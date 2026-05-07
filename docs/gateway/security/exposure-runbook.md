@@ -21,13 +21,13 @@ operator checklist for remote access and messaging exposure.
 
 Prefer the narrowest pattern that satisfies the workflow.
 
-| Pattern | Recommended when | Required controls |
-| --- | --- | --- |
-| Loopback + SSH tunnel | Personal use, admin access, debugging | Keep `gateway.bind: "loopback"` and tunnel `127.0.0.1:18789` |
-| Loopback + Tailscale Serve | Personal tailnet access to Control UI/WebSocket | Keep Gateway loopback-only; rely on Tailscale identity headers only for supported surfaces |
-| Tailnet/LAN bind | Dedicated private network with known devices | Gateway auth, firewall allowlist, no public port-forward |
-| Trusted reverse proxy | Organization SSO/OIDC in front of Gateway | `trusted-proxy` auth, strict `trustedProxies`, header overwrite/strip rules, explicit allowed users |
-| Public internet | Rare, high-risk deployments | Identity-aware proxy, TLS, rate limits, strict allowlists, sandboxed non-main sessions |
+| Pattern                    | Recommended when                                | Required controls                                                                                   |
+| -------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Loopback + SSH tunnel      | Personal use, admin access, debugging           | Keep `gateway.bind: "loopback"` and tunnel `127.0.0.1:18789`                                        |
+| Loopback + Tailscale Serve | Personal tailnet access to Control UI/WebSocket | Keep Gateway loopback-only; rely on Tailscale identity headers only for supported surfaces          |
+| Tailnet/LAN bind           | Dedicated private network with known devices    | Gateway auth, firewall allowlist, no public port-forward                                            |
+| Trusted reverse proxy      | Organization SSO/OIDC in front of Gateway       | `trusted-proxy` auth, strict `trustedProxies`, header overwrite/strip rules, explicit allowed users |
+| Public internet            | Rare, high-risk deployments                     | Identity-aware proxy, TLS, rate limits, strict allowlists, sandboxed non-main sessions              |
 
 Avoid direct public port-forwarding to the Gateway. If you need public access,
 put an identity-aware proxy in front of it and make the proxy the only network

@@ -48,6 +48,10 @@
     "target": "Gateway 网关"
   },
   {
+    "source": "Gateway exposure runbook",
+    "target": "Gateway 暴露运行手册"
+  },
+  {
     "source": "Gateway RPC reference",
     "target": "Gateway RPC 参考"
   },
