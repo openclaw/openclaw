@@ -46,7 +46,7 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
     ).toEqual(["operator.write"]);
   });
 
-  it("restores trusted default operator scopes for shared-secret bearer routes opting into trusted-operator surface", () => {
+  it("does not restore admin scopes for shared-secret bearer routes opting into trusted-operator surface", () => {
     expect(
       resolvePluginRouteRuntimeOperatorScopes(
         createReq({
@@ -55,14 +55,7 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
         { authMethod: "token", trustDeclaredOperatorScopes: false },
         "trusted-operator",
       ),
-    ).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    ).toEqual([]);
   });
 
   it("restores trusted default operator scopes for trusted-proxy routes opting into trusted-operator when scopes header is absent", () => {

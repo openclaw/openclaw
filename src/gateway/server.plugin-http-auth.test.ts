@@ -383,7 +383,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     expect(writeAllowedResults).toEqual([true]);
   });
 
-  test("allows trusted-operator plugin routes to resolve admin-capable runtime scopes for shared-secret bearer auth without scope headers", async () => {
+  test("does not escalate shared-secret bearer callers to admin scopes on trusted-operator surface", async () => {
     const observedRuntimeScopes: string[][] = [];
     const adminAllowedResults: boolean[] = [];
     const handlePluginRequest = createRuntimeScopeRecorderHandler({
@@ -415,15 +415,12 @@ describe("gateway plugin HTTP auth boundary", () => {
         );
 
         expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
       },
     });
 
     expect(observedRuntimeScopes).toHaveLength(1);
-    expect(observedRuntimeScopes[0]).toEqual(
-      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
-    );
-    expect(adminAllowedResults).toEqual([true]);
+    expect(observedRuntimeScopes[0]).not.toContain("operator.admin");
+    expect(adminAllowedResults).toEqual([false]);
   });
 
   test("allows unauthenticated Mattermost slash callback routes while keeping other channel routes protected", async () => {

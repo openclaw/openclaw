@@ -167,7 +167,45 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.write"));
   });
 
-  it("restores trusted-operator defaults for routes opting into trusted surface", async () => {
+  it("does not escalate shared-secret callers to admin scopes on trusted-operator surface", async () => {
+    let observedScopes: string[] | undefined;
+    const log = createMockLogger();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/secure-admin-hook",
+            auth: "gateway",
+            gatewayRuntimeScopeSurface: "trusted-operator",
+            handler: async () => {
+              observedScopes =
+                getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
+              return true;
+            },
+          }),
+        ],
+      }),
+      log,
+    });
+
+    const response = makeMockHttpResponse();
+    const handled = await handler(
+      { url: "/secure-admin-hook" } as IncomingMessage,
+      response.res,
+      undefined,
+      {
+        gatewayAuthSatisfied: true,
+        gatewayRequestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
+        gatewayRequestOperatorScopes: ["operator.write"],
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(observedScopes).not.toContain("operator.admin");
+  });
+
+  it("resolves trusted-operator defaults for trusted-proxy callers on trusted-operator surface", async () => {
     let observedScopes: string[] | undefined;
     const log = createMockLogger();
     const handler = createGatewayPluginRequestHandler({
@@ -191,12 +229,12 @@ describe("plugin HTTP route runtime scopes", () => {
 
     const response = makeMockHttpResponse();
     const handled = await handler(
-      { url: "/secure-admin-hook" } as IncomingMessage,
+      { url: "/secure-admin-hook", headers: {} } as IncomingMessage,
       response.res,
       undefined,
       {
         gatewayAuthSatisfied: true,
-        gatewayRequestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
+        gatewayRequestAuth: { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
         gatewayRequestOperatorScopes: ["operator.write"],
       },
     );
@@ -250,12 +288,12 @@ describe("plugin HTTP route runtime scopes", () => {
 
     const response = makeMockHttpResponse();
     const handled = await handler(
-      { url: "/secure/admin-hook" } as IncomingMessage,
+      { url: "/secure/admin-hook", headers: {} } as IncomingMessage,
       response.res,
       undefined,
       {
         gatewayAuthSatisfied: true,
-        gatewayRequestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
+        gatewayRequestAuth: { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
         gatewayRequestOperatorScopes: ["operator.write"],
       },
     );

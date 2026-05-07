@@ -4,7 +4,7 @@ import {
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
 } from "../http-auth-utils.js";
-import { CLI_DEFAULT_OPERATOR_SCOPES, WRITE_SCOPE } from "../method-scopes.js";
+import { WRITE_SCOPE } from "../method-scopes.js";
 
 export type PluginRouteRuntimeScopeSurface = "write-default" | "trusted-operator";
 
@@ -14,9 +14,6 @@ export function resolvePluginRouteRuntimeOperatorScopes(
   surface: PluginRouteRuntimeScopeSurface = "write-default",
 ): string[] {
   if (surface === "trusted-operator") {
-    if (!requestAuth.trustDeclaredOperatorScopes) {
-      return [...CLI_DEFAULT_OPERATOR_SCOPES];
-    }
     return resolveTrustedHttpOperatorScopes(req, requestAuth);
   }
   if (requestAuth.authMethod !== "trusted-proxy") {
