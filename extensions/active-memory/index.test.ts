@@ -440,6 +440,112 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks write-scoped gateway callers from changing global active-memory config", async () => {
+    const command = registeredCommands["active-memory"];
+
+    const offResult = await command.handler({
+      channel: "gateway",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      args: "off --global",
+      commandBody: "/active-memory off --global",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(offResult.text).toContain("requires operator.admin");
+    expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
+
+    const onResult = await command.handler({
+      channel: "gateway",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      args: "on --global",
+      commandBody: "/active-memory on --global",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(onResult.text).toContain("requires operator.admin");
+    expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows admin-scoped gateway callers to change global active-memory config", async () => {
+    const command = registeredCommands["active-memory"];
+
+    const result = await command.handler({
+      channel: "gateway",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.admin"],
+      args: "off --global",
+      commandBody: "/active-memory off --global",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(result.text).toBe("Active Memory: off globally.");
+    expect(api.runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
+    expect(configFile).toMatchObject({
+      plugins: {
+        entries: {
+          "active-memory": {
+            enabled: true,
+            config: {
+              enabled: false,
+              agents: ["main"],
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps write-scoped gateway callers on non-global-write active-memory paths", async () => {
+    const command = registeredCommands["active-memory"];
+    const sessionKey = "agent:main:write-scoped-active-memory";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-write-scoped-active-memory",
+      updatedAt: 0,
+    };
+
+    const globalStatusResult = await command.handler({
+      channel: "gateway",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      args: "status --global",
+      commandBody: "/active-memory status --global",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(globalStatusResult.text).toBe("Active Memory: on globally.");
+    expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
+
+    const sessionOffResult = await command.handler({
+      channel: "gateway",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      sessionKey,
+      args: "off",
+      commandBody: "/active-memory off",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(sessionOffResult.text).toBe("Active Memory: off for this session.");
+    expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
   it("uses live runtime config for before_prompt_build enablement", async () => {
     configFile = {
       plugins: {
