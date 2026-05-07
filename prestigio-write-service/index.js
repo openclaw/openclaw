@@ -24,21 +24,8 @@ const REQUEST_STABILITY_MS = 250;
 const FILE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_QUOTE_IMAGE_BYTES = 10 * 1024 * 1024;
 const QUOTE_IMAGE_BUCKET = 'quote-images';
-const PASSTHROUGH_MULT = Number(process.env.PRESTIGIO_PASSTHROUGH_MULT || 1.337);
-const MATERIALS_MULT = Number(process.env.PRESTIGIO_MATERIALS_MULT || 1.667);
-const DEFAULT_PILLOW_FILL_RATE_BY_KEY = {
-  'down-50': 20,
-  'down-25': 10.5,
-  'angel-hair': 7,
-  'elite-fiber': 7
-};
-const DEFAULT_PILLOW_LABOR_RATE_BY_KEY = {
-  throw: 130,
-  boxed: 130,
-  bolster: 130,
-  medallion: 130,
-  flange: 130
-};
+const PRICING_SETTINGS_TTL_MS = Number(process.env.PRESTIGIO_PRICING_SETTINGS_TTL_MS || 5 * 60 * 1000);
+const KNOWN_PILLOW_FILL_KEYS = new Set(['down-50', 'down-25', 'down-100', 'angel-hair', 'elite-fiber', 'other']);
 const PRESTIGIO_APP_BASE_URL = (process.env.PRESTIGIO_APP_BASE_URL || 'https://app.prestigio.la').replace(/\/+$/, '');
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
@@ -51,6 +38,153 @@ const HEADERS = {
   'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
   'Content-Type': 'application/json'
 };
+
+let activePricingSettings = null;
+
+function normalizePricingNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function createEmptyPricingSettings() {
+  return {
+    multiplier: {},
+    fill: {},
+    labor: {},
+    material: {},
+    frame: {}
+  };
+}
+
+function normalizePricingSettingsRows(rows = [], source = 'live') {
+  const settings = createEmptyPricingSettings();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row?.category || !row?.item_key) continue;
+    const value = normalizePricingNumber(row.value);
+    if (value === null) continue;
+    if (!settings[row.category]) settings[row.category] = {};
+    settings[row.category][row.item_key] = {
+      value,
+      display_name: row.display_name,
+      unit: row.unit,
+      cost_type: row.cost_type
+    };
+  }
+  return {
+    settings,
+    source,
+    loaded_at: Date.now(),
+    rows_count: Array.isArray(rows) ? rows.length : 0
+  };
+}
+
+function setActivePricingSettingsFromRows(rows, source = 'test') {
+  activePricingSettings = normalizePricingSettingsRows(rows, source);
+  return activePricingSettings;
+}
+
+function clearActivePricingSettings() {
+  activePricingSettings = null;
+}
+
+function hasFreshPricingSettings() {
+  return Boolean(
+    activePricingSettings &&
+    Date.now() - activePricingSettings.loaded_at < PRICING_SETTINGS_TTL_MS
+  );
+}
+
+async function loadLivePricingSettings({ force = false } = {}) {
+  if (!force && hasFreshPricingSettings()) return activePricingSettings;
+  const rows = await supabaseRequest(
+    'pricing_settings',
+    'GET',
+    undefined,
+    '?select=category,item_key,value,display_name,unit,cost_type,sort_order&order=sort_order.asc'
+  );
+  activePricingSettings = normalizePricingSettingsRows(rows, 'pricing_settings');
+  const missing = ['passthrough', 'material'].filter(key => (
+    normalizePricingNumber(activePricingSettings.settings.multiplier?.[key]?.value) === null
+  ));
+  if (missing.length) {
+    throw new Error(`Live pricing_settings is missing multiplier row(s): ${missing.join(', ')}`);
+  }
+  return activePricingSettings;
+}
+
+async function ensureLivePricingSettingsForCalculatedPricing() {
+  return loadLivePricingSettings();
+}
+
+function getLivePricingMultiplier(costType) {
+  if (costType !== 'passthrough' && costType !== 'material') return 1;
+  const value = normalizePricingNumber(activePricingSettings?.settings?.multiplier?.[costType]?.value);
+  if (value !== null && value > 0) return value;
+  throw new Error(`Live pricing_settings multiplier "${costType}" is required for calculated quote pricing.`);
+}
+
+const PASSTHROUGH_COST_KEYS = new Set(['frame', 'springs', 'legs', 'webbing']);
+const MATERIAL_COST_KEYS = new Set(['foam', 'fill', 'seat_foam', 'back_foam', 'seat_fill', 'back_fill', 'frame_padding', 'arm_foam', 'wrap']);
+
+function lineNeedsLivePricingMultiplier(line) {
+  const value = cleanObject(line);
+  if (!value) return false;
+  if (toNullableNumber(value.final) !== null || toNullableNumber(value.multiplier) !== null) return false;
+  if (toNullableNumber(value.raw) !== null) return true;
+  const qty = toNullableNumber(value.qty ?? value.quantity ?? value.hours ?? value.yardage);
+  const rate = toNullableNumber(value.rate ?? value.costPerYard);
+  return qty !== null && rate !== null;
+}
+
+function costBreakdownNeedsLivePricingSettings(costBreakdown) {
+  const breakdown = cleanObject(costBreakdown);
+  if (!breakdown) return false;
+  return Object.entries(breakdown).some(([key, line]) => (
+    (PASSTHROUGH_COST_KEYS.has(key) || MATERIAL_COST_KEYS.has(key)) &&
+    lineNeedsLivePricingMultiplier(line)
+  ));
+}
+
+function costBreakdownLivePricingTypes(costBreakdown) {
+  const breakdown = cleanObject(costBreakdown);
+  const types = new Set();
+  if (!breakdown) return types;
+  Object.entries(breakdown).forEach(([key, line]) => {
+    if (!lineNeedsLivePricingMultiplier(line)) return;
+    if (PASSTHROUGH_COST_KEYS.has(key)) types.add('passthrough');
+    if (MATERIAL_COST_KEYS.has(key)) types.add('material');
+  });
+  return types;
+}
+
+function getPricingOptionsForBreakdown(costBreakdown) {
+  const types = costBreakdownLivePricingTypes(costBreakdown);
+  const multipliers = {};
+  if (types.has('passthrough')) multipliers.passthrough = getLivePricingMultiplier('passthrough');
+  if (types.has('material')) multipliers.material = getLivePricingMultiplier('material');
+  return { multipliers };
+}
+
+function draftItemsNeedLivePricingSettings(items) {
+  return Array.isArray(items) && items.some(item => {
+    const formData = cleanObject(item?.form_data) || {};
+    return costBreakdownNeedsLivePricingSettings(item?.cost_breakdown || item?.lineItems || formData.cost_breakdown);
+  });
+}
+
+async function ensureLivePricingSettingsForDraftItems(items) {
+  if (draftItemsNeedLivePricingSettings(items)) {
+    await ensureLivePricingSettingsForCalculatedPricing();
+  }
+}
+
+function revisionOperationsNeedLivePricingSettings(operations) {
+  return Array.isArray(operations) && operations.some(op => (
+    op?.op === 'update_item' &&
+    costBreakdownNeedsLivePricingSettings(op?.updates?.cost_breakdown)
+  ));
+}
 
 function ensureBusDirs() {
   fs.mkdirSync(REQUEST_DIR, { recursive: true });
@@ -339,6 +473,14 @@ function quoteRevisionLineRaw(line) {
   return qty * rate;
 }
 
+function quoteRevisionLineFinal(line, costType = 'labor') {
+  const value = cleanObject(line) || {};
+  const final = toNullableNumber(value.final);
+  if (final !== null) return final;
+  const multiplier = toNullableNumber(value.multiplier) ?? getLivePricingMultiplier(costType);
+  return quoteRevisionLineRaw(value) * multiplier;
+}
+
 function normalizeQuoteRevisionCostBreakdownLines(costBreakdown) {
   const breakdown = cleanObject(costBreakdown);
   if (!breakdown) return breakdown;
@@ -358,7 +500,7 @@ function normalizeQuoteRevisionCostBreakdownLines(costBreakdown) {
     if (Number.isFinite(qty) && Number.isFinite(rate)) {
       const raw = qty * rate;
       nextLine.raw = raw;
-      if (Number.isFinite(Number(nextLine.multiplier))) {
+      if (nextLine.final === undefined && Number.isFinite(Number(nextLine.multiplier))) {
         nextLine.final = raw * Number(nextLine.multiplier);
       }
     }
@@ -372,13 +514,13 @@ function calculateReupholsteryUnitPriceFromBreakdown(costBreakdown) {
   if (!breakdown) return null;
 
   const passThroughRaw = ['springs', 'webbing', 'frame']
-    .reduce((sum, key) => sum + quoteRevisionLineRaw(breakdown[key]), 0);
+    .reduce((sum, key) => sum + quoteRevisionLineFinal(breakdown[key], 'passthrough'), 0);
   const materialsRaw = ['seat_foam', 'back_foam', 'seat_fill', 'back_fill', 'foam', 'fill']
-    .reduce((sum, key) => sum + quoteRevisionLineRaw(breakdown[key]), 0);
+    .reduce((sum, key) => sum + quoteRevisionLineFinal(breakdown[key], 'material'), 0);
   const labor = breakdown.labor_upholstery || breakdown.labor;
-  const laborRaw = quoteRevisionLineRaw(labor);
+  const laborRaw = quoteRevisionLineFinal(labor, 'labor');
 
-  const unitRaw = (passThroughRaw * PASSTHROUGH_MULT) + (materialsRaw * MATERIALS_MULT) + laborRaw;
+  const unitRaw = passThroughRaw + materialsRaw + laborRaw;
   if (unitRaw <= 0) return null;
   return roundQuoteBuilderPrice(unitRaw);
 }
@@ -388,18 +530,18 @@ function calculatePillowUnitPriceFromBreakdown(costBreakdown, quantity) {
     quoteDescriptionGenerators &&
     typeof quoteDescriptionGenerators.calculatePillowUnitPriceFromBreakdown === 'function'
   ) {
-    return quoteDescriptionGenerators.calculatePillowUnitPriceFromBreakdown(costBreakdown, quantity);
+    return quoteDescriptionGenerators.calculatePillowUnitPriceFromBreakdown(costBreakdown, quantity, getPricingOptionsForBreakdown(costBreakdown));
   }
 
   const breakdown = cleanObject(costBreakdown);
   if (!breakdown) return null;
-  const fillRaw = quoteRevisionLineRaw(breakdown.fill);
+  const fillRaw = quoteRevisionLineFinal(breakdown.fill, 'material');
   const labor = breakdown.labor_upholstery || breakdown.labor;
-  const laborRaw = quoteRevisionLineRaw(labor);
+  const laborRaw = quoteRevisionLineFinal(labor, 'labor');
   const fabric = breakdown.fabric || {};
-  const fabricRaw = Number(fabric.raw) || ((Number(fabric.yardage ?? fabric.qty) || 0) * (Number(fabric.costPerYard ?? fabric.rate) || 0));
+  const fabricRaw = quoteRevisionLineFinal(fabric, 'labor');
   const itemQty = Math.max(1, Number(quantity) || 1);
-  const unitRaw = (fillRaw * MATERIALS_MULT) + laborRaw + (fabricRaw / itemQty);
+  const unitRaw = fillRaw + laborRaw + (fabricRaw / itemQty);
   if (unitRaw <= 0) return null;
   return Math.round(unitRaw / 5) * 5;
 }
@@ -409,18 +551,18 @@ function calculateCushionUnitPriceFromBreakdown(costBreakdown) {
     quoteDescriptionGenerators &&
     typeof quoteDescriptionGenerators.calculateCushionUnitPriceFromBreakdown === 'function'
   ) {
-    return quoteDescriptionGenerators.calculateCushionUnitPriceFromBreakdown(costBreakdown);
+    return quoteDescriptionGenerators.calculateCushionUnitPriceFromBreakdown(costBreakdown, getPricingOptionsForBreakdown(costBreakdown));
   }
 
   const breakdown = cleanObject(costBreakdown);
   if (!breakdown) return null;
-  const foamRaw = quoteRevisionLineRaw(breakdown.foam);
-  const fillRaw = quoteRevisionLineRaw(breakdown.fill);
+  const foamRaw = quoteRevisionLineFinal(breakdown.foam, 'material');
+  const fillRaw = quoteRevisionLineFinal(breakdown.fill, 'material');
   const labor = breakdown.labor_upholstery || breakdown.labor;
-  const laborRaw = quoteRevisionLineRaw(labor);
+  const laborRaw = quoteRevisionLineFinal(labor, 'labor');
   const fabric = breakdown.fabric || {};
-  const fabricRaw = Number(fabric.raw) || ((Number(fabric.yardage ?? fabric.qty) || 0) * (Number(fabric.costPerYard ?? fabric.rate) || 0));
-  const unitRaw = ((foamRaw + fillRaw) * MATERIALS_MULT) + laborRaw + fabricRaw;
+  const fabricRaw = quoteRevisionLineFinal(fabric, 'labor');
+  const unitRaw = foamRaw + fillRaw + laborRaw + fabricRaw;
   if (unitRaw <= 0) return null;
   return roundQuoteBuilderPrice(unitRaw);
 }
@@ -430,22 +572,22 @@ function calculateSeatingUnitPriceFromBreakdown(costBreakdown) {
     quoteDescriptionGenerators &&
     typeof quoteDescriptionGenerators.calculateSeatingUnitPriceFromBreakdown === 'function'
   ) {
-    return quoteDescriptionGenerators.calculateSeatingUnitPriceFromBreakdown(costBreakdown);
+    return quoteDescriptionGenerators.calculateSeatingUnitPriceFromBreakdown(costBreakdown, getPricingOptionsForBreakdown(costBreakdown));
   }
 
   const breakdown = cleanObject(costBreakdown);
   if (!breakdown) return null;
   const passThroughRaw = ['frame', 'springs', 'legs']
-    .reduce((sum, key) => sum + quoteRevisionLineRaw(breakdown[key]), 0);
+    .reduce((sum, key) => sum + quoteRevisionLineFinal(breakdown[key], 'passthrough'), 0);
   const materialsRaw = ['seat_foam', 'back_foam', 'seat_fill', 'back_fill', 'frame_padding', 'arm_foam']
-    .reduce((sum, key) => sum + quoteRevisionLineRaw(breakdown[key]), 0);
+    .reduce((sum, key) => sum + quoteRevisionLineFinal(breakdown[key], 'material'), 0);
   const labor = breakdown.labor_upholstery || breakdown.labor;
-  const laborRaw = quoteRevisionLineRaw(labor);
-  const swivelRaw = quoteRevisionLineRaw(breakdown.swivel);
-  const slipcoverRaw = quoteRevisionLineRaw(breakdown.slipcover);
+  const laborRaw = quoteRevisionLineFinal(labor, 'labor');
+  const swivelRaw = quoteRevisionLineFinal(breakdown.swivel, 'labor');
+  const slipcoverRaw = quoteRevisionLineFinal(breakdown.slipcover, 'labor');
   const fabric = breakdown.fabric || {};
-  const fabricRaw = Number(fabric.raw) || ((Number(fabric.yardage ?? fabric.qty) || 0) * (Number(fabric.costPerYard ?? fabric.rate) || 0));
-  const unitRaw = (passThroughRaw * PASSTHROUGH_MULT) + (materialsRaw * MATERIALS_MULT) + laborRaw + swivelRaw + slipcoverRaw + fabricRaw;
+  const fabricRaw = quoteRevisionLineFinal(fabric, 'labor');
+  const unitRaw = passThroughRaw + materialsRaw + laborRaw + swivelRaw + slipcoverRaw + fabricRaw;
   if (unitRaw <= 0) return null;
   return roundQuoteBuilderPrice(unitRaw);
 }
@@ -455,20 +597,20 @@ function calculateBedUnitPriceFromBreakdown(costBreakdown) {
     quoteDescriptionGenerators &&
     typeof quoteDescriptionGenerators.calculateBedUnitPriceFromBreakdown === 'function'
   ) {
-    return quoteDescriptionGenerators.calculateBedUnitPriceFromBreakdown(costBreakdown);
+    return quoteDescriptionGenerators.calculateBedUnitPriceFromBreakdown(costBreakdown, getPricingOptionsForBreakdown(costBreakdown));
   }
 
   const breakdown = cleanObject(costBreakdown);
   if (!breakdown) return null;
   const passThroughRaw = ['frame', 'legs']
-    .reduce((sum, key) => sum + quoteRevisionLineRaw(breakdown[key]), 0);
-  const materialsRaw = quoteRevisionLineRaw(breakdown.foam);
+    .reduce((sum, key) => sum + quoteRevisionLineFinal(breakdown[key], 'passthrough'), 0);
+  const materialsRaw = quoteRevisionLineFinal(breakdown.foam, 'material');
   const labor = breakdown.labor_upholstery || breakdown.labor;
-  const laborRaw = quoteRevisionLineRaw(labor);
-  const slipcoverRaw = quoteRevisionLineRaw(breakdown.slipcover);
+  const laborRaw = quoteRevisionLineFinal(labor, 'labor');
+  const slipcoverRaw = quoteRevisionLineFinal(breakdown.slipcover, 'labor');
   const fabric = breakdown.fabric || {};
-  const fabricRaw = Number(fabric.raw) || ((Number(fabric.yardage ?? fabric.qty) || 0) * (Number(fabric.costPerYard ?? fabric.rate) || 0));
-  const unitRaw = (passThroughRaw * PASSTHROUGH_MULT) + (materialsRaw * MATERIALS_MULT) + laborRaw + fabricRaw + slipcoverRaw;
+  const fabricRaw = quoteRevisionLineFinal(fabric, 'labor');
+  const unitRaw = passThroughRaw + materialsRaw + laborRaw + fabricRaw + slipcoverRaw;
   if (unitRaw <= 0) return null;
   return roundQuoteBuilderPrice(unitRaw);
 }
@@ -478,19 +620,19 @@ function calculateOttomanUnitPriceFromBreakdown(costBreakdown) {
     quoteDescriptionGenerators &&
     typeof quoteDescriptionGenerators.calculateOttomanUnitPriceFromBreakdown === 'function'
   ) {
-    return quoteDescriptionGenerators.calculateOttomanUnitPriceFromBreakdown(costBreakdown);
+    return quoteDescriptionGenerators.calculateOttomanUnitPriceFromBreakdown(costBreakdown, getPricingOptionsForBreakdown(costBreakdown));
   }
 
   const breakdown = cleanObject(costBreakdown);
   if (!breakdown) return null;
   const passThroughRaw = ['frame', 'legs']
-    .reduce((sum, key) => sum + quoteRevisionLineRaw(breakdown[key]), 0);
+    .reduce((sum, key) => sum + quoteRevisionLineFinal(breakdown[key], 'passthrough'), 0);
   const materialsRaw = ['foam', 'wrap']
-    .reduce((sum, key) => sum + quoteRevisionLineRaw(breakdown[key]), 0);
+    .reduce((sum, key) => sum + quoteRevisionLineFinal(breakdown[key], 'material'), 0);
   const labor = breakdown.labor_upholstery || breakdown.labor;
-  const laborRaw = quoteRevisionLineRaw(labor);
-  const slipcoverRaw = quoteRevisionLineRaw(breakdown.slipcover);
-  const unitRaw = (passThroughRaw * PASSTHROUGH_MULT) + (materialsRaw * MATERIALS_MULT) + laborRaw + slipcoverRaw;
+  const laborRaw = quoteRevisionLineFinal(labor, 'labor');
+  const slipcoverRaw = quoteRevisionLineFinal(breakdown.slipcover, 'labor');
+  const unitRaw = passThroughRaw + materialsRaw + laborRaw + slipcoverRaw;
   if (unitRaw <= 0) return null;
   return roundQuoteBuilderPrice(unitRaw);
 }
@@ -506,9 +648,9 @@ function calculateSoftgoodsUnitPriceFromBreakdown(costBreakdown) {
   const breakdown = cleanObject(costBreakdown);
   if (!breakdown) return null;
   const labor = breakdown.labor_upholstery || breakdown.labor;
-  const laborRaw = quoteRevisionLineRaw(labor);
+  const laborRaw = quoteRevisionLineFinal(labor, 'labor');
   const fabric = breakdown.fabric || {};
-  const fabricRaw = Number(fabric.raw) || ((Number(fabric.yardage ?? fabric.qty) || 0) * (Number(fabric.costPerYard ?? fabric.rate) || 0));
+  const fabricRaw = quoteRevisionLineFinal(fabric, 'labor');
   const unitRaw = laborRaw + fabricRaw;
   if (unitRaw <= 0) return null;
   return roundQuoteBuilderPrice(unitRaw);
@@ -519,18 +661,18 @@ function calculatePatioUnitPriceFromBreakdown(costBreakdown) {
     quoteDescriptionGenerators &&
     typeof quoteDescriptionGenerators.calculatePatioUnitPriceFromBreakdown === 'function'
   ) {
-    return quoteDescriptionGenerators.calculatePatioUnitPriceFromBreakdown(costBreakdown);
+    return quoteDescriptionGenerators.calculatePatioUnitPriceFromBreakdown(costBreakdown, getPricingOptionsForBreakdown(costBreakdown));
   }
 
   const breakdown = cleanObject(costBreakdown);
   if (!breakdown) return null;
   const materialsRaw = ['seat_foam', 'seat_fill', 'back_fill']
-    .reduce((sum, key) => sum + quoteRevisionLineRaw(breakdown[key]), 0);
+    .reduce((sum, key) => sum + quoteRevisionLineFinal(breakdown[key], 'material'), 0);
   const labor = breakdown.labor_upholstery || breakdown.labor;
-  const laborRaw = quoteRevisionLineRaw(labor);
+  const laborRaw = quoteRevisionLineFinal(labor, 'labor');
   const fabric = breakdown.fabric || {};
-  const fabricRaw = Number(fabric.raw) || ((Number(fabric.yardage ?? fabric.qty) || 0) * (Number(fabric.costPerYard ?? fabric.rate) || 0));
-  const unitRaw = (materialsRaw * MATERIALS_MULT) + laborRaw + fabricRaw;
+  const fabricRaw = quoteRevisionLineFinal(fabric, 'labor');
+  const unitRaw = materialsRaw + laborRaw + fabricRaw;
   if (unitRaw <= 0) return null;
   return roundQuoteBuilderPrice(unitRaw);
 }
@@ -540,17 +682,17 @@ function calculateRestuffingUnitPriceFromBreakdown(costBreakdown, quantity) {
     quoteDescriptionGenerators &&
     typeof quoteDescriptionGenerators.calculateRestuffingUnitPriceFromBreakdown === 'function'
   ) {
-    return quoteDescriptionGenerators.calculateRestuffingUnitPriceFromBreakdown(costBreakdown, quantity);
+    return quoteDescriptionGenerators.calculateRestuffingUnitPriceFromBreakdown(costBreakdown, quantity, getPricingOptionsForBreakdown(costBreakdown));
   }
 
   const breakdown = cleanObject(costBreakdown);
   if (!breakdown) return null;
-  const fillRaw = quoteRevisionLineRaw(breakdown.fill);
+  const fillRaw = quoteRevisionLineFinal(breakdown.fill, 'material');
   const labor = breakdown.labor_upholstery || breakdown.labor;
-  const laborRaw = quoteRevisionLineRaw(labor);
-  const coverRaw = quoteRevisionLineRaw(breakdown.cover);
+  const laborRaw = quoteRevisionLineFinal(labor, 'labor');
+  const coverRaw = quoteRevisionLineFinal(breakdown.cover, 'labor');
   const itemQty = Math.max(1, Number(quantity) || 1);
-  const unitRaw = ((fillRaw * MATERIALS_MULT) + laborRaw + coverRaw) / itemQty;
+  const unitRaw = (fillRaw + laborRaw + coverRaw) / itemQty;
   if (unitRaw <= 0) return null;
   return roundQuoteBuilderPrice(unitRaw);
 }
@@ -792,68 +934,16 @@ function resolvePillowFillKey(value) {
   const normalized = normalizeKey(value);
   if (!normalized || normalized === '50/50' || normalized === '50-50' || normalized === '50-50-down') return 'down-50';
   if (normalized === '25/75' || normalized === '25-75' || normalized === '25-75-down') return 'down-25';
-  if (DEFAULT_PILLOW_FILL_RATE_BY_KEY[normalized] !== undefined || normalized === 'other') return normalized;
-  return normalized.includes('25') ? 'down-25' : 'down-50';
+  if (normalized === '100/0' || normalized === '100-0' || normalized === '100-down' || normalized === '100-down-feather') return 'down-100';
+  if (KNOWN_PILLOW_FILL_KEYS.has(normalized)) return normalized;
+  if (normalized.includes('100')) return 'down-100';
+  if (normalized.includes('25')) return 'down-25';
+  if (normalized.includes('50')) return 'down-50';
+  return normalized;
 }
 
-function estimatePillowFillLbs(formData) {
-  if (
-    quoteDescriptionGenerators &&
-    typeof quoteDescriptionGenerators.calculatePillowFillLbs === 'function'
-  ) {
-    return quoteDescriptionGenerators.calculatePillowFillLbs(formData);
-  }
-
-  const width = toNullableNumber(formData.width);
-  const height = toNullableNumber(formData.height);
-  if (!width || !height) return null;
-  return Math.ceil(Math.max(0.9, width * height * 0.0052) * 10) / 10;
-}
-
-function buildPillowDefaultCostBreakdown(item, formData, existingCostBreakdown) {
-  const breakdown = cleanObject(existingCostBreakdown) ? { ...existingCostBreakdown } : {};
-  const fillKey = resolvePillowFillKey(formData.pillowFill || formData.fill || item.pillowFill || item.fill || 'down-50');
-  const fillRate = toNullableNumber(item.fill_rate || formData.fillRate || formData.fill_rate)
-    ?? DEFAULT_PILLOW_FILL_RATE_BY_KEY[fillKey]
-    ?? 20;
-  const fillQty = toNullableNumber(item.fill_lbs || item.fill_qty || formData.fillLbs || formData.fill_lbs)
-    ?? estimatePillowFillLbs(formData);
-
-  if (!breakdown.fill && fillKey !== 'other' && fillQty && fillRate) {
-    const raw = Math.round(fillQty * fillRate * 100) / 100;
-    breakdown.fill = {
-      qty: fillQty,
-      rate: fillRate,
-      raw,
-      multiplier: MATERIALS_MULT,
-      final: Math.round(raw * MATERIALS_MULT * 100) / 100,
-      item_key: fillKey,
-      source: 'dimension_estimate'
-    };
-  }
-
-  const laborKey = formData.construction === 'flange'
-    ? 'flange'
-    : formData.pillowType === 'boxed'
-      ? 'boxed'
-      : 'throw';
-  const laborHours = toNullableNumber(item.labor_hours || formData.laborHours || formData.labor_hours) || 1;
-  const laborRate = toNullableNumber(item.labor_rate || formData.laborRate || formData.labor_rate)
-    || DEFAULT_PILLOW_LABOR_RATE_BY_KEY[laborKey]
-    || 130;
-  if (!breakdown.labor_upholstery && !breakdown.labor && laborHours && laborRate) {
-    const raw = Math.round(laborHours * laborRate * 100) / 100;
-    breakdown.labor_upholstery = {
-      hours: laborHours,
-      rate: laborRate,
-      raw,
-      multiplier: 1,
-      final: raw,
-      source: 'default_pillow_labor'
-    };
-  }
-
-  return Object.keys(breakdown).length ? breakdown : null;
+function buildPillowDefaultCostBreakdown(existingCostBreakdown) {
+  return cleanObject(existingCostBreakdown) ? { ...existingCostBreakdown } : null;
 }
 
 function hasManualPillowPriceOverride(item, formData) {
@@ -979,9 +1069,12 @@ function normalizePillowDraftItem(item, index) {
 
   const description = buildPillowDescription(normalizedFormData, item);
   const costBreakdown = normalizeQuoteRevisionCostBreakdownLines(
-    buildPillowDefaultCostBreakdown(item, normalizedFormData, item.cost_breakdown || item.lineItems)
+    buildPillowDefaultCostBreakdown(item.cost_breakdown || item.lineItems)
   );
   const sellPrice = choosePillowSellPrice(item, normalizedFormData, costBreakdown, quantity);
+  if (sellPrice === null) {
+    throw new Error(`Pillow draft item ${index + 1} requires sell_price or cost_breakdown; hardcoded pillow pricing defaults are disabled.`);
+  }
   const itemName = cleanText(item.item_name || item.name || normalizedFormData.custom_name, 500) || 'NEW CUSTOM PILLOWS';
 
   return {
@@ -1687,6 +1780,7 @@ async function resolveDraftReferenceImages(item) {
 
 async function buildDraftQuotePayload(fields) {
   const quote = cleanObject(fields.quote) || {};
+  await ensureLivePricingSettingsForDraftItems(fields.items);
   const items = Array.isArray(fields.items) ? fields.items.map((item, index) => normalizeDraftItem(item, index)) : [];
 
   if (items.length === 0) {
@@ -2695,6 +2789,7 @@ async function processWriteRequest(request, { requestId, legacy = false } = {}) 
   if (action === 'create-draft-quote') {
     try {
       await resolveDraftQuoteClientFromProject(fields);
+      await ensureLivePricingSettingsForDraftItems(fields.items);
     } catch (err) {
       writeResponse({
         success: false,
@@ -2708,6 +2803,9 @@ async function processWriteRequest(request, { requestId, legacy = false } = {}) 
 
   if (action === 'revise-existing-quote') {
     try {
+      if (revisionOperationsNeedLivePricingSettings(fields.operations)) {
+        await ensureLivePricingSettingsForCalculatedPricing();
+      }
       const quote = await resolveExistingQuote(fields.quote);
       const items = await fetchExistingQuoteItems(quote.id);
       const plan = buildResolvedQuoteRevisionPlan(fields, quote, items);
@@ -2902,9 +3000,12 @@ if (require.main === module) {
 
 module.exports = {
   buildConfirmSummary,
+  clearActivePricingSettings,
   getDraftQuoteSiteVisitTotal,
   isAllowedAttachmentPath,
+  loadLivePricingSettings,
   normalizeAttachmentPath,
+  setActivePricingSettingsFromRows,
   summarizeDraftQuotePricingModes,
   sumDraftQuoteItems
 };
