@@ -111,6 +111,41 @@ function estimateCompactionMessageTokens(message: AgentMessage): number {
   return estimateMessagesTokens([message]);
 }
 
+function clampReserveTokensForModel(
+  reserveTokens: number,
+  model: NonNullable<ExtensionContext["model"]>,
+): number {
+  const modelMaxTokens = Math.max(1, Math.floor(model.maxTokens ?? 128_000));
+  // piGenerateSummary requests max_tokens = floor(0.8 * reserveTokens).
+  // Clamp the reserve before that downstream computation so the published
+  // model output ceiling is never exceeded, even on 1M-token context models.
+  const maxReserveBeforeSummaryOutputClamp = Math.floor(modelMaxTokens / 0.8);
+  return Math.max(
+    1,
+    Math.min(Math.max(1, Math.floor(reserveTokens)), maxReserveBeforeSummaryOutputClamp),
+  );
+}
+
+function formatOversizedOmissionNote(message: AgentMessage, tokens: number): string {
+  const role = (message as { role?: unknown }).role;
+  const roleText = typeof role === "string" && role.trim() ? `; role=${role.trim()}` : "";
+  return `[message omitted: oversized — ${Math.max(0, Math.round(tokens))} tokens${roleText}]`;
+}
+
+function resolveAdaptiveMaxChunkTokens(params: {
+  messages: AgentMessage[];
+  contextWindow: number;
+  maxChunkTokens: number;
+}): number {
+  const contextWindow = Math.max(1, Math.floor(params.contextWindow));
+  const adaptiveRatio = computeAdaptiveChunkRatio(params.messages, contextWindow);
+  const adaptiveMax = Math.max(
+    1,
+    Math.floor(contextWindow * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
+  );
+  return Math.max(1, Math.min(Math.max(1, Math.floor(params.maxChunkTokens)), adaptiveMax));
+}
+
 function normalizeParts(parts: number, messageCount: number): number {
   if (!Number.isFinite(parts) || parts <= 1) {
     return 1;
@@ -303,6 +338,7 @@ async function summarizeChunks(params: {
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
+  contextWindow: number;
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
@@ -312,21 +348,26 @@ async function summarizeChunks(params: {
   }
 
   // SECURITY: never feed toolResult.details or runtime-context transcript entries into summarization prompts.
-  const safeMessages = stripToolResultDetails(stripRuntimeContextCustomMessages(params.messages));
-  const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
+  // Also repair strict provider tool-use/tool-result pairing before and after chunking so
+  // dropped/split transcript spans cannot leave orphaned tool_result blocks behind.
+  const safeMessages = repairToolUseResultPairing(
+    stripToolResultDetails(stripRuntimeContextCustomMessages(params.messages)),
+  ).messages;
+  const effectiveMaxChunkTokens = resolveAdaptiveMaxChunkTokens({
+    messages: safeMessages,
+    contextWindow: params.contextWindow,
+    maxChunkTokens: params.maxChunkTokens,
+  });
+  const chunks = chunkMessagesByMaxTokens(safeMessages, effectiveMaxChunkTokens)
+    .map((chunk) => repairToolUseResultPairing(chunk).messages)
+    .filter((chunk) => chunk.length > 0);
   let summary = params.previousSummary;
   const effectiveInstructions = buildCompactionSummarizationInstructions(
     params.customInstructions,
     params.summarizationInstructions,
   );
 
-  // Clamp reserveTokens to the model's maxTokens output cap.
-  // generateSummary() uses Math.floor(0.8 * reserveTokens) as max_tokens for the API call.
-  // With large context windows (1M tokens), reserveTokensFloor can be 300K+, producing
-  // max_tokens of 240K+ which exceeds model output limits (e.g. 128K for Anthropic).
-  // By clamping reserveTokens here, we ensure the downstream max_tokens stays within bounds.
-  const modelMaxTokens = params.model.maxTokens ?? 128_000;
-  const clampedReserveTokens = Math.min(params.reserveTokens, Math.floor(modelMaxTokens / 0.8));
+  const clampedReserveTokens = clampReserveTokensForModel(params.reserveTokens, params.model);
 
   for (const chunk of chunks) {
     summary = await retryAsync(
@@ -418,29 +459,35 @@ export async function summarizeWithFallback(params: {
     log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
   }
 
-  // Fallback 1: Summarize only small messages, note oversized ones
+  // Tier 2: summarize only non-oversized messages, and preserve placeholders for
+  // messages that are too large to safely include in an API request. Repair the
+  // resulting transcript because removing an assistant tool_use can orphan a later
+  // tool_result and strict providers reject that with "unexpected tool_use_id".
   const smallMessages: AgentMessage[] = [];
   const oversizedNotes: string[] = [];
 
   for (const msg of messages) {
+    const tokens = estimateCompactionMessageTokens(msg);
     if (isOversizedForSummary(msg, contextWindow)) {
-      const role = (msg as { role?: string }).role ?? "message";
-      const tokens = estimateCompactionMessageTokens(msg);
-      oversizedNotes.push(
-        `[Large ${role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
-      );
+      oversizedNotes.push(formatOversizedOmissionNote(msg, tokens));
     } else {
       smallMessages.push(msg);
     }
   }
 
+  const repairedSmallMessages = repairToolUseResultPairing(smallMessages).messages;
+
   // When nothing was oversized, `smallMessages` is the same transcript as the full attempt.
   // Re-summarizing it would duplicate the same failing API work (and duplicate warn logs).
-  if (smallMessages.length > 0 && smallMessages.length !== messages.length) {
+  if (
+    repairedSmallMessages.length > 0 &&
+    (smallMessages.length !== messages.length ||
+      repairedSmallMessages.length !== smallMessages.length)
+  ) {
     try {
       const partialSummary = await summarizeChunks({
         ...params,
-        messages: smallMessages,
+        messages: repairedSmallMessages,
       });
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
@@ -449,10 +496,12 @@ export async function summarizeWithFallback(params: {
     }
   }
 
-  // Final fallback: Just note what was there
+  // Tier 3: note-only summary. This intentionally succeeds locally so compaction
+  // can continue even when the provider rejects both full and partial requests.
+  const noteLines = oversizedNotes.length > 0 ? `\n${oversizedNotes.join("\n")}` : "";
   return (
     `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
-    `Summary unavailable due to size limits.`
+    `Summary unavailable due to size limits.${noteLines}`
   );
 }
 
