@@ -661,6 +661,65 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+  it("uses Claude CLI OAuth auth labels for anthropic models running on the Claude CLI runtime", async () => {
+    await withTempHome(
+      async (dir) => {
+        const authPath = path.join(dir, ".claude", ".credentials.json");
+        fs.mkdirSync(path.dirname(authPath), { recursive: true });
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "access-token",
+              refreshToken: "refresh-token",
+              expiresAt: Date.now() + 60_000,
+            },
+          }),
+          "utf8",
+        );
+
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "claude-cli" },
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-claude-cli-oauth",
+            updatedAt: 0,
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          contextTokens: 32_000,
+          resolvedHarness: "claude-cli",
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
+        expect(normalized).toContain("oauth (claude-cli)");
+      },
+      {
+        env: {
+          ANTHROPIC_API_KEY: undefined,
+          ANTHROPIC_OAUTH_TOKEN: undefined,
+        },
+      },
+    );
+  });
+
   it("uses Codex OAuth context overrides for openai models running on the Codex harness", async () => {
     registerStatusCodexHarness();
 
