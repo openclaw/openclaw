@@ -144,10 +144,12 @@ describe("Codex app-server config", () => {
     expect(
       readCodexPluginConfig({
         codexDynamicToolsProfile: "openclaw-compat",
+        codexDynamicToolsLoading: "direct",
         codexDynamicToolsExclude: ["custom_tool"],
       }),
     ).toMatchObject({
       codexDynamicToolsProfile: "openclaw-compat",
+      codexDynamicToolsLoading: "direct",
       codexDynamicToolsExclude: ["custom_tool"],
     });
   });
