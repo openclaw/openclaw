@@ -507,6 +507,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       ? []
       : await stageIMessageAttachments(validAttachments, {
           maxBytes: mediaMaxBytes,
+          allowedRoots: effectiveAttachmentRoots,
           deps: { logVerbose },
         });
     const mediaAttachments = remoteHost ? rawMediaAttachments : stagedAttachments;

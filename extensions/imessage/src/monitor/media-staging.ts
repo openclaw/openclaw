@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isInboundPathAllowed } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { buildRandomTempFilePath } from "openclaw/plugin-sdk/temp-path";
 import type { IMessageAttachment } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -36,8 +36,45 @@ function jpegFilenameForAttachment(attachmentPath: string): string {
   return `${parsed.name || "imessage-attachment"}.jpg`;
 }
 
+function hasWildcardSegment(root: string): boolean {
+  return root.replaceAll("\\", "/").split("/").includes("*");
+}
+
+async function canonicalizeAllowedRoots(roots: readonly string[]): Promise<string[]> {
+  const canonicalRoots: string[] = [];
+  for (const root of roots) {
+    canonicalRoots.push(root);
+    if (hasWildcardSegment(root)) {
+      continue;
+    }
+    const canonicalRoot = await fs.realpath(root).catch(() => undefined);
+    if (canonicalRoot && canonicalRoot !== root) {
+      canonicalRoots.push(canonicalRoot);
+    }
+  }
+  return canonicalRoots;
+}
+
+async function resolveAllowedCanonicalAttachmentPath(params: {
+  attachmentPath: string;
+  allowedRoots?: readonly string[];
+}): Promise<string> {
+  if (!params.allowedRoots) {
+    return params.attachmentPath;
+  }
+  const canonicalPath = await fs.realpath(params.attachmentPath);
+  const canonicalRoots = await canonicalizeAllowedRoots(params.allowedRoots);
+  if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
+    throw new Error("attachment path resolves outside allowed roots");
+  }
+  return canonicalPath;
+}
+
 async function convertHeicToJpegWithSips(sourcePath: string, maxBytes: number): Promise<Buffer> {
-  const tempPath = path.join(os.tmpdir(), `openclaw-imessage-${randomUUID()}.jpg`);
+  const tempPath = buildRandomTempFilePath({
+    prefix: "openclaw-imessage",
+    extension: "jpg",
+  });
   try {
     await execFileAsync("sips", [
       "-s",
@@ -66,6 +103,7 @@ async function readAttachmentBuffer(params: {
   attachmentPath: string;
   mimeType?: string | null;
   maxBytes: number;
+  allowedRoots?: readonly string[];
   deps: StageIMessageAttachmentsDeps;
 }): Promise<{ buffer: Buffer; contentType?: string; originalFilename?: string }> {
   const stat = await fs.lstat(params.attachmentPath);
@@ -79,11 +117,23 @@ async function readAttachmentBuffer(params: {
     throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
   }
 
+  const canonicalPath = await resolveAllowedCanonicalAttachmentPath({
+    attachmentPath: params.attachmentPath,
+    allowedRoots: params.allowedRoots,
+  });
+  const canonicalStat = await fs.stat(canonicalPath);
+  if (!canonicalStat.isFile()) {
+    throw new Error("attachment path is not a file");
+  }
+  if (canonicalStat.size > params.maxBytes) {
+    throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
+  }
+
   if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
     try {
       const convert = params.deps.convertHeicToJpeg ?? convertHeicToJpegWithSips;
       return {
-        buffer: await convert(params.attachmentPath, params.maxBytes),
+        buffer: await convert(canonicalPath, params.maxBytes),
         contentType: "image/jpeg",
         originalFilename: jpegFilenameForAttachment(params.attachmentPath),
       };
@@ -95,7 +145,7 @@ async function readAttachmentBuffer(params: {
   }
 
   return {
-    buffer: await fs.readFile(params.attachmentPath),
+    buffer: await fs.readFile(canonicalPath),
     contentType: params.mimeType ?? undefined,
     originalFilename: path.basename(params.attachmentPath),
   };
@@ -105,6 +155,7 @@ export async function stageIMessageAttachments(
   attachments: IMessageAttachment[],
   params: {
     maxBytes: number;
+    allowedRoots?: readonly string[];
     deps?: StageIMessageAttachmentsDeps;
   },
 ): Promise<StagedIMessageAttachment[]> {
@@ -123,6 +174,7 @@ export async function stageIMessageAttachments(
         attachmentPath,
         mimeType: attachment.mime_type,
         maxBytes: params.maxBytes,
+        allowedRoots: params.allowedRoots,
         deps,
       });
       const saved = await save(

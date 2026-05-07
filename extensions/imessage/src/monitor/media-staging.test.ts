@@ -33,7 +33,7 @@ describe("stageIMessageAttachments", () => {
     await expect(
       stageIMessageAttachments(
         [{ original_path: sourcePath, mime_type: "image/png", missing: false }],
-        { maxBytes: 1024, deps: { saveMediaBuffer } },
+        { maxBytes: 1024, allowedRoots: [tempDir], deps: { saveMediaBuffer } },
       ),
     ).resolves.toEqual([{ path: "/state/media/inbound/saved.png", contentType: "image/png" }]);
 
@@ -43,6 +43,37 @@ describe("stageIMessageAttachments", () => {
       "inbound",
       1024,
       "photo.png",
+    );
+  });
+
+  it("drops attachments whose canonical path escapes the allowed root", async () => {
+    const allowedRoot = path.join(tempDir, "allowed");
+    const outsideRoot = path.join(tempDir, "outside");
+    await fs.mkdir(allowedRoot, { recursive: true });
+    await fs.mkdir(outsideRoot, { recursive: true });
+    const outsidePath = path.join(outsideRoot, "secret.png");
+    await fs.writeFile(outsidePath, Buffer.from("secret-bytes"));
+    await fs.symlink(outsideRoot, path.join(allowedRoot, "link"), "dir");
+
+    const saveMediaBuffer = vi.fn();
+    const logVerbose = vi.fn();
+
+    await expect(
+      stageIMessageAttachments(
+        [
+          {
+            original_path: path.join(allowedRoot, "link", "secret.png"),
+            mime_type: "image/png",
+            missing: false,
+          },
+        ],
+        { maxBytes: 1024, allowedRoots: [allowedRoot], deps: { saveMediaBuffer, logVerbose } },
+      ),
+    ).resolves.toEqual([]);
+
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(logVerbose).toHaveBeenCalledWith(
+      expect.stringContaining("attachment path resolves outside allowed roots"),
     );
   });
 
