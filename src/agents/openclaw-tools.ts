@@ -429,17 +429,20 @@ export function createOpenClawTools(
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
-  const allTools = options?.disablePluginTools
-    ? tools
-    : [
-        ...tools,
-        ...resolveOpenClawPluginToolsForOptions({
-          options,
-          resolvedConfig,
-          existingToolNames: new Set(tools.map((tool) => tool.name)),
-        }),
-      ];
+  let allTools = tools;
   if (!options?.disablePluginTools) {
+    const existingToolNames = new Set<string>();
+    for (const tool of tools) {
+      existingToolNames.add(tool.name);
+    }
+    allTools = [
+      ...tools,
+      ...resolveOpenClawPluginToolsForOptions({
+        options,
+        resolvedConfig,
+        existingToolNames,
+      }),
+    ];
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
 
