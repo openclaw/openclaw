@@ -53,11 +53,11 @@ function sanitizeHookConsoleValue(value: string | undefined): string | undefined
   if (!normalized) {
     return undefined;
   }
-  return normalized
-    .replace(/[\u001b\r\n\t]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .slice(0, 500);
+  const withoutControlChars = Array.from(normalized, (char) => {
+    const code = char.charCodeAt(0);
+    return code < 32 || code === 127 ? " " : char;
+  }).join("");
+  return withoutControlChars.replace(/\s+/gu, " ").trim().slice(0, 500);
 }
 
 function formatHookRunWarningConsoleMessage(params: {
