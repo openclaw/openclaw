@@ -473,6 +473,29 @@ function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null 
   return path.basename(globalRoot) === "node_modules" ? globalRoot : null;
 }
 
+/**
+ * When OPENCLAW_HOME is set and the package root resides under it, infer the
+ * global node_modules root.  This covers custom pnpm --global-dir installs
+ * where the standard heuristics (pnpm root -g, .modules.yaml) don't match.
+ */
+function inferGlobalRootFromOpenclawHome(pkgRoot?: string | null): string | null {
+  const openclawHome = process.env.OPENCLAW_HOME?.trim();
+  if (!openclawHome || !pkgRoot) {
+    return null;
+  }
+  const resolvedHome = path.resolve(openclawHome);
+  const resolvedPkgRoot = path.resolve(pkgRoot);
+  if (!resolvedPkgRoot.startsWith(resolvedHome + path.sep)) {
+    return null;
+  }
+  // The package root is <global-root>/openclaw — so the global root is the parent
+  const candidate = path.dirname(resolvedPkgRoot);
+  if (path.basename(candidate) === "node_modules") {
+    return candidate;
+  }
+  return null;
+}
+
 function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
   const directGlobalRoot = inferGlobalRootFromPackageRoot(pkgRoot);
   if (resolvePnpmGlobalDirFromGlobalRoot(directGlobalRoot)) {
@@ -604,7 +627,11 @@ export async function resolveGlobalInstallTarget(params: {
     command.manager === "pnpm" && (await isPnpmGlobalPackageRoot(params.pkgRoot))
       ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
       : null;
-  const targetGlobalRoot = pkgRootGlobalRoot ?? globalRoot;
+  const openclawHomeGlobalRoot =
+    !pkgRootGlobalRoot && command.manager === "pnpm"
+      ? inferGlobalRootFromOpenclawHome(params.pkgRoot)
+      : null;
+  const targetGlobalRoot = pkgRootGlobalRoot ?? openclawHomeGlobalRoot ?? globalRoot;
   return {
     ...command,
     globalRoot: targetGlobalRoot,
@@ -662,6 +689,25 @@ export async function detectGlobalInstallManagerForRoot(
 
   if (resolvePreferredNpmCommand(pkgRoot)) {
     return "npm";
+  }
+
+  // If OPENCLAW_HOME is set and the package root resides under it,
+  // detect the package manager by checking which one is available.
+  const openclawHome = process.env.OPENCLAW_HOME?.trim();
+  if (openclawHome) {
+    const resolvedHome = path.resolve(openclawHome);
+    if (pkgReal.startsWith(resolvedHome + path.sep) || pkgReal === resolvedHome) {
+      // Check if pnpm is available (common for OPENCLAW_HOME custom installs)
+      const pnpmCheck = await runCommand(["pnpm", "--version"], { timeoutMs }).catch(() => null);
+      if (pnpmCheck && pnpmCheck.code === 0) {
+        return "pnpm";
+      }
+      // Fall back to npm
+      const npmCheck = await runCommand(["npm", "--version"], { timeoutMs }).catch(() => null);
+      if (npmCheck && npmCheck.code === 0) {
+        return "npm";
+      }
+    }
   }
 
   return null;

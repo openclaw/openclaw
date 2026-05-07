@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -560,6 +561,30 @@ describe("update global helpers", () => {
         packageRoot: path.join(defaultPnpmRoot, "openclaw"),
       });
     });
+  });
+
+  it("detects pnpm via OPENCLAW_HOME when standard heuristics fail", async () => {
+    const customHome = path.join(os.tmpdir(), "openclaw-home-test");
+    const pkgRoot = path.join(customHome, "node_modules", "openclaw");
+    process.env.OPENCLAW_HOME = customHome;
+    try {
+      const runCommand: CommandRunner = async (argv) => {
+        // Both npm root -g and pnpm root -g return paths that don't match pkgRoot
+        if (argv.includes("root") && argv.includes("-g")) {
+          return { stdout: "/some/other/path/node_modules\n", stderr: "", code: 0 };
+        }
+        // pnpm --version succeeds
+        if (argv[0] === "pnpm" && argv[1] === "--version") {
+          return { stdout: "9.0.0\n", stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 1 };
+      };
+      await expect(
+        detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000),
+      ).resolves.toBe("pnpm");
+    } finally {
+      delete process.env.OPENCLAW_HOME;
+    }
   });
 
   it("builds install argv and npm fallback argv", () => {

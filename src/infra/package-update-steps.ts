@@ -17,6 +17,16 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 
+/**
+ * If OPENCLAW_HOME is set, return it as the pnpm --global-dir value.
+ * This supports custom pnpm global installs where the standard layout
+ * heuristic (versioned subdirectory) does not apply.
+ */
+function resolveOpenclawHomeAsGlobalDir(): string | null {
+  const value = process.env.OPENCLAW_HOME?.trim();
+  return value ? path.resolve(value) : null;
+}
+
 export type PackageUpdateStepResult = {
   name: string;
   command: string;
@@ -376,7 +386,8 @@ export async function runGlobalPackageUpdateSteps(params: {
     const installLocation =
       stagedInstall?.prefix ??
       (installCommandTarget.manager === "pnpm"
-        ? resolvePnpmGlobalDirFromGlobalRoot(installCommandTarget.globalRoot)
+        ? resolvePnpmGlobalDirFromGlobalRoot(installCommandTarget.globalRoot) ??
+          resolveOpenclawHomeAsGlobalDir()
         : null);
     const updateStep = await params.runStep({
       name: "global update",

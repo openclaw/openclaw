@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -221,6 +222,25 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
     const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
     if (packageRoot) {
       dirs.push(packageRoot);
+    }
+  }
+  const openclawHome = normalizeDir(process.env.OPENCLAW_HOME);
+  if (openclawHome) {
+    dirs.push(openclawHome);
+    // Add common package locations under OPENCLAW_HOME so that
+    // findPackageRoot can locate the openclaw package.json.
+    // Direct node_modules layout (npm-style)
+    dirs.push(path.join(openclawHome, "node_modules", "openclaw"));
+    // pnpm global layout: <global-dir>/<version>/node_modules/<pkg>
+    try {
+      const entries = fsSync.readdirSync(openclawHome, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && /^\d+$/u.test(entry.name)) {
+          dirs.push(path.join(openclawHome, entry.name, "node_modules", "openclaw"));
+        }
+      }
+    } catch {
+      // ignore - directory may not exist or not be readable
     }
   }
   const proc = normalizeDir(process.cwd());
