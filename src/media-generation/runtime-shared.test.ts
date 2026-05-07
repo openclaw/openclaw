@@ -131,6 +131,7 @@ describe("media-generation runtime shared candidates", () => {
   });
 
   it("disables implicit provider expansion when mediaGenerationAutoProviderFallback=false", () => {
+    let listProviderCalls = 0;
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
         agents: {
@@ -143,16 +144,20 @@ describe("media-generation runtime shared candidates", () => {
         primary: "google/gemini-3.1-flash-image-preview",
       },
       parseModelRef,
-      listProviders: () => [
-        {
-          id: "openai",
-          defaultModel: "gpt-image-1",
-          isConfigured: () => true,
-        },
-      ],
+      listProviders: () => {
+        listProviderCalls += 1;
+        return [
+          {
+            id: "openai",
+            defaultModel: "gpt-image-1",
+            isConfigured: () => true,
+          },
+        ];
+      },
     });
 
     expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
+    expect(listProviderCalls).toBe(0);
   });
 
   it("treats an explicit model override as exact-only", () => {

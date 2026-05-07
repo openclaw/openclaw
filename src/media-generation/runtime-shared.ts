@@ -163,19 +163,6 @@ function resolveAutoCapabilityFallbackRefs(params: {
   });
 }
 
-function providerMatchesId(provider: CapabilityProviderCandidate, providerId: string): boolean {
-  const normalizedProviderId = normalizeOptionalString(providerId);
-  if (!normalizedProviderId) {
-    return false;
-  }
-  return (
-    normalizeOptionalString(provider.id) === normalizedProviderId ||
-    (provider.aliases ?? []).some(
-      (alias) => normalizeOptionalString(alias) === normalizedProviderId,
-    )
-  );
-}
-
 function resolveProviderModelOnlyRef(params: {
   raw: string;
   providers: CapabilityProviderCandidate[];
@@ -207,16 +194,19 @@ export function resolveCapabilityModelCandidates(params: {
     providers ??= params.listProviders?.(params.cfg) ?? [];
     return providers;
   };
-  const add = (raw: string | undefined) => {
+  const resolveCandidate = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
     const trimmed = normalizeOptionalString(raw);
     if (!trimmed) {
-      return;
+      return null;
     }
     const parsed = params.parseModelRef(raw);
-    const candidate =
-      parsed && getProviders().some((provider) => providerMatchesId(provider, parsed.provider))
-        ? parsed
-        : (resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed);
+    if (!options.useProviderMetadata) {
+      return parsed;
+    }
+    return resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed;
+  };
+  const add = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
+    const candidate = resolveCandidate(raw, options);
     if (!candidate) {
       return;
     }
@@ -229,34 +219,29 @@ export function resolveCapabilityModelCandidates(params: {
   };
 
   const override = (() => {
-    const raw = normalizeOptionalString(params.modelOverride);
-    if (!raw) {
-      return null;
-    }
-    const parsed = params.parseModelRef(raw);
-    return parsed && getProviders().some((provider) => providerMatchesId(provider, parsed.provider))
-      ? parsed
-      : (resolveProviderModelOnlyRef({ raw, providers: getProviders() }) ?? parsed);
+    return resolveCandidate(params.modelOverride, { useProviderMetadata: true });
   })();
   if (override) {
     return [override];
   }
 
-  add(params.modelOverride);
-  add(resolveAgentModelPrimaryValue(params.modelConfig));
-  for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
-    add(fallback);
-  }
   const autoProviderFallbackEnabled =
     params.autoProviderFallback ??
     params.cfg.agents?.defaults?.mediaGenerationAutoProviderFallback !== false;
+  add(params.modelOverride, { useProviderMetadata: true });
+  add(resolveAgentModelPrimaryValue(params.modelConfig), {
+    useProviderMetadata: autoProviderFallbackEnabled,
+  });
+  for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
+    add(fallback, { useProviderMetadata: autoProviderFallbackEnabled });
+  }
   if (autoProviderFallbackEnabled && params.listProviders) {
     for (const candidate of resolveAutoCapabilityFallbackRefs({
       cfg: params.cfg,
       agentDir: params.agentDir,
       listProviders: () => getProviders(),
     })) {
-      add(candidate);
+      add(candidate, { useProviderMetadata: false });
     }
   }
   return candidates;
