@@ -229,17 +229,7 @@ describe("openai codex provider", () => {
           },
         },
       ],
-      defaultModel: "openai/gpt-5.5",
-      configPatch: {
-        agents: {
-          defaults: {
-            agentRuntime: { id: "codex" },
-            models: {
-              "openai/gpt-5.5": {},
-            },
-          },
-        },
-      },
+      defaultModel: "openai-codex/gpt-5.5",
     });
     expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
   });

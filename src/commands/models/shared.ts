@@ -7,7 +7,6 @@ import {
   parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { modelSelectionRequiresCodexRuntime } from "../../agents/openai-codex-routing.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
@@ -221,9 +220,6 @@ export function applyDefaultModelPrimaryUpdate(params: {
   const existing = toAgentModelListLike(
     (defaults as Record<string, unknown>)[params.field] as AgentModelConfig | undefined,
   );
-  const shouldUseCodexRuntime =
-    params.field === "model" &&
-    modelSelectionRequiresCodexRuntime({ model: key, config: params.cfg });
 
   return {
     ...params.cfg,
@@ -231,7 +227,6 @@ export function applyDefaultModelPrimaryUpdate(params: {
       ...params.cfg.agents,
       defaults: {
         ...defaults,
-        ...(shouldUseCodexRuntime ? { agentRuntime: { id: "codex" } } : {}),
         [params.field]: mergePrimaryFallbackConfig(existing, { primary: key }),
         models: nextModels,
       },

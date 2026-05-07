@@ -176,10 +176,10 @@ function resolveFallbackModelKeys(params: {
 function resolveModelRouteHint(provider: string): string | undefined {
   const normalized = normalizeProviderId(provider);
   if (normalized === "openai") {
-    return "Codex runtime route";
+    return "API key route";
   }
   if (normalized === "openai-codex") {
-    return "legacy Codex OAuth route";
+    return "ChatGPT OAuth route";
   }
   return undefined;
 }

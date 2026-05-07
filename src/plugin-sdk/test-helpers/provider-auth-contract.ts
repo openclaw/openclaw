@@ -94,13 +94,12 @@ function buildOpenAICodexOAuthResult(params: {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": {},
+            "openai-codex/gpt-5.5": {},
           },
-          agentRuntime: { id: "codex" },
         },
       },
     },
-    defaultModel: "openai/gpt-5.5",
+    defaultModel: "openai-codex/gpt-5.5",
     notes: undefined,
   };
 }
