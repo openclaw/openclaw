@@ -45,9 +45,13 @@ export class NodeRegistry {
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
-    const caps = Array.isArray(connect.caps) ? connect.caps : [];
+    const caps = Array.isArray(connect.caps)
+      ? connect.caps.filter((c): c is string => typeof c === "string")
+      : [];
     const commands = Array.isArray((connect as { commands?: string[] }).commands)
-      ? ((connect as { commands?: string[] }).commands ?? [])
+      ? ((connect as { commands?: string[] }).commands ?? []).filter(
+          (c): c is string => typeof c === "string",
+        )
       : [];
     const permissions =
       typeof (connect as { permissions?: Record<string, boolean> }).permissions === "object"

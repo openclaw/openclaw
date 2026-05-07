@@ -289,4 +289,30 @@ describe("gateway/node-catalog", () => {
       }),
     );
   });
+
+  it("handles non-string entries in caps/commands without crashing", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [],
+      pairedNodes: [],
+      connectedNodes: [
+        {
+          nodeId: "broken-node",
+          displayName: "Broken",
+          platform: "android",
+          caps: ["camera", undefined as unknown as string, null as unknown as string, ""],
+          commands: [undefined as unknown as string, "exec"],
+          connectedAtMs: 1,
+        },
+      ],
+    });
+
+    const node = getKnownNode(catalog, "broken-node");
+    expect(node).toEqual(
+      expect.objectContaining({
+        caps: ["camera"],
+        commands: ["exec"],
+        connected: true,
+      }),
+    );
+  });
 });

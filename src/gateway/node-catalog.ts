@@ -54,6 +54,9 @@ function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): st
       continue;
     }
     for (const value of item) {
+      if (typeof value !== "string") {
+        continue;
+      }
       const trimmed = value.trim();
       if (trimmed) {
         values.add(trimmed);
