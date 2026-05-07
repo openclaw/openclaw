@@ -7,6 +7,7 @@ import { isRecord } from "../utils.js";
 const LEDGER_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
+const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
 
 export type AcpEventLedgerEntry = {
   seq: number;
@@ -44,6 +45,7 @@ export type AcpEventLedger = {
     runId?: string;
     update: SessionUpdate;
   }) => Promise<void>;
+  markIncomplete: (params: { sessionId: string; sessionKey: string }) => Promise<void>;
   readReplay: (params: { sessionId: string; sessionKey: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionId: (params: { sessionId: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
@@ -68,6 +70,7 @@ type LedgerStore = {
 type LedgerOptions = {
   maxSessions?: number;
   maxEventsPerSession?: number;
+  maxSerializedBytes?: number;
   now?: () => number;
 };
 
@@ -75,6 +78,7 @@ type MutableLedgerState = {
   store: LedgerStore;
   maxSessions: number;
   maxEventsPerSession: number;
+  maxSerializedBytes: number;
   now: () => number;
 };
 
@@ -91,6 +95,10 @@ function normalizeLedgerOptions(options: LedgerOptions = {}) {
     maxEventsPerSession: Math.max(
       1,
       Math.floor(options.maxEventsPerSession ?? DEFAULT_MAX_EVENTS_PER_SESSION),
+    ),
+    maxSerializedBytes: Math.max(
+      1_024,
+      Math.floor(options.maxSerializedBytes ?? DEFAULT_MAX_SERIALIZED_BYTES),
     ),
     now: options.now ?? Date.now,
   };
@@ -242,6 +250,30 @@ function trimLedger(state: MutableLedgerState): void {
   for (const session of sessions.slice(state.maxSessions)) {
     delete state.store.sessions[session.sessionId];
   }
+
+  let serializedBytes = Buffer.byteLength(JSON.stringify(state.store), "utf8");
+  while (serializedBytes > state.maxSerializedBytes) {
+    const session = Object.values(state.store.sessions)
+      .filter((candidate) => candidate.events.length > 0)
+      .toSorted((a, b) => a.updatedAt - b.updatedAt)[0];
+    if (!session) {
+      break;
+    }
+    session.events.shift();
+    session.complete = false;
+    serializedBytes = Buffer.byteLength(JSON.stringify(state.store), "utf8");
+  }
+
+  while (serializedBytes > state.maxSerializedBytes) {
+    const session = Object.values(state.store.sessions).toSorted(
+      (a, b) => a.updatedAt - b.updatedAt,
+    )[0];
+    if (!session) {
+      break;
+    }
+    delete state.store.sessions[session.sessionId];
+    serializedBytes = Buffer.byteLength(JSON.stringify(state.store), "utf8");
+  }
 }
 
 function appendUpdate(
@@ -309,6 +341,17 @@ function createLedgerApi(params: {
     async recordUpdate(updateParams) {
       await params.mutate(() => {
         appendUpdate(params.state, updateParams);
+      });
+    },
+
+    async markIncomplete(markParams) {
+      await params.mutate(() => {
+        const session = params.state.store.sessions[markParams.sessionId];
+        if (!session || session.sessionKey !== markParams.sessionKey) {
+          return;
+        }
+        session.complete = false;
+        session.updatedAt = params.state.now();
       });
     },
 

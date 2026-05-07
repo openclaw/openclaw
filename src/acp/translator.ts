@@ -1501,6 +1501,7 @@ export class AcpGatewayAgent implements Agent {
       });
     } catch (err) {
       this.log(`event ledger prompt record failed for ${session.sessionId}: ${String(err)}`);
+      await this.markLedgerIncomplete(session);
     }
   }
 
@@ -1520,6 +1521,26 @@ export class AcpGatewayAgent implements Agent {
       });
     } catch (err) {
       this.log(`event ledger update record failed for ${params.sessionId}: ${String(err)}`);
+      await this.markLedgerIncomplete({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
+      });
+    }
+  }
+
+  private async markLedgerIncomplete(session: {
+    sessionId: string;
+    sessionKey: string;
+    ledgerSessionId?: string;
+  }): Promise<void> {
+    try {
+      await this.eventLedger.markIncomplete({
+        sessionId: resolveLedgerSessionId(session),
+        sessionKey: session.sessionKey,
+      });
+    } catch (err) {
+      this.log(`event ledger incomplete mark failed for ${session.sessionId}: ${String(err)}`);
     }
   }
 

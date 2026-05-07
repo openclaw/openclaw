@@ -6,7 +6,7 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
-import { createInMemoryAcpEventLedger } from "./event-ledger.js";
+import { createInMemoryAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
@@ -329,5 +329,68 @@ describe("ACP translator event ledger replay", () => {
       (call) => call[0]?.update?.sessionUpdate,
     );
     expect(replayedUpdates).not.toContain("user_message_chunk");
+  });
+
+  it("marks replay incomplete when an accepted prompt cannot be recorded", async () => {
+    const innerLedger = createInMemoryAcpEventLedger();
+    let markIncompleteResolve: ((value: unknown) => void) | undefined;
+    const markIncompletePromise = new Promise((resolve) => {
+      markIncompleteResolve = resolve;
+    });
+    const eventLedger: AcpEventLedger = {
+      ...innerLedger,
+      recordUserPrompt: async () => {
+        throw new Error("ledger write failed");
+      },
+      markIncomplete: async (params) => {
+        await innerLedger.markIncomplete(params);
+        markIncompleteResolve?.(params);
+      },
+    };
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const requestMock = vi.fn(async (_method: string) => ({ ok: true }));
+    const agent = new AcpGatewayAgent(
+      connection,
+      createAcpGateway(requestMock as GatewayClient["request"]),
+      {
+        eventLedger,
+        sessionStore,
+      },
+    );
+
+    const created = await agent.newSession(createNewSessionRequest());
+    const session = sessionStore.getSession(created.sessionId);
+    if (!session) {
+      throw new Error("Expected new ACP session to be stored");
+    }
+
+    const prompt = agent.prompt(createPromptRequest(created.sessionId, "Question"));
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (requestMock.mock.calls.some((call) => call[0] === "chat.send")) {
+        break;
+      }
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+    await markIncompletePromise;
+    const runId = sessionStore.getSession(created.sessionId)?.activeRunId;
+    if (!runId) {
+      throw new Error("Expected active ACP run");
+    }
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        sessionKey: session.sessionKey,
+        runId,
+        state: "final",
+        text: "Answer",
+      }),
+    );
+    await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
+
+    await expect(
+      innerLedger.readReplay({ sessionId: created.sessionId, sessionKey: session.sessionKey }),
+    ).resolves.toEqual({ complete: false, events: [] });
   });
 });

@@ -138,6 +138,30 @@ describe("ACP event ledger", () => {
     ]);
   });
 
+  it("marks replay incomplete when serialized byte retention trims payloads", async () => {
+    const ledger = createInMemoryAcpEventLedger({ maxSerializedBytes: 900 });
+    await ledger.startSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:work",
+      cwd: "/work",
+      complete: true,
+    });
+    await ledger.recordUpdate({
+      sessionId: "session-1",
+      sessionKey: "agent:main:work",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-1",
+        status: "completed",
+        rawOutput: { content: "x".repeat(5_000) },
+      },
+    });
+
+    await expect(
+      ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+    ).resolves.toEqual({ complete: false, events: [] });
+  });
+
   it("ignores corrupt ledger files instead of replaying unknown state", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const filePath = path.join(dir, "event-ledger.json");
