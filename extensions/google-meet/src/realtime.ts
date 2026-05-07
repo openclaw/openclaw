@@ -704,6 +704,7 @@ export async function startCommandAgentAudioBridge(params: {
   });
 
   sttSession = resolved.provider.createSession({
+    cfg: params.fullConfig,
     providerConfig: resolved.providerConfig,
     onTranscript: (text) => {
       const trimmed = text.trim();

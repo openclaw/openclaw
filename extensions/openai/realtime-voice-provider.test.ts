@@ -2,7 +2,13 @@ import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const { FakeWebSocket, execFileSyncMock, fetchWithSsrFGuardMock } = vi.hoisted(() => {
+const {
+  FakeWebSocket,
+  execFileSyncMock,
+  fetchWithSsrFGuardMock,
+  isProviderAuthProfileConfiguredMock,
+  resolveProviderAuthProfileApiKeyMock,
+} = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;
 
   class MockWebSocket {
@@ -55,6 +61,8 @@ const { FakeWebSocket, execFileSyncMock, fetchWithSsrFGuardMock } = vi.hoisted((
     FakeWebSocket: MockWebSocket,
     execFileSyncMock: vi.fn(),
     fetchWithSsrFGuardMock: vi.fn(),
+    isProviderAuthProfileConfiguredMock: vi.fn(),
+    resolveProviderAuthProfileApiKeyMock: vi.fn(),
   };
 });
 
@@ -74,6 +82,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+  isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
+  resolveProviderAuthProfileApiKey: resolveProviderAuthProfileApiKeyMock,
+}));
+
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
 type SentRealtimeEvent = {
   type: string;
@@ -82,8 +95,14 @@ type SentRealtimeEvent = {
   content_index?: number;
   audio_end_ms?: number;
   session?: {
+    type?: string;
+    model?: string;
+    modalities?: string[];
+    instructions?: string;
+    voice?: string;
     input_audio_format?: string;
     output_audio_format?: string;
+    input_audio_transcription?: Record<string, unknown>;
     turn_detection?: {
       create_response?: boolean;
     };
@@ -100,6 +119,7 @@ type SentRealtimeEvent = {
       };
       output?: {
         format?: Record<string, unknown>;
+        voice?: string;
       };
     };
     item?: unknown;
@@ -124,6 +144,10 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     FakeWebSocket.instances = [];
     execFileSyncMock.mockReset();
     fetchWithSsrFGuardMock.mockReset();
+    isProviderAuthProfileConfiguredMock.mockReset();
+    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
+    resolveProviderAuthProfileApiKeyMock.mockReset();
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -184,32 +208,100 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(options?.headers).not.toHaveProperty("OpenAI-Beta");
   });
 
-  it("keeps Azure deployment realtime bridge requests on the deployment-compatible session shape", () => {
+  it("mints an ephemeral Realtime secret for native websocket bridges when using Codex OAuth", async () => {
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-token");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({
+        client_secret: { value: "ephemeral-realtime-secret" },
+      }),
+      release: vi.fn(async () => undefined),
+    });
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
-      providerConfig: {
-        apiKey: "sk-test", // pragma: allowlist secret
-        azureEndpoint: "https://example.openai.azure.com",
-        azureDeployment: "realtime-prod",
-      },
+      cfg: {} as never,
+      providerConfig: { model: "gpt-realtime-2" },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     });
 
     void bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
     bridge.close();
 
-    expect(parseSent(socket)[0]?.session).toMatchObject({
-      modalities: ["text", "audio"],
-      input_audio_format: "g711_ulaw",
-      output_audio_format: "g711_ulaw",
+    expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      cfg: {},
     });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/realtime/client_secrets",
+        init: expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Authorization: "Bearer oauth-token", // pragma: allowlist secret
+            "Content-Type": "application/json",
+          }),
+        }),
+        auditContext: "openai-realtime-bridge-session",
+      }),
+    );
+    const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
+      | { init?: { body?: string } }
+      | undefined;
+    const body = JSON.parse(request?.init?.body ?? "{}") as {
+      session?: {
+        type?: string;
+        model?: string;
+        audio?: { output?: { voice?: string } };
+      };
+    };
+    expect(body.session).toMatchObject({
+      type: "realtime",
+      model: "gpt-realtime-2",
+      audio: { output: { voice: "alloy" } },
+    });
+    const socket = FakeWebSocket.instances[0];
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.Authorization).toBe("Bearer ephemeral-realtime-secret");
+    expect(options?.headers).not.toHaveProperty("OpenAI-Beta");
+  });
+
+  it("does not open a native websocket after slow OAuth resolution times out", async () => {
+    vi.useFakeTimers();
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-token");
+    let resolveClientSecret: (value: {
+      response: Response;
+      release: () => Promise<void>;
+    }) => void = () => {};
+    fetchWithSsrFGuardMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveClientSecret = resolve;
+      }),
+    );
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      cfg: {} as never,
+      providerConfig: { model: "gpt-realtime-2" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    const connecting = expect(bridge.connect()).rejects.toThrow(
+      "OpenAI realtime connection timeout",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await connecting;
+
+    resolveClientSecret({
+      response: createJsonResponse({
+        client_secret: { value: "ephemeral-realtime-secret" },
+      }),
+      release: vi.fn(async () => undefined),
+    });
+    await vi.runAllTimersAsync();
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    bridge.close();
   });
 
   it("returns browser-safe OpenClaw attribution headers for native WebRTC offers", async () => {
@@ -229,6 +321,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const session = await provider.createBrowserSession({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
       instructions: "Be concise.",
+      voice: " Marin ",
     });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
@@ -257,7 +350,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
             turn_detection?: Record<string, unknown>;
             transcription?: Record<string, unknown>;
           };
+          output?: Record<string, unknown>;
         };
+        reasoning?: Record<string, unknown>;
       };
     };
     expect(body.session?.model).toBe("gpt-realtime-2");
@@ -270,6 +365,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       },
       transcription: { model: "gpt-4o-mini-transcribe" },
     });
+    expect(body.session?.audio?.output).toEqual({ voice: "marin" });
+    expect(body.session).not.toHaveProperty("temperature");
     expect(session).toMatchObject({
       provider: "openai",
       transport: "webrtc",
@@ -359,20 +456,84 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
-  it("fails closed when keychain refs cannot be resolved", () => {
+  it("treats OpenAI Codex OAuth profiles as configured for browser realtime sessions", () => {
+    isProviderAuthProfileConfiguredMock.mockReturnValue(true);
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const cfg = { agents: { defaults: {} } } as never;
+
+    expect(provider.isConfigured({ cfg, providerConfig: {} })).toBe(true);
+    expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      cfg,
+    });
+  });
+
+  it("does not use Codex OAuth to configure Azure realtime sessions", () => {
+    isProviderAuthProfileConfiguredMock.mockReturnValue(true);
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const cfg = { agents: { defaults: {} } } as never;
+
+    expect(
+      provider.isConfigured({
+        cfg,
+        providerConfig: {
+          azureEndpoint: "https://example.openai.azure.com",
+          azureDeployment: "realtime",
+        },
+      }),
+    ).toBe(false);
+    expect(isProviderAuthProfileConfiguredMock).not.toHaveBeenCalled();
+  });
+
+  it("uses OpenAI Codex OAuth to mint browser realtime client secrets when no API key is set", async () => {
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-realtime-token");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({
+        client_secret: { value: "client-secret-123" },
+      }),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+    const cfg = { agents: { defaults: {} } } as never;
+
+    await provider.createBrowserSession({
+      cfg,
+      providerConfig: {},
+      instructions: "Be concise.",
+    });
+
+    expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      cfg,
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        init: expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer oauth-realtime-token", // pragma: allowlist secret
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("fails closed when keychain refs cannot be resolved", async () => {
     vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
     execFileSyncMock.mockImplementationOnce(() => {
       throw new Error("keychain unavailable");
     });
     const provider = buildOpenAIRealtimeVoiceProvider();
 
-    expect(() =>
-      provider.createBridge({
-        providerConfig: {},
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
-      }),
-    ).toThrow("OpenAI API key missing");
+    const bridge = provider.createBridge({
+      providerConfig: {},
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await expect(bridge.connect()).rejects.toThrow("OpenAI API key or Codex OAuth missing");
   });
 
   it("normalizes provider-owned voice settings from raw provider config", () => {
@@ -383,10 +544,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         providers: {
           openai: {
             model: "gpt-realtime-2",
-            voice: "verse",
+            voice: " Verse ",
             temperature: 0.6,
             silenceDurationMs: 850,
             vadThreshold: 0.35,
+            reasoningEffort: "low",
           },
         },
       },
@@ -398,6 +560,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       temperature: 0.6,
       silenceDurationMs: 850,
       vadThreshold: 0.35,
+      reasoningEffort: "low",
     });
   });
 
@@ -443,6 +606,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         },
         output: {
           format: { type: "audio/pcmu" },
+          voice: "alloy",
         },
       },
     });
@@ -459,6 +623,53 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "input_audio_buffer.append",
     ]);
     expect(bridge.isConnected()).toBe(true);
+  });
+
+  it("keeps Azure deployment bridges on deployment-compatible session payloads", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "sk-test", // pragma: allowlist secret
+        azureEndpoint: "https://example.openai.azure.com/",
+        azureDeployment: "realtime-prod",
+        azureApiVersion: "2024-10-01-preview",
+        voice: "verse",
+      },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      instructions: "Be helpful.",
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    expect(socket.args[0]).toBe(
+      "wss://example.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=realtime-prod",
+    );
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    await Promise.resolve();
+
+    const session = parseSent(socket)[0]?.session;
+    expect(session).toMatchObject({
+      modalities: ["text", "audio"],
+      instructions: "Be helpful.",
+      voice: "verse",
+      input_audio_format: "pcm16",
+      output_audio_format: "pcm16",
+      input_audio_transcription: { model: "whisper-1" },
+      turn_detection: { create_response: true },
+      temperature: 0.8,
+    });
+    expect(session).not.toHaveProperty("type");
+    expect(session).not.toHaveProperty("audio");
+
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
   });
 
   it("rejects connection when session configuration fails before readiness", async () => {

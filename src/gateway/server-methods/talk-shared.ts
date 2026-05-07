@@ -221,18 +221,59 @@ export function buildRealtimeInstructions(configuredInstructions?: string): stri
   return `${DEFAULT_REALTIME_INSTRUCTIONS}\n\nAdditional realtime instructions:\n${extra}`;
 }
 
+type RealtimeVoiceLaunchOptions = {
+  model?: string;
+  voice?: string;
+  vadThreshold?: number;
+  silenceDurationMs?: number;
+  prefixPaddingMs?: number;
+  reasoningEffort?: string;
+};
+
+type RealtimeVoiceLaunchOptionInput = {
+  model?: unknown;
+  voice?: unknown;
+  vadThreshold?: unknown;
+  silenceDurationMs?: unknown;
+  prefixPaddingMs?: unknown;
+  reasoningEffort?: unknown;
+};
+
+export function buildRealtimeVoiceLaunchOptions(params: {
+  requested: RealtimeVoiceLaunchOptionInput;
+  defaults: RealtimeVoiceLaunchOptions;
+}): RealtimeVoiceLaunchOptions {
+  return withRealtimeBrowserOverrides(
+    params.defaults,
+    params.requested,
+  ) as RealtimeVoiceLaunchOptions;
+}
+
 export function withRealtimeBrowserOverrides(
   providerConfig: RealtimeVoiceProviderConfig,
-  params: { model?: string; voice?: string },
+  params: RealtimeVoiceLaunchOptionInput,
 ): RealtimeVoiceProviderConfig {
   const overrides: RealtimeVoiceProviderConfig = {};
   const model = normalizeOptionalString(params.model);
   const voice = normalizeOptionalString(params.voice);
+  const reasoningEffort = normalizeOptionalString(params.reasoningEffort);
   if (model) {
     overrides.model = model;
   }
   if (voice) {
     overrides.voice = voice;
+  }
+  if (typeof params.vadThreshold === "number" && Number.isFinite(params.vadThreshold)) {
+    overrides.vadThreshold = params.vadThreshold;
+  }
+  if (typeof params.silenceDurationMs === "number" && Number.isFinite(params.silenceDurationMs)) {
+    overrides.silenceDurationMs = params.silenceDurationMs;
+  }
+  if (typeof params.prefixPaddingMs === "number" && Number.isFinite(params.prefixPaddingMs)) {
+    overrides.prefixPaddingMs = params.prefixPaddingMs;
+  }
+  if (reasoningEffort) {
+    overrides.reasoningEffort = reasoningEffort;
   }
   return Object.keys(overrides).length > 0 ? { ...providerConfig, ...overrides } : providerConfig;
 }

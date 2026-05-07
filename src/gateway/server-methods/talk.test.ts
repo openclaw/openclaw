@@ -1219,7 +1219,13 @@ describe("talk.client.create handler", () => {
     const respond = vi.fn();
     await talkHandlers["talk.client.create"]({
       req: { type: "req", id: "1", method: "talk.client.create" },
-      params: { sessionKey: "main" },
+      params: {
+        sessionKey: "main",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
+      },
       client: { connId: "conn-1" } as never,
       isWebchatConnect: () => false,
       respond: respond as never,
@@ -1252,6 +1258,10 @@ describe("talk.client.create handler", () => {
         model: "gpt-realtime",
         voice: "alloy",
         instructions: expect.stringContaining("Additional realtime instructions:\nSpeak warmly."),
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
       }),
     );
     expect(respond).toHaveBeenCalledWith(

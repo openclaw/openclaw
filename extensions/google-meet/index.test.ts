@@ -2562,7 +2562,7 @@ describe("google-meet plugin", () => {
     expect(focusCall[3]).toEqual({ progress: false });
   });
 
-  it("does not mutate realtime browser prompts when status is requested", async () => {
+  it("refreshes blocked realtime browser health read-only when status is requested", async () => {
     let openedTab = false;
     const { methods, nodesInvoke } = setup(
       {
@@ -2574,7 +2574,22 @@ describe("google-meet plugin", () => {
           const raw = params as { path?: string; body?: { url?: string; targetId?: string } };
           if (command === "browser.proxy") {
             if (raw.path === "/tabs") {
-              return { payload: { result: { running: true, tabs: [] } } };
+              return {
+                payload: {
+                  result: {
+                    running: true,
+                    tabs: openedTab
+                      ? [
+                          {
+                            targetId: "tab-1",
+                            title: "Meet",
+                            url: "https://meet.google.com/abc-defg-hij",
+                          },
+                        ]
+                      : [],
+                  },
+                },
+              };
             }
             if (raw.path === "/tabs/open") {
               openedTab = true;
@@ -2621,6 +2636,7 @@ describe("google-meet plugin", () => {
     const join = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
       url: "https://meet.google.com/abc-defg-hij",
     })) as { session: { id: string } };
+    openedTab = true;
     nodesInvoke.mockClear();
 
     const status = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.status", {
@@ -2628,11 +2644,23 @@ describe("google-meet plugin", () => {
     })) as { session?: { chrome?: { health?: { manualActionRequired?: boolean } } } };
 
     expect(status.session?.chrome?.health?.manualActionRequired).toBe(true);
-    expect(
-      nodesInvoke.mock.calls.some(
-        ([params]) => requireRecord(params, "node invoke").command === "browser.proxy",
-      ),
-    ).toBe(false);
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          path: "/act",
+          body: expect.objectContaining({ targetId: "tab-1" }),
+        }),
+      }),
+    );
+    expect(nodesInvoke).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          path: "/permissions/grant",
+        }),
+      }),
+    );
   });
 
   it("retries caption enable until the captions button is available", async () => {
@@ -3571,6 +3599,52 @@ describe("google-meet plugin", () => {
     expect(result.spoken).toBe(true);
     expect(result.speechOutputVerified).toBe(false);
     expect(result.speechOutputTimedOut).toBe(false);
+  });
+
+  it("uses the requested bidirectional realtime mode for test speech", async () => {
+    const runtime = new GoogleMeetRuntime({
+      config: resolveGoogleMeetConfig({ defaultMode: "agent" }),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      logger: noopLogger,
+    });
+    const session: GoogleMeetSession = {
+      id: "meet_1",
+      url: "https://meet.google.com/abc-defg-hij",
+      transport: "chrome",
+      mode: "bidi",
+      state: "active",
+      createdAt: "2026-04-27T00:00:00.000Z",
+      updatedAt: "2026-04-27T00:00:00.000Z",
+      participantIdentity: "signed-in Google Chrome profile",
+      realtime: {
+        enabled: true,
+        strategy: "bidi",
+        provider: "openai",
+        toolPolicy: "safe-read-only",
+      },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { audioOutputActive: true, lastOutputBytes: 10 },
+      },
+      notes: [],
+    };
+    vi.spyOn(runtime, "list").mockReturnValue([]);
+    const join = vi.spyOn(runtime, "join").mockResolvedValue({ session, spoken: true });
+
+    await runtime.testSpeech({
+      url: "https://meet.google.com/abc-defg-hij",
+      mode: "bidi",
+      message: "Say exactly: hello.",
+    });
+
+    expect(join).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Say exactly: hello.",
+        mode: "bidi",
+      }),
+    );
   });
 
   it("rejects observe-only mode for test speech", async () => {
