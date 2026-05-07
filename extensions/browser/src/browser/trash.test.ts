@@ -115,8 +115,12 @@ describe("browser trash", () => {
 
   it("refuses to trash paths outside allowed roots", async () => {
     const { movePathToTrash } = await import("./trash.js");
+    const outsideDir = path.join(testRoot, "outside");
+    realMkdirSync(outsideDir, { recursive: true });
+    const outsidePath = path.join(outsideDir, "openclaw-demo");
+    realWriteFileSync(outsidePath, "outside");
 
-    await expect(movePathToTrash("/etc/openclaw-demo")).rejects.toThrow(
+    await expect(movePathToTrash(outsidePath)).rejects.toThrow(
       "Refusing to trash path outside allowed roots",
     );
   });
