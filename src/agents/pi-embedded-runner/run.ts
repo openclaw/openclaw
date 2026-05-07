@@ -82,7 +82,7 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
-import { suspendSession } from "../session-suspension.js";
+import { resolveSessionSuspensionReason, suspendSession } from "../session-suspension.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -1885,8 +1885,7 @@ export async function runEmbeddedPiAgent(
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
                 laneId: globalLane,
-                reason:
-                  normalizedPromptFailover.reason === "billing" ? "manual" : "quota_exhausted",
+                reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
                 failedProvider: normalizedPromptFailover.provider ?? provider,
                 failedModel: normalizedPromptFailover.model ?? modelId,
               });
@@ -2267,10 +2266,7 @@ export async function runEmbeddedPiAgent(
                 agentDir,
                 sessionId: activeSessionId ?? params.sessionId,
                 laneId: globalLane,
-                reason:
-                  assistantFailoverOutcome.error.reason === "billing"
-                    ? "manual"
-                    : "quota_exhausted",
+                reason: resolveSessionSuspensionReason(assistantFailoverOutcome.error.reason),
                 failedProvider: assistantFailoverOutcome.error.provider ?? provider,
                 failedModel: assistantFailoverOutcome.error.model ?? modelId,
               });

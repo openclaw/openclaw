@@ -42,7 +42,7 @@ import {
 } from "./model-selection-resolve.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
-import { suspendSession } from "./session-suspension.js";
+import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -50,8 +50,6 @@ type FailoverAttribution = {
   sessionId?: string;
   lane?: string;
 };
-
-type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
 
 /**
  * Structured error thrown when all model fallback candidates have been
@@ -824,16 +822,6 @@ function resolveCooldownDecision(params: {
     reason: inferredReason,
     markProbe: params.isPrimary && shouldProbe,
   };
-}
-
-function resolveSessionSuspensionReason(reason: FailoverReason): SessionSuspensionReason {
-  if (reason === "billing") {
-    return "manual";
-  }
-  if (reason === "rate_limit") {
-    return "quota_exhausted";
-  }
-  return "circuit_open";
 }
 
 export async function runWithModelFallback<T>(params: {

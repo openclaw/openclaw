@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
+import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 
 const log = createSubsystemLogger("session-suspension");
 
@@ -12,6 +13,8 @@ const DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY = 1;
 export const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 const laneResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+export type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
 
 function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: string): number {
   switch (laneId) {
@@ -27,6 +30,16 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
     default:
       return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
   }
+}
+
+export function resolveSessionSuspensionReason(reason: FailoverReason): SessionSuspensionReason {
+  if (reason === "billing") {
+    return "manual";
+  }
+  if (reason === "rate_limit") {
+    return "quota_exhausted";
+  }
+  return "circuit_open";
 }
 
 function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurrency: number) {
@@ -62,7 +75,7 @@ export async function suspendSession(params: {
   agentDir?: string;
   sessionId: string;
   laneId?: string;
-  reason: "quota_exhausted" | "manual" | "circuit_open";
+  reason: SessionSuspensionReason;
   failedProvider: string;
   failedModel: string;
   summary?: string;
@@ -124,4 +137,5 @@ export async function suspendSession(params: {
 
 export const __testing = {
   resolveLaneResumeConcurrency,
+  resolveSessionSuspensionReason,
 } as const;
