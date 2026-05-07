@@ -325,7 +325,7 @@ function waitForPendingChatModelSwitch(
   if (!pending) {
     return true;
   }
-  return pending.then((ok) => ok !== false);
+  return pending;
 }
 
 function clearSubmittedComposerState(
@@ -341,7 +341,7 @@ function clearSubmittedComposerState(
     host.chatAttachments.every(
       (attachment, index) =>
         attachmentSubmitSignature(attachment) ===
-        attachmentSubmitSignature(submittedAttachments[index]!),
+        attachmentSubmitSignature(submittedAttachments[index]),
     );
   const clearedDraft = host.chatMessage === submittedDraft && attachmentsUnchanged;
   const clearedAttachments = clearedDraft;
