@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
+  isDangerousNameMatchingEnabled,
   keepHttpServerTaskAlive,
   mergeAllowlist,
   summarizeMapping,
@@ -73,6 +74,7 @@ export async function monitorMSTeamsProvider(
   let allowFrom = msteamsCfg.allowFrom;
   let groupAllowFrom = msteamsCfg.groupAllowFrom;
   let teamsConfig = msteamsCfg.teams;
+  const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
 
   const cleanAllowEntry = (entry: string) =>
     entry
@@ -102,21 +104,24 @@ export async function monitorMSTeamsProvider(
   };
 
   try {
-    const allowEntries =
-      allowFrom?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ??
-      [];
-    if (allowEntries.length > 0) {
-      const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
-      allowFrom = mergeAllowlist({ existing: allowFrom, additions });
-    }
+    if (allowNameMatching) {
+      const allowEntries =
+        allowFrom
+          ?.map((entry) => cleanAllowEntry(entry))
+          .filter((entry) => entry && entry !== "*") ?? [];
+      if (allowEntries.length > 0) {
+        const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
+        allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+      }
 
-    if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
-      const groupEntries = groupAllowFrom
-        .map((entry) => cleanAllowEntry(entry))
-        .filter((entry) => entry && entry !== "*");
-      if (groupEntries.length > 0) {
-        const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
-        groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+      if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
+        const groupEntries = groupAllowFrom
+          .map((entry) => cleanAllowEntry(entry))
+          .filter((entry) => entry && entry !== "*");
+        if (groupEntries.length > 0) {
+          const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
+          groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+        }
       }
     }
 
