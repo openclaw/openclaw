@@ -223,9 +223,6 @@ jobs:
                   network_runtime=true
                   session_diagnostics=true
                   ;;
-                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts)
-                  network_runtime=true
-                  ;;
                 src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/pi-embedded-runner/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
                   agent=true
                   ;;
@@ -291,6 +288,12 @@ jobs:
                   ;;
                 packages/plugin-package-contract/*|packages/plugin-sdk/*)
                   plugin_sdk_package=true
+                  ;;
+              esac
+
+              case "${file}" in
+                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts)
+                  network_runtime=true
                   ;;
               esac
             done < <(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')
