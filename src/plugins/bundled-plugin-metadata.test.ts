@@ -31,6 +31,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "active-memory",
   "bonjour",
   "browser",
+  "canvas",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
@@ -50,6 +51,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
   "browser",
+  "canvas",
   "device-pair",
   "file-transfer",
   "memory-core",
