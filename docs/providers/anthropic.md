@@ -253,9 +253,9 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     auto-resolves media capabilities from the configured Anthropic auth — no
     additional config is needed.
 
-    | Property       | Value                |
-    | -------------- | -------------------- |
-    | Default model  | `claude-opus-4-6`    |
+    | Property        | Value                 |
+    | --------------- | --------------------- |
+    | Default model   | `claude-opus-4-7`     |
     | Supported input | Images, PDF documents |
 
     When an image or PDF is attached to a conversation, OpenClaw automatically

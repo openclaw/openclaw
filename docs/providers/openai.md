@@ -32,6 +32,7 @@ changing config.
 | ---------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------- |
 | ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-5.5` plus `agentRuntime.id: "codex"` | Recommended Codex setup for most users. Sign in with `openai-codex` auth. |
 | Direct API-key billing                               | `openai/gpt-5.5`                                 | Set `OPENAI_API_KEY` or run OpenAI API-key onboarding.                    |
+| Latest ChatGPT Instant API alias                     | `openai/chat-latest`                             | Direct API-key only. Moving alias for experiments, not the default.       |
 | ChatGPT/Codex subscription auth through PI           | `openai-codex/gpt-5.5`                           | Use only when you intentionally want the normal PI runner.                |
 | Image generation or editing                          | `openai/gpt-image-2`                             | Works with either `OPENAI_API_KEY` or OpenAI Codex OAuth.                 |
 | Transparent-background images                        | `openai/gpt-image-1.5`                           | Use `outputFormat=png` or `webp` and `openai.background=transparent`.     |
@@ -164,6 +165,23 @@ Choose your preferred auth method and follow the setup steps.
       agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
     }
     ```
+
+    To try ChatGPT's current Instant model from the OpenAI API, set the model
+    to `openai/chat-latest`:
+
+    ```json5
+    {
+      env: { OPENAI_API_KEY: "sk-..." },
+      agents: { defaults: { model: { primary: "openai/chat-latest" } } },
+    }
+    ```
+
+    `chat-latest` is a moving alias. OpenAI documents it as the latest Instant
+    model used in ChatGPT and recommends `gpt-5.5` for production API usage, so
+    keep `openai/gpt-5.5` as the stable default unless you explicitly want that
+    alias behavior. The alias currently accepts only `medium` text verbosity, so
+    OpenClaw normalizes incompatible OpenAI text-verbosity overrides for this
+    model.
 
     <Warning>
     OpenClaw does **not** expose `openai/gpt-5.3-codex-spark`. Live OpenAI API requests reject that model, and the current Codex catalog does not expose it either.

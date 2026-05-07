@@ -1,1 +1,1 @@
-export { BlueBubblesChannelConfigSchema } from "./src/config-schema.js";
+export { BlueBubblesChannelConfigSchema, BlueBubblesConfigSchema } from "./src/config-schema.js";

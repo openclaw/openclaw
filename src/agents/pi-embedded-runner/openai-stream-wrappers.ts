@@ -24,6 +24,19 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 export { resolveOpenAITextVerbosity };
 
+function resolveOpenAITextVerbosityForModel(
+  model: { api?: unknown; id?: unknown; provider?: unknown },
+  verbosity: OpenAITextVerbosity,
+): OpenAITextVerbosity {
+  const api = normalizeOptionalLowercaseString(model.api);
+  const provider = normalizeOptionalLowercaseString(model.provider);
+  const id = normalizeOptionalLowercaseString(model.id);
+  if (api === "openai-responses" && provider === "openai" && id === "chat-latest") {
+    return "medium";
+  }
+  return verbosity;
+}
+
 function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
   provider?: unknown;
@@ -392,7 +405,9 @@ export function createOpenAITextVerbosityWrapper(
     if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") {
       return underlying(model, context, options);
     }
-    const shouldOverrideExistingVerbosity = model.api === "openai-codex-responses";
+    const resolvedVerbosity = resolveOpenAITextVerbosityForModel(model, verbosity);
+    const shouldOverrideExistingVerbosity =
+      model.api === "openai-codex-responses" || resolvedVerbosity !== verbosity;
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
@@ -404,7 +419,7 @@ export function createOpenAITextVerbosityWrapper(
               ? (payloadObj.text as Record<string, unknown>)
               : {};
           if (shouldOverrideExistingVerbosity || existingText.verbosity === undefined) {
-            payloadObj.text = { ...existingText, verbosity };
+            payloadObj.text = { ...existingText, verbosity: resolvedVerbosity };
           }
         }
         return originalOnPayload?.(payload, model);

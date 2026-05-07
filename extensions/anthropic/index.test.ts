@@ -6,7 +6,7 @@ import {
   capturePluginRegistration,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
   () => ({
@@ -23,6 +23,16 @@ vi.mock("./cli-auth-seam.js", () => {
 });
 
 import anthropicPlugin from "./index.js";
+
+beforeEach(() => {
+  readClaudeCliCredentialsForSetupMock.mockReset();
+  readClaudeCliCredentialsForRuntimeMock.mockReset();
+});
+
+afterAll(() => {
+  vi.doUnmock("./cli-auth-seam.js");
+  vi.resetModules();
+});
 
 function createModelRegistry(models: ProviderRuntimeModel[]) {
   return {

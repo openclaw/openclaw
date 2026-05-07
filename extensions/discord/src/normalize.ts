@@ -31,9 +31,6 @@ export function normalizeDiscordOutboundTarget(
     }
     return { ok: true, to: `channel:${trimmed}` };
   }
-  if (/^discord:(?:channel|user):/i.test(trimmed)) {
-    return { ok: true, to: normalizeDiscordMessagingTarget(trimmed) ?? trimmed };
-  }
   return { ok: true, to: trimmed };
 }
 
