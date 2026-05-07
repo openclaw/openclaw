@@ -127,6 +127,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Updater/nvm: prefer the global root inferred directly from the running package path when `npm root -g` returns a mismatched system path (e.g. `/usr/local/lib/node_modules`) on nvm setups where the process PATH lacks nvm shims, preventing EACCES failures when the staged-update directory is created under the unwritable system prefix. Fixes #78775. Thanks @hclsys.
 - Exec approvals/node: let trusted backend node invokes complete no-device Control UI approvals after the original request connection changes, while keeping node, command, cwd, env, and allow-once replay bindings enforced. Fixes #78569. Thanks @naturedogdog.
 - Agents/subagents: keep background completion delivery on the requester-agent handoff/queue-retry path instead of raw-sending child results directly, and strip child-result wrapper or OpenClaw runtime-context scaffolding from queued outbound retries. Fixes #78531. Thanks @EthanSK.
 - CLI/completion: guard the shell-profile source line written by `openclaw completion --install` with a file existence check (`[ -f ... ] && source ...` for bash/zsh, `test -f ...; and source ...` for fish) so uninstalling OpenClaw no longer makes new login shells error on a missing completion cache. (#78659) Thanks @sjf.

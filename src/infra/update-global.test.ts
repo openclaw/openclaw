@@ -356,6 +356,38 @@ describe("update global helpers", () => {
     }
   });
 
+  it("prefers pkgRoot-inferred global root over npm root -g when they diverge (nvm PATH mismatch)", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    try {
+      await withTempDir({ prefix: "openclaw-update-nvm-path-mismatch-" }, async (base) => {
+        const nvmRoot = path.join(
+          base,
+          ".nvm",
+          "versions",
+          "node",
+          "v22.17.0",
+          "lib",
+          "node_modules",
+        );
+        const pkgRoot = path.join(nvmRoot, "openclaw");
+        const systemRoot = path.join(base, "usr", "local", "lib", "node_modules");
+        await fs.mkdir(pkgRoot, { recursive: true });
+
+        // Bare npm (stale PATH without nvm shims) reports the system root. On a write-protected
+        // /usr/local this triggers EACCES when mkdtemp tries to create the staging directory.
+        const runCommand = createNpmRootRunner({ defaultNpmRoot: systemRoot });
+
+        // resolveGlobalRoot must return the nvm root inferred from pkgRoot, not the system root.
+        await expect(resolveGlobalRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(nvmRoot);
+        await expect(resolveGlobalPackageRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(
+          pkgRoot,
+        );
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("does not infer npm ownership from path shape alone when the owning npm binary is absent", async () => {
     await withTempDir({ prefix: "openclaw-update-npm-missing-bin-" }, async (base) => {
       const brewRoot = path.join(base, "opt", "homebrew", "lib", "node_modules");

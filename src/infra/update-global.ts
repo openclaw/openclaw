@@ -592,7 +592,21 @@ export async function resolveGlobalRoot(
     return null;
   }
   const root = res.stdout.trim();
-  return root || null;
+  if (!root) {
+    return null;
+  }
+  // When pkgRoot is known, prefer the global root inferred directly from it.
+  // `npm root -g` can return a system path (e.g. /usr/local/lib/node_modules) when
+  // the process PATH doesn't include the nvm shims, while the package is actually
+  // installed under the nvm prefix. Using the pkgRoot-inferred path avoids the
+  // EACCES mkdtemp failure during staged updates on nvm-only setups. (#78775)
+  if (resolved.manager === "npm" && pkgRoot) {
+    const inferredRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+    if (inferredRoot && inferredRoot !== root) {
+      return inferredRoot;
+    }
+  }
+  return root;
 }
 
 export async function resolveGlobalPackageRoot(
