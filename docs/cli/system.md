@@ -38,6 +38,14 @@ the heartbeat immediately; `next-heartbeat` waits for the next scheduled tick.
 Pass `--session-key` to target a specific session (for example to relay an
 async-task completion back to the channel that started it).
 
+> **Timing exception with `--session-key`:** when `--session-key` is supplied,
+> `--mode next-heartbeat` collapses to an immediate targeted wake instead of
+> waiting for the next scheduled tick. Targeted wakes use heartbeat intent
+> `immediate` so they bypass the runner's not-due gate that would otherwise
+> defer (and effectively drop) an `event`-intent wake. If you want delayed
+> delivery, omit `--session-key` so the event lands on the main session and
+> rides the next regular heartbeat.
+
 Flags:
 
 - `--text <text>`: required system event text.
