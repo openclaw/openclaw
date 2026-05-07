@@ -105,7 +105,7 @@ describe("ACP event ledger", () => {
         sessionUpdate: "agent_thought_chunk",
         content: { type: "text", text: "Thinking" },
       });
-      await expect(fs.readFile(filePath, "utf8")).resolves.toContain('"version": 1');
+      await expect(fs.readFile(filePath, "utf8")).resolves.toContain('"version":1');
     });
   });
 
@@ -138,6 +138,96 @@ describe("ACP event ledger", () => {
     ]);
   });
 
+  it("can replay multi-block prompt history by ACP session id", async () => {
+    const ledger = createInMemoryAcpEventLedger({ now: () => 1000 });
+    await ledger.startSession({
+      sessionId: "acp-session-1",
+      sessionKey: "acp:gateway-session-1",
+      cwd: "/work",
+      complete: true,
+    });
+    await ledger.recordUserPrompt({
+      sessionId: "acp-session-1",
+      sessionKey: "acp:gateway-session-1",
+      runId: "run-1",
+      prompt: [
+        { type: "text", text: "First" },
+        { type: "text", text: "Second" },
+      ],
+    });
+
+    const replay = await ledger.readReplayBySessionId({ sessionId: "acp-session-1" });
+
+    expect(replay.complete).toBe(true);
+    expect(replay.sessionKey).toBe("acp:gateway-session-1");
+    expect(
+      replay.events.map((event) =>
+        event.update.sessionUpdate === "user_message_chunk" ? event.update.content : undefined,
+      ),
+    ).toEqual([
+      { type: "text", text: "First" },
+      { type: "text", text: "Second" },
+    ]);
+  });
+
+  it("evicts the oldest complete session when session retention is exceeded", async () => {
+    let now = 1000;
+    const ledger = createInMemoryAcpEventLedger({ maxSessions: 1, now: () => now++ });
+    await ledger.startSession({
+      sessionId: "old-session",
+      sessionKey: "acp:old-gateway-session",
+      cwd: "/work",
+      complete: true,
+    });
+    await ledger.startSession({
+      sessionId: "new-session",
+      sessionKey: "acp:new-gateway-session",
+      cwd: "/work",
+      complete: true,
+    });
+
+    await expect(
+      ledger.readReplay({ sessionId: "old-session", sessionKey: "acp:old-gateway-session" }),
+    ).resolves.toEqual({ complete: false, events: [] });
+    const replay = await ledger.readReplayBySessionId({ sessionId: "new-session" });
+    expect(replay.complete).toBe(true);
+    expect(replay.sessionKey).toBe("acp:new-gateway-session");
+  });
+
+  it("resets stale events when a session is restarted with reset", async () => {
+    const ledger = createInMemoryAcpEventLedger();
+    await ledger.startSession({
+      sessionId: "session-1",
+      sessionKey: "acp:old-session",
+      cwd: "/work",
+      complete: true,
+    });
+    await ledger.recordUpdate({
+      sessionId: "session-1",
+      sessionKey: "acp:old-session",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Old answer" },
+      },
+    });
+    await ledger.startSession({
+      sessionId: "session-1",
+      sessionKey: "acp:new-session",
+      cwd: "/work",
+      complete: true,
+      reset: true,
+    });
+
+    await expect(
+      ledger.readReplay({ sessionId: "session-1", sessionKey: "acp:old-session" }),
+    ).resolves.toEqual({ complete: false, events: [] });
+    await expect(ledger.readReplayBySessionId({ sessionId: "session-1" })).resolves.toMatchObject({
+      complete: true,
+      sessionKey: "acp:new-session",
+      events: [],
+    });
+  });
+
   it("marks replay incomplete when serialized byte retention trims payloads", async () => {
     const ledger = createInMemoryAcpEventLedger({ maxSerializedBytes: 900 });
     await ledger.startSession({
@@ -162,6 +252,35 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
+  it("keeps the persisted ledger file under the serialized byte budget", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const filePath = path.join(dir, "acp", "event-ledger.json");
+      const ledger = createFileAcpEventLedger({ filePath, maxSerializedBytes: 1024 });
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+      await ledger.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-1",
+          status: "completed",
+          rawOutput: { content: "x".repeat(5_000) },
+        },
+      });
+
+      const bytes = Buffer.byteLength(await fs.readFile(filePath, "utf8"), "utf8");
+      expect(bytes).toBeLessThanOrEqual(1024);
+      await expect(
+        ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+      ).resolves.toEqual({ complete: false, events: [] });
+    });
+  });
+
   it("ignores corrupt ledger files instead of replaying unknown state", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const filePath = path.join(dir, "event-ledger.json");
@@ -171,6 +290,43 @@ describe("ACP event ledger", () => {
       await expect(
         ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
       ).resolves.toEqual({ complete: false, events: [] });
+    });
+  });
+
+  it("reloads file-backed state under lock before writing", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const filePath = path.join(dir, "acp", "event-ledger.json");
+      const first = createFileAcpEventLedger({ filePath });
+      const second = createFileAcpEventLedger({ filePath });
+
+      await first.startSession({
+        sessionId: "session-1",
+        sessionKey: "acp:gateway-session-1",
+        cwd: "/work",
+        complete: true,
+      });
+      await second.startSession({
+        sessionId: "session-2",
+        sessionKey: "acp:gateway-session-2",
+        cwd: "/work",
+        complete: true,
+      });
+      await first.recordUpdate({
+        sessionId: "session-1",
+        sessionKey: "acp:gateway-session-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Answer" },
+        },
+      });
+
+      const reader = createFileAcpEventLedger({ filePath });
+      const replay = await reader.readReplay({
+        sessionId: "session-2",
+        sessionKey: "acp:gateway-session-2",
+      });
+      expect(replay.complete).toBe(true);
+      expect(replay.sessionKey).toBe("acp:gateway-session-2");
     });
   });
 });

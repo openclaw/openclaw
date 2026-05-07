@@ -1,13 +1,25 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
 import { resolveStateDir } from "../config/paths.js";
-import { readJsonFile, writeJsonAtomic } from "../infra/json-files.js";
+import { withFileLock } from "../infra/file-lock.js";
+import { readJsonFile, writeTextAtomic } from "../infra/json-files.js";
 import { isRecord } from "../utils.js";
 
 const LEDGER_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
 const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
+const FILE_LEDGER_LOCK_OPTIONS = {
+  retries: {
+    retries: 8,
+    factor: 2,
+    minTimeout: 50,
+    maxTimeout: 5_000,
+    randomize: true,
+  },
+  stale: 15_000,
+} as const;
 
 export type AcpEventLedgerEntry = {
   seq: number;
@@ -113,6 +125,14 @@ function createUserPromptUpdates(prompt: readonly ContentBlock[]): SessionUpdate
     sessionUpdate: "user_message_chunk",
     content: cloneJsonValue(content),
   }));
+}
+
+function serializeLedgerStore(store: LedgerStore): string {
+  return JSON.stringify(store);
+}
+
+function getSerializedLedgerByteLength(store: LedgerStore): number {
+  return Buffer.byteLength(serializeLedgerStore(store), "utf8");
 }
 
 function normalizeEvent(raw: unknown): AcpEventLedgerEntry | undefined {
@@ -244,14 +264,16 @@ function trimLedger(state: MutableLedgerState): void {
     session.complete = false;
   }
 
-  const sessions = Object.values(state.store.sessions).toSorted(
-    (a, b) => b.updatedAt - a.updatedAt,
-  );
-  for (const session of sessions.slice(state.maxSessions)) {
-    delete state.store.sessions[session.sessionId];
+  const sessions = Object.values(state.store.sessions);
+  if (sessions.length > state.maxSessions) {
+    for (const session of sessions
+      .toSorted((a, b) => b.updatedAt - a.updatedAt)
+      .slice(state.maxSessions)) {
+      delete state.store.sessions[session.sessionId];
+    }
   }
 
-  let serializedBytes = Buffer.byteLength(JSON.stringify(state.store), "utf8");
+  let serializedBytes = getSerializedLedgerByteLength(state.store);
   while (serializedBytes > state.maxSerializedBytes) {
     const session = Object.values(state.store.sessions)
       .filter((candidate) => candidate.events.length > 0)
@@ -261,7 +283,7 @@ function trimLedger(state: MutableLedgerState): void {
     }
     session.events.shift();
     session.complete = false;
-    serializedBytes = Buffer.byteLength(JSON.stringify(state.store), "utf8");
+    serializedBytes = getSerializedLedgerByteLength(state.store);
   }
 
   while (serializedBytes > state.maxSerializedBytes) {
@@ -272,7 +294,7 @@ function trimLedger(state: MutableLedgerState): void {
       break;
     }
     delete state.store.sessions[session.sessionId];
-    serializedBytes = Buffer.byteLength(JSON.stringify(state.store), "utf8");
+    serializedBytes = getSerializedLedgerByteLength(state.store);
   }
 }
 
@@ -419,14 +441,12 @@ export function createFileAcpEventLedger(
     ...normalized,
   };
   let operation = Promise.resolve();
-  let loaded = false;
 
   const load = async () => {
-    if (loaded) {
-      return;
-    }
     state.store = normalizeStore(await readJsonFile(params.filePath));
-    loaded = true;
+  };
+  const ensureParentDir = async () => {
+    await fs.mkdir(path.dirname(params.filePath), { recursive: true, mode: 0o700 });
   };
 
   const enqueue = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -442,18 +462,23 @@ export function createFileAcpEventLedger(
     state,
     mutate: async (fn) =>
       enqueue(async () => {
-        await load();
-        fn();
-        await writeJsonAtomic(params.filePath, state.store, {
-          trailingNewline: true,
-          mode: 0o600,
-          dirMode: 0o700,
+        await ensureParentDir();
+        await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
+          await load();
+          fn();
+          await writeTextAtomic(params.filePath, serializeLedgerStore(state.store), {
+            mode: 0o600,
+            dirMode: 0o700,
+          });
         });
       }),
     read: async (fn) =>
       enqueue(async () => {
-        await load();
-        return fn();
+        await ensureParentDir();
+        return await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
+          await load();
+          return fn();
+        });
       }),
   });
 }
