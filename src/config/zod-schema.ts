@@ -358,6 +358,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    defaultModel: z.string().optional(),
     env: z
       .object({
         shellEnv: z
@@ -1132,7 +1133,7 @@ export const OpenClawSchema = z
       .optional(),
     proxy: ProxyConfigSchema,
   })
-  .strict()
+  .catchall(z.unknown())
   .superRefine((cfg, ctx) => {
     const agents = cfg.agents?.list ?? [];
     if (agents.length === 0) {

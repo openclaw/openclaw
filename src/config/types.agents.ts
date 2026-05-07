@@ -77,6 +77,8 @@ export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  /** Human-readable description of what this agent does. */
+  description?: string;
   workspace?: string;
   agentDir?: string;
   /** Optional per-agent full system prompt replacement. */

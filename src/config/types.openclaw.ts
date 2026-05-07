@@ -45,6 +45,8 @@ export type OpenClawConfig = {
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
   };
+  /** Default model identifier used when no agent-level model is configured. */
+  defaultModel?: string;
   auth?: AuthConfig;
   accessGroups?: AccessGroupsConfig;
   acp?: AcpConfig;
