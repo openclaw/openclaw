@@ -563,9 +563,9 @@ declared plugin runtime entrypoints are still scanned even if they use one of
 those names.
 
 This CLI flag applies to plugin install/update flows only. Gateway-backed skill
-dependency installs use the matching `dangerouslyForceUnsafeInstall` request
-override instead, while `openclaw skills install` remains the separate ClawHub
-skill download/install flow.
+dependency installs always enforce scans and no longer accept the matching
+`dangerouslyForceUnsafeInstall` request override, while `openclaw skills install`
+remains the separate ClawHub skill download/install flow.
 
 If a plugin you published on ClawHub is hidden or blocked by a scan, open the
 ClawHub dashboard or run `clawhub package rescan <name>` to ask ClawHub to check
