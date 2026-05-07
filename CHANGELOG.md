@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Gateway/media: enforce requester-session ownership on the managed outgoing image endpoint for device-token callers, preventing cross-session attachment access (IDOR). Fixes #78723. Thanks @hclsys.
+- Gateway/media: enforce requester-session ownership on the managed outgoing image endpoint for all callers (device-token and trusted-proxy), removing the privilegedAccess bypass that allowed cross-session attachment reads (IDOR). Fixes #78723, #78731. Thanks @hclsys.
 
 ### Changes
 

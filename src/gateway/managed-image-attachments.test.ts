@@ -288,6 +288,32 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.toString("utf-8")).toBe("original-image");
   });
 
+  it("rejects trusted-proxy access without requester session ownership", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+    });
+
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("allows trusted-proxy access with requester session ownership header", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+      headers: { "x-openclaw-requester-session-key": sessionKey },
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body.toString("utf-8")).toBe("original-image");
+  });
+
   it("rejects non-GET methods", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
 

@@ -1009,8 +1009,6 @@ export async function handleManagedOutgoingImageHttpRequest(
     return true;
   }
 
-  const privilegedAccess = requestAuth.trustDeclaredOperatorScopes;
-
   const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
   if (!scopeAuth.allowed) {
@@ -1045,32 +1043,30 @@ export async function handleManagedOutgoingImageHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  if (!privilegedAccess) {
-    const requesterSessionKey = resolveRequesterSessionKey(req);
-    if (!requesterSessionKey) {
-      sendJson(res, 403, {
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "requester session ownership required",
-        },
-      });
-      return true;
-    }
-    const ownsSession = await requesterOwnsManagedImageSession({
-      requesterSessionKey,
-      targetSessionKey: record.sessionKey,
+  const requesterSessionKey = resolveRequesterSessionKey(req);
+  if (!requesterSessionKey) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "requester session ownership required",
+      },
     });
-    if (!ownsSession) {
-      sendJson(res, 403, {
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "requester session does not own attachment session",
-        },
-      });
-      return true;
-    }
+    return true;
+  }
+  const ownsSession = await requesterOwnsManagedImageSession({
+    requesterSessionKey,
+    targetSessionKey: record.sessionKey,
+  });
+  if (!ownsSession) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "requester session does not own attachment session",
+      },
+    });
+    return true;
   }
   if (!(await recordMatchesTranscriptMessage(record))) {
     sendStatus(res, 404, "not found");
