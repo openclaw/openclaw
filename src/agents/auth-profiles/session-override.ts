@@ -132,14 +132,15 @@ export async function resolveSessionAuthProfileOverride(params: {
         ? "user"
         : undefined);
 
+  const currentProfileId = current;
   if (
-    current &&
-    !store.profiles[current] &&
+    currentProfileId &&
+    !store.profiles[currentProfileId] &&
     !providers.some((candidateProvider) =>
       isConfiguredAwsSdkAuthProfileForProvider({
         cfg,
         provider: candidateProvider,
-        profileId: current,
+        profileId: currentProfileId,
       }),
     )
   ) {

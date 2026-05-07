@@ -22,6 +22,7 @@ import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-reg
 
 export type ModelListAuthIndex = {
   hasProviderAuth(provider: string): boolean;
+  allowsProviderAuthAvailabilityFallback(provider: string): boolean;
 };
 
 export type CreateModelListAuthIndexParams = {
@@ -157,6 +158,16 @@ export function createModelListAuthIndex(
     return hasAuth;
   };
 
+  const hasOpenAICodexRuntimeAuth = (provider: string): boolean => {
+    const normalizedProvider = normalizeAuthProvider(provider, aliasMap);
+    return (
+      openAIProviderUsesCodexRuntimeByDefault({
+        provider: normalizedProvider,
+        config: params.cfg,
+      }) && authenticatedProviders.has(OPENAI_CODEX_PROVIDER_ID)
+    );
+  };
+
   return {
     hasProviderAuth(provider: string): boolean {
       const normalizedProvider = normalizeAuthProvider(provider, aliasMap);
@@ -167,15 +178,10 @@ export function createModelListAuthIndex(
       if (hasDirectAuth) {
         return true;
       }
-      if (
-        openAIProviderUsesCodexRuntimeByDefault({
-          provider: normalizedProvider,
-          config: params.cfg,
-        })
-      ) {
-        return authenticatedProviders.has(OPENAI_CODEX_PROVIDER_ID);
-      }
-      return false;
+      return hasOpenAICodexRuntimeAuth(normalizedProvider);
+    },
+    allowsProviderAuthAvailabilityFallback(provider: string): boolean {
+      return hasOpenAICodexRuntimeAuth(provider);
     },
   };
 }
