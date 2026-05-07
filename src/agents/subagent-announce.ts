@@ -460,7 +460,7 @@ export async function runSubagentAnnounceFlow(params: {
     // Build status label
     const statusLabel =
       outcome.status === "ok"
-        ? "completed successfully"
+        ? "completed; ready for parent review"
         : outcome.status === "timeout"
           ? "timed out"
           : outcome.status === "error"
