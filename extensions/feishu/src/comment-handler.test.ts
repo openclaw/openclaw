@@ -297,6 +297,47 @@ describe("handleFeishuCommentEvent", () => {
     expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
   });
 
+  it("passes disabled config-write policy to dynamic agent creation", async () => {
+    const runtime = createTestRuntime({
+      resolveAgentRoute: () => buildResolvedRoute("default"),
+    });
+    setFeishuRuntime(runtime);
+
+    await handleFeishuCommentEvent({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            configWrites: false,
+            dynamicAgentCreation: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      accountId: "default",
+      event: { event_id: "evt_1" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
+    expect(maybeCreateDynamicAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderOpenId: "ou_sender",
+        configWritesAllowed: false,
+      }),
+    );
+    const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
+      typeof vi.fn
+    >;
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
   it("issues a pairing challenge in the comment thread when dmPolicy=pairing", async () => {
     const runtime = createTestRuntime();
     setFeishuRuntime(runtime);
