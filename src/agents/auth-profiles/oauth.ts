@@ -16,6 +16,7 @@ import { resolveSecretRefString, type SecretRefResolveCache } from "../../secret
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
@@ -24,6 +25,11 @@ import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
+import {
+  getRuntimeAuthProfileStoreSnapshot,
+  hasRuntimeAuthProfileStoreSnapshot,
+  setRuntimeAuthProfileStoreSnapshot,
+} from "./runtime-snapshots.js";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   resolvePersistedAuthProfileOwnerAgentDir,
@@ -375,6 +381,24 @@ export async function resolveApiKeyForProfile(
         profileId,
         agentDir: ownerAgentDir,
       });
+      // If the requesting agentDir differs from the owner, also patch its runtime snapshot
+      // so the in-memory merged store doesn't re-select the stale profileId on the next attempt.
+      if (
+        params.agentDir !== ownerAgentDir &&
+        hasRuntimeAuthProfileStoreSnapshot(params.agentDir)
+      ) {
+        const snapshot = getRuntimeAuthProfileStoreSnapshot(params.agentDir);
+        if (snapshot) {
+          const providerKey = resolveProviderIdForAuth(cred.provider);
+          if (snapshot.lastGood?.[providerKey] === profileId) {
+            delete snapshot.lastGood[providerKey];
+            if (Object.keys(snapshot.lastGood).length === 0) {
+              snapshot.lastGood = undefined;
+            }
+            setRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
+          }
+        }
+      }
     }
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,
