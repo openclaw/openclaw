@@ -89,7 +89,7 @@ describe("skills gateway handlers (clawhub)", () => {
     });
   });
 
-  it("forwards dangerous override for local skill installs", async () => {
+  it("does not forward dangerous override via gateway (enforced false)", async () => {
     installSkillMock.mockResolvedValue({
       ok: true,
       message: "Installed",
@@ -99,7 +99,6 @@ describe("skills gateway handlers (clawhub)", () => {
     });
 
     let ok: boolean | null = null;
-    let response: unknown;
     let error: unknown;
     await skillsHandlers["skills.install"]({
       params: {
@@ -114,25 +113,13 @@ describe("skills gateway handlers (clawhub)", () => {
       context: makeContext() as never,
       respond: (success, result, err) => {
         ok = success;
-        response = result;
         error = err;
       },
     });
 
-    expect(installSkillMock).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/workspace",
-      skillName: "calendar",
-      installId: "deps",
-      dangerouslyForceUnsafeInstall: true,
-      timeoutMs: 120_000,
-      config: {},
-    });
-    expect(ok).toBe(true);
-    expect(error).toBeUndefined();
-    expect(response).toMatchObject({
-      ok: true,
-      message: "Installed",
-    });
+    expect(installSkillMock).not.toHaveBeenCalled();
+    expect(ok).toBe(false);
+    expect((error as { message?: string })?.message).toContain("invalid skills.install params");
   });
 
   it("updates ClawHub skills through skills.update", async () => {
