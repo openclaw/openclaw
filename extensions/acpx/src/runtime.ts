@@ -15,13 +15,41 @@ import {
   type AcpRuntimeStatus,
 } from "acpx/runtime";
 import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
+import {
+  createAcpxProcessLeaseId,
+  hashAcpxProcessCommand,
+  withAcpxLeaseEnvironment,
+  type AcpxProcessLease,
+  type AcpxProcessLeaseStore,
+} from "./process-lease.js";
+import {
+  cleanupOpenClawOwnedAcpxProcessTree,
+  isOpenClawOwnedAcpxProcessCommand,
+  type AcpxProcessCleanupDeps,
+} from "./process-reaper.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
 type AcpLoadedSessionRecord = Awaited<ReturnType<AcpSessionStore["load"]>>;
+type BaseAcpxRuntimeTestOptions = ConstructorParameters<typeof BaseAcpxRuntime>[1];
+type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
+  openclawWrapperRoot?: string;
+  openclawGatewayInstanceId?: string;
+  openclawProcessLeaseStore?: AcpxProcessLeaseStore;
+};
+type AcpxRuntimeTestOptions = Record<string, unknown> & {
+  openclawProcessCleanup?: AcpxProcessCleanupDeps;
+};
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
+};
+
+type AcpxLaunchLeaseContext = {
+  leaseId: string;
+  gatewayInstanceId: string;
+  sessionKey: string;
+  wrapperRoot: string;
 };
 
 function readSessionRecordName(record: AcpSessionRecord): string {
@@ -32,7 +60,56 @@ function readSessionRecordName(record: AcpSessionRecord): string {
   return typeof name === "string" ? name.trim() : "";
 }
 
-function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSessionStore {
+function readRecordAgentCommand(record: unknown): string | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { agentCommand } = record as { agentCommand?: unknown };
+  return typeof agentCommand === "string" ? agentCommand.trim() || undefined : undefined;
+}
+
+function readRecordAgentPid(record: unknown): number | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { pid, processId } = record as { pid?: unknown; processId?: unknown };
+  const rawPid = pid ?? processId;
+  const numericPid =
+    typeof rawPid === "number"
+      ? rawPid
+      : typeof rawPid === "string"
+        ? Number.parseInt(rawPid, 10)
+        : undefined;
+  return numericPid && Number.isInteger(numericPid) && numericPid > 0 ? numericPid : undefined;
+}
+
+function readOpenClawLeaseIdFromRecord(record: AcpLoadedSessionRecord): string | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { openclawLeaseId } = record as { openclawLeaseId?: unknown };
+  return typeof openclawLeaseId === "string" ? openclawLeaseId.trim() || undefined : undefined;
+}
+
+function extractGeneratedWrapperPath(command: string | undefined): string {
+  const parts = splitCommandParts(command ?? "");
+  return (
+    parts.find(
+      (part) =>
+        basename(part) === "codex-acp-wrapper.mjs" ||
+        basename(part) === "claude-agent-acp-wrapper.mjs",
+    ) ?? ""
+  );
+}
+
+function createResetAwareSessionStore(
+  baseStore: AcpSessionStore,
+  params?: {
+    gatewayInstanceId?: string;
+    leaseStore?: AcpxProcessLeaseStore;
+    launchScope?: AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>;
+  },
+): ResetAwareSessionStore {
   const freshSessionKeys = new Set<string>();
 
   return {
@@ -41,11 +118,55 @@ function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSes
       if (normalized && freshSessionKeys.has(normalized)) {
         return undefined;
       }
-      return await baseStore.load(sessionId);
+      const record = await baseStore.load(sessionId);
+      if (!record || !params?.leaseStore || !params.gatewayInstanceId) {
+        return record;
+      }
+      const sessionName = readSessionRecordName(record) || normalized;
+      const lease = (await params.leaseStore.listOpen(params.gatewayInstanceId)).find(
+        (entry) => entry.sessionKey === sessionName || entry.sessionKey === normalized,
+      );
+      if (!lease) {
+        return record;
+      }
+      return {
+        ...(record as Record<string, unknown>),
+        openclawLeaseId: lease.leaseId,
+        openclawGatewayInstanceId: lease.gatewayInstanceId,
+      } as AcpLoadedSessionRecord;
     },
     async save(record: AcpSessionRecord): Promise<void> {
-      await baseStore.save(record);
+      let recordToSave = record;
+      const launch = params?.launchScope?.getStore();
       const sessionName = readSessionRecordName(record);
+      const rootPid = readRecordAgentPid(record);
+      const agentCommand = readRecordAgentCommand(record);
+      if (
+        launch &&
+        params?.leaseStore &&
+        sessionName === launch.sessionKey &&
+        rootPid &&
+        agentCommand
+      ) {
+        const lease: AcpxProcessLease = {
+          leaseId: launch.leaseId,
+          gatewayInstanceId: launch.gatewayInstanceId,
+          sessionKey: launch.sessionKey,
+          wrapperRoot: launch.wrapperRoot,
+          wrapperPath: extractGeneratedWrapperPath(agentCommand),
+          rootPid,
+          commandHash: hashAcpxProcessCommand(agentCommand),
+          startedAt: Date.now(),
+          state: "open",
+        };
+        await params.leaseStore.save(lease);
+        recordToSave = {
+          ...(record as Record<string, unknown>),
+          openclawLeaseId: launch.leaseId,
+          openclawGatewayInstanceId: launch.gatewayInstanceId,
+        } as AcpSessionRecord;
+      }
+      await baseStore.save(recordToSave);
       if (sessionName) {
         freshSessionKeys.delete(sessionName);
       }
@@ -109,11 +230,11 @@ function readAgentFromHandle(handle: AcpRuntimeHandle): string | undefined {
 }
 
 function readAgentCommandFromRecord(record: AcpLoadedSessionRecord): string | undefined {
-  if (typeof record !== "object" || record === null) {
-    return undefined;
-  }
-  const { agentCommand } = record as { agentCommand?: unknown };
-  return typeof agentCommand === "string" ? agentCommand.trim() || undefined : undefined;
+  return readRecordAgentCommand(record);
+}
+
+function readAgentPidFromRecord(record: AcpLoadedSessionRecord): number | undefined {
+  return readRecordAgentPid(record);
 }
 
 function splitCommandParts(value: string): string[] {
@@ -338,6 +459,7 @@ function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelO
 function createModelScopedAgentRegistry(params: {
   agentRegistry: AcpAgentRegistry;
   scope: AsyncLocalStorage<CodexAcpModelOverride | undefined>;
+  leaseCommand: (command: string | undefined) => string | undefined;
 }): AcpAgentRegistry {
   return {
     resolve(agentName: string): string | undefined {
@@ -349,9 +471,9 @@ function createModelScopedAgentRegistry(params: {
         typeof command !== "string" ||
         !isCodexAcpCommand(command)
       ) {
-        return command;
+        return params.leaseCommand(command);
       }
-      return appendCodexAcpConfigOverrides(command, override);
+      return params.leaseCommand(appendCodexAcpConfigOverrides(command, override));
     },
     list(): string[] {
       return params.agentRegistry.list();
@@ -402,30 +524,45 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly delegate: BaseAcpxRuntime;
   private readonly bridgeSafeDelegate: BaseAcpxRuntime;
   private readonly probeDelegate: BaseAcpxRuntime;
+  private readonly processCleanupDeps: AcpxProcessCleanupDeps | undefined;
+  private readonly wrapperRoot: string | undefined;
+  private readonly gatewayInstanceId: string | undefined;
+  private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
+  private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
 
-  constructor(
-    options: AcpRuntimeOptions,
-    testOptions?: ConstructorParameters<typeof BaseAcpxRuntime>[1],
-  ) {
-    this.sessionStore = createResetAwareSessionStore(options.sessionStore);
+  constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
+    const { openclawProcessCleanup, ...delegateTestOptions } = testOptions ?? {};
+    this.processCleanupDeps = openclawProcessCleanup;
+    this.wrapperRoot = options.openclawWrapperRoot;
+    this.gatewayInstanceId = options.openclawGatewayInstanceId;
+    this.processLeaseStore = options.openclawProcessLeaseStore;
+    this.sessionStore = createResetAwareSessionStore(options.sessionStore, {
+      gatewayInstanceId: this.gatewayInstanceId,
+      leaseStore: this.processLeaseStore,
+      launchScope: this.launchLeaseScope,
+    });
     this.agentRegistry = options.agentRegistry;
     this.scopedAgentRegistry = createModelScopedAgentRegistry({
       agentRegistry: this.agentRegistry,
       scope: this.codexAcpModelOverrideScope,
+      leaseCommand: (command) => this.commandWithLaunchLease(command),
     });
     const sharedOptions = {
       ...options,
       sessionStore: this.sessionStore,
       agentRegistry: this.scopedAgentRegistry,
     };
-    this.delegate = new BaseAcpxRuntime(sharedOptions, testOptions);
+    this.delegate = new BaseAcpxRuntime(
+      sharedOptions,
+      delegateTestOptions as BaseAcpxRuntimeTestOptions,
+    );
     this.bridgeSafeDelegate = shouldUseDistinctBridgeDelegate(options)
       ? new BaseAcpxRuntime(
           {
             ...sharedOptions,
             mcpServers: [],
           },
-          testOptions,
+          delegateTestOptions as BaseAcpxRuntimeTestOptions,
         )
       : this.delegate;
     this.probeDelegate = this.resolveDelegateForAgent(resolveProbeAgentName(options));
@@ -445,6 +582,13 @@ export class AcpxRuntime implements AcpRuntime {
 
   private async resolveDelegateForHandle(handle: AcpRuntimeHandle): Promise<BaseAcpxRuntime> {
     const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+    return this.resolveDelegateForLoadedRecord(handle, record);
+  }
+
+  private resolveDelegateForLoadedRecord(
+    handle: AcpRuntimeHandle,
+    record: AcpLoadedSessionRecord,
+  ): BaseAcpxRuntime {
     const recordCommand = readAgentCommandFromRecord(record);
     if (recordCommand) {
       return this.resolveDelegateForCommand(recordCommand);
@@ -461,6 +605,106 @@ export class AcpxRuntime implements AcpRuntime {
     return resolveAgentCommandForName({
       agentName: readAgentFromHandle(handle),
       agentRegistry: this.agentRegistry,
+    });
+  }
+
+  private commandWithLaunchLease(command: string | undefined): string | undefined {
+    const launch = this.launchLeaseScope.getStore();
+    if (!command || !launch) {
+      return command;
+    }
+    return withAcpxLeaseEnvironment({
+      command,
+      leaseId: launch.leaseId,
+      gatewayInstanceId: launch.gatewayInstanceId,
+    });
+  }
+
+  private async runWithLaunchLease<T>(params: {
+    sessionKey: string;
+    command: string | undefined;
+    run: () => Promise<T>;
+  }): Promise<T> {
+    if (
+      !params.command ||
+      !this.wrapperRoot ||
+      !this.gatewayInstanceId ||
+      !this.processLeaseStore ||
+      !isOpenClawOwnedAcpxProcessCommand({
+        command: params.command,
+        wrapperRoot: this.wrapperRoot,
+      })
+    ) {
+      return await params.run();
+    }
+    const launch: AcpxLaunchLeaseContext = {
+      leaseId: createAcpxProcessLeaseId(),
+      gatewayInstanceId: this.gatewayInstanceId,
+      sessionKey: params.sessionKey,
+      wrapperRoot: this.wrapperRoot,
+    };
+    // The pending lease is written before acpx spawns. The session-store save
+    // path fills in the live PID after acpx connects and exposes the process.
+    await this.processLeaseStore.save({
+      leaseId: launch.leaseId,
+      gatewayInstanceId: launch.gatewayInstanceId,
+      sessionKey: launch.sessionKey,
+      wrapperRoot: launch.wrapperRoot,
+      wrapperPath: extractGeneratedWrapperPath(params.command),
+      rootPid: 0,
+      commandHash: hashAcpxProcessCommand(params.command),
+      startedAt: Date.now(),
+      state: "open",
+    });
+    return await this.launchLeaseScope.run(launch, params.run);
+  }
+
+  private async cleanupProcessTreeForRecord(
+    handle: AcpRuntimeHandle,
+    record: AcpLoadedSessionRecord,
+  ): Promise<void> {
+    const leaseId = readOpenClawLeaseIdFromRecord(record);
+    const lease =
+      (leaseId ? await this.processLeaseStore?.load(leaseId) : undefined) ??
+      (this.gatewayInstanceId
+        ? (await this.processLeaseStore?.listOpen(this.gatewayInstanceId))?.find(
+            (entry) => entry.sessionKey === handle.sessionKey,
+          )
+        : undefined);
+    if (lease && lease.gatewayInstanceId === this.gatewayInstanceId && lease.rootPid > 0) {
+      await this.processLeaseStore?.markState(lease.leaseId, "closing");
+      const result = await cleanupOpenClawOwnedAcpxProcessTree({
+        rootPid: lease.rootPid,
+        rootCommand: readAgentCommandFromRecord(record),
+        expectedLeaseId: lease.leaseId,
+        expectedGatewayInstanceId: lease.gatewayInstanceId,
+        wrapperRoot: lease.wrapperRoot,
+        deps: this.processCleanupDeps,
+      });
+      await this.processLeaseStore?.markState(
+        lease.leaseId,
+        result.terminatedPids.length > 0 || result.skippedReason === "missing-root"
+          ? "closed"
+          : "lost",
+      );
+      return;
+    }
+
+    const rootPid = readAgentPidFromRecord(record);
+    const rootCommand =
+      readAgentCommandFromRecord(record) ??
+      resolveAgentCommandForName({
+        agentName: readAgentFromHandle(handle),
+        agentRegistry: this.agentRegistry,
+      });
+    if (!rootPid || !rootCommand) {
+      return;
+    }
+    await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid,
+      rootCommand,
+      wrapperRoot: this.wrapperRoot,
+      deps: this.processCleanupDeps,
     });
   }
 
@@ -491,7 +735,11 @@ export class AcpxRuntime implements AcpRuntime {
         : undefined;
 
     if (!codexModelOverride) {
-      return delegate.ensureSession(input);
+      return await this.runWithLaunchLease({
+        sessionKey: input.sessionKey,
+        command,
+        run: () => delegate.ensureSession(input),
+      });
     }
 
     const normalizedInput = {
@@ -500,9 +748,14 @@ export class AcpxRuntime implements AcpRuntime {
         ? { model: codexAcpSessionModelId(codexModelOverride) }
         : {}),
     };
-    return this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
-      delegate.ensureSession(normalizedInput),
-    );
+    return await this.runWithLaunchLease({
+      sessionKey: input.sessionKey,
+      command,
+      run: () =>
+        this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
+          delegate.ensureSession(normalizedInput),
+        ),
+    });
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
@@ -571,7 +824,10 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
-    const delegate = await this.resolveDelegateForHandle(input.handle);
+    const record = await this.sessionStore.load(
+      input.handle.acpxRecordId ?? input.handle.sessionKey,
+    );
+    const delegate = this.resolveDelegateForLoadedRecord(input.handle, record);
     await delegate.cancel(input);
   }
 
@@ -580,14 +836,21 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
-    await (
-      await this.resolveDelegateForHandle(input.handle)
-    ).close({
-      handle: input.handle,
-      reason: input.reason,
-      discardPersistentState: input.discardPersistentState,
-    });
-    if (input.discardPersistentState) {
+    const record = await this.sessionStore.load(
+      input.handle.acpxRecordId ?? input.handle.sessionKey,
+    );
+    let closeSucceeded = false;
+    try {
+      await this.resolveDelegateForLoadedRecord(input.handle, record).close({
+        handle: input.handle,
+        reason: input.reason,
+        discardPersistentState: input.discardPersistentState,
+      });
+      closeSucceeded = true;
+    } finally {
+      await this.cleanupProcessTreeForRecord(input.handle, record);
+    }
+    if (closeSucceeded && input.discardPersistentState) {
       this.sessionStore.markFresh(input.handle.sessionKey);
     }
   }
