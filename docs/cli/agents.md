@@ -195,6 +195,7 @@ Avatar paths resolve relative to the workspace root.
 - `theme`
 - `emoji`
 - `avatar` (workspace-relative path, http(s) URL, or data URI)
+- Local workspace-relative avatar image files are limited to 2 MB. HTTP(S) URLs and `data:` URIs are not checked with the local file-size limit.
 
 Options:
 
