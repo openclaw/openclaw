@@ -297,6 +297,7 @@ describe("executeNodeHostCommand", () => {
           timeoutMs: 30_000,
         }),
       }),
+      { scopes: ["operator.write", "operator.approvals"] },
     );
   });
 
@@ -355,6 +356,7 @@ describe("executeNodeHostCommand", () => {
             systemRunPlan: expectedPlan,
           }),
         }),
+        { scopes: ["operator.write", "operator.approvals"] },
       );
     });
   });
