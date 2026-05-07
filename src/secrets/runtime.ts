@@ -37,6 +37,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
   warnings: SecretResolverWarning[];
   webTools: RuntimeWebToolsMetadata;
+  webToolsFromFastPath: boolean;
 };
 
 type SecretsRuntimeRefreshContext = {
@@ -61,6 +62,7 @@ const RUNTIME_PATH_ENV_KEYS = [
 
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
 let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
+let lastFullResolverSourceConfig: OpenClawConfig | null = null;
 const preparedSnapshotRefreshContext = new WeakMap<
   PreparedSecretsRuntimeSnapshot,
   SecretsRuntimeRefreshContext
@@ -88,6 +90,7 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
     })),
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
     webTools: structuredClone(snapshot.webTools),
+    webToolsFromFastPath: snapshot.webToolsFromFastPath,
   };
 }
 
@@ -103,6 +106,7 @@ function cloneRefreshContext(context: SecretsRuntimeRefreshContext): SecretsRunt
 function clearActiveSecretsRuntimeState(): void {
   activeSnapshot = null;
   activeRefreshContext = null;
+  lastFullResolverSourceConfig = null;
   clearActiveRuntimeWebToolsMetadata();
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
@@ -285,6 +289,15 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   });
 }
 
+function hasRuntimeWebToolConfigContainers(config: OpenClawConfig): boolean {
+  const web = config.tools?.web;
+  if (web && typeof web === "object" && !Array.isArray(web)) {
+    return true;
+  }
+  const entries = config.plugins?.entries;
+  return !!entries && typeof entries === "object" && !Array.isArray(entries);
+}
+
 function hasSecretRefCandidate(
   value: unknown,
   defaults: Parameters<typeof coerceSecretRef>[1],
@@ -355,6 +368,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       authStores,
       warnings: [],
       webTools: createEmptyRuntimeWebToolsMetadata(),
+      webToolsFromFastPath: true,
     };
     preparedSnapshotRefreshContext.set(snapshot, {
       env: runtimeEnv,
@@ -429,6 +443,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       resolvedConfig,
       context,
     }),
+    webToolsFromFastPath: false,
   };
   preparedSnapshotRefreshContext.set(snapshot, {
     env: runtimeEnv,
@@ -450,11 +465,27 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       loadAuthStore: loadAuthProfileStoreForSecretsRuntime,
       loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
+
+  // Key off lastFullResolverSourceConfig, not activeSnapshot.sourceConfig — fast-path activations must not overwrite it.
+  const shouldPreserveWebTools =
+    next.webToolsFromFastPath &&
+    lastFullResolverSourceConfig !== null &&
+    hasRuntimeWebToolConfigSurface(lastFullResolverSourceConfig) &&
+    !hasRuntimeWebToolConfigContainers(next.sourceConfig);
+
   setRuntimeConfigSnapshot(next.config, next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
   activeRefreshContext = cloneRefreshContext(refreshContext);
-  setActiveRuntimeWebToolsMetadata(next.webTools);
+
+  if (!next.webToolsFromFastPath) {
+    lastFullResolverSourceConfig = next.sourceConfig;
+  }
+
+  if (!shouldPreserveWebTools) {
+    setActiveRuntimeWebToolsMetadata(next.webTools);
+  }
+
   setRuntimeConfigSnapshotRefreshHandler({
     refresh: async ({ sourceConfig }) => {
       if (!activeSnapshot || !activeRefreshContext) {

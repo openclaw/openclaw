@@ -37,6 +37,7 @@ function createSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapshot 
     config,
     authStores: [],
     warnings: [],
+    webToolsFromFastPath: false,
     webTools: {
       search: { providerSource: "none", diagnostics: [] },
       fetch: { providerSource: "none", diagnostics: [] },

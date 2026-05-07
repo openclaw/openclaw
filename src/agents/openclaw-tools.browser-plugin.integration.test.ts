@@ -199,6 +199,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       config: staleRuntimeConfig,
       authStores: [],
       warnings: [],
+      webToolsFromFastPath: false,
       webTools: {
         search: {
           providerSource: "none",

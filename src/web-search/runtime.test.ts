@@ -289,6 +289,7 @@ describe("web search runtime", () => {
       config: resolvedConfig,
       authStores: [],
       warnings: [],
+      webToolsFromFastPath: false,
       webTools: {
         search: {
           providerSource: "auto-detect",
@@ -398,6 +399,7 @@ describe("web search runtime", () => {
       config: {},
       authStores: [],
       warnings: [],
+      webToolsFromFastPath: false,
       webTools: {
         search: {
           providerSource: "auto-detect",
