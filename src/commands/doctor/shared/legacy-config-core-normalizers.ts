@@ -1,4 +1,7 @@
-import { migrateLegacyRuntimeModelRef } from "../../../agents/model-runtime-aliases.js";
+import {
+  migrateLegacyRuntimeModelRef,
+  isLegacyRuntimeModelProvider,
+} from "../../../agents/model-runtime-aliases.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
@@ -338,7 +341,21 @@ function normalizeLegacyRuntimeAgentContainer(
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
 
-  const model = normalizeLegacyRuntimeAgentModelConfig(raw.model);
+  // If the agent already has an explicit agentRuntime.id that corresponds to a
+  // known non-default runtime (codex, codex-cli, claude-cli, etc.), skip model
+  // prefix normalization — those runtimes use their own model ref format and
+  // rewriting e.g. "codex/gpt-5.5" → "openai/gpt-5.5" breaks auth profile
+  // selection. See #78499.
+  const existingRuntimeId =
+    isRecord(raw.agentRuntime) && typeof raw.agentRuntime.id === "string"
+      ? raw.agentRuntime.id.trim().toLowerCase()
+      : undefined;
+  const hasExplicitNonDefaultRuntime =
+    existingRuntimeId && existingRuntimeId !== "auto" && isLegacyRuntimeModelProvider(existingRuntimeId);
+
+  const model = hasExplicitNonDefaultRuntime
+    ? { value: raw.model, changed: false, selectedRuntime: undefined }
+    : normalizeLegacyRuntimeAgentModelConfig(raw.model);
   if (model.changed) {
     next.model = model.value;
     changed = true;
