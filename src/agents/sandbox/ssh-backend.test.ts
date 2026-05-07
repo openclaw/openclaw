@@ -4,6 +4,7 @@ import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
+  createSandboxUserConfig,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -85,6 +86,7 @@ function createBackendSandboxConfig(params?: { binds?: string[]; target?: string
         params?.target ? { target: params.target } : {},
       ),
     },
+    user: createSandboxUserConfig(),
     browser: createSandboxBrowserConfig({
       image: "img",
       containerPrefix: "prefix-",
@@ -252,6 +254,7 @@ describe("ssh sandbox backend", () => {
           strictHostKeyChecking: true,
           updateHostKeys: true,
         },
+        user: createSandboxUserConfig(),
         browser: {
           enabled: false,
           image: "openclaw-browser",

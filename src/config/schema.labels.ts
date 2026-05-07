@@ -649,6 +649,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Sandbox Docker Allow Container Namespace Join",
   "agents.defaults.sandbox.docker.gpus": "Sandbox Docker GPUs",
+  "agents.defaults.sandbox.user.username": "Sandbox User Username",
+  "agents.defaults.sandbox.user.workspaceDir": "Sandbox User Workspace",
+  "agents.defaults.sandbox.user.workspaceRoot": "Sandbox User Runtime Root",
   commands: "Commands",
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",

@@ -72,6 +72,7 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
 
 import { createDockerSandboxBackend, dockerSandboxBackendManager } from "./docker-backend.js";
 import { createSshSandboxBackend, sshSandboxBackendManager } from "./ssh-backend.js";
+import { createUserSandboxBackend, userSandboxBackendManager } from "./user-backend.js";
 
 registerSandboxBackend("docker", {
   factory: createDockerSandboxBackend,
@@ -81,4 +82,9 @@ registerSandboxBackend("docker", {
 registerSandboxBackend("ssh", {
   factory: createSshSandboxBackend,
   manager: sshSandboxBackendManager,
+});
+
+registerSandboxBackend("user", {
+  factory: createUserSandboxBackend,
+  manager: userSandboxBackendManager,
 });

@@ -568,6 +568,16 @@ const SandboxSshSchema = z
   .strict()
   .optional();
 
+const SandboxUserSchema = z
+  .object({
+    username: z.string().min(1).optional(),
+    command: z.string().min(1).optional(),
+    workspaceDir: z.string().min(1).optional(),
+    workspaceRoot: z.string().min(1).optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentSandboxSchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
@@ -578,6 +588,7 @@ export const AgentSandboxSchema = z
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
     ssh: SandboxSshSchema,
+    user: SandboxUserSchema,
     browser: SandboxBrowserSchema,
     prune: SandboxPruneSchema,
   })

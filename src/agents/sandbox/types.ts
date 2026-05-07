@@ -65,6 +65,13 @@ export type SandboxSshConfig = {
   knownHostsData?: string;
 };
 
+export type SandboxUserConfig = {
+  username?: string;
+  command: string;
+  workspaceDir?: string;
+  workspaceRoot?: string;
+};
+
 export type SandboxScope = "session" | "agent" | "shared";
 
 export type SandboxConfig = {
@@ -75,6 +82,7 @@ export type SandboxConfig = {
   workspaceRoot: string;
   docker: SandboxDockerConfig;
   ssh: SandboxSshConfig;
+  user: SandboxUserConfig;
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;

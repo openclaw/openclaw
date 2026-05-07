@@ -13,6 +13,7 @@ export {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
+  createSandboxUserConfig,
 } from "./test-helpers/sandbox-fixtures.js";
 export { writeSkill } from "../agents/skills.e2e-test-helpers.js";
 export {

@@ -123,3 +123,14 @@ export type SandboxSshSettings = {
   /** Inline or SecretRef-backed known_hosts contents. */
   knownHostsData?: SecretInput;
 };
+
+export type SandboxUserSettings = {
+  /** Local system username to run sandboxed tools as. */
+  username?: string;
+  /** su command to use. Default: "su". */
+  command?: string;
+  /** Target user's canonical agent workspace. Default: ~/.openclaw/workspace for the target user. */
+  workspaceDir?: string;
+  /** Target user's per-scope sandbox root. Default: ~/.openclaw/sandboxes for the target user. */
+  workspaceRoot?: string;
+};

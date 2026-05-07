@@ -69,21 +69,22 @@ Not sandboxed:
 
 - `"docker"` (default when sandboxing is enabled): local Docker-backed sandbox runtime.
 - `"ssh"`: generic SSH-backed remote sandbox runtime.
+- `"user"`: local `su`-backed sandbox runtime that runs tools as another system user.
 - `"openshell"`: OpenShell-backed sandbox runtime.
 
-SSH-specific config lives under `agents.defaults.sandbox.ssh`. OpenShell-specific config lives under `plugins.entries.openshell.config`.
+SSH-specific config lives under `agents.defaults.sandbox.ssh`. User-specific config lives under `agents.defaults.sandbox.user`. OpenShell-specific config lives under `plugins.entries.openshell.config`.
 
 ### Choosing a backend
 
-|                     | Docker                           | SSH                            | OpenShell                                           |
-| ------------------- | -------------------------------- | ------------------------------ | --------------------------------------------------- |
-| **Where it runs**   | Local container                  | Any SSH-accessible host        | OpenShell managed sandbox                           |
-| **Setup**           | `scripts/sandbox-setup.sh`       | SSH key + target host          | OpenShell plugin enabled                            |
-| **Workspace model** | Bind-mount or copy               | Remote-canonical (seed once)   | `mirror` or `remote`                                |
-| **Network control** | `docker.network` (default: none) | Depends on remote host         | Depends on OpenShell                                |
-| **Browser sandbox** | Supported                        | Not supported                  | Not supported yet                                   |
-| **Bind mounts**     | `docker.binds`                   | N/A                            | N/A                                                 |
-| **Best for**        | Local dev, full isolation        | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
+|                     | Docker                           | SSH                            | User                         | OpenShell                                           |
+| ------------------- | -------------------------------- | ------------------------------ | ---------------------------- | --------------------------------------------------- |
+| **Where it runs**   | Local container                  | Any SSH-accessible host        | Local system user via `su`   | OpenShell managed sandbox                           |
+| **Setup**           | `scripts/sandbox-setup.sh`       | SSH key + target host          | local user + `su` permission | OpenShell plugin enabled                            |
+| **Workspace model** | Bind-mount or copy               | Remote-canonical (seed once)   | user-canonical (seed once)   | `mirror` or `remote`                                |
+| **Network control** | `docker.network` (default: none) | Depends on remote host         | Host network as target user  | Depends on OpenShell                                |
+| **Browser sandbox** | Supported                        | Not supported                  | Not supported                | Not supported yet                                   |
+| **Bind mounts**     | `docker.binds`                   | N/A                            | N/A                          | N/A                                                 |
+| **Best for**        | Local dev, full isolation        | Offloading to a remote machine | Local Unix user separation   | Managed remote sandboxes with optional two-way sync |
 
 ### Docker backend
 
@@ -155,6 +156,50 @@ Use `backend: "ssh"` when you want OpenClaw to sandbox `exec`, file tools, and m
     - `openclaw sandbox recreate` deletes the per-scope remote root and seeds again from local on next use.
     - Browser sandboxing is not supported on the SSH backend.
     - `sandbox.docker.*` settings do not apply to the SSH backend.
+
+  </Accordion>
+</AccordionGroup>
+
+### User backend
+
+Use `backend: "user"` when you want OpenClaw to run sandboxed tools as another local system user through `su`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "user",
+        scope: "session",
+        workspaceAccess: "rw",
+        user: {
+          username: "openclaw-sandbox",
+          // command: "su",
+          // Defaults are resolved against the target user's home:
+          // workspaceDir: "~/.openclaw/workspace",
+          // workspaceRoot: "~/.openclaw/sandboxes",
+        },
+      },
+    },
+  },
+}
+```
+
+<AccordionGroup>
+  <Accordion title="How it works">
+    - OpenClaw runs the backend shell through `su <username> -c ...`.
+    - On first use after create or recreate, OpenClaw seeds the target-user workspace from the local workspace once.
+    - With `workspaceAccess: "rw"`, tools run in `sandbox.user.workspaceDir` (default `~/.openclaw/workspace` for the target user).
+    - With `workspaceAccess: "none"` or `"ro"`, OpenClaw also uses per-scope runtime directories under `sandbox.user.workspaceRoot` (default `~/.openclaw/sandboxes` for the target user).
+    - OpenClaw does not sync target-user changes back to the original host workspace automatically.
+
+  </Accordion>
+  <Accordion title="Operational requirements">
+    - The Gateway process must be allowed to run `su <username> -c ...` non-interactively.
+    - The target user must have a shell that accepts `-c`; most normal Unix login shells do.
+    - Browser sandboxing is not supported on the user backend.
+    - `sandbox.docker.*` settings do not apply to the user backend.
 
   </Accordion>
 </AccordionGroup>
@@ -300,6 +345,12 @@ With the OpenShell backend:
 - `mirror` mode still uses the local workspace as the canonical source between exec turns
 - `remote` mode uses the remote OpenShell workspace as the canonical source after the initial seed
 - `workspaceAccess: "ro"` and `"none"` still restrict write behavior the same way
+
+With the user backend:
+
+- `workspaceAccess: "rw"` uses the target user's `sandbox.user.workspaceDir` as the canonical workspace after the initial seed
+- `workspaceAccess: "ro"` exposes the target user's `sandbox.user.workspaceDir` as the read-only agent workspace and uses a writable per-scope sandbox workspace
+- `workspaceAccess: "none"` only exposes the per-scope sandbox workspace
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 

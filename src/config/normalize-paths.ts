@@ -6,6 +6,14 @@ const PATH_VALUE_RE = /^~(?=$|[\\/])/;
 const PATH_KEY_RE = /(dir|path|paths|file|root|workspace)$/i;
 const PATH_LIST_KEYS = new Set(["paths", "pathPrepend"]);
 
+function isTargetUserSandboxPath(pathKeys: readonly string[]): boolean {
+  const last = pathKeys.at(-1);
+  if (last !== "workspaceDir" && last !== "workspaceRoot") {
+    return false;
+  }
+  return pathKeys.at(-2) === "user" && pathKeys.at(-3) === "sandbox";
+}
+
 function normalizeStringValue(key: string | undefined, value: string): string {
   if (!PATH_VALUE_RE.test(value.trim())) {
     return value;
@@ -19,8 +27,15 @@ function normalizeStringValue(key: string | undefined, value: string): string {
   return value;
 }
 
-function normalizeAny(key: string | undefined, value: unknown): unknown {
+function normalizeAny(
+  key: string | undefined,
+  value: unknown,
+  pathKeys: readonly string[],
+): unknown {
   if (typeof value === "string") {
+    if (isTargetUserSandboxPath(pathKeys)) {
+      return value;
+    }
     return normalizeStringValue(key, value);
   }
 
@@ -31,10 +46,10 @@ function normalizeAny(key: string | undefined, value: unknown): unknown {
         return normalizeChildren ? normalizeStringValue(key, entry) : entry;
       }
       if (Array.isArray(entry)) {
-        return normalizeAny(undefined, entry);
+        return normalizeAny(undefined, entry, pathKeys);
       }
       if (isPlainObject(entry)) {
-        return normalizeAny(undefined, entry);
+        return normalizeAny(undefined, entry, pathKeys);
       }
       return entry;
     });
@@ -45,7 +60,7 @@ function normalizeAny(key: string | undefined, value: unknown): unknown {
   }
 
   for (const [childKey, childValue] of Object.entries(value)) {
-    const next = normalizeAny(childKey, childValue);
+    const next = normalizeAny(childKey, childValue, [...pathKeys, childKey]);
     if (next !== childValue) {
       value[childKey] = next;
     }
@@ -64,6 +79,6 @@ export function normalizeConfigPaths(cfg: OpenClawConfig): OpenClawConfig {
   if (!cfg || typeof cfg !== "object") {
     return cfg;
   }
-  normalizeAny(undefined, cfg);
+  normalizeAny(undefined, cfg, []);
   return cfg;
 }

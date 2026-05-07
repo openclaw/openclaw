@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SandboxSshSettings } from "../../config/types.sandbox.js";
+import type { SandboxSshSettings, SandboxUserSettings } from "../../config/types.sandbox.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveAgentConfig } from "../agent-scope.js";
@@ -26,6 +26,7 @@ import type {
   SandboxPruneConfig,
   SandboxScope,
   SandboxSshConfig,
+  SandboxUserConfig,
 } from "./types.js";
 
 export const DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS = [
@@ -36,6 +37,7 @@ export const DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS = [
 
 const DEFAULT_SANDBOX_SSH_COMMAND = "ssh";
 const DEFAULT_SANDBOX_SSH_WORKSPACE_ROOT = "/tmp/openclaw-sandboxes";
+const DEFAULT_SANDBOX_USER_COMMAND = "su";
 
 type DangerousSandboxDockerBooleanKey = (typeof DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS)[number];
 type DangerousSandboxDockerBooleans = Pick<SandboxDockerConfig, DangerousSandboxDockerBooleanKey>;
@@ -218,6 +220,23 @@ export function resolveSandboxSshConfig(params: {
   };
 }
 
+export function resolveSandboxUserConfig(params: {
+  scope: SandboxScope;
+  globalUser?: Partial<SandboxUserSettings>;
+  agentUser?: Partial<SandboxUserSettings>;
+}): SandboxUserConfig {
+  const agentUser = params.scope === "shared" ? undefined : params.agentUser;
+  const globalUser = params.globalUser;
+  return {
+    username: normalizeOptionalString(agentUser?.username ?? globalUser?.username),
+    command:
+      normalizeOptionalString(agentUser?.command ?? globalUser?.command) ??
+      DEFAULT_SANDBOX_USER_COMMAND,
+    workspaceDir: normalizeOptionalString(agentUser?.workspaceDir ?? globalUser?.workspaceDir),
+    workspaceRoot: normalizeOptionalString(agentUser?.workspaceRoot ?? globalUser?.workspaceRoot),
+  };
+}
+
 export function resolveSandboxConfigForAgent(
   cfg?: OpenClawConfig,
   agentId?: string,
@@ -258,6 +277,11 @@ export function resolveSandboxConfigForAgent(
       scope,
       globalSsh: agent?.ssh,
       agentSsh: agentSandbox?.ssh,
+    }),
+    user: resolveSandboxUserConfig({
+      scope,
+      globalUser: agent?.user,
+      agentUser: agentSandbox?.user,
     }),
     browser: resolveSandboxBrowserConfig({
       scope,

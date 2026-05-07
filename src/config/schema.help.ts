@@ -461,6 +461,18 @@ export const FIELD_HELP: Record<string, string> = {
     'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
   "agents.list[].sandbox.docker.gpus":
     "Per-agent Docker GPU passthrough override for sandbox containers.",
+  "agents.defaults.sandbox.user.username":
+    "Local system user for the su-backed user sandbox backend. The Gateway process must be allowed to run su for this user non-interactively.",
+  "agents.list[].sandbox.user.username":
+    "Per-agent local system user for the user sandbox backend.",
+  "agents.defaults.sandbox.user.workspaceDir":
+    "Target user's canonical agent workspace for the user sandbox backend. Defaults to ~/.openclaw/workspace in the target user's home.",
+  "agents.list[].sandbox.user.workspaceDir":
+    "Per-agent target-user workspace for the user sandbox backend.",
+  "agents.defaults.sandbox.user.workspaceRoot":
+    "Target user's per-scope sandbox runtime root for the user sandbox backend. Defaults to ~/.openclaw/sandboxes in the target user's home.",
+  "agents.list[].sandbox.user.workspaceRoot":
+    "Per-agent target-user sandbox runtime root for the user sandbox backend.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.list[].sandbox.browser.cdpSourceRange":

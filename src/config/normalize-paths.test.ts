@@ -43,7 +43,13 @@ describe("normalizeConfigPaths", () => {
               identity: {
                 name: "~not-a-path",
               },
-              sandbox: { workspaceRoot: "~/sandbox-root" },
+              sandbox: {
+                workspaceRoot: "~/sandbox-root",
+                user: {
+                  workspaceDir: "~/.openclaw/user-workspace",
+                  workspaceRoot: "~/.openclaw/user-sandboxes",
+                },
+              },
             },
           ],
         },
@@ -67,6 +73,10 @@ describe("normalizeConfigPaths", () => {
       expect(cfg.agents?.list?.[0]?.workspace).toBe(path.join(home, "ws-agent"));
       expect(cfg.agents?.list?.[0]?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main"));
       expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(path.join(home, "sandbox-root"));
+      expect(cfg.agents?.list?.[0]?.sandbox?.user?.workspaceDir).toBe("~/.openclaw/user-workspace");
+      expect(cfg.agents?.list?.[0]?.sandbox?.user?.workspaceRoot).toBe(
+        "~/.openclaw/user-sandboxes",
+      );
 
       // Non-path key => do not treat "~" as home expansion.
       expect(cfg.agents?.list?.[0]?.identity?.name).toBe("~not-a-path");

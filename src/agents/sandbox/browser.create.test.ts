@@ -107,6 +107,9 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       strictHostKeyChecking: true,
       updateHostKeys: true,
     },
+    user: {
+      command: "su",
+    },
     browser: {
       enabled: true,
       image: "openclaw-sandbox-browser:bookworm-slim",

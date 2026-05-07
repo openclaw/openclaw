@@ -15,9 +15,10 @@ Today that usually means:
 
 - Docker sandbox containers
 - SSH sandbox runtimes when `agents.defaults.sandbox.backend = "ssh"`
+- User sandbox runtimes when `agents.defaults.sandbox.backend = "user"`
 - OpenShell sandbox runtimes when `agents.defaults.sandbox.backend = "openshell"`
 
-For `ssh` and OpenShell `remote`, recreate matters more than with Docker:
+For `ssh`, `user`, and OpenShell `remote`, recreate matters more than with Docker:
 
 - the remote workspace is canonical after the initial seed
 - `openclaw sandbox recreate` deletes that canonical remote workspace for the selected scope
@@ -120,6 +121,22 @@ openclaw sandbox recreate --all
 For the core `ssh` backend, recreate deletes the per-scope remote workspace root
 on the SSH target. The next run seeds it again from the local workspace.
 
+### After changing user sandbox settings
+
+```bash
+# Edit config:
+# - agents.defaults.sandbox.backend
+# - agents.defaults.sandbox.user.username
+# - agents.defaults.sandbox.user.workspaceDir
+# - agents.defaults.sandbox.user.workspaceRoot
+
+openclaw sandbox recreate --all
+```
+
+For the core `user` backend, recreate deletes the per-scope runtime root under
+the target user's sandbox root. The next run seeds the target-user workspace
+again from the local workspace.
+
 ### After changing OpenShell source, policy, or mode
 
 ```bash
@@ -183,7 +200,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
     "defaults": {
       "sandbox": {
         "mode": "all", // off, non-main, all
-        "backend": "docker", // docker, ssh, openshell
+        "backend": "docker", // docker, ssh, user, openshell
         "scope": "agent", // session, agent, shared
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",

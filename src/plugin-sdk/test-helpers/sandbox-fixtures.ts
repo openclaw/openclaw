@@ -2,6 +2,7 @@ import type {
   SandboxBrowserConfig,
   SandboxPruneConfig,
   SandboxSshConfig,
+  SandboxUserConfig,
 } from "../../agents/sandbox/types.js";
 
 export function createSandboxBrowserConfig(
@@ -43,6 +44,15 @@ export function createSandboxSshConfig(
     workspaceRoot,
     strictHostKeyChecking: true,
     updateHostKeys: true,
+    ...overrides,
+  };
+}
+
+export function createSandboxUserConfig(
+  overrides: Partial<SandboxUserConfig> = {},
+): SandboxUserConfig {
+  return {
+    command: "su",
     ...overrides,
   };
 }

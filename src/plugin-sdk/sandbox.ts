@@ -2,6 +2,7 @@ export type {
   CreateSandboxBackendParams,
   RemoteShellSandboxHandle,
   RunSshSandboxCommandParams,
+  RunUserSandboxCommandParams,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
@@ -16,8 +17,10 @@ export type {
   SandboxContext,
   SandboxResolvedPath,
   SandboxSshConfig,
+  SandboxUserConfig,
   SshSandboxSession,
   SshSandboxSettings,
+  UserSandboxSettings,
 } from "../agents/sandbox.js";
 export type { OpenClawConfig } from "../config/config.js";
 
@@ -25,6 +28,7 @@ export {
   buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildUserSandboxArgv,
   createRemoteShellSandboxFsBridge,
   createWritableRenameTargetResolver,
   createSshSandboxSessionFromConfigText,
@@ -34,11 +38,14 @@ export {
   getSandboxBackendManager,
   registerSandboxBackend,
   requireSandboxBackendFactory,
+  resolveUserSandboxHome,
   resolveWritableRenameTargets,
   resolveWritableRenameTargetsForBridge,
   runSshSandboxCommand,
+  runUserSandboxCommand,
   sanitizeEnvVars,
   shellEscape,
+  uploadDirectoryToUserTarget,
   uploadDirectoryToSshTarget,
 } from "../agents/sandbox.js";
 

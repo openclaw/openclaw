@@ -8,6 +8,7 @@ import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
+  createSandboxUserConfig,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { createOpenShellSandboxBackendFactory } from "./backend.js";
@@ -389,6 +390,7 @@ describe("openshell sandbox backend e2e", () => {
           env: {},
         },
         ssh: createSandboxSshConfig("/tmp/openclaw-sandboxes"),
+        user: createSandboxUserConfig(),
         browser: createSandboxBrowserConfig(),
         tools: { allow: [], deny: [] },
         prune: createSandboxPruneConfig(),

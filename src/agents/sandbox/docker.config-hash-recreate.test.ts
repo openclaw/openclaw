@@ -138,6 +138,9 @@ function createSandboxConfig(
       strictHostKeyChecking: true,
       updateHostKeys: true,
     },
+    user: {
+      command: "su",
+    },
     browser: {
       enabled: false,
       image: "openclaw-browser:test",

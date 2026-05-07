@@ -6,6 +6,7 @@ import {
   resolveSandboxPruneConfig,
   resolveSandboxScope,
   resolveSandboxSshConfig,
+  resolveSandboxUserConfig,
 } from "./sandbox/config.js";
 
 describe("sandbox config merges", () => {
@@ -187,6 +188,38 @@ describe("sandbox config merges", () => {
       },
     });
     expect(sshShared.target).toBe("global@example.com:22");
+  });
+
+  it("merges sandbox user settings and ignores agent overrides under shared scope", () => {
+    const user = resolveSandboxUserConfig({
+      scope: "agent",
+      globalUser: {
+        username: "global-sandbox",
+        command: "su",
+        workspaceDir: "/home/global/.openclaw/workspace",
+      },
+      agentUser: {
+        username: "agent-sandbox",
+        workspaceRoot: "/home/agent/.openclaw/sandboxes",
+      },
+    });
+    expect(user).toEqual({
+      username: "agent-sandbox",
+      command: "su",
+      workspaceDir: "/home/global/.openclaw/workspace",
+      workspaceRoot: "/home/agent/.openclaw/sandboxes",
+    });
+
+    const userShared = resolveSandboxUserConfig({
+      scope: "shared",
+      globalUser: {
+        username: "global-sandbox",
+      },
+      agentUser: {
+        username: "agent-sandbox",
+      },
+    });
+    expect(userShared.username).toBe("global-sandbox");
   });
 
   it("defaults sandbox backend to docker", () => {

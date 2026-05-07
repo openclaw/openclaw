@@ -4,6 +4,7 @@ export {
   resolveSandboxDockerConfig,
   resolveSandboxPruneConfig,
   resolveSandboxScope,
+  resolveSandboxUserConfig,
 } from "./sandbox/config.js";
 export {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
@@ -45,6 +46,12 @@ export {
   shellEscape,
   uploadDirectoryToSshTarget,
 } from "./sandbox/ssh.js";
+export {
+  buildUserSandboxArgv,
+  resolveUserSandboxHome,
+  runUserSandboxCommand,
+  uploadDirectoryToUserTarget,
+} from "./sandbox/user.js";
 export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";
@@ -69,6 +76,7 @@ export type {
   SshSandboxSession,
   SshSandboxSettings,
 } from "./sandbox/ssh.js";
+export type { RunUserSandboxCommandParams, UserSandboxSettings } from "./sandbox/user.js";
 
 export type {
   SandboxBrowserConfig,
@@ -79,6 +87,7 @@ export type {
   SandboxPruneConfig,
   SandboxScope,
   SandboxSshConfig,
+  SandboxUserConfig,
   SandboxToolPolicy,
   SandboxToolPolicyResolved,
   SandboxToolPolicySource,
