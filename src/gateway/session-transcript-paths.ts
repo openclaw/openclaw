@@ -39,9 +39,9 @@ export function resolveStableSessionEndTranscript(params: {
   sessionFile?: string;
   agentId?: string;
 }): { sessionFile?: string } {
-  const stablePath = normalizeTranscriptLocator(params.sessionFile);
-  if (stablePath) {
-    return { sessionFile: stablePath };
+  const stableLocator = normalizeTranscriptLocator(params.sessionFile);
+  if (stableLocator) {
+    return { sessionFile: stableLocator };
   }
 
   const [candidate] = resolveSessionTranscriptCandidates(
