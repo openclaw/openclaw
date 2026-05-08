@@ -33,6 +33,9 @@ const mocks = vi.hoisted(() => ({
   resolveExplicitAgentSessionKey: vi.fn(),
   resolveBareResetBootstrapFileAccess: vi.fn(() => true),
   listAgentIds: vi.fn(() => ["main"]),
+  resolveAgentEffectiveModelPrimary: vi.fn(
+    (_cfg: unknown, _agentId: string): string | undefined => undefined,
+  ),
   loadConfigReturn: {} as Record<string, unknown>,
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
@@ -91,7 +94,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
     cfg.agents?.list?.find((agent) => agent.id === agentId),
   resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
     cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
-  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
 }));
 
 vi.mock("../../auto-reply/reply/session-reset-prompt.js", async () => {
@@ -428,6 +431,7 @@ describe("gateway agent handler", () => {
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
+    mocks.resolveAgentEffectiveModelPrimary.mockReset().mockReturnValue(undefined);
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
@@ -1103,6 +1107,94 @@ describe("gateway agent handler", () => {
     const logMeta = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[1] as { error?: string } | undefined;
     expect(logMeta?.error).toContain("\n    at ");
+  });
+
+  it("validates fresh-session image attachments against the per-agent model", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "local/text-only",
+          },
+        },
+        list: [
+          {
+            id: "writer",
+            model: {
+              primary: "local/vision",
+            },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          local: {},
+        },
+      },
+    };
+    const sessionKey = "agent:writer:main";
+    mocks.loadConfigReturn = cfg;
+    mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+    mocks.resolveAgentEffectiveModelPrimary.mockImplementation(
+      (runtimeCfg: unknown, agentId: string) => {
+        const typedCfg = runtimeCfg as typeof cfg;
+        const agent = typedCfg.agents.list.find((candidate) => candidate.id === agentId);
+        return agent?.model?.primary ?? typedCfg.agents.defaults.model.primary;
+      },
+    );
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "fresh-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    const context = {
+      ...makeContext(),
+      loadGatewayModelCatalog: vi.fn(async () => [
+        { provider: "local", id: "text-only", name: "text-only", input: ["text"] },
+        { provider: "local", id: "vision", name: "vision", input: ["text", "image"] },
+      ]),
+    } as unknown as GatewayRequestContext;
+
+    await invokeAgent(
+      {
+        message: "inspect this",
+        agentId: "writer",
+        sessionKey,
+        idempotencyKey: "test-agent-fresh-session-agent-model-attachments",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "pixel.png",
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+          },
+        ],
+      },
+      { context, reqId: "agent-fresh-session-agent-model-attachments" },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      images?: Array<{ data: string; mimeType: string; type: string }>;
+      imageOrder?: unknown[];
+    }>();
+    expect(context.loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
+    expect(callArgs.images).toEqual([
+      expect.objectContaining({
+        type: "image",
+        mimeType: "image/png",
+      }),
+    ]);
+    expect(callArgs.imageOrder).toEqual(["inline"]);
   });
 
   it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
