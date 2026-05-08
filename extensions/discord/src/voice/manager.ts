@@ -318,10 +318,46 @@ export class DiscordVoiceManager {
     let disconnectedHandler: (() => Promise<void>) | undefined;
     let destroyedHandler: (() => void) | undefined;
     let playerErrorHandler: ((err: Error) => void) | undefined;
+    let stopped = false;
     const clearSessionIfCurrent = () => {
       const active = this.sessions.get(guildId);
       if (active?.connection === connection) {
         this.sessions.delete(guildId);
+      }
+    };
+    const stopEntry = (
+      entry: VoiceSessionEntry,
+      options: { destroyConnection: boolean; reason: string },
+    ) => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      if (speakingHandler) {
+        connection.receiver.speaking.off("start", speakingHandler);
+      }
+      if (speakingEndHandler) {
+        connection.receiver.speaking.off("end", speakingEndHandler);
+      }
+      stopVoiceCaptureState(entry.capture);
+      if (disconnectedHandler) {
+        connection.off(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
+      }
+      if (destroyedHandler) {
+        connection.off(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
+      }
+      if (playerErrorHandler) {
+        player.off("error", playerErrorHandler);
+      }
+      entry.realtime?.close();
+      entry.realtime = undefined;
+      player.stop();
+      if (options.destroyConnection) {
+        destroyVoiceConnectionSafely({
+          connection,
+          voiceSdk,
+          reason: options.reason,
+        });
       }
     };
 
@@ -348,27 +384,8 @@ export class DiscordVoiceManager {
       capture: createVoiceCaptureState(),
       receiveRecovery: createVoiceReceiveRecoveryState(),
       stop: () => {
-        if (speakingHandler) {
-          connection.receiver.speaking.off("start", speakingHandler);
-        }
-        if (speakingEndHandler) {
-          connection.receiver.speaking.off("end", speakingEndHandler);
-        }
-        stopVoiceCaptureState(entry.capture);
-        if (disconnectedHandler) {
-          connection.off(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
-        }
-        if (destroyedHandler) {
-          connection.off(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
-        }
-        if (playerErrorHandler) {
-          player.off("error", playerErrorHandler);
-        }
-        entry.realtime?.close();
-        player.stop();
-        destroyVoiceConnectionSafely({
-          connection,
-          voiceSdk,
+        stopEntry(entry, {
+          destroyConnection: true,
           reason: `stop guild ${guildId} channel ${channelId}`,
         });
       },
@@ -433,15 +450,18 @@ export class DiscordVoiceManager {
           `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
         );
         clearSessionIfCurrent();
-        destroyVoiceConnectionSafely({
-          connection,
-          voiceSdk,
+        stopEntry(entry, {
+          destroyConnection: true,
           reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
         });
       }
     };
     destroyedHandler = () => {
       clearSessionIfCurrent();
+      stopEntry(entry, {
+        destroyConnection: false,
+        reason: `destroyed guild ${guildId} channel ${channelId}`,
+      });
     };
     playerErrorHandler = (err: Error) => {
       logger.warn(`discord voice: playback error: ${formatErrorMessage(err)}`);
@@ -595,7 +615,7 @@ export class DiscordVoiceManager {
       if (realtime && realtimeIngress) {
         const turn = realtime.beginSpeakerTurn(realtimeIngress, userId);
         try {
-          await this.processRealtimeAudioCapture({ stream, turn });
+          await this.processRealtimeAudioCapture({ entry, stream, turn });
         } finally {
           turn.close();
         }
@@ -632,12 +652,20 @@ export class DiscordVoiceManager {
   }
 
   private async processRealtimeAudioCapture(params: {
+    entry: VoiceSessionEntry;
     stream: import("node:stream").Readable;
     turn: import("./session.js").VoiceRealtimeSpeakerTurn;
   }): Promise<void> {
-    const { stream, turn } = params;
+    const { entry, stream, turn } = params;
+    let resetReceiveRecovery = false;
     await decodeOpusStreamChunks(stream, {
-      onChunk: (pcm) => turn.sendInputAudio(pcm),
+      onChunk: (pcm) => {
+        if (!resetReceiveRecovery && pcm.length > 0) {
+          resetReceiveRecovery = true;
+          this.resetDecryptFailureState(entry);
+        }
+        turn.sendInputAudio(pcm);
+      },
       onVerbose: logVoiceVerbose,
       onWarn: (message) => logger.warn(message),
     });

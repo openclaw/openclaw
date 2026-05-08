@@ -76,6 +76,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
   private consultToolsAllow: string[] | undefined;
   private readonly pendingSpeakerTurns: PendingSpeakerTurn[] = [];
+  private readonly playerIdleHandler = () => {
+    this.resetOutputStream();
+  };
 
   constructor(
     private readonly params: {
@@ -164,6 +167,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     logVoiceVerbose(
       `realtime voice bridge starting: mode=${this.params.mode} provider=${resolved.provider.id}`,
     );
+    const voiceSdk = loadDiscordVoiceSdk();
+    this.params.entry.player.on(voiceSdk.AudioPlayerStatus.Idle, this.playerIdleHandler);
     await this.bridge.connect();
   }
 
@@ -174,6 +179,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.clearOutputAudio();
     this.bridge?.close();
     this.bridge = null;
+    const voiceSdk = loadDiscordVoiceSdk();
+    this.params.entry.player.off(voiceSdk.AudioPlayerStatus.Idle, this.playerIdleHandler);
   }
 
   beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
@@ -243,11 +250,15 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   private clearOutputAudio(): void {
+    this.resetOutputStream();
+    this.params.entry.player.stop(true);
+  }
+
+  private resetOutputStream(): void {
     const stream = this.outputStream;
     this.outputStream = null;
     stream?.end();
     stream?.destroy();
-    this.params.entry.player.stop(true);
   }
 
   private handleToolCall(
@@ -309,6 +320,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   private consumePendingSpeakerContext(): DiscordRealtimeSpeakerContext | undefined {
     this.prunePendingSpeakerTurns();
+    this.expireClosedSpeakerTurnsBeforeLaterAudio();
     const index = this.pendingSpeakerTurns.findIndex((turn) => turn.hasAudio);
     if (index < 0) {
       return undefined;
@@ -328,6 +340,21 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     while (this.pendingSpeakerTurns.length > DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT) {
       const completedIndex = this.pendingSpeakerTurns.findIndex((turn) => turn.closed);
       this.pendingSpeakerTurns.splice(Math.max(completedIndex, 0), 1);
+    }
+  }
+
+  private expireClosedSpeakerTurnsBeforeLaterAudio(): void {
+    let hasLaterAudio = false;
+    for (let index = this.pendingSpeakerTurns.length - 1; index >= 0; index -= 1) {
+      const turn = this.pendingSpeakerTurns[index];
+      if (!turn?.hasAudio) {
+        continue;
+      }
+      if (turn.closed && hasLaterAudio) {
+        this.pendingSpeakerTurns.splice(index, 1);
+        continue;
+      }
+      hasLaterAudio = true;
     }
   }
 }
