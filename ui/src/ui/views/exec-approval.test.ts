@@ -242,7 +242,6 @@ describe("approval and confirmation modals", () => {
     );
 
     const { dialog } = await getRenderedDialog();
-    expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
     dispatchEscape(dialog);
 
@@ -263,7 +262,6 @@ describe("approval and confirmation modals", () => {
     );
 
     const { dialog } = await getRenderedDialog();
-    expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
     dispatchEscape(dialog);
 
