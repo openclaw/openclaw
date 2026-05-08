@@ -1390,7 +1390,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("keeps an implicit-conversation root and its Slack thread follow-up on one parent session in `requireMention: false` channels (#78505)", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1778073105.769279";
     const expectedSessionKey = `agent:main:slack:channel:c0agg76cp1s:thread:${rootTs}`;
     const replies = vi.fn().mockResolvedValue({
@@ -1405,7 +1404,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
         channels: {
           slack: {
             enabled: true,

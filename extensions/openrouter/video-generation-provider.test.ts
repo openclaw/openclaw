@@ -109,10 +109,12 @@ function expectOpenRouterFetchCall(index: number, url: string, auditContext: str
 
 function requireGeneratedVideo(result: OpenRouterVideoResult, index: number) {
   const video = result.videos[index];
-  if (!video) {
+  expect(video).toBeDefined();
+  expect(video?.buffer).toBeDefined();
+  if (!video?.buffer) {
     throw new Error(`expected OpenRouter generated video at index ${index}`);
   }
-  return video;
+  return video as typeof video & { buffer: Buffer };
 }
 
 function requireGeneratedVideoBuffer(result: OpenRouterVideoResult, index: number) {

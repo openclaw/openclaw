@@ -279,7 +279,12 @@ function importLearnings(root: string, env: NodeJS.ProcessEnv): ImportResult {
 function pluginStatePlan(params: {
   label: string;
   sourcePath: string;
-  namespace: "conversations" | "polls" | "feedback-learnings" | typeof MSTEAMS_SSO_TOKEN_NAMESPACE;
+  namespace:
+    | "conversations"
+    | "polls"
+    | "feedback-learnings"
+    | typeof MSTEAMS_SSO_TOKEN_NAMESPACE
+    | typeof MSTEAMS_DELEGATED_TOKEN_NAMESPACE;
   importSource: (sourcePath: string, env: NodeJS.ProcessEnv) => ImportResult;
 }): ChannelLegacyStateMigrationPlan {
   return {

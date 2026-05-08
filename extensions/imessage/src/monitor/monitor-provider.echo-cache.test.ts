@@ -1,15 +1,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSentMessageCache } from "./echo-cache.js";
-import { rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
+import {
+  rememberPersistedIMessageEcho,
+  resetPersistedIMessageEchoCacheForTest,
+} from "./persisted-echo-cache.js";
 
 describe("iMessage sent-message echo cache", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
     vi.useRealTimers();
+    resetPersistedIMessageEchoCacheForTest();
+    resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -99,12 +105,7 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has("acct:imessage:+1555", { messageId: "guid-1" })).toBe(true);
   });
 
-  it("writes sent-echoes.jsonl 0600 and parent dir 0700", () => {
-    // sent-echoes.jsonl carries scope keys + outbound message text + messageIds.
-    // Same threat model as reply-cache.jsonl: a same-UID hostile process could
-    // enumerate active conversations or inject lines so a future inbound dedupe
-    // call wrongly suppresses a legitimate inbound. Owner-only mode is the
-    // mitigation.
+  it("stores persisted echoes in SQLite without writing sent-echoes.jsonl", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-echo-perm-"));
     tempDirs.push(stateDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -116,13 +117,12 @@ describe("iMessage sent-message echo cache", () => {
     });
 
     const echoFile = path.join(stateDir, "imessage", "sent-echoes.jsonl");
-    const echoDir = path.dirname(echoFile);
-    expect(fs.existsSync(echoFile)).toBe(true);
+    const sqliteFile = path.join(stateDir, "state", "openclaw.sqlite");
+    expect(fs.existsSync(echoFile)).toBe(false);
+    expect(fs.existsSync(sqliteFile)).toBe(true);
 
-    const fileMode = fs.statSync(echoFile).mode & 0o777;
-    const dirMode = fs.statSync(echoDir).mode & 0o777;
-    expect(fileMode).toBe(0o600);
-    expect(dirMode).toBe(0o700);
+    const cache = createSentMessageCache();
+    expect(cache.has("acct:imessage:+1555", { messageId: "guid-perm" })).toBe(true);
   });
 
   it("retains entries written hours earlier so catchup replay sees own outbound rows", () => {
@@ -152,31 +152,5 @@ describe("iMessage sent-message echo cache", () => {
       true,
     );
     expect(cache.has("acct:imessage:+1555", { messageId: "guid-pre-gap" })).toBe(true);
-  });
-
-  it("clamps pre-existing sent-echoes.jsonl from older 0644/0755 to 0600/0700", () => {
-    // Older gateway versions wrote with default modes. After upgrade, the next
-    // remember must clamp the existing file/dir back to owner-only.
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-echo-clamp-"));
-    tempDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-
-    const imsgDir = path.join(stateDir, "imessage");
-    fs.mkdirSync(imsgDir, { recursive: true, mode: 0o755 });
-    const echoFile = path.join(imsgDir, "sent-echoes.jsonl");
-    fs.writeFileSync(echoFile, "", { mode: 0o644 });
-    fs.chmodSync(imsgDir, 0o755);
-    fs.chmodSync(echoFile, 0o644);
-
-    rememberPersistedIMessageEcho({
-      scope: "acct:imessage:+1555",
-      text: "clamp-test",
-      messageId: "guid-clamp",
-    });
-
-    const fileMode = fs.statSync(echoFile).mode & 0o777;
-    const dirMode = fs.statSync(imsgDir).mode & 0o777;
-    expect(fileMode).toBe(0o600);
-    expect(dirMode).toBe(0o700);
   });
 });

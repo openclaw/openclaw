@@ -1,17 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  _resetIMessageShortIdMemoryForTest,
   _resetIMessageShortIdState,
   findLatestIMessageEntryForChat,
   rememberIMessageReplyCache,
   resolveIMessageMessageId,
 } from "./monitor-reply-cache.js";
 
-// Isolate from any live ~/.openclaw/imessage/reply-cache.jsonl that the
-// developer might have from a running gateway. Without this, the on-disk
-// hydrate path picks up production data and tests get cross-pollinated.
+// Isolate from any live ~/.openclaw/state/openclaw.sqlite that the developer
+// might have from a running gateway. Without this, the SQLite hydrate path
+// picks up production data and tests get cross-pollinated.
 //
 // vi.stubEnv defaults to per-test scoping in this codebase, which means a
 // beforeAll-only stub gets unstubbed between tests. Mutate process.env
@@ -24,6 +26,7 @@ beforeAll(() => {
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
 });
 afterAll(() => {
+  resetPluginStateStoreForTests();
   if (priorStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -34,15 +37,6 @@ afterAll(() => {
 
 beforeEach(() => {
   _resetIMessageShortIdState();
-  // Belt-and-suspenders: also nuke the persisted file directly. The
-  // _reset helper does this when OPENCLAW_STATE_DIR is set, but explicitly
-  // clearing here protects the test from any future refactor of _reset's
-  // gating logic.
-  try {
-    fs.rmSync(path.join(tempStateDir, "imessage", "reply-cache.jsonl"), { force: true });
-  } catch {
-    // best-effort
-  }
 });
 
 describe("imessage short message id resolution", () => {
@@ -295,37 +289,8 @@ describe("findLatestIMessageEntryForChat", () => {
   });
 });
 
-describe("reply cache disk permissions", () => {
-  it("clamps pre-existing reply-cache.jsonl from older 0644/0755 to 0600/0700", () => {
-    // Older gateway versions wrote with default modes. Every append must
-    // clamp existing files back to owner-only — appendFileSync's `mode`
-    // only applies on creation, so a chmod-on-create-only path would leave
-    // the upgrade case world-readable forever.
-    const imsgDir = path.join(tempStateDir, "imessage");
-    fs.mkdirSync(imsgDir, { recursive: true, mode: 0o755 });
-    const cacheFile = path.join(imsgDir, "reply-cache.jsonl");
-    fs.writeFileSync(cacheFile, "", { mode: 0o644 });
-    fs.chmodSync(imsgDir, 0o755);
-    fs.chmodSync(cacheFile, 0o644);
-
-    rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "clamp-test-guid",
-      chatIdentifier: "+12069106512",
-      timestamp: Date.now(),
-    });
-
-    const fileMode = fs.statSync(cacheFile).mode & 0o777;
-    const dirMode = fs.statSync(imsgDir).mode & 0o777;
-    expect(fileMode).toBe(0o600);
-    expect(dirMode).toBe(0o700);
-  });
-
-  it("writes the cache file 0600 and parent dir 0700", () => {
-    // Map gateway-allocated short-ids to message guids; a hostile same-UID
-    // process reading or writing this file could (a) enumerate active
-    // conversation guids or (b) inject lines so a future shortId resolves
-    // to an attacker-chosen guid. Owner-only mode is the mitigation.
+describe("reply cache SQLite persistence", () => {
+  it("stores short-id mappings in SQLite without writing reply-cache.jsonl", () => {
     rememberIMessageReplyCache({
       accountId: "default",
       messageId: "perm-test-guid",
@@ -334,13 +299,9 @@ describe("reply cache disk permissions", () => {
     });
 
     const cacheFile = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
-    const cacheDir = path.dirname(cacheFile);
-    expect(fs.existsSync(cacheFile)).toBe(true);
-
-    const fileMode = fs.statSync(cacheFile).mode & 0o777;
-    const dirMode = fs.statSync(cacheDir).mode & 0o777;
-    expect(fileMode).toBe(0o600);
-    expect(dirMode).toBe(0o700);
+    const sqliteFile = path.join(tempStateDir, "state", "openclaw.sqlite");
+    expect(fs.existsSync(cacheFile)).toBe(false);
+    expect(fs.existsSync(sqliteFile)).toBe(true);
   });
 });
 
@@ -360,15 +321,9 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     });
     expect(issued.shortId).not.toBe("");
 
-    // Simulate a restart: clear the in-memory state but leave the JSONL on
-    // disk. _resetIMessageShortIdState only deletes the persisted file when
-    // OPENCLAW_STATE_DIR is set, so we have to keep the file ourselves
-    // since this test runs under the suite's temp state dir.
-    const cachePath = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
-    const persisted = fs.readFileSync(cachePath, "utf8");
-    _resetIMessageShortIdState();
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    fs.writeFileSync(cachePath, persisted, "utf8");
+    // Simulate a restart: clear the in-memory state but leave the SQLite row
+    // intact.
+    _resetIMessageShortIdMemoryForTest();
 
     // Now resolve the short id we issued before the "restart". Without the
     // hydrate-on-resolve fix this throws "no longer available" because the

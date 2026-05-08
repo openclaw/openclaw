@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetIMessageShortIdState } from "../monitor-reply-cache.js";
@@ -529,6 +530,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
   });
   afterAll(() => {
+    resetPluginStateStoreForTests();
     if (priorStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -538,11 +540,6 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
   });
   beforeEach(() => {
     _resetIMessageShortIdState();
-    try {
-      fs.rmSync(path.join(tempStateDir, "imessage", "reply-cache.jsonl"), { force: true });
-    } catch {
-      // best-effort
-    }
   });
 
   function buildParams(messageOverrides: Partial<{ id: number; guid: string }>) {
