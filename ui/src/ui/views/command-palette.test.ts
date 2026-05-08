@@ -180,7 +180,8 @@ describe("command palette", () => {
       bubbles: true,
       cancelable: true,
     });
-    input?.dispatchEvent(tab);
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    input!.dispatchEvent(tab);
     expect(tab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(input);
 
@@ -189,7 +190,7 @@ describe("command palette", () => {
       bubbles: true,
       cancelable: true,
     });
-    input?.dispatchEvent(escape);
+    input!.dispatchEvent(escape);
     expect(escape.defaultPrevented).toBe(true);
     expect(onToggle).toHaveBeenCalledTimes(1);
 
@@ -204,16 +205,17 @@ describe("command palette", () => {
     const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
     const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
     expect(dialog?.open).toBe(true);
-    expect(input?.id).toBe("cmd-palette-input");
+    expect(input).toBeInstanceOf(HTMLInputElement);
 
-    input?.dispatchEvent(
+    input!.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,
         cancelable: true,
       }),
     );
-    dialog?.dispatchEvent(new Event("cancel", { cancelable: true }));
+    expect(dialog).toBeInstanceOf(HTMLDialogElement);
+    dialog!.dispatchEvent(new Event("cancel", { cancelable: true }));
 
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
