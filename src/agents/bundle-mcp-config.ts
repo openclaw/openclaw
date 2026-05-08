@@ -21,6 +21,8 @@ type BundleMcpToolPolicy = {
 
 type BundleMcpServerMapper = (server: BundleMcpServerConfig, name: string) => BundleMcpServerConfig;
 
+const BUNDLE_MCP_PLUGIN_POLICY_ENTRIES = new Set(["bundle-mcp", "group:plugins"]);
+
 const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
   "streamable-http": "http",
   http: "http",
@@ -64,6 +66,9 @@ function policyEntryTargetsMcpServer(entry: string, serverName: string): boolean
   const normalizedServerName = normalizeToolName(serverName);
   if (!normalizedEntry || !normalizedServerName) {
     return false;
+  }
+  if (BUNDLE_MCP_PLUGIN_POLICY_ENTRIES.has(normalizedEntry)) {
+    return true;
   }
   if (normalizedEntry === "*") {
     return true;

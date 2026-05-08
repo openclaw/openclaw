@@ -112,4 +112,32 @@ describe("loadMergedBundleMcpConfig", () => {
 
     expect(Object.keys(filtered.mcpServers)).toEqual(["twenty-crm"]);
   });
+
+  it("preserves profile-allowed bundle MCP servers", () => {
+    const filtered = filterBundleMcpConfigByToolPolicies({
+      config: {
+        mcpServers: {
+          "twenty-crm": { type: "sse", url: "https://crm.example.com/mcp" },
+          calendar: { type: "sse", url: "https://calendar.example.com/mcp" },
+        },
+      },
+      policies: [{ allow: ["read", "exec", "bundle-mcp"] }],
+    });
+
+    expect(Object.keys(filtered.mcpServers)).toEqual(["twenty-crm", "calendar"]);
+  });
+
+  it("lets explicit denies override profile-allowed bundle MCP servers", () => {
+    const filtered = filterBundleMcpConfigByToolPolicies({
+      config: {
+        mcpServers: {
+          "twenty-crm": { type: "sse", url: "https://crm.example.com/mcp" },
+          calendar: { type: "sse", url: "https://calendar.example.com/mcp" },
+        },
+      },
+      policies: [{ allow: ["bundle-mcp"] }, { deny: ["mcp__twenty-crm"] }],
+    });
+
+    expect(Object.keys(filtered.mcpServers)).toEqual(["calendar"]);
+  });
 });
