@@ -1657,7 +1657,7 @@ describe("discoverOpenClawPlugins", () => {
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
 
-    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
+    expect(candidates.map((candidate) => candidate.idHint)).not.toContain("pack");
   });
 
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
@@ -1693,7 +1693,7 @@ describe("discoverOpenClawPlugins", () => {
         }),
       );
 
-      expect(result.candidates.some((candidate) => candidate.idHint === "demo-pack")).toBe(true);
+      expect(result.candidates.map((candidate) => candidate.idHint)).toContain("demo-pack");
       expect(result.diagnostics).not.toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1804,12 +1804,12 @@ describe("discoverOpenClawPlugins", () => {
 
     const env = buildDiscoveryEnvWithOverrides(stateDir);
     const first = discoverWithEnv({ env });
-    expect(first.candidates.some((candidate) => candidate.idHint === "fresh")).toBe(true);
+    expect(first.candidates.map((candidate) => candidate.idHint)).toContain("fresh");
 
     fs.rmSync(pluginPath, { force: true });
 
     const second = discoverWithEnv({ env });
-    expect(second.candidates.some((candidate) => candidate.idHint === "fresh")).toBe(false);
+    expect(second.candidates.map((candidate) => candidate.idHint)).not.toContain("fresh");
   });
 
   it("discovers bundled and global plugins for each workspace-specific scan", () => {
