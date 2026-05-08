@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   approveNodePairing,
@@ -137,9 +137,8 @@ async function expectRePairingRequest(params: {
       commands: params.reconnectCommands,
     });
 
-    const deadline = Date.now() + 2_000;
     let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
-    while (Date.now() < deadline) {
+    await vi.waitFor(async () => {
       const list = await rpcReq<{
         nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
       }>(controlWs, "node.list", {});
@@ -151,10 +150,10 @@ async function expectRePairingRequest(params: {
         JSON.stringify(node?.commands?.toSorted() ?? []) ===
         JSON.stringify(params.expectedVisibleCommands)
       ) {
-        break;
+        return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+      throw new Error(`node commands not visible yet: ${JSON.stringify(lastNodes)}`);
+    });
 
     expect(
       lastNodes
