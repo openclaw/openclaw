@@ -1,7 +1,4 @@
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
@@ -132,14 +129,10 @@ function resolveSafeCliSessionFile(params: {
     config: params.config,
     agentId: params.agentId,
   });
-  const pathOptions = resolveSessionFilePathOptions({
+  const sessionFile = createSqliteSessionTranscriptLocator({
     agentId: sessionAgentId ?? defaultAgentId,
+    sessionId: params.sessionId,
   });
-  const sessionFile = resolveSessionFilePath(
-    params.sessionId,
-    { sessionFile: params.sessionFile },
-    pathOptions,
-  );
   return { sessionFile };
 }
 

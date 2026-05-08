@@ -13,9 +13,8 @@ import {
 } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
+  createSqliteSessionTranscriptLocator,
   resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   type SessionEntry,
 } from "../../config/sessions.js";
 import {
@@ -217,16 +216,8 @@ function resolveSessionLogPath(
     );
     const sessionFile = normalizeOptionalString(sessionEntry?.sessionFile) || transcriptPath;
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const pathOpts = resolveSessionFilePathOptions({
-      agentId,
-    });
-    // Normalize sessionFile through resolveSessionFilePath so relative entries
-    // are resolved against the sessions dir/store layout, not process.cwd().
-    return resolveSessionFilePath(
-      sessionId,
-      sessionFile ? { sessionFile } : sessionEntry,
-      pathOpts,
-    );
+    void sessionFile;
+    return createSqliteSessionTranscriptLocator({ agentId, sessionId });
   } catch {
     return undefined;
   }

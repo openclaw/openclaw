@@ -129,13 +129,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderName: params.ctx.SenderName,
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
-    sessionFile: runtime.resolveSessionFilePath(
+    sessionFile: runtime.createSqliteSessionTranscriptLocator({
+      agentId: sessionAgentId,
       sessionId,
-      targetSessionEntry,
-      runtime.resolveSessionFilePathOptions({
-        agentId: sessionAgentId,
-      }),
-    ),
+    }),
     workspaceDir: params.workspaceDir,
     agentDir: sessionAgentDir,
     config: params.cfg,

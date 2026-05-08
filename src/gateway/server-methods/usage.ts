@@ -1,7 +1,4 @@
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
@@ -130,8 +127,7 @@ function resolveSessionUsageFileOrRespond(
   const sessionId = entry?.sessionId ?? rawSessionId;
   let sessionFile: string;
   try {
-    const pathOpts = resolveSessionFilePathOptions({ agentId });
-    sessionFile = resolveSessionFilePath(sessionId, entry, pathOpts);
+    sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
   } catch {
     respond(
       false,
@@ -882,13 +878,10 @@ export const usageHandlers: GatewayRequestHandlers = {
       // Resolve the session file path
       let sessionFile: string | undefined;
       try {
-        const pathOpts = resolveSessionFilePathOptions({
-          agentId,
-        });
         sessionFile = resolveExistingUsageSessionFile({
           sessionId,
           sessionEntry: storeEntry,
-          sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
+          sessionFile: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
           agentId,
         });
       } catch {

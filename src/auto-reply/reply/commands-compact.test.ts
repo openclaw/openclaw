@@ -9,18 +9,20 @@ import type { HandleCommandsParams } from "./commands-types.js";
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedPiRun: vi.fn(),
   compactEmbeddedPiSession: vi.fn(),
+  createSqliteSessionTranscriptLocator: vi.fn(
+    ({ agentId, sessionId }: { agentId: string; sessionId: string }) =>
+      `sqlite-transcript://${agentId}/${sessionId}.jsonl`,
+  ),
   enqueueSystemEvent: vi.fn(),
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
   incrementCompactionCount: vi.fn(),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
-  resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-  resolveSessionFilePathOptions: vi.fn(() => ({})),
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { compactEmbeddedPiSession, incrementCompactionCount, resolveSessionFilePathOptions } =
+const { compactEmbeddedPiSession, incrementCompactionCount } =
   await import("./commands-compact.runtime.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 
@@ -183,10 +185,11 @@ describe("handleCompactCommand", () => {
       sessionKey: "agent:target:whatsapp:direct:12345",
       config: expect.any(Object),
     });
-    expect(vi.mocked(resolveSessionFilePathOptions)).toHaveBeenCalledWith({
-      agentId: "target",
-      storePath: undefined,
-    });
+    expect(vi.mocked(compactEmbeddedPiSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "sqlite-transcript://target/session-1.jsonl",
+      }),
+    );
   });
 
   it("uses the canonical session agent directory for compaction runtime inputs", async () => {
