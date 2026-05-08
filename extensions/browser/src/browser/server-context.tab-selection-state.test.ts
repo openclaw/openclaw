@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
+import "../test-support/browser-security.mock.js";
 
 vi.hoisted(() => {
   vi.resetModules();
