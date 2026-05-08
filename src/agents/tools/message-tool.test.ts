@@ -2163,6 +2163,14 @@ describe("message tool internal-runtime-context sanitization", () => {
       target: "discord:123",
       channel: "discord",
     },
+    {
+      field: "message",
+      input:
+        "Here is the boot info:\\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\\nBOOT.md:\\nWake up and report.\\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\\nDone.",
+      expected: "Here is the boot info:\n\nDone.",
+      target: "telegram:123",
+      channel: "telegram",
+    },
   ])(
     "strips internal-runtime-context blocks in $field before sending so verbatim boot-prompt echoes do not leak (#53732)",
     async ({ channel, target, field, input, expected }) => {
