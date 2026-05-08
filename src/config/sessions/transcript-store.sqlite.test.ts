@@ -15,6 +15,7 @@ import {
   appendSqliteSessionTranscriptMessage,
   deleteSqliteSessionTranscript,
   exportSqliteSessionTranscriptJsonl,
+  listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
   recordSqliteSessionTranscriptSnapshot,
   replaceSqliteSessionTranscriptEvents,
@@ -168,6 +169,40 @@ describe("SQLite session transcript store", () => {
         sessionId: "shared-session",
       }).map((entry) => entry.event),
     ).toEqual([{ type: "message", id: "main" }]);
+  });
+
+  it("lists SQLite transcripts with the newest remembered transcript path", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const olderPath = path.join(stateDir, "session-old.jsonl");
+    const newerPath = path.join(stateDir, "session-new.jsonl");
+
+    appendSqliteSessionTranscriptEvent({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      transcriptPath: olderPath,
+      event: { type: "message", id: "older" },
+      now: () => 100,
+    });
+    appendSqliteSessionTranscriptEvent({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      transcriptPath: newerPath,
+      event: { type: "message", id: "newer" },
+      now: () => 200,
+    });
+
+    expect(listSqliteSessionTranscripts({ env, agentId: "main" })).toEqual([
+      {
+        agentId: "main",
+        sessionId: "session-1",
+        path: newerPath,
+        updatedAt: 200,
+        eventCount: 2,
+      },
+    ]);
   });
 
   it("cascades transcript file mappings when an agent database registration is removed", () => {

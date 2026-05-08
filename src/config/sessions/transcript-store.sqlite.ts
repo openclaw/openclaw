@@ -415,6 +415,25 @@ export function listSqliteSessionTranscripts(
       agentId: agentDatabase.agentId,
       ...(agentDatabase.path ? { path: agentDatabase.path } : {}),
     });
+    const transcriptPaths = new Map<string, string>();
+    for (const row of executeSqliteQuerySync<{ session_id?: unknown; path?: unknown }>(
+      stateDatabase.db,
+      getStateTranscriptKysely(stateDatabase.db)
+        .selectFrom("transcript_files")
+        .select(["session_id", "path"])
+        .where("agent_id", "=", agentDatabase.agentId)
+        .orderBy("session_id", "asc")
+        .orderBy(sql`COALESCE(imported_at, exported_at, 0)`, "desc")
+        .orderBy("path", "asc"),
+    ).rows) {
+      if (
+        typeof row.session_id === "string" &&
+        typeof row.path === "string" &&
+        !transcriptPaths.has(row.session_id)
+      ) {
+        transcriptPaths.set(row.session_id, row.path);
+      }
+    }
     transcripts.push(
       ...executeSqliteQuerySync<{
         session_id?: unknown;
@@ -445,18 +464,7 @@ export function listSqliteSessionTranscripts(
           typeof record.event_count === "bigint"
             ? Number(record.event_count)
             : Number(record.event_count ?? 0);
-        const pathRow = executeSqliteQueryTakeFirstSync<{ path?: unknown }>(
-          stateDatabase.db,
-          getStateTranscriptKysely(stateDatabase.db)
-            .selectFrom("transcript_files")
-            .select(["path"])
-            .where("agent_id", "=", agentDatabase.agentId)
-            .where("session_id", "=", record.session_id)
-            .orderBy(sql`COALESCE(imported_at, exported_at, 0)`, "desc")
-            .orderBy("path", "asc")
-            .limit(1),
-        );
-        const path = typeof pathRow?.path === "string" ? pathRow.path : undefined;
+        const path = transcriptPaths.get(record.session_id);
         return [
           {
             agentId: agentDatabase.agentId,
