@@ -1,4 +1,10 @@
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -25,6 +31,8 @@ type KvRow = {
   value_json: string;
   updated_at: number | bigint;
 };
+
+type OpenClawStateKvDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
 
 function rowUpdatedAt(row: KvRow): number {
   return typeof row.updated_at === "bigint" ? Number(row.updated_at) : row.updated_at;
@@ -57,16 +65,16 @@ export function readOpenClawStateKvJson(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateJsonValue | undefined {
   const database = openOpenClawStateDatabase(options);
+  const db = getNodeSqliteKysely<OpenClawStateKvDatabase>(database.db);
   const row =
-    (database.db
-      .prepare(
-        `
-          SELECT scope, key, value_json, updated_at
-          FROM kv
-          WHERE scope = ? AND key = ?
-        `,
-      )
-      .get(scope, key) as KvRow | undefined) ?? null;
+    executeSqliteQueryTakeFirstSync<KvRow>(
+      database.db,
+      db
+        .selectFrom("kv")
+        .select(["scope", "key", "value_json", "updated_at"])
+        .where("scope", "=", scope)
+        .where("key", "=", key),
+    ) ?? null;
   return row ? parseKvValue(row) : undefined;
 }
 
@@ -75,18 +83,16 @@ export function listOpenClawStateKvJson<TValue>(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateKvEntry<TValue>[] {
   const database = openOpenClawStateDatabase(options);
-  return (
-    database.db
-      .prepare(
-        `
-          SELECT scope, key, value_json, updated_at
-          FROM kv
-          WHERE scope = ?
-          ORDER BY updated_at ASC, key ASC
-        `,
-      )
-      .all(scope) as KvRow[]
-  ).flatMap((row) => {
+  const db = getNodeSqliteKysely<OpenClawStateKvDatabase>(database.db);
+  return executeSqliteQuerySync<KvRow>(
+    database.db,
+    db
+      .selectFrom("kv")
+      .select(["scope", "key", "value_json", "updated_at"])
+      .where("scope", "=", scope)
+      .orderBy("updated_at", "asc")
+      .orderBy("key", "asc"),
+  ).rows.flatMap((row) => {
     const entry = rowToKvEntry<TValue>(row);
     return entry ? [entry] : [];
   });
@@ -100,17 +106,19 @@ export function writeOpenClawStateKvJson<TValue>(
 ): OpenClawStateKvEntry<TValue> {
   const updatedAt = options.now?.() ?? Date.now();
   runOpenClawStateWriteTransaction((database) => {
-    database.db
-      .prepare(
-        `
-          INSERT INTO kv (scope, key, value_json, updated_at)
-          VALUES (?, ?, ?, ?)
-          ON CONFLICT(scope, key) DO UPDATE SET
-            value_json = excluded.value_json,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(scope, key, JSON.stringify(value), updatedAt);
+    const db = getNodeSqliteKysely<OpenClawStateKvDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("kv")
+        .values({ scope, key, value_json: JSON.stringify(value), updated_at: updatedAt })
+        .onConflict((conflict) =>
+          conflict.columns(["scope", "key"]).doUpdateSet({
+            value_json: JSON.stringify(value),
+            updated_at: updatedAt,
+          }),
+        ),
+    );
   }, options);
   return {
     scope,
@@ -126,10 +134,12 @@ export function deleteOpenClawStateKvJson(
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
   return runOpenClawStateWriteTransaction((database) => {
-    const result = database.db
-      .prepare("DELETE FROM kv WHERE scope = ? AND key = ?")
-      .run(scope, key);
-    return Number(result.changes ?? 0) > 0;
+    const db = getNodeSqliteKysely<OpenClawStateKvDatabase>(database.db);
+    const result = executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("kv").where("scope", "=", scope).where("key", "=", key),
+    );
+    return Number(result.numAffectedRows ?? 0) > 0;
   }, options);
 }
 
@@ -138,7 +148,11 @@ export function deleteOpenClawStateKvScope(
   options: OpenClawStateDatabaseOptions = {},
 ): number {
   return runOpenClawStateWriteTransaction((database) => {
-    const result = database.db.prepare("DELETE FROM kv WHERE scope = ?").run(scope);
-    return Number(result.changes ?? 0);
+    const db = getNodeSqliteKysely<OpenClawStateKvDatabase>(database.db);
+    const result = executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("kv").where("scope", "=", scope),
+    );
+    return Number(result.numAffectedRows ?? 0);
   }, options);
 }
