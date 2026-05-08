@@ -3,7 +3,7 @@ import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 export const matrixChannelConfigUiHints = {
   dangerouslyAllowNameMatching: {
     label: "Matrix Display Name Matching",
-    help: "Compatibility opt-in for resolving Matrix display names in dm.allowFrom, groupAllowFrom, and room users. Prefer full @user:server IDs because display names are mutable.",
+    help: "Compatibility opt-in for resolving Matrix display names and joined room names in allowlists. Prefer full @user:server IDs and room IDs or aliases because names are mutable.",
   },
   "streaming.progress.label": {
     label: "Matrix Progress Label",

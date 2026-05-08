@@ -139,7 +139,7 @@ export type MatrixConfig = {
   encryption?: boolean;
   /** If true, enforce allowlists for groups + DMs regardless of policy. */
   allowlistOnly?: boolean;
-  /** Break-glass compatibility mode for resolving mutable Matrix display names in allowlists. */
+  /** Break-glass compatibility mode for resolving mutable Matrix display names and room names in allowlists. */
   dangerouslyAllowNameMatching?: boolean;
   /**
    * Allow messages from other configured Matrix bot accounts.
