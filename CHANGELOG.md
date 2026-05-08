@@ -184,6 +184,7 @@ Docs: https://docs.openclaw.ai
 - Agents/context engine: invalidate cached assembled context views when source history shrinks or assembly fails, preventing stale pre-reset history from being reused. Fixes #77968. (#78163) Thanks @brokemac79 and @ChrisBot2026.
 - Plugin SDK: add a generic `api.runtime.llm.complete` host completion helper with runtime-derived caller attribution, config-gated model/agent overrides, session-bound context-engine access, request-scoped config, audit metadata, and normalized usage attribution. (#64294) Thanks @DaevMithran.
 - Control UI/exec approvals: highlight parsed shell command fragments that may deserve extra review in approval prompts. (#77153) Thanks @jesse-merhi.
+- MS Teams: clean up stale FileConsentCard prompts after file upload accept, decline, expiry, mismatch, or upload failure paths while preserving successful FileInfoCard replacement. (#57364) Thanks @HangGlidersRule.
 
 ### Breaking
 

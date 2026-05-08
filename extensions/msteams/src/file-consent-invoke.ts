@@ -45,6 +45,24 @@ async function handleMSTeamsFileConsentInvoke(
         consentCardActivityId?: string;
       }
     | undefined = inMemoryFile ?? fsFile;
+  const replyToActivityId = typeof activity.replyToId === "string" ? activity.replyToId : undefined;
+
+  async function tryDeleteConsentCard(reason: string, activityId?: string): Promise<void> {
+    if (!activityId) {
+      return;
+    }
+    try {
+      await context.deleteActivity(activityId);
+      log.debug?.("deleted file consent card", { activityId, reason });
+    } catch (err) {
+      log.debug?.("failed to delete file consent card", {
+        activityId,
+        reason,
+        error: formatUnknownError(err),
+      });
+    }
+  }
+
   if (pendingFile) {
     const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
     const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
@@ -57,6 +75,7 @@ async function handleMSTeamsFileConsentInvoke(
       if (consentResponse.action === "accept") {
         await context.sendActivity(expiredUploadMessage);
       }
+      await tryDeleteConsentCard("conversation-mismatch", replyToActivityId);
       return true;
     }
   }
@@ -102,7 +121,13 @@ async function handleMSTeamsFileConsentInvoke(
               type: "message",
               attachments: [fileInfoCard],
             });
+            await tryDeleteConsentCard(
+              "upload-success-update-failed",
+              pendingFile.consentCardActivityId,
+            );
           }
+        } else {
+          await tryDeleteConsentCard("upload-success", replyToActivityId);
         }
 
         log.info("file upload complete", {
@@ -112,6 +137,10 @@ async function handleMSTeamsFileConsentInvoke(
         });
       } catch (err) {
         log.error("file upload failed", { uploadId, error: formatUnknownError(err) });
+        await tryDeleteConsentCard(
+          "upload-failed",
+          pendingFile.consentCardActivityId ?? replyToActivityId,
+        );
         await context.sendActivity("File upload failed. Please try again.");
       } finally {
         removePendingUpload(uploadId);
@@ -119,10 +148,15 @@ async function handleMSTeamsFileConsentInvoke(
       }
     } else {
       log.debug?.("pending file not found for consent", { uploadId });
+      await tryDeleteConsentCard("expired-pending-not-found", replyToActivityId);
       await context.sendActivity(expiredUploadMessage);
     }
   } else {
     log.debug?.("user declined file consent", { uploadId });
+    await tryDeleteConsentCard(
+      "user-declined",
+      pendingFile?.consentCardActivityId ?? replyToActivityId,
+    );
     removePendingUpload(uploadId);
     await removePendingUploadFs(uploadId);
   }
