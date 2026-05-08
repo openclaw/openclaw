@@ -557,7 +557,6 @@ describe("MediaStreamHandler security hardening", () => {
     expect(secondSocket.write).toHaveBeenCalledOnce();
     expect(secondSocket.destroy).toHaveBeenCalledOnce();
 
-    expect(upgradeCallback).not.toBeNull();
     const completeUpgrade = upgradeCallback as ((ws: WebSocket) => void) | null;
     if (!completeUpgrade) {
       throw new Error("Expected upgrade callback to be registered");
