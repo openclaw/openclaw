@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { stripAnsi } from "../../terminal/ansi.js";
 import { formatMigrationPlan } from "./output.js";
-
-function stripAnsi(value: string): string {
-  return value.replace(/\u001b\[[0-9;]*m/gu, "");
-}
 
 function skillItem(index: number): MigrationItem {
   return {
