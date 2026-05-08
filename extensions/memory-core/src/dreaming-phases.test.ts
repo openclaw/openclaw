@@ -6,7 +6,6 @@ import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-run
 import {
   appendSqliteSessionTranscriptEvent,
   replaceSqliteSessionTranscriptEvents,
-  resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   resolveMemoryCorePluginConfig,
@@ -299,6 +298,10 @@ async function readPhaseSignalStoreForTest(workspaceDir: string, nowMs: number) 
   );
 }
 
+function createTestTranscriptPath(workspaceDir: string, agentId: string, fileName: string): string {
+  return path.join(workspaceDir, ".state", "transcript-fixtures", agentId, fileName);
+}
+
 function parseTestTranscriptPath(transcriptPath: string):
   | {
       workspaceDir: string;
@@ -307,19 +310,16 @@ function parseTestTranscriptPath(transcriptPath: string):
   | undefined {
   const parts = path.normalize(path.resolve(transcriptPath)).split(path.sep);
   const stateIndex = parts.lastIndexOf(".state");
-  const agentsIndex = parts.lastIndexOf("agents");
-  const sessionsIndex = parts.lastIndexOf("sessions");
   if (
     stateIndex <= 0 ||
-    agentsIndex !== stateIndex + 1 ||
-    sessionsIndex !== agentsIndex + 2 ||
-    !parts[agentsIndex + 1]
+    parts[stateIndex + 1] !== "transcript-fixtures" ||
+    !parts[stateIndex + 2]
   ) {
     return undefined;
   }
   return {
     workspaceDir: parts.slice(0, stateIndex).join(path.sep) || path.sep,
-    agentId: parts[agentsIndex + 1],
+    agentId: parts[stateIndex + 2],
   };
 }
 
@@ -801,9 +801,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const transcriptPath = createTestTranscriptPath(workspaceDir, "main", "dreaming-main.jsonl");
     await fs.writeFile(
       transcriptPath,
       [
@@ -910,12 +908,8 @@ describe("memory-core dreaming phases", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
 
-    const mainSessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const subagentSessionsDir = resolveSessionTranscriptsDirForAgent("agi-ceo");
-    await fs.mkdir(mainSessionsDir, { recursive: true });
-    await fs.mkdir(subagentSessionsDir, { recursive: true });
     await fs.writeFile(
-      path.join(mainSessionsDir, "main-session.jsonl"),
+      createTestTranscriptPath(workspaceDir, "main", "main-session.jsonl"),
       [
         JSON.stringify({
           type: "message",
@@ -929,7 +923,7 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
     await fs.writeFile(
-      path.join(subagentSessionsDir, "subagent-session.jsonl"),
+      createTestTranscriptPath(workspaceDir, "agi-ceo", "subagent-session.jsonl"),
       [
         JSON.stringify({
           type: "message",
@@ -999,9 +993,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const transcriptPath = createTestTranscriptPath(workspaceDir, "main", "dreaming-main.jsonl");
     await fs.writeFile(
       transcriptPath,
       [
@@ -1073,9 +1065,11 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-narrative.jsonl");
+    const transcriptPath = createTestTranscriptPath(
+      workspaceDir,
+      "main",
+      "dreaming-narrative.jsonl",
+    );
     await fs.writeFile(
       transcriptPath,
       [
@@ -1169,9 +1163,11 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-narrative.jsonl");
+    const transcriptPath = createTestTranscriptPath(
+      workspaceDir,
+      "main",
+      "dreaming-narrative.jsonl",
+    );
     await fs.writeFile(
       transcriptPath,
       [
@@ -1258,9 +1254,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "cron-run.jsonl");
+    const transcriptPath = createTestTranscriptPath(workspaceDir, "main", "cron-run.jsonl");
     await fs.writeFile(
       transcriptPath,
       [
@@ -1343,9 +1337,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "ordinary-session.jsonl");
+    const transcriptPath = createTestTranscriptPath(workspaceDir, "main", "ordinary-session.jsonl");
     await fs.writeFile(
       transcriptPath,
       [
@@ -1442,11 +1434,13 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
 
     await fs.writeFile(
-      path.join(sessionsDir, "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      createTestTranscriptPath(
+        workspaceDir,
+        "main",
+        "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+      ),
       JSON.stringify({
         type: "message",
         message: {
@@ -1458,7 +1452,7 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
     await fs.writeFile(
-      path.join(sessionsDir, "ordinary.jsonl"),
+      createTestTranscriptPath(workspaceDir, "main", "ordinary.jsonl"),
       [
         JSON.stringify({
           type: "message",
@@ -1606,9 +1600,11 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-narrative.jsonl");
+    const transcriptPath = createTestTranscriptPath(
+      workspaceDir,
+      "main",
+      "dreaming-narrative.jsonl",
+    );
     await fs.writeFile(
       transcriptPath,
       [
@@ -1689,9 +1685,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const transcriptPath = createTestTranscriptPath(workspaceDir, "main", "dreaming-main.jsonl");
     const oldMessage = "Move backups to S3 Glacier.";
     await fs.writeFile(
       transcriptPath,
@@ -1807,9 +1801,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const transcriptPath = createTestTranscriptPath(workspaceDir, "main", "dreaming-main.jsonl");
     await fs.writeFile(
       transcriptPath,
       [
@@ -1888,9 +1880,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const transcriptPath = createTestTranscriptPath(workspaceDir, "main", "dreaming-main.jsonl");
     const lines: string[] = [];
     for (let index = 0; index < 160; index += 1) {
       lines.push(
@@ -1968,9 +1958,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const transcriptPath = createTestTranscriptPath(workspaceDir, "main", "dreaming-main.jsonl");
 
     await fs.writeFile(
       transcriptPath,
@@ -2066,9 +2054,7 @@ describe("memory-core dreaming phases", () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const transcriptPath = path.join(sessionsDir, "dreaming-main.jsonl");
+    const transcriptPath = createTestTranscriptPath(workspaceDir, "main", "dreaming-main.jsonl");
     await fs.writeFile(
       transcriptPath,
       [
