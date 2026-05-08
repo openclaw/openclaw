@@ -147,15 +147,14 @@ describe("tsdown config", () => {
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {
     const configs = asConfigArray(tsdownConfig);
+    const hookEntries = configs.flatMap((config) =>
+      Array.isArray(config.entry)
+        ? config.entry.filter((entry) => entry.includes("src/hooks/"))
+        : [],
+    );
 
-    expect(configs.some((config) => config.outDir === "dist/plugin-sdk")).toBe(false);
-    expect(
-      configs.some((config) =>
-        Array.isArray(config.entry)
-          ? config.entry.some((entry) => entry.includes("src/hooks/"))
-          : false,
-      ),
-    ).toBe(false);
+    expect(configs.map((config) => config.outDir)).not.toContain("dist/plugin-sdk");
+    expect(hookEntries).toEqual([]);
   });
 
   it("externalizes known heavy native dependencies", () => {
