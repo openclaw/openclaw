@@ -93,9 +93,8 @@ This plan has started landing in slices:
   media-result manifests for generated or captured tool media in the same
   run-scoped artifact store while keeping delivery files on disk.
 - Managed outgoing image attachment metadata now uses the shared SQLite `kv`
-  store as the primary record path. The older per-attachment JSON files are
-  still imported and compatibility-exported so downgrade/debug workflows keep
-  working while HTTP serving and cleanup can survive a missing JSON sidecar.
+  store as the primary record path. Older per-attachment JSON files import into
+  SQLite when encountered and are removed after import.
 - The subagent run registry now uses the shared SQLite `kv` store as the
   primary record path. Legacy `subagents/runs.json` files import into SQLite
   when SQLite is empty and are removed after import.
@@ -514,8 +513,8 @@ Add tests before each migration step:
 - Worker permission profile construction, including VFS-only path denial.
 - Disk, VFS scratch, and VFS-only filesystem mode behavior.
 - Plugin state and task registry coexistence with the shared state DB.
-- Managed outgoing media record import from legacy JSON plus SQLite-primary
-  serving when the compatibility JSON record is missing.
+- Managed outgoing media record import from legacy JSON, legacy file removal
+  after import, plus SQLite-primary serving without JSON exports.
 - Subagent run registry import from legacy `subagents/runs.json`, legacy file
   removal after import, and restore from SQLite without JSON exports.
 - Sandbox container and browser registry reads from SQLite when compatibility
