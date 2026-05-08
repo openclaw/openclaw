@@ -45,16 +45,15 @@ afterEach(() => {
 });
 
 function parseGitHubOutput(output: string): Record<string, string> {
-  return Object.fromEntries(
-    output
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
+  const parsed: Record<string, string> = {};
+  for (const line of output.trim().split("\n")) {
+    if (!line) {
+      continue;
+    }
+    const separator = line.indexOf("=");
+    parsed[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  return parsed;
 }
 
 describe("detectChangedScope", () => {
