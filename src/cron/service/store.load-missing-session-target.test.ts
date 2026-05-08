@@ -62,7 +62,7 @@ describe("cron service store load: missing sessionTarget", () => {
       toolsAllow: ["exec"],
     });
     expect(job.state.nextRunAtMs).toEqual(expect.any(Number));
-    expect(() => assertSupportedJobSpec(job)).not.toThrow();
+    expect(assertSupportedJobSpec(job)).toBeUndefined();
   });
 
   it('defaults missing sessionTarget to "main" for systemEvent payloads', async () => {
@@ -85,7 +85,7 @@ describe("cron service store load: missing sessionTarget", () => {
 
     const job = findJobOrThrow(state, "missing-session-target-system-event");
     expect(job.sessionTarget).toBe("main");
-    expect(() => assertSupportedJobSpec(job)).not.toThrow();
+    expect(assertSupportedJobSpec(job)).toBeUndefined();
   });
 
   it('defaults missing sessionTarget to "isolated" for agentTurn payloads', async () => {
@@ -108,7 +108,7 @@ describe("cron service store load: missing sessionTarget", () => {
 
     const job = findJobOrThrow(state, "missing-session-target-agent-turn");
     expect(job.sessionTarget).toBe("isolated");
-    expect(() => assertSupportedJobSpec(job)).not.toThrow();
+    expect(assertSupportedJobSpec(job)).toBeUndefined();
   });
 
   it("assertSupportedJobSpec throws a clear error when sessionTarget is missing", () => {
