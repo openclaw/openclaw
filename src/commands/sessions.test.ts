@@ -57,9 +57,10 @@ describe("sessionsCommand", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli" },
           model: { primary: "anthropic/claude-opus-4-7" },
-          models: { "anthropic/claude-opus-4-7": {} },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
           contextTokens: 200_000,
         },
       },
@@ -92,9 +93,10 @@ describe("sessionsCommand", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli" },
           model: { primary: "anthropic/claude-opus-4-7" },
-          models: { "anthropic/claude-opus-4-7": {} },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
           contextTokens: 200_000,
         },
       },

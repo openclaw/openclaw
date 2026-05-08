@@ -121,7 +121,7 @@ describe("discoverKilocodeModels", () => {
   it("returns static catalog in test environment", async () => {
     const models = await discoverKilocodeModels();
     expect(models.length).toBeGreaterThan(0);
-    expect(models.some((m) => m.id === "kilo/auto")).toBe(true);
+    expect(requireModelById(models, "kilo/auto").id).toBe("kilo/auto");
   });
 
   it("static catalog has correct defaults for kilo/auto", async () => {
@@ -185,7 +185,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(models.length).toBeGreaterThan(0);
-      expect(models.some((m) => m.id === "kilo/auto")).toBe(true);
+      expect(requireModelById(models, "kilo/auto").id).toBe("kilo/auto");
     });
   });
 
@@ -197,7 +197,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(models.length).toBeGreaterThan(0);
-      expect(models.some((m) => m.id === "kilo/auto")).toBe(true);
+      expect(requireModelById(models, "kilo/auto").id).toBe("kilo/auto");
     });
   });
 
@@ -211,8 +211,10 @@ describe("discoverKilocodeModels (fetch path)", () => {
     });
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
-      expect(models.some((m) => m.id === "kilo/auto")).toBe(true);
-      expect(models.some((m) => m.id === "anthropic/claude-sonnet-4")).toBe(true);
+      expect(requireModelById(models, "kilo/auto").id).toBe("kilo/auto");
+      expect(requireModelById(models, "anthropic/claude-sonnet-4").id).toBe(
+        "anthropic/claude-sonnet-4",
+      );
     });
   });
 
@@ -256,7 +258,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const auto = requireModelById(models, "kilo/auto");
       expect(auto.name).toBe("Kilo: Auto");
       expect(auto.cost.input).toBeCloseTo(5.0);
-      expect(models.some((m) => m.id === "anthropic/claude-sonnet-4")).toBe(true);
+      expect(requireModelById(models, "anthropic/claude-sonnet-4").id).toBe(
+        "anthropic/claude-sonnet-4",
+      );
     });
   });
 });

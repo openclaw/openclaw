@@ -114,7 +114,11 @@ describe("shell env fallback", () => {
 
   function expectBinShFallbackExec(exec: ReturnType<typeof vi.fn>) {
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
+    expect(exec).toHaveBeenCalledWith(
+      "/bin/sh",
+      ["-l", "-c", "env -0"],
+      expect.objectContaining({ windowsHide: true }),
+    );
   }
 
   it("is disabled by default", () => {
@@ -425,7 +429,11 @@ describe("shell env fallback", () => {
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
-      expect(exec).toHaveBeenCalledWith(trustedShell, ["-l", "-c", "env -0"], expect.any(Object));
+      expect(exec).toHaveBeenCalledWith(
+        trustedShell,
+        ["-l", "-c", "env -0"],
+        expect.objectContaining({ windowsHide: true }),
+      );
     });
   });
 
