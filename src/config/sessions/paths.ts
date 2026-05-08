@@ -23,7 +23,7 @@ export function resolveSessionTranscriptsDirForAgent(
   return resolveAgentSessionsDir(agentId, env, homedir);
 }
 
-export type SessionFilePathOptions = {
+export type SessionTranscriptLocatorOptions = {
   agentId?: string;
 };
 
@@ -95,10 +95,10 @@ export function isSqliteSessionTranscriptLocator(locator: string | undefined): b
   return typeof locator === "string" && parseSqliteSessionTranscriptLocator(locator) !== undefined;
 }
 
-export function resolveSessionFilePath(
+export function resolveSessionTranscriptLocator(
   sessionId: string,
   entry?: { sessionFile?: string },
-  opts?: SessionFilePathOptions,
+  opts?: SessionTranscriptLocatorOptions,
 ): string {
   const candidate = entry?.sessionFile?.trim();
   const parsed = candidate ? parseSqliteSessionTranscriptLocator(candidate) : undefined;
