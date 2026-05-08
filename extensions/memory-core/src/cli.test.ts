@@ -38,7 +38,6 @@ vi.mock("./cli.host.runtime.js", async () => {
     normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
-    resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
     resolveStateDir: runtimeCore.resolveStateDir,
     setVerbose: runtimeCli.setVerbose,
     shortenHomeInString: runtimeCli.shortenHomeInString,

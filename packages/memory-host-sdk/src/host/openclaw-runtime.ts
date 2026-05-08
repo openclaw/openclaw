@@ -53,7 +53,6 @@ export {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
-export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export {
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
