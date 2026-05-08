@@ -12,6 +12,36 @@ type FakeServer = EventEmitter & {
   headersTimeout: number;
 };
 
+type MSTeamsChannelResolution = {
+  input: string;
+  resolved: boolean;
+  teamId?: string;
+  channelId?: string;
+};
+
+type MSTeamsUserResolution = {
+  input: string;
+  resolved: boolean;
+  id?: string;
+};
+
+type ResolveMSTeamsChannelAllowlistMock = (params: {
+  cfg: unknown;
+  entries: string[];
+}) => Promise<MSTeamsChannelResolution[]>;
+
+type ResolveMSTeamsUserAllowlistMock = (params: {
+  cfg: unknown;
+  entries: string[];
+}) => Promise<MSTeamsUserResolution[]>;
+
+type RegisterMSTeamsHandlersMock = (
+  handler: unknown,
+  deps: unknown,
+) => {
+  run: () => Promise<void>;
+};
+
 const expressControl = vi.hoisted(() => ({
   mode: { value: "listening" as "listening" | "error" },
   apps: [] as Array<{
@@ -94,7 +124,7 @@ vi.mock("express", () => {
 });
 
 const registerMSTeamsHandlers = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn<RegisterMSTeamsHandlersMock>(() => ({
     run: vi.fn(async () => {}),
   })),
 );
@@ -118,12 +148,13 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
 );
 
 vi.mock("./monitor-handler.js", () => ({
-  registerMSTeamsHandlers: (...args: unknown[]) => registerMSTeamsHandlers(...args),
+  registerMSTeamsHandlers: (handler: unknown, deps: unknown) =>
+    registerMSTeamsHandlers(handler, deps),
 }));
 
 const resolveAllowlistMocks = vi.hoisted(() => ({
-  resolveMSTeamsChannelAllowlist: vi.fn(async () => []),
-  resolveMSTeamsUserAllowlist: vi.fn(async () => []),
+  resolveMSTeamsChannelAllowlist: vi.fn<ResolveMSTeamsChannelAllowlistMock>(async () => []),
+  resolveMSTeamsUserAllowlist: vi.fn<ResolveMSTeamsUserAllowlistMock>(async () => []),
 }));
 
 vi.mock("./resolve-allowlist.js", () => ({
