@@ -42,6 +42,7 @@ const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
+  moveToFailed: vi.fn(async () => {}),
   markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {}),
   markDeliveryPlatformSendAttemptStarted: vi.fn(async () => {}),
   withActiveDeliveryClaim: vi.fn<
@@ -84,6 +85,7 @@ vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
+  moveToFailed: queueMocks.moveToFailed,
   markDeliveryPlatformOutcomeUnknown: queueMocks.markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted: queueMocks.markDeliveryPlatformSendAttemptStarted,
   withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
@@ -289,6 +291,8 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
     queueMocks.failDelivery.mockResolvedValue(undefined);
+    queueMocks.moveToFailed.mockClear();
+    queueMocks.moveToFailed.mockResolvedValue(undefined);
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockClear();
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockResolvedValue(undefined);
     queueMocks.markDeliveryPlatformSendAttemptStarted.mockClear();
@@ -815,6 +819,58 @@ describe("deliverOutboundPayloads", () => {
       expect.stringContaining("native send failed"),
     );
   });
+
+  it(
+    "moves the queue entry to failed/ (not pending) when dispatch throws " +
+      "OutboundDispatchTerminalError, so delivery-recovery does not replay it (#79376)",
+    async () => {
+      const { OutboundDispatchTerminalError } = await import("./target-errors.js");
+      const sendMatrix = vi.fn(async () => {
+        throw new OutboundDispatchTerminalError(
+          "No active WhatsApp Web listener (account: default)...",
+          "whatsapp-listener-unavailable",
+        );
+      });
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {},
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "hi" }],
+          deps: { matrix: sendMatrix },
+        }),
+      ).rejects.toBeInstanceOf(OutboundDispatchTerminalError);
+      // Queue entry MUST be removed from the pending queue (moveToFailed),
+      // NOT just decorated with failDelivery (which keeps it pending and
+      // visible to the recovery scanner).
+      expect(queueMocks.moveToFailed).toHaveBeenCalledWith("mock-queue-id");
+      expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    "keeps the queue entry pending (failDelivery) for generic crashes so " +
+      "delivery-recovery can replay them",
+    async () => {
+      const sendMatrix = vi.fn(async () => {
+        throw new Error("socket reset mid-send");
+      });
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {},
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "hi" }],
+          deps: { matrix: sendMatrix },
+        }),
+      ).rejects.toThrow(/socket reset/);
+      expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+        "mock-queue-id",
+        expect.stringContaining("socket reset"),
+      );
+      expect(queueMocks.moveToFailed).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves successful sends when the success hook throws", async () => {
     const afterSendFailure = vi.fn();

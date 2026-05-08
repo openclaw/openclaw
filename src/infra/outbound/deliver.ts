@@ -54,9 +54,11 @@ import {
   failDelivery,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
+  moveToFailed,
   type QueuedRenderedMessageBatchPlan,
   withActiveDeliveryClaim,
 } from "./delivery-queue.js";
+import { isOutboundDispatchTerminalError } from "./target-errors.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import {
@@ -1223,7 +1225,17 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       if (isAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else if (!platformResultsReturned) {
-        await failDelivery(queueId, formatErrorMessage(err)).catch(() => {});
+        if (isOutboundDispatchTerminalError(err)) {
+          // The dispatcher reported a terminal pre-flight failure (e.g. the
+          // channel listener is down). The caller has been informed that the
+          // send did not happen, so we must NOT keep the entry in the pending
+          // queue — otherwise `delivery-recovery` would silently replay it
+          // after the next gateway restart, producing duplicate posts. See
+          // openclaw/openclaw#79376.
+          await moveToFailed(queueId).catch(() => {});
+        } else {
+          await failDelivery(queueId, formatErrorMessage(err)).catch(() => {});
+        }
       }
     }
     throw err;

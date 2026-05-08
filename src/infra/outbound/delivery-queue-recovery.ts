@@ -75,6 +75,10 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
   /ambiguous .* recipient/i,
   /User .* not in room/i,
+  // Channel listener was down at dispatch time. The caller has been told the
+  // send failed (errorCode=UNAVAILABLE); replaying after restart would
+  // produce duplicate posts. See openclaw/openclaw#79376.
+  /no active whatsapp web listener/i,
 ];
 
 const drainInProgress = new Map<string, boolean>();

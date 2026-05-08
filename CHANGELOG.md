@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Outbound/WhatsApp: stop replaying WhatsApp messages whose dispatch returned `UNAVAILABLE` because the Web listener was down. The pre-flight "No active WhatsApp Web listener" failure is now raised as a tagged terminal dispatch error so `delivery-recovery` no longer silently re-sends those messages after the next gateway restart, eliminating duplicate group/broadcast posts; the recovery path keeps replaying entries that crashed mid-send. Also recognize the legacy error message as a permanent recovery error so any pending entries written by older builds are cleared on first scan. (#79376)
 - Docker: run the runtime image under `tini` so long-lived containers reap orphaned child processes and forward signals correctly. (#77885) Thanks @VintageAyu.
 - Google/Gemini: normalize retired `google/gemini-3-pro-preview` and `google-gemini-cli/gemini-3-pro-preview` selections to `google/gemini-3.1-pro-preview` before they are written to model config.
 - Amazon Bedrock: support `serviceTier` parameter for Bedrock models, configurable via `agents.defaults.params.serviceTier` or per-model in `agents.defaults.models`. Valid values: `default`, `flex`, `priority`, `reserved`. (#64512) Thanks @mobilinkd.

@@ -6,6 +6,7 @@ import {
   convertMarkdownTables,
   resolveMarkdownTableMode,
 } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { OutboundDispatchTerminalError } from "openclaw/plugin-sdk/outbound-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -47,8 +48,15 @@ function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; account
   const listener =
     getRegisteredWhatsAppConnectionController(resolvedAccountId)?.getActiveListener() ?? null;
   if (!listener) {
-    throw new Error(
+    // Use a tagged terminal error so the outbound delivery queue does NOT
+    // re-enqueue this dispatch for `delivery-recovery` replay after the next
+    // gateway restart. The caller has been informed (errorCode=UNAVAILABLE)
+    // that the send did not happen and will decide whether to retry; silently
+    // replaying the same delivery would cause duplicate group posts. See
+    // openclaw/openclaw#79376.
+    throw new OutboundDispatchTerminalError(
       `No active WhatsApp Web listener (account: ${resolvedAccountId}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${resolvedAccountId}`)}.`,
+      "whatsapp-listener-unavailable",
     );
   }
   return { accountId: resolvedAccountId, listener };

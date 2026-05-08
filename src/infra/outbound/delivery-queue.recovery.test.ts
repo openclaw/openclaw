@@ -467,6 +467,34 @@ describe("delivery-queue recovery", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
   });
 
+  it(
+    "treats 'No active WhatsApp Web listener' as a permanent error so legacy " +
+      "queue entries from a listener-down dispatch do not duplicate after restart (#79376)",
+    async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+15551234@g.us", payloads: [{ text: "hi" }] },
+        tmpDir(),
+      );
+      const deliver = vi
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            "No active WhatsApp Web listener (account: default). Start the gateway, then link WhatsApp with: openclaw channels login --channel whatsapp --account default.",
+          ),
+        );
+      const log = createRecoveryLog();
+      const { result } = await runRecovery({ deliver, log });
+
+      expect(result.failed).toBe(1);
+      expect(result.recovered).toBe(0);
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      expect(
+        fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`)),
+      ).toBe(true);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+    },
+  );
+
   it("treats Matrix 'User not in room' as a permanent error", async () => {
     const id = await enqueueDelivery(
       { channel: "matrix", to: "!lowercased:matrix.example.com", payloads: [{ text: "hi" }] },

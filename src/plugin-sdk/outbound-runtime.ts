@@ -10,6 +10,10 @@ export {
 } from "../infra/outbound/deliver.js";
 export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
 export {
+  isOutboundDispatchTerminalError,
+  OutboundDispatchTerminalError,
+} from "../infra/outbound/target-errors.js";
+export {
   buildOutboundSessionContext,
   type OutboundSessionContext,
 } from "../infra/outbound/session-context.js";

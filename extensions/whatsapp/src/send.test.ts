@@ -262,6 +262,32 @@ describe("web outbound", () => {
     ).rejects.toThrow(/account: work/);
   });
 
+  it(
+    "raises a terminal dispatch error when no active listener exists, so " +
+      "delivery-recovery does not replay the send (#79376)",
+    async () => {
+      hoisted.controllerListeners.clear();
+      const { isOutboundDispatchTerminalError } = await import(
+        "openclaw/plugin-sdk/outbound-runtime"
+      );
+      let captured: unknown;
+      try {
+        await sendMessageWhatsApp("+1555", "hi", {
+          verbose: false,
+          cfg: WHATSAPP_TEST_CFG,
+          accountId: "work",
+        });
+      } catch (err) {
+        captured = err;
+      }
+      expect(captured).toBeDefined();
+      expect(isOutboundDispatchTerminalError(captured)).toBe(true);
+      if (isOutboundDispatchTerminalError(captured)) {
+        expect(captured.reason).toBe("whatsapp-listener-unavailable");
+      }
+    },
+  );
+
   it("maps audio to PTT with opus mime when ogg", async () => {
     const buf = Buffer.from("audio");
     loadWebMediaMock.mockResolvedValueOnce({
