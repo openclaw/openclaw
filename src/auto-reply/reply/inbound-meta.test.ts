@@ -686,4 +686,28 @@ describe("buildInboundUserContextPrefix", () => {
     expect(history[0]?.["body"]).toBe("body-5");
     expect(history.at(-1)?.["body"]).toBe("body-24");
   });
+
+  it("uses the configured inbound history cap when provided", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "group",
+        InboundHistory: Array.from({ length: 25 }, (_, index) => ({
+          sender: `sender-${index}`,
+          body: `body-${index}`,
+          timestamp: index,
+        })),
+      } as TemplateContext,
+      undefined,
+      { historyLimit: 25 },
+    );
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["history_count"]).toBe(25);
+    expect(conversationInfo["history_truncated"]).toBeUndefined();
+
+    const history = parseHistoryPayload(text);
+    expect(history).toHaveLength(25);
+    expect(history[0]?.["body"]).toBe("body-0");
+    expect(history.at(-1)?.["body"]).toBe("body-24");
+  });
 });

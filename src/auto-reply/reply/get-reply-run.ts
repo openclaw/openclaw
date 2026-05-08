@@ -609,6 +609,10 @@ export async function runPreparedReply(
     ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  const inboundHistoryLimit =
+    typeof sessionCtx.InboundHistoryLimit === "number"
+      ? sessionCtx.InboundHistoryLimit
+      : cfg.messages?.groupChat?.historyLimit;
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {
@@ -619,6 +623,7 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
+    { historyLimit: inboundHistoryLimit },
   );
   const baseBodyForPrompt = isBareSessionReset
     ? [

@@ -310,6 +310,7 @@ export async function buildDiscordMessageProcessContext(params: {
     Body: combinedBody,
     BodyForAgent: preflightAudioTranscript ?? baseText ?? text,
     InboundHistory: inboundHistory,
+    InboundHistoryLimit: historyLimit,
     RawBody: preflightAudioTranscript ?? baseText,
     CommandBody: preflightAudioTranscript ?? baseText,
     ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),

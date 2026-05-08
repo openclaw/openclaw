@@ -10,7 +10,11 @@ import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
 
 const MAX_UNTRUSTED_JSON_STRING_CHARS = 2_000;
-const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
+const DEFAULT_UNTRUSTED_HISTORY_ENTRIES = 20;
+
+type InboundUserContextPrefixOptions = {
+  historyLimit?: number;
+};
 
 function stripNullBytes(value: string): string {
   return value.replaceAll("\u0000", "");
@@ -42,6 +46,13 @@ function truncateUntrustedJsonString(value: string): string {
     return value;
   }
   return `${truncateUtf16Safe(value, Math.max(0, MAX_UNTRUSTED_JSON_STRING_CHARS - 14)).trimEnd()}…[truncated]`;
+}
+
+function resolveUntrustedHistoryEntryLimit(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_UNTRUSTED_HISTORY_ENTRIES;
+  }
+  return Math.max(0, Math.floor(value));
 }
 
 function sanitizeUntrustedJsonValue(value: unknown): unknown {
@@ -178,6 +189,7 @@ export function buildInboundMetaSystemPrompt(
 export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
+  options?: InboundUserContextPrefixOptions,
 ): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
@@ -193,7 +205,8 @@ export function buildInboundUserContextPrefix(
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
   const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
-  const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
+  const historyLimit = resolveUntrustedHistoryEntryLimit(options?.historyLimit);
+  const boundedHistory = historyLimit > 0 ? inboundHistory.slice(-historyLimit) : [];
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
@@ -231,7 +244,7 @@ export function buildInboundUserContextPrefix(
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
     has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
     history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
-    history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
+    history_truncated: inboundHistory.length > historyLimit ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(

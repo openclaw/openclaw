@@ -44,6 +44,8 @@ export type MsgContext = {
     body: string;
     timestamp?: number;
   }>;
+  /** Maximum number of InboundHistory entries to serialize into prompt metadata. */
+  InboundHistoryLimit?: number;
   /**
    * @deprecated Use CommandBody.
    *
