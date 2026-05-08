@@ -22,6 +22,15 @@ vi.mock("../agents/pi-embedded.js", () => ({
 
 import { generateSlugViaLLM } from "./llm-slug-generator.js";
 
+function requireFirstRunOptions(): unknown {
+  const options = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+  expect(options).toBeDefined();
+  if (!options) {
+    throw new Error("expected embedded Pi agent run options");
+  }
+  return options;
+}
+
 describe("generateSlugViaLLM", () => {
   beforeEach(() => {
     runEmbeddedPiAgentMock.mockReset();
@@ -37,7 +46,7 @@ describe("generateSlugViaLLM", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+    expect(requireFirstRunOptions()).toEqual(
       expect.objectContaining({
         timeoutMs: 15_000,
         cleanupBundleMcpOnRunEnd: true,
@@ -58,7 +67,7 @@ describe("generateSlugViaLLM", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+    expect(requireFirstRunOptions()).toEqual(
       expect.objectContaining({
         timeoutMs: 500_000,
       }),
@@ -96,7 +105,7 @@ describe("generateSlugViaLLM", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+    expect(requireFirstRunOptions()).toEqual(
       expect.objectContaining({
         provider: "openai-codex",
         model: "gpt-5.5",
