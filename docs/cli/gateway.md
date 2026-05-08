@@ -99,10 +99,10 @@ openclaw gateway run
   Alias for `--ws-log compact`.
 </ParamField>
 <ParamField path="--raw-stream" type="boolean">
-  Log raw model stream events to jsonl.
+  Log raw model stream events to SQLite diagnostics.
 </ParamField>
 <ParamField path="--raw-stream-path <path>" type="string">
-  Raw stream jsonl path.
+  Optional raw stream JSONL export path.
 </ParamField>
 
 ## Restart the Gateway
