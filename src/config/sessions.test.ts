@@ -9,12 +9,14 @@ import {
   buildGroupDisplayName,
   createSqliteSessionTranscriptLocator,
   deriveSessionKey,
-  resolveSessionFilePath,
   resolveSessionKey,
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptsDir,
   updateLastRoute,
 } from "./sessions.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionTranscriptPath,
+  resolveSessionTranscriptsDir,
+} from "./sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
