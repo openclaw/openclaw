@@ -88,10 +88,10 @@ describe("gateway cli backend live helpers", () => {
       token: "gateway-token",
     });
 
-    expect(typeof client).toBe("object");
-    expect(client).not.toBeNull();
-    expect(typeof (client as { start?: unknown }).start).toBe("function");
-    expect(typeof (client as { stopAndWait?: unknown }).stopAndWait).toBe("function");
+    expect(client).toMatchObject({
+      start: expect.any(Function),
+      stopAndWait: expect.any(Function),
+    });
     expect(gatewayClientState.lastOptions).toMatchObject({
       url: "ws://127.0.0.1:18789",
       token: "gateway-token",

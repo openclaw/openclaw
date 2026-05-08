@@ -2056,9 +2056,7 @@ describe("oversized transcript line guards", () => {
       512 * 1024,
     );
 
-    expect(usage).not.toBeNull();
-    expect(usage?.modelProvider).not.toBe("oversized-provider");
-    expect(usage?.modelProvider).toBe("test-provider");
+    expect(usage).toMatchObject({ modelProvider: "test-provider" });
   });
 
   test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {
