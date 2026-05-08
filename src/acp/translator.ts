@@ -24,6 +24,7 @@ import type {
   SessionConfigOption,
   SessionInfo,
   SessionModeState,
+  SessionUpdate,
   SetSessionConfigOptionRequest,
   SetSessionConfigOptionResponse,
   SetSessionModeRequest,
@@ -42,6 +43,11 @@ import {
 } from "../infra/fixed-window-rate-limit.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { shortenHomePath } from "../utils.js";
+import {
+  createInMemoryAcpEventLedger,
+  type AcpEventLedger,
+  type AcpEventLedgerReplay,
+} from "./event-ledger.js";
 import {
   extractAttachmentsFromPrompt,
   extractToolCallContent,
@@ -97,6 +103,7 @@ type DisconnectContext = {
 type PendingPrompt = {
   sessionId: string;
   sessionKey: string;
+  ledgerSessionId?: string;
   idempotencyKey: string;
   sendAccepted?: boolean;
   disconnectContext?: DisconnectContext;
@@ -117,6 +124,7 @@ type PendingToolCall = {
 };
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
+  eventLedger?: AcpEventLedger;
   sessionStore?: AcpSessionStore;
 };
 
@@ -501,12 +509,26 @@ function buildSystemProvenanceReceipt(params: {
   ].join("\n");
 }
 
+function hasExplicitSessionRouting(
+  meta: ReturnType<typeof parseSessionMeta>,
+  opts: AcpServerOptions,
+): boolean {
+  return Boolean(
+    meta.sessionKey || meta.sessionLabel || opts.defaultSessionKey || opts.defaultSessionLabel,
+  );
+}
+
+function resolveLedgerSessionId(session: { sessionId: string; ledgerSessionId?: string }): string {
+  return session.ledgerSessionId ?? session.sessionId;
+}
+
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
   private gateway: GatewayClient;
   private opts: AcpGatewayAgentOptions;
   private log: (msg: string) => void;
   private sessionStore: AcpSessionStore;
+  private eventLedger: AcpEventLedger;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
   private disconnectTimer: NodeJS.Timeout | null = null;
@@ -531,6 +553,7 @@ export class AcpGatewayAgent implements Agent {
     this.opts = opts;
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
+    this.eventLedger = opts.eventLedger ?? createInMemoryAcpEventLedger();
     this.sessionCreateRateLimiter = createFixedWindowRateLimiter({
       maxRequests: Math.max(
         1,
@@ -625,12 +648,14 @@ export class AcpGatewayAgent implements Agent {
       sessionKey,
       cwd: params.cwd,
     });
+    await this.startLedgerSession(session, { complete: true, reset: true });
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.getSessionSnapshot(session.sessionKey);
-    await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+    await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
+      record: true,
     });
-    await this.sendAvailableCommands(session.sessionId);
+    await this.sendAvailableCommands(session, { record: true });
     const { configOptions, modes } = sessionSnapshot;
     return {
       sessionId: session.sessionId,
@@ -646,29 +671,56 @@ export class AcpGatewayAgent implements Agent {
     }
 
     const meta = parseSessionMeta(params._meta);
+    const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
+    const exactLedgerReplay: AcpEventLedgerReplay = hasExplicitRouting
+      ? { complete: false, events: [] }
+      : await this.readLedgerReplayBySessionId(params.sessionId);
+    const listedLedgerReplay: AcpEventLedgerReplay =
+      !hasExplicitRouting && !exactLedgerReplay.complete
+        ? await this.readLedgerReplayBySessionKey(params.sessionId)
+        : { complete: false, events: [] };
+    const routedLedgerReplay = exactLedgerReplay.complete ? exactLedgerReplay : listedLedgerReplay;
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
-      fallbackKey: params.sessionId,
+      fallbackKey: routedLedgerReplay.sessionKey ?? params.sessionId,
     });
+    const ledgerReplay =
+      exactLedgerReplay.complete && exactLedgerReplay.sessionKey === sessionKey
+        ? exactLedgerReplay
+        : listedLedgerReplay.complete && listedLedgerReplay.sessionKey === sessionKey
+          ? listedLedgerReplay
+          : await this.readLedgerReplay({
+              sessionId: params.sessionId,
+              sessionKey,
+            });
 
     const session = this.sessionStore.createSession({
       sessionId: params.sessionId,
       sessionKey,
+      ...(ledgerReplay.sessionId ? { ledgerSessionId: ledgerReplay.sessionId } : {}),
       cwd: params.cwd,
     });
+    await this.startLedgerSession(session, { complete: ledgerReplay.complete });
     this.log(`loadSession: ${session.sessionId} -> ${session.sessionKey}`);
     const [sessionSnapshot, transcript] = await Promise.all([
       this.getSessionSnapshot(session.sessionKey),
-      this.getSessionTranscript(session.sessionKey).catch((err) => {
-        this.log(`session transcript fallback for ${session.sessionKey}: ${String(err)}`);
-        return [];
-      }),
+      ledgerReplay.complete
+        ? Promise.resolve([])
+        : this.getSessionTranscript(session.sessionKey).catch((err) => {
+            this.log(`session transcript fallback for ${session.sessionKey}: ${String(err)}`);
+            return [];
+          }),
     ]);
-    await this.replaySessionTranscript(session.sessionId, transcript);
-    await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+    if (ledgerReplay.complete) {
+      await this.replayLedgerSession(session.sessionId, ledgerReplay);
+    } else {
+      await this.replaySessionTranscript(session.sessionId, transcript);
+    }
+    await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
+      record: false,
     });
-    await this.sendAvailableCommands(session.sessionId);
+    await this.sendAvailableCommands(session, { record: false });
     const { configOptions, modes } = sessionSnapshot;
     return { configOptions, modes };
   }
@@ -754,11 +806,13 @@ export class AcpGatewayAgent implements Agent {
       sessionKey,
       cwd: params.cwd,
     });
+    await this.startLedgerSession(session, { complete: false });
     this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
-    await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+    await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
       includeControls: false,
+      record: false,
     });
-    await this.sendAvailableCommands(session.sessionId);
+    await this.sendAvailableCommands(session, { record: false });
     const { configOptions, modes } = sessionSnapshot;
     return { configOptions, modes };
   }
@@ -795,8 +849,9 @@ export class AcpGatewayAgent implements Agent {
       const sessionSnapshot = await this.getSessionSnapshot(session.sessionKey, {
         thinkingLevel: params.modeId,
       });
-      await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+      await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
         includeControls: true,
+        record: true,
       });
     } catch (err) {
       this.log(`setSessionMode error: ${String(err)}`);
@@ -828,8 +883,9 @@ export class AcpGatewayAgent implements Agent {
         session.sessionKey,
         sessionPatch.overrides,
       );
-      await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+      await this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
         includeControls: true,
+        record: true,
       });
       return {
         configOptions: sessionSnapshot.configOptions,
@@ -892,6 +948,7 @@ export class AcpGatewayAgent implements Agent {
       this.pendingPrompts.set(params.sessionId, {
         sessionId: params.sessionId,
         sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         idempotencyKey: runId,
         disconnectContext: this.activeDisconnectContext ?? undefined,
         resolve,
@@ -902,6 +959,12 @@ export class AcpGatewayAgent implements Agent {
       }
 
       const sendWithProvenanceFallback = async () => {
+        const markSendAccepted = () => {
+          const pending = this.getPendingPrompt(params.sessionId, runId);
+          if (pending) {
+            pending.sendAccepted = true;
+          }
+        };
         try {
           await this.gateway.request(
             "chat.send",
@@ -912,20 +975,16 @@ export class AcpGatewayAgent implements Agent {
             },
             { timeoutMs: null },
           );
-          const pending = this.getPendingPrompt(params.sessionId, runId);
-          if (pending) {
-            pending.sendAccepted = true;
-          }
+          markSendAccepted();
+          await this.recordUserPrompt(session, runId, params.prompt);
         } catch (err) {
           if (
             (systemInputProvenance || systemProvenanceReceipt) &&
             isAdminScopeProvenanceRejection(err)
           ) {
             await this.gateway.request("chat.send", requestParams, { timeoutMs: null });
-            const pending = this.getPendingPrompt(params.sessionId, runId);
-            if (pending) {
-              pending.sendAccepted = true;
-            }
+            markSendAccepted();
+            await this.recordUserPrompt(session, runId, params.prompt);
             return;
           }
           throw err;
@@ -1018,8 +1077,12 @@ export class AcpGatewayAgent implements Agent {
         rawInput: args,
         locations,
       });
-      await this.connection.sessionUpdate({
+      await this.emitSessionUpdate({
         sessionId: pending.sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: pending.idempotencyKey,
+        record: true,
         update: {
           sessionUpdate: "tool_call",
           toolCallId,
@@ -1036,8 +1099,12 @@ export class AcpGatewayAgent implements Agent {
     if (phase === "update") {
       const toolState = pending.toolCalls?.get(toolCallId);
       const partialResult = data.partialResult;
-      await this.connection.sessionUpdate({
+      await this.emitSessionUpdate({
         sessionId: pending.sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: pending.idempotencyKey,
+        record: true,
         update: {
           sessionUpdate: "tool_call_update",
           toolCallId,
@@ -1054,8 +1121,12 @@ export class AcpGatewayAgent implements Agent {
       const isError = Boolean(data.isError);
       const toolState = pending.toolCalls?.get(toolCallId);
       pending.toolCalls?.delete(toolCallId);
-      await this.connection.sessionUpdate({
+      await this.emitSessionUpdate({
         sessionId: pending.sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: pending.idempotencyKey,
+        record: true,
         update: {
           sessionUpdate: "tool_call_update",
           toolCallId,
@@ -1135,8 +1206,12 @@ export class AcpGatewayAgent implements Agent {
       const newThought = fullThought.slice(sentThoughtSoFar);
       pending.sentThoughtLength = fullThought.length;
       pending.sentThought = fullThought;
-      await this.connection.sessionUpdate({
+      await this.emitSessionUpdate({
         sessionId,
+        sessionKey: pending.sessionKey,
+        ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        runId: pending.idempotencyKey,
+        record: true,
         update: {
           sessionUpdate: "agent_thought_chunk",
           content: { type: "text", text: newThought },
@@ -1157,8 +1232,12 @@ export class AcpGatewayAgent implements Agent {
     const newText = fullText.slice(sentSoFar);
     pending.sentTextLength = fullText.length;
     pending.sentText = fullText;
-    await this.connection.sessionUpdate({
+    await this.emitSessionUpdate({
       sessionId,
+      sessionKey: pending.sessionKey,
+      ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+      runId: pending.idempotencyKey,
+      record: true,
       update: {
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: newText },
@@ -1178,9 +1257,19 @@ export class AcpGatewayAgent implements Agent {
     }
     const sessionSnapshot = await this.getSessionSnapshot(pending.sessionKey);
     try {
-      await this.sendSessionSnapshotUpdate(sessionId, sessionSnapshot, {
-        includeControls: false,
-      });
+      await this.sendSessionSnapshotUpdate(
+        {
+          sessionId,
+          sessionKey: pending.sessionKey,
+          ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
+        },
+        sessionSnapshot,
+        {
+          includeControls: false,
+          record: true,
+          runId: pending.idempotencyKey,
+        },
+      );
     } catch (err) {
       this.log(`session snapshot update failed for ${sessionId}: ${String(err)}`);
     }
@@ -1197,7 +1286,28 @@ export class AcpGatewayAgent implements Agent {
       }
       return pending;
     }
+    if (runId) {
+      for (const pending of this.pendingPrompts.values()) {
+        if (pending.idempotencyKey !== runId) {
+          continue;
+        }
+        this.reconcilePendingSessionKey(pending, sessionKey);
+        return pending;
+      }
+    }
     return undefined;
+  }
+
+  private reconcilePendingSessionKey(pending: PendingPrompt, sessionKey: string): void {
+    if (pending.sessionKey === sessionKey) {
+      return;
+    }
+    this.log(`session key reconciled: ${pending.sessionKey} -> ${sessionKey}`);
+    pending.sessionKey = sessionKey;
+    const session = this.sessionStore.getSession(pending.sessionId);
+    if (session?.activeRunId === pending.idempotencyKey) {
+      session.sessionKey = sessionKey;
+    }
   }
 
   private clearDisconnectTimer(): void {
@@ -1351,9 +1461,142 @@ export class AcpGatewayAgent implements Agent {
     return true;
   }
 
-  private async sendAvailableCommands(sessionId: string): Promise<void> {
+  private async startLedgerSession(
+    session: { sessionId: string; sessionKey: string; ledgerSessionId?: string; cwd: string },
+    options: { complete: boolean; reset?: boolean },
+  ): Promise<void> {
+    try {
+      await this.eventLedger.startSession({
+        sessionId: resolveLedgerSessionId(session),
+        sessionKey: session.sessionKey,
+        cwd: session.cwd,
+        complete: options.complete,
+        ...(options.reset ? { reset: true } : {}),
+      });
+    } catch (err) {
+      this.log(`event ledger session start failed for ${session.sessionId}: ${String(err)}`);
+    }
+  }
+
+  private async readLedgerReplay(params: {
+    sessionId: string;
+    sessionKey: string;
+  }): Promise<AcpEventLedgerReplay> {
+    try {
+      return await this.eventLedger.readReplay(params);
+    } catch (err) {
+      this.log(`event ledger replay fallback for ${params.sessionId}: ${String(err)}`);
+      return { complete: false, events: [] };
+    }
+  }
+
+  private async readLedgerReplayBySessionId(sessionId: string): Promise<AcpEventLedgerReplay> {
+    try {
+      return await this.eventLedger.readReplayBySessionId({ sessionId });
+    } catch (err) {
+      this.log(`event ledger exact replay fallback for ${sessionId}: ${String(err)}`);
+      return { complete: false, events: [] };
+    }
+  }
+
+  private async readLedgerReplayBySessionKey(sessionKey: string): Promise<AcpEventLedgerReplay> {
+    try {
+      return await this.eventLedger.readReplayBySessionKey({ sessionKey });
+    } catch (err) {
+      this.log(`event ledger session-key replay fallback for ${sessionKey}: ${String(err)}`);
+      return { complete: false, events: [] };
+    }
+  }
+
+  private async recordUserPrompt(
+    session: { sessionId: string; sessionKey: string; ledgerSessionId?: string },
+    runId: string,
+    prompt: PromptRequest["prompt"],
+  ): Promise<void> {
+    try {
+      await this.eventLedger.recordUserPrompt({
+        sessionId: resolveLedgerSessionId(session),
+        sessionKey: session.sessionKey,
+        runId,
+        prompt,
+      });
+    } catch (err) {
+      this.log(`event ledger prompt record failed for ${session.sessionId}: ${String(err)}`);
+      await this.markLedgerIncomplete(session);
+    }
+  }
+
+  private async recordLedgerUpdate(params: {
+    sessionId: string;
+    sessionKey: string;
+    ledgerSessionId?: string;
+    runId?: string;
+    update: SessionUpdate;
+  }): Promise<void> {
+    try {
+      await this.eventLedger.recordUpdate({
+        sessionId: params.ledgerSessionId ?? params.sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.runId ? { runId: params.runId } : {}),
+        update: params.update,
+      });
+    } catch (err) {
+      this.log(`event ledger update record failed for ${params.sessionId}: ${String(err)}`);
+      await this.markLedgerIncomplete({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
+      });
+    }
+  }
+
+  private async markLedgerIncomplete(session: {
+    sessionId: string;
+    sessionKey: string;
+    ledgerSessionId?: string;
+  }): Promise<void> {
+    try {
+      await this.eventLedger.markIncomplete({
+        sessionId: resolveLedgerSessionId(session),
+        sessionKey: session.sessionKey,
+      });
+    } catch (err) {
+      this.log(`event ledger incomplete mark failed for ${session.sessionId}: ${String(err)}`);
+    }
+  }
+
+  private async emitSessionUpdate(params: {
+    sessionId: string;
+    sessionKey?: string;
+    ledgerSessionId?: string;
+    runId?: string;
+    update: SessionUpdate;
+    record?: boolean;
+  }): Promise<void> {
     await this.connection.sessionUpdate({
-      sessionId,
+      sessionId: params.sessionId,
+      update: params.update,
+    });
+    if (params.record && params.sessionKey) {
+      await this.recordLedgerUpdate({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+        update: params.update,
+      });
+    }
+  }
+
+  private async sendAvailableCommands(
+    session: { sessionId: string; sessionKey: string; ledgerSessionId?: string },
+    options: { record: boolean },
+  ): Promise<void> {
+    await this.emitSessionUpdate({
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+      record: options.record,
       update: {
         sessionUpdate: "available_commands_update",
         availableCommands: await getAvailableCommandsForAcp(),
@@ -1552,7 +1795,7 @@ export class AcpGatewayAgent implements Agent {
     for (const message of transcript) {
       const replayChunks = extractReplayChunks(message);
       for (const chunk of replayChunks) {
-        await this.connection.sessionUpdate({
+        await this.emitSessionUpdate({
           sessionId,
           update: {
             sessionUpdate: chunk.sessionUpdate,
@@ -1563,21 +1806,42 @@ export class AcpGatewayAgent implements Agent {
     }
   }
 
-  private async sendSessionSnapshotUpdate(
+  private async replayLedgerSession(
     sessionId: string,
+    ledgerReplay: AcpEventLedgerReplay,
+  ): Promise<void> {
+    for (const event of ledgerReplay.events) {
+      await this.emitSessionUpdate({
+        sessionId,
+        update: event.update,
+        record: false,
+      });
+    }
+  }
+
+  private async sendSessionSnapshotUpdate(
+    session: { sessionId: string; sessionKey: string; ledgerSessionId?: string },
     sessionSnapshot: SessionSnapshot,
-    options: { includeControls: boolean },
+    options: { includeControls: boolean; record: boolean; runId?: string },
   ): Promise<void> {
     if (options.includeControls) {
-      await this.connection.sessionUpdate({
-        sessionId,
+      await this.emitSessionUpdate({
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+        runId: options.runId,
+        record: options.record,
         update: {
           sessionUpdate: "current_mode_update",
           currentModeId: sessionSnapshot.modes.currentModeId,
         },
       });
-      await this.connection.sessionUpdate({
-        sessionId,
+      await this.emitSessionUpdate({
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+        runId: options.runId,
+        record: options.record,
         update: {
           sessionUpdate: "config_option_update",
           configOptions: sessionSnapshot.configOptions,
@@ -1585,8 +1849,12 @@ export class AcpGatewayAgent implements Agent {
       });
     }
     if (sessionSnapshot.metadata) {
-      await this.connection.sessionUpdate({
-        sessionId,
+      await this.emitSessionUpdate({
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+        runId: options.runId,
+        record: options.record,
         update: {
           sessionUpdate: "session_info_update",
           ...sessionSnapshot.metadata,
@@ -1594,8 +1862,12 @@ export class AcpGatewayAgent implements Agent {
       });
     }
     if (sessionSnapshot.usage) {
-      await this.connection.sessionUpdate({
-        sessionId,
+      await this.emitSessionUpdate({
+        sessionId: session.sessionId,
+        sessionKey: session.sessionKey,
+        ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
+        runId: options.runId,
+        record: options.record,
         update: {
           sessionUpdate: "usage_update",
           used: sessionSnapshot.usage.used,
