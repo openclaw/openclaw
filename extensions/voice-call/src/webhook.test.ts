@@ -1121,7 +1121,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       unblockReadBodies();
 
       const settled = await Promise.all(inFlightRequests);
-      expect(settled.every((response) => response.status === 200)).toBe(true);
+      expect(settled.map((response) => response.status)).toEqual(Array(8).fill(200));
     } finally {
       unblockReadBodies();
       readBodySpy.mockRestore();
@@ -1196,7 +1196,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       unblockReadBodies();
 
       const settled = await Promise.all(inFlightRequests);
-      expect(settled.every((response) => response.statusCode === 200)).toBe(true);
+      expect(settled.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
     } finally {
       unblockReadBodies();
       readBodySpy.mockRestore();
