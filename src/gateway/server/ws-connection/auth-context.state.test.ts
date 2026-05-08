@@ -82,6 +82,7 @@ describe("resolveConnectAuthDecision", () => {
     const state = await resolveConnectAuthState({
       resolvedAuth: {
         mode: "none",
+        allowTailscale: false,
       } satisfies ResolvedGatewayAuth,
       connectAuth: {},
       hasDeviceIdentity: false,
