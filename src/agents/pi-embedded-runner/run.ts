@@ -1500,6 +1500,7 @@ export async function runEmbeddedPiAgent(
                     activeProcessSessions: listActiveProcessSessionReferences({
                       scopeKey: resolveProcessToolScopeKey({
                         sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
                         agentId: sessionAgentId,
                       }),
                     }),
@@ -1671,6 +1672,7 @@ export async function runEmbeddedPiAgent(
                     activeProcessSessions: listActiveProcessSessionReferences({
                       scopeKey: resolveProcessToolScopeKey({
                         sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
                         agentId: sessionAgentId,
                       }),
                     }),

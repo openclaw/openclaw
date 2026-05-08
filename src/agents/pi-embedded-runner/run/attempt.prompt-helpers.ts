@@ -489,31 +489,35 @@ export function resolveAttemptPrependSystemContext(params: {
   ]);
 }
 
+type AfterTurnRuntimeContextAttempt = Pick<
+  EmbeddedRunAttemptParams,
+  | "sessionKey"
+  | "sandboxSessionKey"
+  | "messageChannel"
+  | "messageProvider"
+  | "agentAccountId"
+  | "currentChannelId"
+  | "currentThreadTs"
+  | "currentMessageId"
+  | "config"
+  | "skillsSnapshot"
+  | "senderIsOwner"
+  | "senderId"
+  | "provider"
+  | "modelId"
+  | "thinkLevel"
+  | "reasoningLevel"
+  | "bashElevated"
+  | "extraSystemPrompt"
+  | "ownerNumbers"
+  | "authProfileId"
+> & {
+  sessionId?: EmbeddedRunAttemptParams["sessionId"];
+};
+
 /** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
-  attempt: Pick<
-    EmbeddedRunAttemptParams,
-    | "sessionKey"
-    | "sandboxSessionKey"
-    | "messageChannel"
-    | "messageProvider"
-    | "agentAccountId"
-    | "currentChannelId"
-    | "currentThreadTs"
-    | "currentMessageId"
-    | "config"
-    | "skillsSnapshot"
-    | "senderIsOwner"
-    | "senderId"
-    | "provider"
-    | "modelId"
-    | "thinkLevel"
-    | "reasoningLevel"
-    | "bashElevated"
-    | "extraSystemPrompt"
-    | "ownerNumbers"
-    | "authProfileId"
-  >;
+  attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;
   agentDir: string;
   activeAgentId?: string;
@@ -548,6 +552,7 @@ export function buildAfterTurnRuntimeContext(params: {
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.attempt.sandboxSessionKey?.trim() || params.attempt.sessionKey,
+          sessionId: params.attempt.sessionId,
           agentId: params.activeAgentId,
         }),
       }),

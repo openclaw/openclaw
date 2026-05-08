@@ -164,6 +164,24 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     );
   });
 
+  it("omits active process session references when no safe scope is available", () => {
+    const active = createProcessSessionFixture({
+      id: "sess-active",
+      command: "sleep 600",
+      backgrounded: true,
+    });
+    active.scopeKey = "agent:main:thread:1";
+    addSession(active);
+
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+    });
+
+    expect(result.activeProcessSessions).toBeUndefined();
+  });
+
   it("applies runtime defaults when resolving the effective compaction target", () => {
     expect(
       resolveEmbeddedCompactionTarget({

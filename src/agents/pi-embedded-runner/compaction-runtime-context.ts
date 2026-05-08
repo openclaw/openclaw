@@ -108,10 +108,11 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     modelId: params.modelId,
     authProfileId: params.authProfileId,
   });
+  const processScopeKey = params.sessionKey?.trim();
   const activeProcessSessions =
     params.activeProcessSessions ??
     listActiveProcessSessionReferences({
-      scopeKey: params.sessionKey?.trim() || undefined,
+      scopeKey: processScopeKey,
     });
   return {
     sessionKey: params.sessionKey ?? undefined,

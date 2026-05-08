@@ -33,6 +33,10 @@ export function listActiveProcessSessionReferences(params: {
   now?: number;
   limit?: number;
 }): ActiveProcessSessionReference[] {
+  const scopeKey = params.scopeKey?.trim();
+  if (!scopeKey) {
+    return [];
+  }
   const now = params.now ?? Date.now();
   const limit =
     typeof params.limit === "number" && Number.isFinite(params.limit) && params.limit > 0
@@ -40,7 +44,7 @@ export function listActiveProcessSessionReferences(params: {
       : DEFAULT_ACTIVE_PROCESS_LIMIT;
   return listRunningSessions()
     .filter((session) => session.backgrounded)
-    .filter((session) => !params.scopeKey || session.scopeKey === params.scopeKey)
+    .filter((session) => session.scopeKey === scopeKey)
     .toSorted((left, right) => right.startedAt - left.startedAt)
     .slice(0, limit)
     .map((session) => ({
