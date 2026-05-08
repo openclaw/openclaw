@@ -507,8 +507,8 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
-    expect(calls.some((c) => c.includes("/getMe"))).toBe(true);
-    expect(calls.some((c) => c.includes("/getWebhookInfo"))).toBe(true);
+    expect(calls).toEqual(expect.arrayContaining([expect.stringContaining("/getMe")]));
+    expect(calls).toEqual(expect.arrayContaining([expect.stringContaining("/getWebhookInfo")]));
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
@@ -520,7 +520,9 @@ describe("getHealthSnapshot", () => {
       );
       expect(tokenFileProbe.telegram.configured).toBe(true);
       expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
-      expect(tokenFileProbe.calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);
+      expect(tokenFileProbe.calls).toEqual(
+        expect.arrayContaining([expect.stringContaining("bott-file/getMe")]),
+      );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
