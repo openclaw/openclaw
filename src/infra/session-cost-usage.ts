@@ -84,6 +84,7 @@ const emptyTotals = (): CostUsageTotals => ({
 const USAGE_COST_CACHE_VERSION = 2;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
+const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -343,6 +344,29 @@ async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile)
     content: `${JSON.stringify(cache)}\n`,
     tempPrefix: ".usage-cost-cache",
   });
+}
+
+function isUsageCostCacheTempFileName(name: string): boolean {
+  return name.startsWith(".usage-cost-cache.") && name.endsWith(".tmp");
+}
+
+async function cleanupStaleUsageCostCacheTempFiles(cachePath: string): Promise<void> {
+  const dir = path.dirname(cachePath);
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const cutoffMs = Date.now() - USAGE_COST_CACHE_TEMP_FILE_GRACE_MS;
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isFile() || !isUsageCostCacheTempFileName(entry.name)) {
+        return;
+      }
+      const tempPath = path.join(dir, entry.name);
+      const stats = await fs.promises.stat(tempPath).catch(() => null);
+      if (!stats || stats.mtimeMs > cutoffMs) {
+        return;
+      }
+      await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    }),
+  );
 }
 
 async function listUsageCountedTranscriptFiles(
@@ -1099,6 +1123,7 @@ export async function refreshCostUsageCache(params?: {
     return "busy";
   }
   try {
+    await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
     const cache = await readUsageCostCache(cachePath);
     const files = await listUsageCountedTranscriptFiles(params?.agentId);

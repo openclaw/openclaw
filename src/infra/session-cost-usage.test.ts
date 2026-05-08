@@ -896,6 +896,63 @@ describe("session cost usage", () => {
     });
   });
 
+  it("reclaims stale usage cache temp files before refreshing", async () => {
+    const root = await makeSessionCostRoot("cost-cache-stale-temp-files");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-stale-temp-files.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: {
+            input: 5,
+            output: 5,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const legacyTempPath = path.join(sessionsDir, ".usage-cost-cache.json.123.456.tmp");
+      const currentTempPath = path.join(
+        sessionsDir,
+        ".usage-cost-cache.123.550e8400-e29b-41d4-a716-446655440000.tmp",
+      );
+      const recentTempPath = path.join(sessionsDir, ".usage-cost-cache.123.recent.tmp");
+      await Promise.all([
+        fs.writeFile(legacyTempPath, "legacy temp", "utf-8"),
+        fs.writeFile(currentTempPath, "current temp", "utf-8"),
+        fs.writeFile(recentTempPath, "recent temp", "utf-8"),
+      ]);
+      const old = new Date(Date.now() - 60_000);
+      await Promise.all([
+        fs.utimes(legacyTempPath, old, old),
+        fs.utimes(currentTempPath, old, old),
+      ]);
+
+      const result = await refreshCostUsageCache();
+
+      expect(result).toBe("refreshed");
+      await expect(fs.stat(legacyTempPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(currentTempPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(recentTempPath, "utf-8")).resolves.toBe("recent temp");
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(summary.totals.totalTokens).toBe(10);
+      expect(summary.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
   it("batches stale session summary refreshes for the same agent", async () => {
     const root = await makeSessionCostRoot("cost-cache-session-batch");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
