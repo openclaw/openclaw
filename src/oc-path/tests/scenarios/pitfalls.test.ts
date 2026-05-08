@@ -492,28 +492,18 @@ describe("wave-23 pitfalls — reserved characters", () => {
   });
 });
 
-// ---------- Sentinel-redaction pitfall (P-036) ---------------------------
-
-describe("wave-23 pitfalls — redaction sentinel", () => {
-  // P-036 is fully covered by wave-21-sentinel-cross-kind. This is a
-  // smoke test asserting the link is intact.
-  it("P-036 sentinel guard activates at emit time (covered by wave-21)", () => {
-    expect(true).toBe(true);
-  });
-});
-
 // ---------- DEFERRED — documented limits ---------------------------------
 
 describe("wave-23 pitfalls — deferred (v0 limits)", () => {
-  it.skip("P-005 slash literal in key — v1: quoted segments", () => {});
-  it.skip("P-006 dot literal in key — v1: quoted segments", () => {});
-  it.skip("P-017 nested unions {a,{b,c}} — v1: parser stack", () => {});
-  it.skip("P-019 wildcard inside wildcard — v1: pattern composition", () => {});
-  it.skip("P-025 leading-zero numeric `01` — v1: explicit form", () => {});
-  it.skip("P-027 `&` in segments — v1: percent-encoding", () => {});
-  it.skip("P-028 percent-encoded segments — v1: rfc3986 layer", () => {});
-  it.skip("P-034 ast mutation between resolve & consume — caller invariant", () => {});
-  it.skip("P-035 stale paths from prior find — caller invariant", () => {});
+  it.todo("P-005 slash literal in key — v1: quoted segments");
+  it.todo("P-006 dot literal in key — v1: quoted segments");
+  it.todo("P-017 nested unions {a,{b,c}} — v1: parser stack");
+  it.todo("P-019 wildcard inside wildcard — v1: pattern composition");
+  it.todo("P-025 leading-zero numeric `01` — v1: explicit form");
+  it.todo("P-027 `&` in segments — v1: percent-encoding");
+  it.todo("P-028 percent-encoded segments — v1: rfc3986 layer");
+  it.todo("P-034 ast mutation between resolve & consume — caller invariant");
+  it.todo("P-035 stale paths from prior find — caller invariant");
 });
 
 // ---------- Injection pitfalls (C12 / W12) -------------------------------
