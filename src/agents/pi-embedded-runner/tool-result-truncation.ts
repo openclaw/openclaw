@@ -617,6 +617,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  agentId?: string;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -655,6 +656,8 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   });
   if (rewriteResult.changed && params.sessionFile) {
     emitSessionTranscriptUpdate({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
     });
@@ -679,6 +682,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   sessionFile: string;
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  agentId?: string;
   sessionId?: string;
   sessionKey?: string;
   config?: unknown;
@@ -722,6 +726,8 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
       appendedEntries: rewriteResult.appendedEntries,
     });
     emitSessionTranscriptUpdate({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
     });
@@ -745,6 +751,7 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  agentId?: string;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -762,6 +769,7 @@ export async function truncateOversizedToolResultsInSession(params: {
   sessionFile: string;
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  agentId?: string;
   sessionId?: string;
   sessionKey?: string;
   config?: unknown;
@@ -774,6 +782,7 @@ export async function truncateOversizedToolResultsInSession(params: {
       state,
       contextWindowTokens,
       maxCharsOverride: params.maxCharsOverride,
+      agentId: params.agentId,
       sessionFile,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
