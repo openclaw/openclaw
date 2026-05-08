@@ -670,10 +670,14 @@ describe("scoped vitest configs", () => {
 
   it("keeps broad dedicated extension groups out of the shared extensions lane", () => {
     const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
-    expect(defaultExtensionBrowserConfig.test?.include).toContain("browser/**/*.test.ts");
-    expect(defaultExtensionMediaConfig.test?.include).toContain("vydra/**/*.test.ts");
-    expect(defaultExtensionMiscConfig.test?.include).toContain("firecrawl/**/*.test.ts");
-    expect(defaultExtensionQaConfig.test?.include).toContain("qa-lab/**/*.test.ts");
+    const browserTestConfig = requireTestConfig(defaultExtensionBrowserConfig);
+    const mediaTestConfig = requireTestConfig(defaultExtensionMediaConfig);
+    const miscTestConfig = requireTestConfig(defaultExtensionMiscConfig);
+    const qaTestConfig = requireTestConfig(defaultExtensionQaConfig);
+    expect(browserTestConfig.include).toContain("browser/**/*.test.ts");
+    expect(mediaTestConfig.include).toContain("vydra/**/*.test.ts");
+    expect(miscTestConfig.include).toContain("firecrawl/**/*.test.ts");
+    expect(qaTestConfig.include).toContain("qa-lab/**/*.test.ts");
     for (const file of [
       "browser/src/browser/pw.test.ts",
       "vydra/src/index.test.ts",
