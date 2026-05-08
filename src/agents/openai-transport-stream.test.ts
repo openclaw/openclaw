@@ -998,7 +998,8 @@ describe("openai transport stream", () => {
     };
 
     expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
-    expect(params.input).toEqual(expect.any(Array));
+    expect(Array.isArray(params.input)).toBe(true);
+    expect(params.input?.map((item) => item.role)).toEqual(["user"]);
     expect(
       params.input?.filter((item) => item.role === "system" || item.role === "developer"),
     ).toEqual([]);

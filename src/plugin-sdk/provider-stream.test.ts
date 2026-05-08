@@ -239,7 +239,8 @@ describe("buildProviderStreamFamilyHooks", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
       service_tier: "flex",
     });
-    expect(capturedHeaders).toEqual(expect.any(Object));
+    expect(capturedHeaders).toBeTypeOf("object");
+    expect(capturedHeaders).not.toBeNull();
 
     const openRouterHooks = OPENROUTER_THINKING_STREAM_HOOKS;
     void requireStreamFn(
