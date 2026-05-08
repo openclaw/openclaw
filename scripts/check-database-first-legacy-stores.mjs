@@ -39,6 +39,11 @@ const legacyStoreMarkers = [
   { label: "ACPX process leases JSON", pattern: /\bprocess-leases\.json\b/u },
   { label: "ACPX gateway instance id file", pattern: /\bgateway-instance-id\b/u },
   { label: "gateway restart sentinel JSON", pattern: /\brestart-sentinel\.json\b/u },
+  { label: "gateway restart intent JSON", pattern: /\bgateway-restart-intent\.json\b/u },
+  {
+    label: "gateway supervisor restart handoff JSON",
+    pattern: /\bgateway-supervisor-restart-handoff\.json\b/u,
+  },
   { label: "gateway singleton lock file", pattern: /\bgateway\.[A-Za-z0-9._-]+\.lock\b/u },
   { label: "QMD embed lock file", pattern: /\bqmd[/\\]embed\.lock\b/u },
   {
