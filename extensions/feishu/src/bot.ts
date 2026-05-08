@@ -1,10 +1,5 @@
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import {
-  ensureConfiguredBindingRouteReady,
-  resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
-} from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -20,6 +15,11 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveOpenDmAllowlistAccess } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+  resolveRuntimeConversationBindingRoute,
+} from "../../../plugin-sdk/conversation-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
@@ -1237,6 +1237,9 @@ export async function handleFeishuMessage(params: {
       return threadContext;
     };
 
+    // Determine if this message is a text command (starts with /)
+    const isTextCommand = effectiveCommandProbeBody.trim().startsWith("/");
+
     // --- Shared context builder for dispatch ---
     const buildCtxPayloadForAgent = async (
       agentId: string,
@@ -1277,6 +1280,7 @@ export async function handleFeishuMessage(params: {
         Timestamp: messageCreateTimeMs,
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
+        ...(isTextCommand ? { CommandSource: "text" as const } : {}),
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
         GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
