@@ -85,6 +85,15 @@ function getRuntimeLogs() {
   return runtimeLogMock.mock.calls.map((call: unknown[]) => String(call[0]));
 }
 
+function getRuntimeLog(index: number): string {
+  const call = runtimeLogMock.mock.calls[index];
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`expected runtime log call ${index}`);
+  }
+  return String(call[0]);
+}
+
 function getJoinedRuntimeLogs() {
   return getRuntimeLogs().join("\n");
 }
@@ -967,7 +976,7 @@ describe("statusCommand", () => {
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
+    const payload = JSON.parse(getRuntimeLog(0));
     expect(payload.linkChannel).toBeUndefined();
     expect(payload.memory).toBeNull();
     expect(payload.memoryPlugin.enabled).toBe(true);
@@ -1001,7 +1010,7 @@ describe("statusCommand", () => {
     runtimeLogMock.mockClear();
     await statusCommand({ json: true, all: true }, runtime as never);
 
-    const allPayload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
+    const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
