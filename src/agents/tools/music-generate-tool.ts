@@ -361,6 +361,8 @@ async function loadReferenceImages(params: {
         : await (async () => {
             const { signal, cleanup } = buildTimeoutAbortSignal({
               timeoutMs: params.timeoutMs ?? DEFAULT_REFERENCE_FETCH_TIMEOUT_MS,
+              operation: "music-generate-reference-fetch",
+              url: resolvedPath ?? resolvedInput,
             });
             try {
               return await loadWebMedia(resolvedPath ?? resolvedInput, {
