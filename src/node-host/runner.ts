@@ -78,6 +78,7 @@ export function createNodeHostGatewayDropWatchdog(deps: NodeHostGatewayDropDeps 
   const writeLine = deps.writeLine ?? writeStderrLine;
   const exit = deps.exit ?? ((code: number): never => process.exit(code));
   const unhealthyDrops: number[] = [];
+  let ignoreNextUnhealthyClose = false;
 
   function recordUnhealthyDrop(detail: string): void {
     const current = now();
@@ -100,10 +101,16 @@ export function createNodeHostGatewayDropWatchdog(deps: NodeHostGatewayDropDeps 
       if (!isNodeHostUnhealthyGatewayConnectError(err.message)) {
         return;
       }
+      ignoreNextUnhealthyClose = true;
       recordUnhealthyDrop(`connect failed: ${err.message}`);
     },
     recordClose: (code: number, reason: string) => {
       if (!isNodeHostUnhealthyGatewayClose(code)) {
+        ignoreNextUnhealthyClose = false;
+        return;
+      }
+      if (ignoreNextUnhealthyClose) {
+        ignoreNextUnhealthyClose = false;
         return;
       }
       const suffix = reason.trim() ? `: ${reason}` : "";

@@ -194,6 +194,24 @@ describe("createNodeHostGatewayDropWatchdog", () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
+  it("counts a connect error followed by abnormal close as one failed attempt", () => {
+    const exit = vi.fn((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never;
+    const watchdog = createNodeHostGatewayDropWatchdog({ writeLine: () => {}, exit });
+
+    watchdog.recordConnectError(new Error("Unexpected server response: 502"));
+    watchdog.recordClose(1006, "abnormal closure");
+    watchdog.recordConnectError(new Error("Unexpected server response: 502"));
+    watchdog.recordClose(1006, "abnormal closure");
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(() =>
+      watchdog.recordConnectError(new Error("Unexpected server response: 502")),
+    ).toThrow("exit 1");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
   it("does not exit for isolated or stale abnormal gateway drops", () => {
     let currentTime = 1_000;
     const exit = vi.fn((code: number) => {
