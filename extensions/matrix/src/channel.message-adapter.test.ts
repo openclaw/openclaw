@@ -94,7 +94,7 @@ describe("matrix channel message adapter", () => {
 
     const proveReplyThread = async () => {
       mocks.sendMessageMatrix.mockClear();
-      const result = await adapter.send.text({
+      const result = await sendText({
         cfg,
         to: "room:!room:example",
         text: "threaded",
