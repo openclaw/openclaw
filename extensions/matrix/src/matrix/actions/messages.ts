@@ -15,14 +15,24 @@ import {
 const MATRIX_THREAD_RELATION_TYPE = "m.thread";
 const MAX_MAIN_TIMELINE_FETCH_PAGES = 3;
 
-function isThreadEvent(event: MatrixRawEvent): boolean {
-  const relatesTo = event.content?.["m.relates_to"];
+function isThreadRelation(value: unknown): boolean {
   return (
-    typeof relatesTo === "object" &&
-    relatesTo !== null &&
-    "rel_type" in relatesTo &&
-    relatesTo.rel_type === MATRIX_THREAD_RELATION_TYPE
+    typeof value === "object" &&
+    value !== null &&
+    "rel_type" in value &&
+    value.rel_type === MATRIX_THREAD_RELATION_TYPE
   );
+}
+
+function isThreadEvent(event: MatrixRawEvent): boolean {
+  if (isThreadRelation(event.content?.["m.relates_to"])) {
+    return true;
+  }
+  const newContent = event.content?.["m.new_content"];
+  if (typeof newContent !== "object" || newContent === null) {
+    return false;
+  }
+  return isThreadRelation((newContent as Record<string, unknown>)["m.relates_to"]);
 }
 
 function appendUniqueEvent(

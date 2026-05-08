@@ -1,10 +1,15 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
 import { setMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const profileAction = "set-profile" as const;
+const matrixActionMock = vi.hoisted(() => ({
+  handleMatrixAction: vi.fn(),
+}));
+
+vi.mock("./tool-actions.runtime.js", () => matrixActionMock);
 
 const runtimeStub = {
   config: {
@@ -50,6 +55,7 @@ function createConfiguredMatrixConfig(): CoreConfig {
 describe("matrixMessageActions", () => {
   beforeEach(() => {
     setMatrixRuntime(runtimeStub);
+    matrixActionMock.handleMatrixAction.mockReset();
   });
 
   it("exposes poll create but only handles poll votes inside the plugin", () => {
@@ -258,5 +264,32 @@ describe("matrixMessageActions", () => {
     expect(assistantActions).not.toContain("reactions");
     expect(opsActions).toContain("react");
     expect(opsActions).toContain("reactions");
+  });
+
+  it("forwards threadId through exposed Matrix read actions", async () => {
+    matrixActionMock.handleMatrixAction.mockResolvedValue({ messages: [] });
+
+    await matrixMessageActions.handleAction?.({
+      action: "read",
+      params: {
+        to: "!room:example.org",
+        limit: 5,
+        before: "batch-before",
+        threadId: "$thread-root",
+      },
+      cfg: createConfiguredMatrixConfig(),
+    } as never);
+
+    expect(matrixActionMock.handleMatrixAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "readMessages",
+        roomId: "!room:example.org",
+        limit: 5,
+        before: "batch-before",
+        threadId: "$thread-root",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
   });
 });

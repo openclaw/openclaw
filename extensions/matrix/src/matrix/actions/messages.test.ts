@@ -418,6 +418,60 @@ describe("matrix message actions", () => {
     expect(result.messages.map((message) => message.eventId)).toEqual(["$main-1"]);
   });
 
+  it("filters threaded edit events out of main-room reads", async () => {
+    const doRequest = vi.fn(async () => ({
+      chunk: [
+        {
+          event_id: "$thread-edit",
+          sender: "@bob:example.org",
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "* edited thread reply",
+            "m.relates_to": {
+              rel_type: "m.replace",
+              event_id: "$thread-reply",
+            },
+            "m.new_content": {
+              msgtype: "m.text",
+              body: "edited thread reply",
+              "m.relates_to": {
+                rel_type: "m.thread",
+                event_id: "$thread-root",
+              },
+            },
+          },
+        },
+        {
+          event_id: "$main-1",
+          sender: "@alice:example.org",
+          type: "m.room.message",
+          origin_server_ts: 10,
+          content: {
+            msgtype: "m.text",
+            body: "main room message",
+          },
+        },
+      ],
+      start: "start-token",
+      end: "end-token",
+    }));
+    const hydrateEvents = vi.fn(
+      async (_roomId: string, events: Array<Record<string, unknown>>) => events,
+    );
+    const client = {
+      doRequest,
+      hydrateEvents,
+      getEvent: vi.fn(),
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const result = await readMatrixMessages("room:!room:example.org", { client, limit: 5 });
+
+    expect(result.messages.map((message) => message.eventId)).toEqual(["$main-1"]);
+  });
+
   it("keeps main-room pagination cursors aligned while filtering thread replies", async () => {
     const pages = [
       {
