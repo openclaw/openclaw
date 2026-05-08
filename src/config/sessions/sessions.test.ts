@@ -9,7 +9,6 @@ import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
   createSqliteSessionTranscriptLocator,
   resolveSessionFilePath,
-  resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
@@ -36,13 +35,6 @@ describe("session path safety", () => {
     for (const sessionId of unsafeSessionIds) {
       expect(() => validateSessionId(sessionId), sessionId).toThrow(/Invalid session ID/);
     }
-  });
-
-  it("resolves transcript path inside an explicit sessions dir", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-    const resolved = resolveSessionTranscriptPathInDir("sess-1", sessionsDir, "topic/a+b");
-
-    expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
   });
 
   it("ignores legacy sessionFile paths", () => {
@@ -574,7 +566,7 @@ describe("resolveAndPersistSessionFile", () => {
   it("creates and persists a SQLite locator when session is not yet present", async () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
-    const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const fallbackSessionFile = path.join(fixture.sessionsDir(), `${sessionId}.jsonl`);
     const expectedSessionFile = createSqliteSessionTranscriptLocator({
       agentId: "main",
       sessionId,
@@ -596,7 +588,7 @@ describe("resolveAndPersistSessionFile", () => {
   it("normalizes legacy stored transcript paths to SQLite locators", async () => {
     const sessionId = "legacy-path-session-id";
     const sessionKey = "agent:main:telegram:group:456";
-    const legacySessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const legacySessionFile = path.join(fixture.sessionsDir(), `${sessionId}.jsonl`);
     const expectedSessionFile = createSqliteSessionTranscriptLocator({
       agentId: "main",
       sessionId,
@@ -626,10 +618,7 @@ describe("resolveAndPersistSessionFile", () => {
     const previousSessionId = "old-session-id";
     const nextSessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
-    const previousSessionFile = resolveSessionTranscriptPathInDir(
-      previousSessionId,
-      fixture.sessionsDir(),
-    );
+    const previousSessionFile = path.join(fixture.sessionsDir(), `${previousSessionId}.jsonl`);
     const expectedNextSessionFile = createSqliteSessionTranscriptLocator({
       agentId: "main",
       sessionId: nextSessionId,

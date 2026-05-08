@@ -12,11 +12,7 @@ import {
   resolveSessionKey,
   updateLastRoute,
 } from "./sessions.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptsDir,
-} from "./sessions/paths.js";
+import { resolveSessionFilePath, resolveSessionTranscriptsDir } from "./sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
@@ -609,21 +605,6 @@ describe("sessions", () => {
       () => "/home/ignored",
     );
     expect(dir).toBe(path.join(path.resolve("/custom/state"), "agents", "main", "sessions"));
-  });
-
-  it("includes topic ids in session transcript filenames", () => {
-    withStateDir("/custom/state", () => {
-      const sessionFile = resolveSessionTranscriptPath("sess-1", "main", 123);
-      expect(sessionFile).toBe(
-        path.join(
-          path.resolve("/custom/state"),
-          "agents",
-          "main",
-          "sessions",
-          "sess-1-topic-123.jsonl",
-        ),
-      );
-    });
   });
 
   it("uses agent id when resolving session file fallback paths", () => {

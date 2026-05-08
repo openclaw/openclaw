@@ -8,10 +8,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import {
-  createSqliteSessionTranscriptLocator,
-  resolveSessionTranscriptPathInDir,
-} from "./paths.js";
+import { createSqliteSessionTranscriptLocator } from "./paths.js";
 import { upsertSessionEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
@@ -431,7 +428,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("serializes concurrent parent-linked transcript appends", async () => {
     const targetSessionId = "concurrent-tree-session";
-    const sessionFile = resolveSessionTranscriptPathInDir(targetSessionId, fixture.sessionsDir());
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: targetSessionId,
+    });
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: targetSessionId,
@@ -470,7 +470,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("appends to existing SQLite transcript chains", async () => {
     const targetSessionId = "small-linear-session";
-    const sessionFile = resolveSessionTranscriptPathInDir(targetSessionId, fixture.sessionsDir());
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: targetSessionId,
+    });
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: targetSessionId,
@@ -525,10 +528,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("appends scoped SQLite transcript entries without importing JSONL at runtime", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = resolveSessionTranscriptPathInDir(
-      "sqlite-import-session",
-      fixture.sessionsDir(),
-    );
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "sqlite-import-session",
+    });
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "sqlite-import-session",
@@ -572,10 +575,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("mirrors a newly created scoped transcript header into SQLite", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionFile = resolveSessionTranscriptPathInDir(
-      "sqlite-new-session",
-      fixture.sessionsDir(),
-    );
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "sqlite-new-session",
+    });
 
     const appended = await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,

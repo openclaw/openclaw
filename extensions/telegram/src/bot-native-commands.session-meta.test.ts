@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,7 +54,6 @@ const sessionMocks = vi.hoisted(() => {
     ),
     recordSessionMetaFromInbound: vi.fn(),
     resolveAndPersistSessionFile: vi.fn(),
-    resolveSessionTranscriptPath: vi.fn(),
     sessionStore,
   };
 });
@@ -163,7 +161,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     getSessionEntry: sessionMocks.getSessionEntry,
     listSessionEntries: sessionMocks.listSessionEntries,
     resolveAndPersistSessionFile: sessionMocks.resolveAndPersistSessionFile,
-    resolveSessionTranscriptPath: sessionMocks.resolveSessionTranscriptPath,
   };
 });
 vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
@@ -499,13 +496,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         },
       };
     });
-    sessionMocks.resolveSessionTranscriptPath
-      .mockClear()
-      .mockImplementation((sessionId: string, _agentId?: string, threadId?: string | number) =>
-        threadId === undefined
-          ? `/tmp/openclaw-sessions/${sessionId}.jsonl`
-          : `/tmp/openclaw-sessions/${sessionId}-topic-${threadId}.jsonl`,
-      );
     pluginRuntimeMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
     pluginRuntimeMocks.matchPluginCommand.mockClear().mockReturnValue(null);
     replyMocks.dispatchReplyWithBufferedBlockDispatcher
@@ -1211,14 +1201,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       expect.objectContaining({
         sessionId: "sess-topic",
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-        fallbackSessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
+        fallbackSessionFile: "sqlite-transcript://main/sess-topic.jsonl",
       }),
     );
     expect(pluginRuntimeMocks.executePluginCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
-        sessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
+        sessionFile: "sqlite-transcript://main/sess-topic.jsonl",
         messageThreadId: 42,
       }),
     );
