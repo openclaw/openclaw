@@ -298,4 +298,36 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
     expect(entry.lineMap).toEqual([2, 3]);
   });
+
+  it("skips runtime-only system event turns", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Continue the OpenClaw runtime event.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Final cron delivery report for today." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Remember the database maintenance window." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "I noted the database maintenance window." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "runtime-event-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe(
+      "User: Remember the database maintenance window.\nAssistant: I noted the database maintenance window.",
+    );
+    expect(entry.lineMap).toEqual([3, 4]);
+  });
 });

@@ -1390,6 +1390,22 @@ describe("memory-core dreaming phases", () => {
           type: "message",
           message: {
             role: "user",
+            timestamp: "2026-04-16T18:07:30.000Z",
+            content: "Continue the OpenClaw runtime event.",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:07:45.000Z",
+            content: "Final cron delivery report for today's background sync.",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
             timestamp: "2026-04-16T18:08:00.000Z",
             content: "Document the Ollama provider setup.",
           },
@@ -1461,6 +1477,8 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("Read HEARTBEAT.md");
     expect(corpus).not.toContain("HEARTBEAT_OK");
     expect(corpus).not.toContain("Run the qmd sync");
+    expect(corpus).not.toContain("Continue the OpenClaw runtime event");
+    expect(corpus).not.toContain("Final cron delivery report");
   });
 
   it("ignores chat scaffolding tags when building rem reflections", () => {

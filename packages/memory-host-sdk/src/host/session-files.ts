@@ -28,6 +28,7 @@ const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
+const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 
 export type SessionFileEntry = {
   path: string;
@@ -454,6 +455,10 @@ function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assista
   return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
 }
 
+function isGeneratedRuntimeEventPromptMessage(text: string, role: "user" | "assistant"): boolean {
+  return role === "user" && text === OPENCLAW_RUNTIME_EVENT_USER_PROMPT;
+}
+
 function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
   const strippedInbound = stripInboundMetadataForUserRole(text, role);
   const strippedInternal = stripInternalRuntimeContext(strippedInbound);
@@ -468,6 +473,9 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
     return null;
   }
   if (isGeneratedHeartbeatPromptMessage(normalized, role)) {
+    return null;
+  }
+  if (isGeneratedRuntimeEventPromptMessage(normalized, role)) {
     return null;
   }
   if (isSilentReplyPayloadText(normalized)) {
@@ -559,6 +567,7 @@ export async function buildSessionEntry(
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
     const allowArchiveContentCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
+    let skipAssistantAfterRuntimeEventPrompt = false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -605,6 +614,22 @@ export async function buildSessionEntry(
       const rawText = collectRawSessionText(message.content);
       if (rawText === null) {
         continue;
+      }
+      if (message.role === "assistant" && skipAssistantAfterRuntimeEventPrompt) {
+        skipAssistantAfterRuntimeEventPrompt = false;
+        continue;
+      }
+      const strippedRawText = stripInternalRuntimeContext(
+        stripInboundMetadataForUserRole(rawText, message.role),
+      );
+      if (
+        isGeneratedRuntimeEventPromptMessage(normalizeSessionText(strippedRawText), message.role)
+      ) {
+        skipAssistantAfterRuntimeEventPrompt = true;
+        continue;
+      }
+      if (message.role === "user") {
+        skipAssistantAfterRuntimeEventPrompt = false;
       }
       if (
         !generatedByCronRun &&
