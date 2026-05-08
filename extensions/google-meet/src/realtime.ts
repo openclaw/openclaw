@@ -1116,6 +1116,7 @@ export async function startCommandRealtimeAudioBridge(params: {
   });
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
+    cfg: params.fullConfig,
     providerConfig: resolved.providerConfig,
     audioFormat: resolveGoogleMeetRealtimeAudioFormat(params.config),
     instructions: params.config.realtime.instructions,

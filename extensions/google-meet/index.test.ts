@@ -4215,6 +4215,7 @@ describe("google-meet plugin", () => {
       .mockReturnValueOnce(outputProcess)
       .mockReturnValueOnce(inputProcess)
       .mockReturnValueOnce(replacementOutputProcess);
+    const fullConfig = { models: { providers: {} } } as never;
     const sessionStore: Record<string, unknown> = {};
     const runtime = {
       agent: {
@@ -4240,7 +4241,7 @@ describe("google-meet plugin", () => {
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime", agentId: "jay" },
       }),
-      fullConfig: {} as never,
+      fullConfig,
       runtime: runtime as never,
       meetingSessionId: "meet-1",
       inputCommand: ["capture-meet"],
@@ -4253,6 +4254,7 @@ describe("google-meet plugin", () => {
     expect(noopLogger.info).toHaveBeenCalledWith(
       "[google-meet] realtime voice bridge starting: strategy=bidi provider=openai model=gpt-realtime audioFormat=pcm16-24khz",
     );
+    expect(callbacks?.cfg).toBe(fullConfig);
     inputStdout.write(Buffer.from([1, 2, 3]));
     callbacks?.onAudio(Buffer.from([4, 5]));
     callbacks?.onMark?.("mark-1");
@@ -4689,6 +4691,7 @@ describe("google-meet plugin", () => {
       },
     };
     let pullCount = 0;
+    const fullConfig = { models: { providers: {} } } as never;
     const sessionStore: Record<string, unknown> = {};
     const runtime = {
       nodes: {
@@ -4727,7 +4730,7 @@ describe("google-meet plugin", () => {
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime" },
       }),
-      fullConfig: {} as never,
+      fullConfig,
       runtime: runtime as never,
       meetingSessionId: "meet-1",
       nodeId: "node-1",
@@ -4739,6 +4742,7 @@ describe("google-meet plugin", () => {
     expect(noopLogger.info).toHaveBeenCalledWith(
       "[google-meet] realtime voice bridge starting: strategy=bidi provider=openai model=gpt-realtime audioFormat=pcm16-24khz",
     );
+    expect(callbacks?.cfg).toBe(fullConfig);
     callbacks?.onAudio(Buffer.from([1, 2, 3]));
     callbacks?.onClearAudio();
     callbacks?.onReady?.();
