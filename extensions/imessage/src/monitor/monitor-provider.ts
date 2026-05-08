@@ -141,6 +141,16 @@ function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
   );
 }
 
+function formatIMessageReactionText(message: IMessagePayload): string | undefined {
+  if (!message.is_reaction) {
+    return undefined;
+  }
+  const action = message.is_reaction_add === false ? "removed" : "added";
+  const emoji = message.reaction_emoji?.trim() || message.reaction_type?.trim() || "reaction";
+  const target = message.reacted_to_guid?.trim();
+  return target ? `${action} ${emoji} reaction to [id:${target}]` : `${action} ${emoji} reaction`;
+}
+
 async function waitForWatchSubscribeRetryDelay(params: {
   ms: number;
   abortSignal?: AbortSignal;
@@ -338,7 +348,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   };
 
   async function handleMessageNow(message: IMessagePayload) {
-    const messageText = (message.text ?? "").trim();
+    const reactionText = formatIMessageReactionText(message);
+    const messageText = (reactionText ?? message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
@@ -804,6 +815,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         "watch.subscribe",
         {
           attachments: includeAttachments,
+          include_reactions: true,
         },
         { timeoutMs: probeTimeoutMs },
       );
