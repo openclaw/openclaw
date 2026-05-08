@@ -11,6 +11,10 @@ function expectUpdatePlanEnabled(params: UpdatePlanGatingParams, expected: boole
   expect(isUpdatePlanToolEnabledForOpenClawTools(params)).toBe(expected);
 }
 
+function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
+  return tools.map((tool) => tool.name);
+}
+
 function openAiGpt5Params(
   config: OpenClawConfig,
   overrides: Partial<UpdatePlanGatingParams> = {},
@@ -48,8 +52,8 @@ describe("openclaw-tools update_plan gating", () => {
       modelId: "claude-sonnet-4-6",
     });
 
-    expect(defaultTools.some((tool) => tool.name === "update_plan")).toBe(false);
-    expect(emptyAllowlistTools.some((tool) => tool.name === "update_plan")).toBe(false);
+    expect(toolNames(defaultTools)).not.toContain("update_plan");
+    expect(toolNames(emptyAllowlistTools)).not.toContain("update_plan");
   });
 
   it("wraps constructed tools with before-tool-call hooks by default", () => {
@@ -95,7 +99,7 @@ describe("openclaw-tools update_plan gating", () => {
       modelId: "claude-sonnet-4-6",
     });
 
-    expect(tools.some((tool) => tool.name === "update_plan")).toBe(true);
+    expect(toolNames(tools)).toContain("update_plan");
   });
 
   it("registers update_plan when a config allowlist group includes it", () => {
@@ -106,7 +110,7 @@ describe("openclaw-tools update_plan gating", () => {
       modelId: "claude-sonnet-4-6",
     });
 
-    expect(tools.some((tool) => tool.name === "update_plan")).toBe(true);
+    expect(toolNames(tools)).toContain("update_plan");
   });
 
   it("registers update_plan when a runtime allowlist group includes it", () => {
@@ -118,7 +122,7 @@ describe("openclaw-tools update_plan gating", () => {
       modelId: "claude-sonnet-4-6",
     });
 
-    expect(tools.some((tool) => tool.name === "update_plan")).toBe(true);
+    expect(toolNames(tools)).toContain("update_plan");
   });
 
   it("respects deny policy while constructing update_plan for grouped allowlists", () => {
@@ -131,7 +135,7 @@ describe("openclaw-tools update_plan gating", () => {
       modelId: "claude-sonnet-4-6",
     });
 
-    expect(tools.some((tool) => tool.name === "update_plan")).toBe(false);
+    expect(toolNames(tools)).not.toContain("update_plan");
   });
 
   it("auto-enables update_plan for unconfigured GPT-5 openai runs", () => {
