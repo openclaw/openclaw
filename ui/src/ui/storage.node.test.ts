@@ -572,9 +572,14 @@ describe("loadSettings default gateway URL derivation", () => {
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
 
     const sessionsByGateway = persisted.sessionsByGateway as unknown;
-    expect(typeof sessionsByGateway).toBe("object");
-    expect(sessionsByGateway).not.toBeNull();
-    expect(Array.isArray(sessionsByGateway)).toBe(false);
+    expect(sessionsByGateway).toEqual(
+      expect.objectContaining({
+        "wss://gateway.example:8443": {
+          sessionKey: "agent:current:main",
+          lastActiveSessionKey: "agent:current:main",
+        },
+      }),
+    );
     const scopedSessions = sessionsByGateway as Record<string, unknown>;
     const scopes = Object.keys(scopedSessions);
     expect(scopes).toHaveLength(10);
@@ -584,10 +589,6 @@ describe("loadSettings default gateway URL derivation", () => {
     // newest stale entries and the current gateway should be retained
     expect(scopes).toContain("wss://stale-10.example:8443");
     expect(scopes).toContain("wss://gateway.example:8443");
-    expect(scopedSessions["wss://gateway.example:8443"]).toEqual({
-      sessionKey: "agent:current:main",
-      lastActiveSessionKey: "agent:current:main",
-    });
   });
 
   it("persists local user identity separately from gateway settings", () => {
