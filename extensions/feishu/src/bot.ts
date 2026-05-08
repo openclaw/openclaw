@@ -965,13 +965,17 @@ export async function handleFeishuMessage(params: {
       audioTranscript === undefined
         ? shouldComputeCommandAuthorized
         : core.channel.commands.shouldComputeCommandAuthorized(effectiveCommandProbeBody, cfg);
+    // When no command-specific allowFrom is configured, any sender who has already
+    // been admitted (passed DM/group gates above) may run slash commands.
+    // resolveCommandAuthorizedFromAuthorizers returns false when configured=false
+    // even for an allowed sender, so bypass it when the allowlist is empty.
     const commandAuthorized = shouldComputeEffectiveCommandAuthorized
-      ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
-          useAccessGroups,
-          authorizers: [
-            { configured: commandAllowFrom.length > 0, allowed: senderAllowedForCommands },
-          ],
-        })
+      ? commandAllowFrom.length === 0
+        ? true
+        : core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
+            useAccessGroups,
+            authorizers: [{ configured: true, allowed: senderAllowedForCommands }],
+          })
       : undefined;
 
     // Fetch quoted/replied message content if parentId exists

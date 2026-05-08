@@ -1045,7 +1045,10 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
-  it("computes group command authorization from group allowFrom", async () => {
+  it("authorizes group slash commands when no group allowFrom is configured (#79409)", async () => {
+    // When groupPolicy is open and no allowFrom is configured, any admitted group sender
+    // should be able to run slash commands. Previously resolved to CommandAuthorized=false
+    // because resolveCommandAuthorizedFromAuthorizers returned false for empty authorizers.
     mockShouldComputeCommandAuthorized.mockReturnValue(true);
     mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(false);
 
@@ -1065,7 +1068,7 @@ describe("handleFeishuMessage command authorization", () => {
     const event: FeishuMessageEvent = {
       sender: {
         sender_id: {
-          open_id: "ou-attacker",
+          open_id: "ou-sender",
         },
       },
       message: {
@@ -1073,15 +1076,63 @@ describe("handleFeishuMessage command authorization", () => {
         chat_id: "oc-group",
         chat_type: "group",
         message_type: "text",
-        content: JSON.stringify({ text: "/status" }),
+        content: JSON.stringify({ text: "/compact" }),
       },
     };
 
     await dispatchMessage({ cfg, event });
 
+    // When commandAllowFrom is empty, we bypass resolveCommandAuthorizedFromAuthorizers
+    // and set CommandAuthorized=true directly.
+    expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ChatType: "group",
+        CommandAuthorized: true,
+        SenderId: "ou-sender",
+      }),
+    );
+  });
+
+  it("denies group slash commands when group allowFrom is configured and sender is not listed", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      commands: { useAccessGroups: true },
+      channels: {
+        feishu: {
+          allowFrom: ["ou-admin"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-attacker",
+        },
+      },
+      message: {
+        message_id: "msg-group-command-auth-deny",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "/compact" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // commandAllowFrom = configAllowFrom = ["ou-admin"]; sender "ou-attacker" is not listed.
     expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
       useAccessGroups: true,
-      authorizers: [{ configured: false, allowed: false }],
+      authorizers: [{ configured: true, allowed: false }],
     });
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3179,6 +3230,49 @@ describe("handleFeishuMessage command authorization", () => {
         messageId: "msg-audio-reused-id",
         fileKey: "file_audio_second",
         type: "file",
+      }),
+    );
+  });
+
+  it("still uses resolveCommandAuthorizedFromAuthorizers for DMs with explicit allowFrom", async () => {
+    // When allowFrom is configured, the allowlist gate is the authoritative check.
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["ou-allowed"],
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-allowed",
+        },
+      },
+      message: {
+        message_id: "msg-dm-slash-command-allowlisted",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "/compact" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
+      useAccessGroups: expect.any(Boolean),
+      authorizers: [{ configured: true, allowed: true }],
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        CommandAuthorized: true,
+        SenderId: "ou-allowed",
       }),
     );
   });
