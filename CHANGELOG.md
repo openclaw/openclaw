@@ -133,6 +133,7 @@ Docs: https://docs.openclaw.ai
 - Agents: label `.openclaw/sandboxes` exec workdirs as sandbox runs in compact tool summaries instead of showing the full path.
 - OpenAI Codex: surface browser OAuth and device-code login failures instead of treating failed logins as empty successful auth results. Refs #80363.
 - CLI agents: carry runtime-only current-turn sender/reply context into CLI model prompts while keeping prompt-build hook input and transcript text clean.
+- CLI/gateway: emit structured JSON for gateway transport close and timeout failures when JSON output is requested. Fixes #79108.
 - Control UI: keep workspace file presence checks from treating `fs-safe` stat helper failures as missing files, restoring Agents file status for existing Windows workspace files. Fixes #79953. Thanks @lovelefeng-glitch.
 - Microsoft Foundry: report an explicit error when the Azure subscription prompt returns an id that is not present in the enabled subscription list, instead of continuing from an unsafe subscription assertion. (#62742) Thanks @oliviareid-svg.
 - fix(matrix): gate name-based allowlist resolution [AI]. (#79007) Thanks @pgondhi987.
