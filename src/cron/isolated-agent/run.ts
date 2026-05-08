@@ -1,5 +1,6 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
@@ -33,6 +34,7 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
 import {
   createPersistCronSessionEntry,
   markCronSessionPreRun,
@@ -586,27 +588,56 @@ async function prepareCronRunContext(params: {
   let provider = resolvedModelSelection.provider;
   let model = resolvedModelSelection.model;
 
-  const preflight = await (
-    await loadCronModelPreflightRuntime()
-  ).preflightCronModelProvider({
+  const preflightRuntime = await loadCronModelPreflightRuntime();
+  const preflight = await preflightRuntime.preflightCronModelProvider({
     cfg: cfgWithAgentDefaults,
     provider,
     model,
   });
   if (preflight.status === "unavailable") {
-    logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
-    return {
-      ok: false,
-      result: withRunSession({
-        status: "skipped",
-        error: preflight.reason,
-        diagnostics: createCronRunDiagnosticsFromError("model-preflight", preflight.reason, {
-          severity: "warn",
+    const fallbacks = resolveCronFallbacksOverride({
+      cfg: cfgWithAgentDefaults,
+      job: input.job,
+      agentId,
+    });
+    let resolvedFromFallback = false;
+    if (fallbacks && fallbacks.length > 0) {
+      for (const raw of fallbacks) {
+        const ref = parseModelRef(raw, provider);
+        if (!ref) {
+          continue;
+        }
+        const fallbackPreflight = await preflightRuntime.preflightCronModelProvider({
+          cfg: cfgWithAgentDefaults,
+          provider: ref.provider,
+          model: ref.model,
+        });
+        if (fallbackPreflight.status === "available") {
+          logWarn(
+            `[cron:${input.job.id}] Primary ${provider}/${model} unavailable; using fallback ${ref.provider}/${ref.model}.`,
+          );
+          provider = ref.provider;
+          model = ref.model;
+          resolvedFromFallback = true;
+          break;
+        }
+      }
+    }
+    if (!resolvedFromFallback) {
+      logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
+      return {
+        ok: false,
+        result: withRunSession({
+          status: "skipped",
+          error: preflight.reason,
+          diagnostics: createCronRunDiagnosticsFromError("model-preflight", preflight.reason, {
+            severity: "warn",
+          }),
+          provider,
+          model,
         }),
-        provider,
-        model,
-      }),
-    };
+      };
+    }
   }
 
   const hooksGmailThinking = isGmailHook
