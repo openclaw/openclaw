@@ -7,8 +7,8 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
-  loadCombinedSessionStoreForGateway,
-  resolveGatewaySessionStoreTarget,
+  loadCombinedSessionEntriesForGateway,
+  resolveGatewaySessionDatabaseTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
@@ -24,6 +24,11 @@ function resolveTranscriptPathForComparison(value: string | undefined): string |
   try {
     return fs.realpathSync(resolved);
   } catch {
+    try {
+      return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+    } catch {
+      // Fall through to the resolved path when neither the file nor parent exists.
+    }
     return resolved;
   }
 }
@@ -38,7 +43,7 @@ function sessionKeyMatchesTranscriptPath(params: {
   if (!entry?.sessionId) {
     return false;
   }
-  const target = resolveGatewaySessionStoreTarget({
+  const target = resolveGatewaySessionDatabaseTarget({
     cfg: params.cfg,
     key: params.key,
     scanLegacyKeys: false,
@@ -47,7 +52,6 @@ function sessionKeyMatchesTranscriptPath(params: {
   const sessionAgentId = normalizeAgentId(target.agentId);
   return resolveSessionTranscriptCandidates(
     entry.sessionId,
-    target.storePath,
     entry.sessionFile,
     sessionAgentId,
   ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
@@ -63,7 +67,7 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
     return undefined;
   }
   const cfg = getRuntimeConfig();
-  const { store } = loadCombinedSessionStoreForGateway(cfg);
+  const { entries: store } = loadCombinedSessionEntriesForGateway(cfg);
 
   const cachedKey = TRANSCRIPT_SESSION_KEY_CACHE.get(targetPath);
   if (

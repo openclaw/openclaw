@@ -120,7 +120,6 @@ vi.mock("../session-utils.js", async () => {
           mainKey: mockState.mainSessionKey,
         },
       },
-      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
       entry: {
         sessionId: mockState.sessionId,
         sessionFile: mockState.transcriptPath,
