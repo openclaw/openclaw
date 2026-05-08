@@ -17,6 +17,7 @@ import {
   resolveModelMock,
   resolveSandboxContextMock,
   resolveSessionAgentIdMock,
+  resolveSessionAgentIdsMock,
   rotateTranscriptAfterCompactionMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
@@ -1047,6 +1048,57 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       result: { summary: "engine-summary", tokensAfter: 50 },
     });
     mockResolvedModel();
+  });
+
+  it("binds context-engine compaction runtime LLM to the session agent", async () => {
+    resolveSessionAgentIdsMock.mockReturnValueOnce({
+      defaultAgentId: "main",
+      sessionAgentId: "lossless-agent",
+    });
+
+    await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        config: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+            },
+          },
+        },
+        sessionKey: "legacy-topic-47",
+      }),
+    );
+
+    expect(contextEngineCompactMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({
+          llm: expect.objectContaining({ complete: expect.any(Function) }),
+        }),
+      }),
+    );
+    const contextEngineCompactCalls = contextEngineCompactMock.mock.calls as unknown as Array<
+      [
+        {
+          runtimeContext?: {
+            llm?: {
+              complete?: (params: {
+                messages: Array<{ role: "user"; content: string }>;
+                agentId?: string;
+              }) => Promise<unknown>;
+            };
+          };
+        },
+      ]
+    >;
+    const runtimeContext = contextEngineCompactCalls[0]?.[0]?.runtimeContext;
+    expect(runtimeContext).toBeDefined();
+
+    await expect(
+      runtimeContext?.llm?.complete?.({
+        messages: [{ role: "user", content: "summarize" }],
+        agentId: "other-agent",
+      }),
+    ).rejects.toThrow("cannot override the active session agent");
   });
 
   it("fires before_compaction with sentinel -1 and after_compaction on success", async () => {

@@ -501,6 +501,42 @@ describe("plugins.entries.*.subagent", () => {
   });
 });
 
+describe("plugins.entries.*.llm", () => {
+  it("accepts trusted llm override settings", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            llm: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+              allowAgentIdOverride: true,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid trusted llm override settings", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            llm: {
+              allowModelOverride: "yes",
+              allowedModels: [1],
+              allowAgentIdOverride: "yes",
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("web search provider config", () => {
   it("accepts kimi provider and config", () => {
     const res = validateConfigObject(
