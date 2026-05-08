@@ -113,8 +113,9 @@ const createCompactionHandler = () => {
     }),
   } as unknown as ExtensionAPI;
   compactionSafeguardExtension(mockApi);
+  expect(compactionHandler).toBeDefined();
   if (!compactionHandler) {
-    throw new Error("expected compaction safeguard handler");
+    throw new Error("Expected compaction safeguard to register a handler.");
   }
   return compactionHandler;
 };
