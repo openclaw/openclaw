@@ -61,6 +61,7 @@ import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -120,7 +121,11 @@ import {
   findClientToolNameConflicts,
   toClientToolDefinitions,
 } from "../../pi-tool-definition-adapter.js";
-import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import {
+  createOpenClawCodingTools,
+  resolveProcessToolScopeKey,
+  resolveToolLoopDetectionConfig,
+} from "../../pi-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -1218,6 +1223,12 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
     });
     const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+    const activeProcessSessions = listActiveProcessSessionReferences({
+      scopeKey: resolveProcessToolScopeKey({
+        sessionKey: sandboxSessionKey,
+        agentId: sessionAgentId,
+      }),
+    });
     const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
       config: params.config,
       agentId: sessionAgentId,
@@ -1234,6 +1245,7 @@ export async function runEmbeddedAttempt(
         channel: runtimeChannel,
         capabilities: runtimeCapabilities,
         channelActions,
+        activeProcessSessions,
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;

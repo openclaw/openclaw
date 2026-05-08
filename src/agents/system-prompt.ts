@@ -14,6 +14,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
 import {
   buildFullBootstrapPromptLines,
@@ -673,6 +674,7 @@ export function buildAgentSystemPrompt(params: {
     channel?: string;
     capabilities?: string[];
     repoRoot?: string;
+    activeProcessSessions?: ActiveProcessSessionReference[];
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
@@ -1262,10 +1264,28 @@ export function buildAgentSystemPrompt(params: {
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
+    ...buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
   return lines.filter(Boolean).join("\n");
+}
+
+function buildActiveProcessSessionReferenceLines(
+  sessions: ActiveProcessSessionReference[] | undefined,
+): string[] {
+  if (!sessions?.length) {
+    return [];
+  }
+  return [
+    "Active background exec sessions in this scope:",
+    ...sessions.map((session) => {
+      const pid = typeof session.pid === "number" ? ` pid=${session.pid}` : "";
+      const cwd = session.cwd ? ` cwd=${sanitizeForPromptLiteral(session.cwd)}` : "";
+      return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
+    }),
+    "Use the process tool with a sessionId to poll, log, write to, or terminate these sessions. If prior context lost a sessionId, run process list.",
+  ];
 }
 
 export function buildRuntimeLine(
@@ -1279,6 +1299,7 @@ export function buildRuntimeLine(
     defaultModel?: string;
     shell?: string;
     repoRoot?: string;
+    activeProcessSessions?: ActiveProcessSessionReference[];
   },
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],

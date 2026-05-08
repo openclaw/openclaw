@@ -144,6 +144,16 @@ function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
   } as AnyAgentTool;
 }
 
+export function resolveProcessToolScopeKey(params: {
+  scopeKey?: string;
+  sessionKey?: string;
+  agentId?: string;
+}): string | undefined {
+  return (
+    params.scopeKey ?? params.sessionKey ?? (params.agentId ? `agent:${params.agentId}` : undefined)
+  );
+}
+
 function applyModelProviderToolPolicy(
   tools: AnyAgentTool[],
   params?: {
@@ -442,8 +452,11 @@ export function createOpenClawCodingTools(options?: {
   ]);
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
-  const scopeKey =
-    options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
+  const scopeKey = resolveProcessToolScopeKey({
+    scopeKey: options?.exec?.scopeKey,
+    sessionKey: options?.sessionKey,
+    agentId,
+  });
   const subagentStore = resolveSubagentCapabilityStore(options?.sessionKey, {
     cfg: options?.config,
   });

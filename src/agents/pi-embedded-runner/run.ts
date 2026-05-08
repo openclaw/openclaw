@@ -36,6 +36,7 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
+import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -81,6 +82,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { resolveProcessToolScopeKey } from "../pi-tools.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -1495,6 +1497,12 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,
@@ -1660,6 +1668,12 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,

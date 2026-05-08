@@ -14,8 +14,10 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
+import { resolveProcessToolScopeKey } from "../../pi-tools.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
@@ -492,6 +494,7 @@ export function buildAfterTurnRuntimeContext(params: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
     | "sessionKey"
+    | "sandboxSessionKey"
     | "messageChannel"
     | "messageProvider"
     | "agentAccountId"
@@ -542,6 +545,12 @@ export function buildAfterTurnRuntimeContext(params: {
       bashElevated: params.attempt.bashElevated,
       extraSystemPrompt: params.attempt.extraSystemPrompt,
       ownerNumbers: params.attempt.ownerNumbers,
+      activeProcessSessions: listActiveProcessSessionReferences({
+        scopeKey: resolveProcessToolScopeKey({
+          sessionKey: params.attempt.sandboxSessionKey?.trim() || params.attempt.sessionKey,
+          agentId: params.activeAgentId,
+        }),
+      }),
     }),
     ...resolveContextEngineCapabilities({
       config: params.attempt.config,
