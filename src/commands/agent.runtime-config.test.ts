@@ -63,16 +63,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
 }
 
-function requireResolveCommandConfigParams(callIndex = 0): ResolveCommandConfigParams {
-  const call = resolveCommandConfigWithSecretsMock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected command config resolution call ${callIndex}`);
-  }
-  const [params] = call;
-  return params;
-}
-
-function mockConfig(home: string, storePath: string): OpenClawConfig {
+function mockConfig(home: string): OpenClawConfig {
   const cfg = {
     agents: {
       defaults: {
@@ -81,7 +72,7 @@ function mockConfig(home: string, storePath: string): OpenClawConfig {
         workspace: path.join(home, "openclaw"),
       },
     },
-    session: { store: storePath, mainKey: "main" },
+    session: { mainKey: "main" },
   } as OpenClawConfig;
   loadConfigMock.mockReturnValue(cfg);
   return cfg;
@@ -98,7 +89,6 @@ beforeEach(() => {
 describe("agentCommand runtime config", () => {
   it("sets runtime snapshots from source config before embedded agent run", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
       const loadedConfig = {
         agents: {
           defaults: {
@@ -107,7 +97,7 @@ describe("agentCommand runtime config", () => {
             workspace: path.join(home, "openclaw"),
           },
         },
-        session: { store, mainKey: "main" },
+        session: { mainKey: "main" },
         models: {
           providers: {
             openai: {
@@ -172,8 +162,7 @@ describe("agentCommand runtime config", () => {
 
   it("includes channel secret targets when delivery is requested", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = mockConfig(home, store);
+      const loadedConfig = mockConfig(home);
       loadedConfig.channels = {
         telegram: {
           botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
@@ -196,8 +185,7 @@ describe("agentCommand runtime config", () => {
 
   it("skips command secret resolution when no relevant SecretRef values exist", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = mockConfig(home, store);
+      const loadedConfig = mockConfig(home);
 
       const prepared = await resolveAgentRuntimeConfig(runtime);
 
@@ -208,20 +196,13 @@ describe("agentCommand runtime config", () => {
 
   it("derives a fresh session from --to", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const cfg = mockConfig(home, store);
+      const cfg = mockConfig(home);
 
       const resolved = resolveSession({ cfg, to: "+1555" });
 
-      expect(resolved.storePath).toBe(store);
-      expect(resolved.sessionKey).toBeTypeOf("string");
-      const sessionKey = resolved.sessionKey;
-      if (!sessionKey) {
-        throw new Error("expected session key");
-      }
-      expect(sessionKey.length).toBeGreaterThan(0);
-      expect(resolved.sessionId).toBeTypeOf("string");
-      expect(resolved.sessionId.length).toBeGreaterThan(0);
+      expect(resolved.agentId).toBe("main");
+      expect(resolved.sessionKey).toBeTruthy();
+      expect(resolved.sessionId).toBeTruthy();
       expect(resolved.isNewSession).toBe(true);
     });
   });

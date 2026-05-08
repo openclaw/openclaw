@@ -250,15 +250,14 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
-  it("honors custom session store roots when resolving hook history transcripts", async () => {
+  it("resolves hook history from SQLite without custom session store roots", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
-    const customStoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-store-"));
+    const customTranscriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-transcript-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const storePath = path.join(customStoreDir, "sessions.json");
     const sessionFile = createSessionTranscript({
-      rootDir: customStoreDir,
+      rootDir: customTranscriptDir,
       sessionId: "session-custom-store",
-      filePath: path.join(customStoreDir, "session-custom-store.jsonl"),
+      filePath: path.join(customTranscriptDir, "session-custom-store.jsonl"),
       messages: ["custom store history"],
     });
 
@@ -269,16 +268,14 @@ describe("loadCliSessionHistoryMessages", () => {
         sessionKey: "agent:main:main",
         agentId: "main",
         config: {
-          session: {
-            store: storePath,
-          },
+          session: {},
         },
       });
       expect(history).toHaveLength(1);
       expectMessageFields(history[0], { role: "user", content: "custom store history" });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
-      fs.rmSync(customStoreDir, { recursive: true, force: true });
+      fs.rmSync(customTranscriptDir, { recursive: true, force: true });
     }
   });
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, resolveStorePath, saveSessionStore } from "../config/sessions.js";
+import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -39,6 +39,26 @@ import { agentsDeleteCommand } from "./agents.js";
 
 const runtime = createTestRuntime();
 
+function readSessionRowsForAgent(
+  agentId: string,
+): Record<string, { sessionId: string; updatedAt: number }> {
+  return Object.fromEntries(
+    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      { sessionId: entry.sessionId, updatedAt: entry.updatedAt },
+    ]),
+  );
+}
+
+function writeSessionRowsForAgent(
+  agentId: string,
+  sessions: Record<string, { sessionId: string; updatedAt: number }>,
+): void {
+  for (const [sessionKey, entry] of Object.entries(sessions)) {
+    upsertSessionEntry({ agentId, sessionKey, entry });
+  }
+}
+
 async function arrangeAgentsDeleteTest(params: {
   stateDir: string;
   cfg: OpenClawConfig;
@@ -46,8 +66,7 @@ async function arrangeAgentsDeleteTest(params: {
   sessions: Record<string, { sessionId: string; updatedAt: number }>;
 }) {
   const deletedAgentId = params.deletedAgentId ?? "ops";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: deletedAgentId });
-  await saveSessionStore(storePath, params.sessions);
+  writeSessionRowsForAgent(deletedAgentId, params.sessions);
   await fs.mkdir(path.join(params.stateDir, `workspace-${deletedAgentId}`), { recursive: true });
   await fs.mkdir(path.join(params.stateDir, "agents", deletedAgentId, "agent"), {
     recursive: true,
@@ -61,14 +80,14 @@ async function arrangeAgentsDeleteTest(params: {
     resolved: params.cfg,
   });
 
-  return storePath;
+  return deletedAgentId;
 }
 
 function expectSessionStore(
-  storePath: string,
+  agentId: string,
   sessions: Record<string, { sessionId: string; updatedAt: number }>,
 ) {
-  expect(loadSessionStore(storePath)).toEqual(sessions);
+  expect(readSessionRowsForAgent(agentId)).toEqual(sessions);
 }
 
 function readJsonLogs(): Array<Record<string, unknown>> {
@@ -209,39 +228,6 @@ describe("agents delete command", () => {
           updatedAt: now + 3,
         },
         global: { sessionId: "sess-global", updatedAt: now + 4 },
-      });
-    });
-  });
-
-  it("preserves shared-store legacy default keys when deleting another agent", async () => {
-    await withStateDirEnv("openclaw-agents-delete-shared-store-", async ({ stateDir }) => {
-      const now = Date.now();
-      const cfg: OpenClawConfig = {
-        session: { store: path.join(stateDir, "sessions.json") },
-        agents: {
-          list: [
-            { id: "main", default: true, workspace: path.join(stateDir, "workspace-main") },
-            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
-          ],
-        },
-      };
-      const storePath = await arrangeAgentsDeleteTest({
-        stateDir,
-        cfg,
-        sessions: {
-          main: { sessionId: "sess-main", updatedAt: now + 1 },
-          "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: now + 2 },
-          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 3 },
-          "agent:ops:quietchat:direct:u2": { sessionId: "sess-ops-direct", updatedAt: now + 4 },
-        },
-      });
-
-      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expectSessionStore(storePath, {
-        main: { sessionId: "sess-main", updatedAt: now + 1 },
-        "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: now + 2 },
       });
     });
   });

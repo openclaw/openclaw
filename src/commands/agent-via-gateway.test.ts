@@ -44,7 +44,6 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
       },
     },
     session: {
-      store: storePath,
       mainKey: "main",
       ...overrides?.session,
     },
@@ -57,7 +56,7 @@ async function withTempStore(
   overrides?: Partial<OpenClawConfig>,
 ) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-cli-"));
-  const store = path.join(dir, "sessions.json");
+  const store = path.join(dir, "agents", "main", "sessions", "sessions.json");
   mockConfig(store, overrides);
   try {
     await fn({ dir, store });

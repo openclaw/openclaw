@@ -1,6 +1,9 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import type { SessionEntry } from "../../config/sessions.js";
+import {
+  getSessionEntry,
+  resolveAgentIdFromSessionKey,
+  type SessionEntry,
+  upsertSessionEntry,
+} from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 
 export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
@@ -32,11 +35,17 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
   } as unknown as FollowupRun;
 }
 
-export async function writeTestSessionStore(
-  storePath: string,
-  sessionKey: string,
-  entry: SessionEntry,
-): Promise<void> {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }, null, 2), "utf8");
+export async function writeTestSessionRow(sessionKey: string, entry: SessionEntry): Promise<void> {
+  upsertSessionEntry({
+    agentId: resolveAgentIdFromSessionKey(sessionKey),
+    sessionKey,
+    entry,
+  });
+}
+
+export function readTestSessionRow(sessionKey: string): SessionEntry | undefined {
+  return getSessionEntry({
+    agentId: resolveAgentIdFromSessionKey(sessionKey),
+    sessionKey,
+  });
 }

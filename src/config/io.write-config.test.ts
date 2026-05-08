@@ -488,7 +488,7 @@ describe("config io write", () => {
         homedir: () => home,
         logger: { warn, error: vi.fn() },
       });
-      await fs.writeFile(path.join(unwritableStatePath, "plugins"), "not a directory", "utf-8");
+      await fs.writeFile(path.join(unwritableStatePath, "state"), "not a directory", "utf-8");
 
       const loadedConfig = io.loadConfig();
       expectInstallRecord(loadedConfig.plugins?.installs?.demo, {
@@ -612,7 +612,7 @@ describe("config io write", () => {
       await io.writeConfigFile({
         agents: { list: [{ id: "main", default: true }] },
         gateway: { mode: "local" },
-        session: { mainKey: "main", store: path.join(overrideDir, "sessions.json") },
+        session: { mainKey: "main" },
       });
 
       const livePersisted = JSON.parse(await fs.readFile(liveConfigPath, "utf-8")) as {
@@ -623,9 +623,9 @@ describe("config io write", () => {
       const overridePersisted = JSON.parse(
         await fs.readFile(path.join(overrideDir, "openclaw.json"), "utf-8"),
       ) as {
-        session?: { store?: unknown };
+        session?: { mainKey?: unknown };
       };
-      expect(overridePersisted.session?.store).toBe(path.join(overrideDir, "sessions.json"));
+      expect(overridePersisted.session).toEqual({ mainKey: "main" });
     });
   });
 

@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
@@ -11,6 +13,7 @@ import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import type { VirtualAgentFs, VirtualAgentFsEntry } from "./filesystem/agent-filesystem.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
@@ -62,20 +65,17 @@ async function writeSessionStore(
   agentId: string,
   entries: Record<string, unknown>,
 ) {
-  await fs.writeFile(
-    storeTemplate.replaceAll("{agentId}", agentId),
-    JSON.stringify(entries, null, 2),
-    "utf-8",
-  );
+  void storeTemplate;
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
+  }
 }
 
 function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
   return createOpenClawCodingTools({
     sessionKey,
     config: {
-      session: {
-        store: storeTemplate,
-      },
+      session: {},
       agents: {
         defaults: {
           subagents: {
@@ -86,6 +86,11 @@ function createToolsForStoredSession(storeTemplate: string, sessionKey: string) 
     },
   });
 }
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  vi.unstubAllEnvs();
+});
 
 function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCodingTools>) {
   const names = new Set(tools.map((tool) => tool.name));
@@ -856,7 +861,15 @@ describe("createOpenClawCodingTools", () => {
   it("uses stored spawnDepth to apply leaf tool policy for flat depth-2 session keys", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-depth-policy-"));
     try {
-      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
+      const storeTemplate = path.join(
+        tmpDir,
+        ".openclaw",
+        "agents",
+        "{agentId}",
+        "sessions",
+        "sessions.json",
+      );
       await writeSessionStore(storeTemplate, "main", {
         "agent:main:subagent:flat": {
           sessionId: "session-flat-depth-2",
@@ -875,7 +888,15 @@ describe("createOpenClawCodingTools", () => {
   it("applies subagent tool policy to ACP children spawned under a subagent envelope", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-subagent-policy-"));
     try {
-      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
+      const storeTemplate = path.join(
+        tmpDir,
+        ".openclaw",
+        "agents",
+        "{agentId}",
+        "sessions",
+        "sessions.json",
+      );
       await writeSessionStore(storeTemplate, "main", {
         "agent:main:acp:child": {
           sessionId: "session-acp-child",
@@ -925,7 +946,15 @@ describe("createOpenClawCodingTools", () => {
   it("applies leaf tool policy for cross-agent subagent sessions when spawnDepth is missing", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cross-agent-subagent-"));
     try {
-      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
+      const storeTemplate = path.join(
+        tmpDir,
+        ".openclaw",
+        "agents",
+        "{agentId}",
+        "sessions",
+        "sessions.json",
+      );
       await writeSessionStore(storeTemplate, "main", {
         "agent:main:subagent:parent": {
           sessionId: "session-main-parent",
