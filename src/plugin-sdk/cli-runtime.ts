@@ -1,6 +1,7 @@
 // Public CLI/output helpers for plugins that share terminal-facing command behavior.
 
 export * from "../cli/command-format.js";
+export { addGatewayClientOptions } from "../cli/gateway-rpc.js";
 export { inheritOptionFromParent } from "../cli/command-options.js";
 export { runCommandWithRuntime } from "../cli/cli-utils.js";
 export { formatHelpExamples } from "../cli/help-format.js";
@@ -15,5 +16,6 @@ export { shouldEagerRegisterSubcommands } from "../cli/command-registration-poli
 export * from "../cli/wait.js";
 export { note } from "../terminal/note.js";
 export { stylePromptTitle } from "../terminal/prompt-style.js";
+export { formatDocsLink } from "../terminal/links.js";
 export { theme } from "../terminal/theme.js";
 export * from "../version.js";
