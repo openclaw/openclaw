@@ -123,6 +123,8 @@ describe("runHeartbeatOnce commitments", () => {
         ) => {
           expect(ctx.Body).toContain("Due inferred follow-up commitments");
           expect(ctx.Body).toContain("How did the interview go?");
+          expect(ctx.Body).toContain("Do not include analysis, reasoning, hidden thought");
+          expect(ctx.Body).toContain("Never start a visible reply with think");
           expect(ctx.Body).not.toContain(params?.sourceUserText ?? "I have an interview tomorrow.");
           expect(ctx.Body).not.toContain(
             params?.sourceAssistantText ?? "Good luck, I hope it goes well.",
@@ -148,10 +150,18 @@ describe("runHeartbeatOnce commitments", () => {
           nowMs: () => nowMs,
         },
       });
+      const sessionStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { sessionFile?: string }
+      >;
+      const transcript = sessionStore[sessionKey]?.sessionFile
+        ? await fs.readFile(sessionStore[sessionKey].sessionFile, "utf-8").catch(() => "")
+        : "";
 
       return {
         result,
         sendTelegram,
+        transcript,
         store: await loadCommitmentStore(),
       };
     });
@@ -368,10 +378,12 @@ describe("runHeartbeatOnce commitments", () => {
   });
 
   it("delivers due commitments to the original scope when heartbeat target is last", async () => {
-    const { result, sendTelegram, store } = await setupCommitmentCase();
+    const { result, sendTelegram, store, transcript } = await setupCommitmentCase();
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
+    expect(transcript).toContain("delivery-mirror");
+    expect(transcript).toContain("How did the interview go?");
     expect(store.commitments[0]).toMatchObject({
       id: "cm_interview",
       status: "sent",

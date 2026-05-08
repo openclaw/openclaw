@@ -1621,6 +1621,7 @@ async function deliverOutboundPayloadsCore(
         agentId: params.mirror.agentId,
         sessionKey: params.mirror.sessionKey,
         text: mirrorText,
+        storePath: params.mirror.storePath,
         idempotencyKey: params.mirror.idempotencyKey,
         config: params.cfg,
       });
