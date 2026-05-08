@@ -74,7 +74,7 @@ describe("active-memory plugin", () => {
       plugins: {
         ...plugins,
         slots: {
-          ...((plugins?.slots as Record<string, unknown> | undefined) ?? {}),
+          ...(plugins?.slots as Record<string, unknown> | undefined),
           memory,
         },
       },
