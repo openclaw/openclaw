@@ -500,23 +500,27 @@ describe("scoped vitest configs", () => {
   });
 
   it("normalizes mattermost extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionMattermostConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionMattermostConfig.test?.include).toEqual(["mattermost/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionMattermostConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["mattermost/**/*.test.ts"]);
   });
 
   it("normalizes msteams extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionMsTeamsConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionMsTeamsConfig.test?.include).toEqual(["msteams/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionMsTeamsConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["msteams/**/*.test.ts"]);
   });
 
   it("normalizes telegram extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionTelegramConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionTelegramConfig.test?.include).toEqual(["telegram/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionTelegramConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["telegram/**/*.test.ts"]);
   });
 
   it("normalizes whatsapp extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionWhatsAppConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionWhatsAppConfig.test?.include).toEqual(["whatsapp/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionWhatsAppConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["whatsapp/**/*.test.ts"]);
   });
 
   it("normalizes zalo extension include patterns relative to the scoped dir", () => {
