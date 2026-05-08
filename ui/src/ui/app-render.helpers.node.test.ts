@@ -654,6 +654,7 @@ describe("handleChatManualRefresh", () => {
     const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
     Object.defineProperty(globalThis, "requestAnimationFrame", {
       configurable: true,
+      writable: true,
       value: vi.fn((callback: FrameRequestCallback) => {
         animationFrame.callback = callback;
         return 1;
@@ -698,10 +699,15 @@ describe("handleChatManualRefresh", () => {
       expect(state.chatManualRefreshInFlight).toBe(false);
       expect(state.chatNewMessagesBelow).toBe(false);
     } finally {
-      Object.defineProperty(globalThis, "requestAnimationFrame", {
-        configurable: true,
-        value: previousRequestAnimationFrame,
-      });
+      if (previousRequestAnimationFrame === undefined) {
+        Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+      } else {
+        Object.defineProperty(globalThis, "requestAnimationFrame", {
+          configurable: true,
+          writable: true,
+          value: previousRequestAnimationFrame,
+        });
+      }
     }
   });
 });
