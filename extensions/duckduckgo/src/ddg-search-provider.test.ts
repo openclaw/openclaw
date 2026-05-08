@@ -47,7 +47,6 @@ describe("duckduckgo web search provider", () => {
     expect(provider.requiresCredential).toBe(false);
     expect(provider.credentialPath).toBe("");
     const pluginEntry = applied.plugins?.entries?.duckduckgo;
-    expect(pluginEntry).toBeDefined();
     if (!pluginEntry) {
       throw new Error("expected DuckDuckGo plugin entry");
     }

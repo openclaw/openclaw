@@ -266,7 +266,6 @@ describe("inworldTTS", () => {
     expect(request.url).toBe("https://api.inworld.ai/tts/v1/voice:stream");
     expect(request.auditContext).toBe("inworld-tts");
     expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
-    expect(request.init).toBeDefined();
     if (!request.init) {
       throw new Error("expected Inworld TTS request init");
     }

@@ -30,7 +30,6 @@ type ReadabilityResult = Awaited<
 >;
 
 function requireReadabilityResult(result: ReadabilityResult): NonNullable<ReadabilityResult> {
-  expect(result).toBeDefined();
   if (!result) {
     throw new Error("expected readability extraction result");
   }
