@@ -310,18 +310,15 @@ describe("renderQuickSettings", () => {
       const input = Array.from(container.querySelectorAll('input[type="file"]')).find(
         (node) => !node.closest(".qs-identity-card--assistant"),
       ) as HTMLInputElement | null;
-      expect(input).not.toBeNull();
-      if (!input) {
-        return;
-      }
+      expect(input).toBeInstanceOf(HTMLInputElement);
 
       const file = new File([new Uint8Array(1_500_001)], "avatar.png", { type: "image/png" });
-      Object.defineProperty(input, "files", {
+      Object.defineProperty(input!, "files", {
         configurable: true,
         value: [file],
       });
 
-      input.dispatchEvent(new Event("change"));
+      input!.dispatchEvent(new Event("change"));
 
       expect(fileReader).not.toHaveBeenCalled();
       expect(onUserAvatarChange).not.toHaveBeenCalled();
