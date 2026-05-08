@@ -709,6 +709,16 @@ export const pl: TranslationMap = {
       today: "Dzisiaj",
       last7d: "7d",
       last30d: "30d",
+      last90d: "90d",
+      last1y: "1y",
+      all: "Wszystkie",
+    },
+    scope: {
+      instance: "Current instance",
+      instanceHint: "Show only the active session id for each logical session.",
+      family: "Historical lineage",
+      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyIncluded: "Historical lineage includes {count} session instances.",
     },
     filters: {
       title: "Filtry",
