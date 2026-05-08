@@ -1,0 +1,4 @@
+interface:
+  display_name: "Personal API"
+  short_description: "Scaffold your Obsidian vault as an AI identity layer"
+  default_prompt: "Read ME.md and AGENT.md to understand my context, then proceed."
