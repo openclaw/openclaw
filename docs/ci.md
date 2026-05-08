@@ -277,7 +277,7 @@ Package Acceptance has bounded legacy-compatibility windows for already-publishe
 
 - known private QA entries in `dist/postinstall-inventory.json` may point at tarball-omitted files;
 - `doctor-switch` may skip the `gateway install --wrapper` persistence subcase when the package does not expose that flag;
-- `update-channel-switch` may prune missing `pnpm.patchedDependencies` from the tarball-derived fake git fixture and may log missing persisted `update.channel`;
+- `update-channel-switch` may prune missing pnpm `patchedDependencies` from the tarball-derived fake git fixture and may log missing persisted `update.channel`;
 - plugin smokes may read legacy install-record locations or accept missing marketplace install-record persistence;
 - `plugin-update` may allow config metadata migration while still requiring the install record and no-reinstall behavior to stay unchanged.
 

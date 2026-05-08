@@ -3,10 +3,11 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
-const packageJsonPath = join(repoRoot, "package.json");
+const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
@@ -140,11 +141,11 @@ describe("Dockerfile", () => {
 
   it("keeps package manager patch files in runtime images", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-      pnpm?: { patchedDependencies?: Record<string, string> };
+    const pnpmWorkspace = YAML.parse(await readFile(pnpmWorkspacePath, "utf8")) as {
+      patchedDependencies?: Record<string, string>;
     };
 
-    expect(Object.keys(packageJson.pnpm?.patchedDependencies ?? {})).not.toHaveLength(0);
+    expect(Object.keys(pnpmWorkspace.patchedDependencies ?? {})).not.toHaveLength(0);
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
