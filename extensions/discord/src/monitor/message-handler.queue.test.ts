@@ -294,6 +294,45 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
+  it("sends early typing for accepted guild messages when group replies are automatic", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+    preflightDiscordMessageMock.mockResolvedValue(
+      createAcceptedDmPreflightContext({
+        cfg: {
+          ...createPreflightContext().cfg,
+          messages: {
+            inbound: {
+              debounceMs: 0,
+            },
+            groupChat: {
+              visibleReplies: "automatic",
+            },
+          },
+        },
+        isDirectMessage: false,
+        isGuildMessage: true,
+        messageChannelId: "guild-channel",
+      }),
+    );
+    processDiscordMessageMock.mockResolvedValue(undefined);
+
+    const handler = createDiscordMessageHandler(createDiscordHandlerParams());
+    await expect(
+      handler(createMessageData("m-guild-automatic", "guild-channel") as never, {} as never),
+    ).resolves.toBeUndefined();
+
+    await flushQueueWork();
+
+    expect(earlyTypingMocks.sendTyping).toHaveBeenCalledWith({
+      rest: { kind: "discord-rest" },
+      channelId: "guild-channel",
+    });
+    expect(earlyTypingMocks.sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
+      processDiscordMessageMock.mock.invocationCallOrder[0],
+    );
+  });
+
   it("resets busy counters when the handler is created", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();

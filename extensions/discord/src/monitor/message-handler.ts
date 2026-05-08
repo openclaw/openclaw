@@ -2,6 +2,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-message";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { createDiscordRestClient } from "../client.js";
@@ -68,14 +69,25 @@ function shouldSendAcceptedDiscordTypingCue(ctx: DiscordMessagePreflightContext)
   if (ctx.abortSignal?.aborted) {
     return false;
   }
-  if (!ctx.isDirectMessage || ctx.isGuildMessage || ctx.isGroupDm) {
-    return false;
-  }
-  if (!ctx.messageText.trim()) {
-    return false;
-  }
   const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
-  return configuredTypingMode === undefined || configuredTypingMode === "instant";
+  if (configuredTypingMode !== undefined && configuredTypingMode !== "instant") {
+    return false;
+  }
+  if (ctx.isDirectMessage && !ctx.isGuildMessage && !ctx.isGroupDm) {
+    return Boolean(ctx.messageText?.trim());
+  }
+  if (!ctx.isGuildMessage) {
+    return false;
+  }
+  if (
+    resolveChannelMessageSourceReplyDeliveryMode({
+      cfg: ctx.cfg,
+      ctx: { ChatType: "channel" },
+    }) !== "automatic"
+  ) {
+    return false;
+  }
+  return Boolean(ctx.messageText?.trim());
 }
 
 function queueAcceptedDiscordTypingCue(ctx: DiscordMessagePreflightContext): void {
