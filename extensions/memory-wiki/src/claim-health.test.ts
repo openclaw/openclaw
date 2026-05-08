@@ -59,6 +59,6 @@ describe("buildPageContradictionClusters", () => {
 
     expect(clusters).toHaveLength(2);
     expect(clusters.map((cluster) => cluster.key).toSorted()).toEqual(["किताब", "कीताब"]);
-    expect(clusters.every((cluster) => cluster.entries)).toBe(true);
+    expect(clusters.filter((cluster) => !cluster.entries)).toEqual([]);
   });
 });
