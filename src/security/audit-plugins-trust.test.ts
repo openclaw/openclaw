@@ -170,7 +170,6 @@ describe("security audit install metadata findings", () => {
     checkId: string,
   ) => {
     const finding = findings.find((entry) => entry.checkId === checkId);
-    expect(finding).toBeDefined();
     if (!finding) {
       throw new Error(`Expected ${checkId} finding`);
     }

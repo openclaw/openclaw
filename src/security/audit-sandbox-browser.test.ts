@@ -19,7 +19,6 @@ function requireFinding(
   findings: Array<{ checkId: string; severity: string; detail: string }>,
 ) {
   const finding = findings.find((entry) => entry.checkId === checkId);
-  expect(finding).toBeDefined();
   if (!finding) {
     throw new Error(`Expected ${checkId} finding`);
   }
