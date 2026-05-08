@@ -140,7 +140,7 @@ export async function removeWorkspaceDirs(
   }
 }
 
-export async function listAgentSessionStatePaths(stateDir: string): Promise<string[]> {
+export async function listAgentRuntimeStatePaths(stateDir: string): Promise<string[]> {
   const root = path.join(stateDir, "agents");
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });

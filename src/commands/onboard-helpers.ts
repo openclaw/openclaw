@@ -22,7 +22,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import { listAgentSessionStatePaths } from "./cleanup-utils.js";
+import { listAgentRuntimeStatePaths } from "./cleanup-utils.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
@@ -212,7 +212,7 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     return;
   }
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  for (const target of await listAgentSessionStatePaths(resolveStateDir())) {
+  for (const target of await listAgentRuntimeStatePaths(resolveStateDir())) {
     await moveToTrash(target, runtime);
   }
   if (scope === "full") {
