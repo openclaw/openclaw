@@ -11,6 +11,14 @@ import {
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
 
+function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
+  expect(config.test).toBeDefined();
+  if (!config.test) {
+    throw new Error("expected unit vitest test config");
+  }
+  return config.test as NonNullable<T["test"]>;
+}
+
 afterEach(() => {
   patternFiles.cleanup();
 });
@@ -72,14 +80,16 @@ describe("loadExtraExcludePatternsFromEnv", () => {
 describe("unit vitest config", () => {
   it("defaults unit tests to the non-isolated runner", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(unitConfig.test?.isolate).toBe(false);
-    expect(normalizeConfigPath(unitConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("keeps acp and ui tests out of the generic unit lane", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(unitConfig.test?.exclude).toEqual(expect.arrayContaining(["extensions/**", "test/**"]));
-    expect(unitConfig.test?.include).not.toEqual(
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.exclude).toEqual(expect.arrayContaining(["extensions/**", "test/**"]));
+    expect(testConfig.include).not.toEqual(
       expect.arrayContaining([
         "ui/src/ui/app-chat.test.ts",
         "ui/src/ui/chat/**/*.test.ts",
@@ -95,8 +105,9 @@ describe("unit vitest config", () => {
         argv: ["node", "vitest", "run", "src/config/channel-configured.test.ts"],
       },
     );
-    expect(unitConfig.test?.include).toEqual(["src/config/channel-configured.test.ts"]);
-    expect(unitConfig.test?.passWithNoTests).toBe(true);
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.include).toEqual(["src/config/channel-configured.test.ts"]);
+    expect(testConfig.passWithNoTests).toBe(true);
   });
 
   it("adds the OpenClaw runtime setup hooks on top of the base setup", () => {
