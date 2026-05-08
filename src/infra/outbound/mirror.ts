@@ -4,6 +4,7 @@ export type OutboundMirror = {
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
+  storePath?: string;
 };
 
 export type DeliveryMirror = OutboundMirror & {
