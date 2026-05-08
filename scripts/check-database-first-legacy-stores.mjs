@@ -132,7 +132,6 @@ const allowedExactPaths = new Set([
   "extensions/skill-workshop/src/state-migrations.ts",
   "extensions/qqbot/src/state-migrations.ts",
   "extensions/telegram/src/state-migrations.ts",
-  "src/agents/sandbox/registry.ts",
   "src/infra/state-migrations.ts",
   "src/plugin-state/plugin-state-store.sqlite.ts",
   "src/tasks/task-flow-registry.store.sqlite.ts",
