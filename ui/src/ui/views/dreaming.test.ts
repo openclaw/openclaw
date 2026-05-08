@@ -294,9 +294,11 @@ describe("dreaming view", () => {
       content: "# ChatGPT Export: BA flight receipts process",
     });
     const container = renderInto(buildProps({ onOpenWikiPage }));
-    container
-      .querySelectorAll<HTMLButtonElement>(".dreams-diary__insight-actions .btn")[1]
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const openSourceButton = container.querySelectorAll<HTMLButtonElement>(
+      ".dreams-diary__insight-actions .btn",
+    )[1];
+    expect(openSourceButton).toBeInstanceOf(HTMLButtonElement);
+    openSourceButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
     expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
     setDreamDiarySubTab("dreams");
@@ -322,9 +324,11 @@ describe("dreaming view", () => {
     });
     rerender();
 
-    container
-      .querySelectorAll<HTMLButtonElement>(".dreams-diary__insight-actions .btn")[1]
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const openSourceButton = container.querySelectorAll<HTMLButtonElement>(
+      ".dreams-diary__insight-actions .btn",
+    )[1];
+    expect(openSourceButton).toBeInstanceOf(HTMLButtonElement);
+    openSourceButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
     await Promise.resolve();
 
@@ -332,9 +336,11 @@ describe("dreaming view", () => {
       "6001 total lines",
     );
 
-    container
-      .querySelector<HTMLButtonElement>(".dreams-diary__preview-header .btn")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const closePreviewButton = container.querySelector<HTMLButtonElement>(
+      ".dreams-diary__preview-header .btn",
+    );
+    expect(closePreviewButton).toBeInstanceOf(HTMLButtonElement);
+    closePreviewButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
   });
@@ -368,9 +374,11 @@ describe("dreaming view", () => {
     expect(container.textContent).toContain("Memory Wiki is not enabled");
     expect(container.textContent).toContain("plugins.entries.memory-wiki.enabled = true");
 
-    container
-      .querySelector<HTMLButtonElement>(".dreams-diary__empty-actions .btn")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const configButton = container.querySelector<HTMLButtonElement>(
+      ".dreams-diary__empty-actions .btn",
+    );
+    expect(configButton).toBeInstanceOf(HTMLButtonElement);
+    configButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onOpenConfig).toHaveBeenCalledTimes(1);
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
