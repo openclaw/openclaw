@@ -26,7 +26,6 @@ type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
 
 function requireCapabilityOutput(result: CapabilityResult, index: number) {
   const output = result.outputs[index];
-  expect(output).toBeDefined();
   if (!output) {
     throw new Error(`expected media-understanding output at index ${index}`);
   }

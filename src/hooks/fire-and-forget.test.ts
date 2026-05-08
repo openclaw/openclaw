@@ -3,7 +3,6 @@ import { fireAndForgetBoundedHook, fireAndForgetHook } from "./fire-and-forget.j
 
 function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
   const message = logger.mock.calls[0]?.[0];
-  expect(message).toBeDefined();
   if (typeof message !== "string") {
     throw new Error("expected string log message");
   }

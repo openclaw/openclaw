@@ -12,7 +12,6 @@ import {
 const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
-  expect(config.test).toBeDefined();
   if (!config.test) {
     throw new Error("expected unit vitest test config");
   }

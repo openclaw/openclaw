@@ -24,7 +24,6 @@ import { generateSlugViaLLM } from "./llm-slug-generator.js";
 
 function requireFirstRunOptions(): unknown {
   const options = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
-  expect(options).toBeDefined();
   if (!options) {
     throw new Error("expected embedded Pi agent run options");
   }

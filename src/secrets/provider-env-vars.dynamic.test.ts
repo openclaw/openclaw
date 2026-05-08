@@ -65,7 +65,6 @@ const pluginRegistryMocks = vi.hoisted(() => {
 
 function requireLastMetadataSnapshotCall(): unknown[] {
   const call = pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.at(-1);
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error("expected plugin metadata snapshot call");
   }

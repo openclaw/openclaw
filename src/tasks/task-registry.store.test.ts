@@ -23,7 +23,6 @@ const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 function requireFirstUpsertParams(upsertTaskWithDeliveryState: ReturnType<typeof vi.fn>): unknown {
   const params = upsertTaskWithDeliveryState.mock.calls[0]?.[0];
-  expect(params).toBeDefined();
   if (!params) {
     throw new Error("expected task upsert params");
   }

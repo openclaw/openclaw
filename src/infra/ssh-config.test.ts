@@ -48,7 +48,6 @@ const spawnMock = vi.mocked(spawn);
 
 function requireSpawnArgs(index: number): string[] {
   const args = spawnMock.mock.calls[index]?.[1] as string[] | undefined;
-  expect(args).toBeDefined();
   if (!args) {
     throw new Error("expected ssh spawn args");
   }
