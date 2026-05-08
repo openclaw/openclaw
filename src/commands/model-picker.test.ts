@@ -1352,6 +1352,29 @@ describe("applyModelAllowlist", () => {
     });
   });
 
+  it("normalizes retired Google Gemini refs before writing selected models", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3.1-pro-preview": { alias: "gemini" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelAllowlist(config, [
+      "google/gemini-3-pro-preview",
+      "google-gemini-cli/gemini-3-pro-preview",
+      "openrouter/google/gemini-3-pro-preview",
+    ]);
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      "google-gemini-cli/gemini-3.1-pro-preview": {},
+      "openrouter/google/gemini-3-pro-preview": {},
+    });
+  });
+
   it("preserves entries outside scoped allowlist updates", () => {
     const config = {
       agents: {
@@ -1453,6 +1476,28 @@ describe("applyModelFallbacksFromSelection", () => {
     const next = applyModelFallbacksFromSelection(config, ["anthropic/claude-opus-4-6"]);
     expect(next.agents?.defaults?.model).toEqual({
       primary: "anthropic/claude-opus-4-6",
+    });
+  });
+
+  it("normalizes retired Google Gemini refs in selected fallbacks before writing config", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["google/gemini-3-pro-preview"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, [
+      "openai/gpt-5.5",
+      "google/gemini-3-pro-preview",
+    ]);
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
     });
   });
 

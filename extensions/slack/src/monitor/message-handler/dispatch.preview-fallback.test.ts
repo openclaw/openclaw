@@ -904,7 +904,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expect(requireCapturedItemEventHandler()).toEqual(expect.any(Function));
+    await requireCapturedItemEventHandler()({ progressText: "hidden progress" });
   });
 
   it("does not create a blank Slack progress draft when label and lines are disabled", async () => {
@@ -943,7 +943,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expect(requireCapturedItemEventHandler()).toEqual(expect.any(Function));
+    await requireCapturedItemEventHandler()({ progressText: "hidden partial progress" });
   });
 
   it("starts native streams in the first-reply thread for top-level channel messages", async () => {

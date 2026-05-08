@@ -2638,7 +2638,9 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     const reactionHandler = onSpy.mock.calls.find((call) => call[0] === "message_reaction");
     expect(reactionHandler?.[0]).toBe("message_reaction");
-    expect(reactionHandler?.[1]).toEqual(expect.any(Function));
+    if (typeof reactionHandler?.[1] !== "function") {
+      throw new Error("expected message_reaction handler");
+    }
   });
 
   it("enqueues system event for reaction", async () => {
