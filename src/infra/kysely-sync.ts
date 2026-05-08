@@ -49,7 +49,7 @@ export function executeCompiledSqliteQuerySync<Row>(
 
 export function executeSqliteQuerySync<Row>(
   db: DatabaseSync,
-  query: CompilableQuery,
+  query: CompilableQuery<Row>,
 ): QueryResult<Row> {
   return executeCompiledSqliteQuerySync<Row>(db, query.compile());
 }
