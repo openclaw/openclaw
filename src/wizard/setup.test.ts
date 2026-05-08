@@ -324,7 +324,7 @@ describe("runSetupWizard", () => {
     return dir;
   }
 
-  it("does not crash when preferred-provider lookup sees a provider without an id", async () => {
+  it("skips provider entries without an id during preferred-provider lookup", async () => {
     setupChannels.mockClear();
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",

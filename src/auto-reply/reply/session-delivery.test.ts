@@ -58,12 +58,11 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
       sessionKey: "agent:samantha:main",
       isInterSession: true,
     });
-    // No external route existed — falls through to normal resolution (webchat or undefined)
-    // The important thing is it does NOT throw and returns a defined or undefined value.
+    // No external route existed — falls through to normal resolution (webchat or undefined).
     expect(result === "webchat" || result === undefined).toBe(true);
   });
 
-  it("inter-session on session with no persisted lastTo does not crash", () => {
+  it("inter-session on session with no persisted lastTo preserves session route", () => {
     const result = resolveLastToRaw({
       originatingChannelRaw: "webchat",
       originatingToRaw: "session:somekey",

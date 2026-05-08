@@ -27,7 +27,7 @@ const opsRegressionFixtures = setupCronRegressionFixtures({
 });
 
 describe("cron service ops regressions", () => {
-  it("does not crash startup when a loaded job is missing state", async () => {
+  it("repairs missing job state during startup", async () => {
     const scheduledAt = Date.now() + 60_000;
     const store = opsRegressionFixtures.makeStorePath();
     const state = createCronServiceState({

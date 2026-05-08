@@ -148,13 +148,12 @@ describe("drainPendingDeliveries for reconnect", () => {
     expect(after.lastError).toBe("transient failure");
   });
 
-  it("does not throw if delivery fails during drain", async () => {
+  it("records retry state if delivery fails during drain", async () => {
     const log = createRecoveryLog();
     const deliver = createTransientFailureDeliver();
 
     await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
 
-    // Should not throw
     await expect(
       drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir }),
     ).resolves.toBeUndefined();
