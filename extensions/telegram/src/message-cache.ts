@@ -133,9 +133,7 @@ function parsePersistedNode(value: unknown): TelegramCachedMessageNode | null {
     return null;
   }
   const threadId = Number(readOptionalString(value, "threadId"));
-  return normalizeMessageNode(value.sourceMessage, {
-    ...(Number.isFinite(threadId) ? { threadId } : {}),
-  });
+  return normalizeMessageNode(value.sourceMessage, Number.isFinite(threadId) ? { threadId } : {});
 }
 
 function readPersistedMessages(filePath: string, maxMessages: number) {
