@@ -30,7 +30,6 @@ vi.mock("../session-utils.js", async () => {
     ...original,
     loadSessionEntry: () => ({
       cfg: {},
-      storePath: path.join(path.dirname(sessionEntryState.transcriptPath), "sessions.json"),
       entry: {
         sessionId: sessionEntryState.sessionId,
         sessionFile: sessionEntryState.transcriptPath,

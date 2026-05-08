@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 
 const configMocks = vi.hoisted(() => ({
-  storePath: "",
   workspaceDir: "",
   getRuntimeConfig: vi.fn(() => ({
     agents: {
@@ -44,13 +43,10 @@ import { agentHandlers } from "./agent.js";
 
 describe("agent handler session create events", () => {
   let tempDir: string;
-  let storePath: string;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-create-event-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    configMocks.storePath = storePath;
     configMocks.workspaceDir = tempDir;
     configMocks.getRuntimeConfig.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockClear();

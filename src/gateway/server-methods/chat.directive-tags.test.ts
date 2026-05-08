@@ -120,7 +120,6 @@ vi.mock("../session-utils.js", async () => {
           mainKey: mockState.mainSessionKey,
         },
       },
-      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
       entry: {
         sessionId: mockState.sessionId,
         sessionFile: mockState.transcriptPath,
@@ -2070,7 +2069,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         (update.message as { role?: unknown }).role === "user",
     );
     expect(userUpdate).toMatchObject({
-      sessionFile: expect.stringMatching(/sess\.jsonl$/),
+      sessionFile: expect.stringMatching(/sess-\d+\.jsonl$/),
       sessionKey: "main",
       message: {
         role: "user",
@@ -2212,7 +2211,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           (update.message as { role?: unknown }).role === "user",
       );
       expect(userUpdate).toMatchObject({
-        sessionFile: expect.stringMatching(/sess\.jsonl$/),
+        sessionFile: expect.stringMatching(/sess-\d+\.jsonl$/),
         sessionKey: "main",
       });
       expect(mockState.savedMediaCalls).toEqual([
@@ -3391,7 +3390,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         (update.message as { role?: unknown }).role === "user",
     );
     expect(userUpdate).toMatchObject({
-      sessionFile: expect.stringMatching(/sess\.jsonl$/),
+      sessionFile: expect.stringMatching(/sess-\d+\.jsonl$/),
       sessionKey: "main",
       message: {
         role: "user",
@@ -3424,7 +3423,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           (update.message as { role?: unknown }).role === "user",
       );
       expect(userUpdate).toMatchObject({
-        sessionFile: expect.stringMatching(/sess\.jsonl$/),
+        sessionFile: expect.stringMatching(/sess-\d+\.jsonl$/),
         sessionKey: "main",
         message: {
           role: "user",
