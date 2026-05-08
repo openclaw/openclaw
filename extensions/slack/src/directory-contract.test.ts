@@ -93,7 +93,7 @@ describe("Slack directory contract", () => {
       limit: 2,
     });
     expect(peers).toHaveLength(2);
-    expect(peers.every((entry) => entry.id.startsWith("user:u"))).toBe(true);
+    expect(peers.filter((entry) => !entry.id.startsWith("user:u"))).toEqual([]);
   });
 
   it("resolves current Slack account identity from live auth", async () => {

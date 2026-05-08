@@ -290,7 +290,7 @@ describe("handleSlackAction", () => {
         text: expect.stringContaining("/tmp/openclaw-media/report.pdf"),
       }),
     );
-    expect(result.content.some((entry) => entry.type === "image")).toBe(false);
+    expect(result.content.filter((entry) => entry.type === "image")).toEqual([]);
     expect(result.details).toEqual(
       expect.objectContaining({
         ok: true,
