@@ -122,7 +122,12 @@ describe("security fix", () => {
   ) => {
     const whatsapp = channels.whatsapp;
     const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
-    expect(accounts[accountId]?.groupPolicy).toBe(expectedPolicy);
+    const account = accounts[accountId];
+    expect(account).toBeDefined();
+    if (!account) {
+      throw new Error(`Expected WhatsApp account ${accountId}`);
+    }
+    expect(account.groupPolicy).toBe(expectedPolicy);
     return accounts;
   };
 
