@@ -24,10 +24,7 @@ import {
   parseModelRef,
 } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import {
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptsDirForAgent,
-} from "../../config/sessions/paths.js";
+import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
@@ -470,12 +467,11 @@ async function probeTarget(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  sessionDir: string;
   target: AuthProbeTarget;
   timeoutMs: number;
   maxTokens: number;
 }): Promise<AuthProbeResult> {
-  const { cfg, agentId, agentDir, workspaceDir, sessionDir, target, timeoutMs, maxTokens } = params;
+  const { cfg, agentId, agentDir, workspaceDir, target, timeoutMs, maxTokens } = params;
   if (!target.model) {
     return {
       provider: target.provider,
@@ -493,7 +489,6 @@ async function probeTarget(params: {
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
   const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
-  await fs.mkdir(sessionDir, { recursive: true });
 
   const start = Date.now();
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
@@ -561,7 +556,6 @@ async function runTargetsWithConcurrency(params: {
     params.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
     resolveDefaultAgentWorkspaceDir();
-  const sessionDir = resolveSessionTranscriptsDirForAgent(agentId);
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -587,7 +581,6 @@ async function runTargetsWithConcurrency(params: {
         agentId,
         agentDir,
         workspaceDir,
-        sessionDir,
         target,
         timeoutMs,
         maxTokens,
