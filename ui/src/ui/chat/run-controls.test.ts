@@ -285,7 +285,7 @@ describe("context notice", () => {
     expect(icon?.classList.contains("context-notice__icon")).toBe(true);
     expect(icon?.getAttribute("width")).toBe("16");
     expect(icon?.getAttribute("height")).toBe("16");
-    expect(icon?.querySelector("path")).not.toBeNull();
+    expect(icon?.querySelectorAll("path")).toHaveLength(1);
 
     const onCompact = vi.fn();
     render(renderContextNotice(session, 200_000, { onCompact }), container);
@@ -365,6 +365,6 @@ describe("side result render", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-side-result--error")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-side-result--error")).toHaveLength(1);
   });
 });
