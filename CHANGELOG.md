@@ -183,6 +183,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/router: when `openclaw <name>` does not match a CLI subcommand, check the runtime plugin tool registry first so that names that are actually agent tools (e.g. `lcm_recent`) get a "this is an agent tool registered by the `<plugin>` plugin, not a CLI subcommand" error instead of the misleading suggestion to add the tool name to `plugins.allow`. Fixes #77214.
 - Agents/compaction: keep the recent tail after manual `/compact` when Pi returns an empty or no-op compaction summary, preventing blank checkpoints from replacing the live context.
 - fix(discord): gate user allowlist name resolution [AI]. (#79002) Thanks @pgondhi987.
 - fix(msteams): gate startup user allowlist resolution [AI]. (#79003) Thanks @pgondhi987.
