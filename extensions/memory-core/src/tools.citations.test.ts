@@ -4,7 +4,7 @@ import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemorySearchManagerMockCalls,
   getReadAgentMemoryFileMockCalls,
@@ -38,22 +38,14 @@ function collectWikiResultPaths(results: readonly { corpus: string; path: string
 }
 
 async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
-  const startedAt = Date.now();
-  let lastError: unknown;
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      return await task();
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 20);
-      });
-    }
-  }
-  if (lastError instanceof Error) {
-    throw lastError;
-  }
-  throw new Error("Timed out waiting for async test condition");
+  let value: T | undefined;
+  await vi.waitFor(
+    async () => {
+      value = await task();
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  return value as T;
 }
 
 beforeEach(() => {

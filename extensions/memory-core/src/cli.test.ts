@@ -1703,22 +1703,14 @@ describe("memory cli", () => {
   });
 
   async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
-    const startedAt = Date.now();
-    let lastError: unknown;
-    while (Date.now() - startedAt < timeoutMs) {
-      try {
-        return await task();
-      } catch (error) {
-        lastError = error;
-        await new Promise((resolve) => {
-          setTimeout(resolve, 10);
-        });
-      }
-    }
-    if (lastError instanceof Error) {
-      throw lastError;
-    }
-    throw new Error("Timed out waiting for async test condition");
+    let value: T | undefined;
+    await vi.waitFor(
+      async () => {
+        value = await task();
+      },
+      { interval: 1, timeout: timeoutMs },
+    );
+    return value as T;
   }
 
   it("records short-term recall entries from memory search hits", async () => {
