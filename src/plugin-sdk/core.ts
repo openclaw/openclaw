@@ -66,6 +66,8 @@ export type {
   PluginSessionActionContext,
   PluginSessionActionRegistration,
   PluginSessionActionResult,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
   PluginSessionSchedulerJobHandle,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,

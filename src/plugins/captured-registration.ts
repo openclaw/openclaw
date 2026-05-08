@@ -287,6 +287,11 @@ export function createCapturedPluginRegistration(params?: {
         registerSessionAction(action: PluginSessionActionRegistration) {
           sessionActions.push(action);
         },
+        sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
+        registerSessionAction(action: PluginSessionActionRegistration) {
+          sessionActions.push(action);
+        },
+        sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
         registerTool(tool) {
           if (typeof tool !== "function") {
             tools.push(tool);

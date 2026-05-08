@@ -68,6 +68,7 @@ import {
   setPluginRunContext,
 } from "./host-hook-runtime.js";
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
+import { sendPluginSessionAttachment } from "./host-hook-workflow.js";
 import {
   isPluginJsonValue,
   normalizePluginHostHookId,
@@ -115,6 +116,7 @@ import type {
   PluginSessionExtensionRegistryRegistration,
   PluginTextTransformsRegistration,
 } from "./registry-types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue, type JsonSchemaValue } from "./schema-validator.js";
@@ -2678,7 +2680,51 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 });
               },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
+              sendSessionAttachment: (attachment) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return Promise.resolve({ ok: false, error: "global side effects disabled" });
+                }
+                const activeRegistry = getActivePluginRegistry();
+                const pluginLoaded =
+                  activeRegistry === registry &&
+                  registry.plugins.some(
+                    (plugin) => plugin.id === record.id && plugin.status === "loaded",
+                  );
+                if (!pluginLoaded) {
+                  return Promise.resolve({ ok: false, error: "plugin is not loaded" });
+                }
+                const runtimeConfig =
+                  (registryParams.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+                  params.config;
+                return sendPluginSessionAttachment({
+                  ...attachment,
+                  config: runtimeConfig,
+                  origin: record.origin,
+                });
+              },
               registerSessionAction: (action) => registerSessionAction(record, action),
+              sendSessionAttachment: (attachment) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return Promise.resolve({ ok: false, error: "global side effects disabled" });
+                }
+                const activeRegistry = getActivePluginRegistry();
+                const pluginLoaded =
+                  activeRegistry === registry &&
+                  registry.plugins.some(
+                    (plugin) => plugin.id === record.id && plugin.status === "loaded",
+                  );
+                if (!pluginLoaded) {
+                  return Promise.resolve({ ok: false, error: "plugin is not loaded" });
+                }
+                const runtimeConfig =
+                  (registryParams.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+                  params.config;
+                return sendPluginSessionAttachment({
+                  ...attachment,
+                  config: runtimeConfig,
+                  origin: record.origin,
+                });
+              },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
                   throwRegistrationError("only memory plugins can register a memory capability");
