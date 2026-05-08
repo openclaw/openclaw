@@ -115,7 +115,7 @@ The branch already has a real shared SQLite base:
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
   run artifact, and scoped cache stores for workers.
 - `src/commands/doctor-sqlite-state.ts` already imports several legacy JSON
-  state files into SQLite from doctor.
+  state files, including node host config, into SQLite from doctor.
 - `src/infra/state-migrations.ts` already imports legacy `sessions.json` and
   `*.jsonl` transcripts into SQLite and removes successful sources.
 
