@@ -727,14 +727,15 @@ function requireBlockReplyHandler(
 }
 
 async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs, "dispatcher">) {
-  await dispatchReplyFromConfig({
+  const first = await dispatchReplyFromConfig({
     ...params,
     dispatcher: createDispatcher(),
   });
-  await dispatchReplyFromConfig({
+  const second = await dispatchReplyFromConfig({
     ...params,
     dispatcher: createDispatcher(),
   });
+  return [first, second] as const;
 }
 
 describe("dispatchReplyFromConfig", () => {
@@ -2740,16 +2741,9 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
-    const first = await dispatchReplyFromConfig({
+    const [first, duplicate] = await dispatchTwiceWithFreshDispatchers({
       ctx,
       cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-    const duplicate = await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
       replyResolver,
     });
 
@@ -2771,16 +2765,9 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "visible fallback" }) as ReplyPayload);
 
-    const first = await dispatchReplyFromConfig({
+    const [first, duplicate] = await dispatchTwiceWithFreshDispatchers({
       ctx,
       cfg,
-      dispatcher: createDispatcher(),
-      replyResolver,
-    });
-    const duplicate = await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher: createDispatcher(),
       replyResolver,
     });
 
