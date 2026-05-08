@@ -1,6 +1,7 @@
 import type { VoiceCallConfig } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallId, CallRecord } from "../types.js";
+import type { VoiceCallRecordStore } from "./store.js";
 
 type TranscriptWaiter = {
   resolve: (text: string) => void;
@@ -20,7 +21,7 @@ type CallManagerRuntimeState = {
 type CallManagerRuntimeDeps = {
   provider: VoiceCallProvider | null;
   config: VoiceCallConfig;
-  storePath: string;
+  callStore: VoiceCallRecordStore;
   webhookUrl: string | null;
 };
 

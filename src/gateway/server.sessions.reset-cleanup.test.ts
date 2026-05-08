@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import { expect, test, vi } from "vitest";
+import { getSessionEntry } from "../config/sessions.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
-import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   bootstrapCacheMocks,
@@ -109,7 +109,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
 });
 
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
+  const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
   const prepareFreshSession = vi.fn(async () => {});
   acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
@@ -119,7 +119,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
     },
   });
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         acp: {
@@ -206,35 +206,30 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
   });
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      acp?: {
-        backend?: string;
-        agent?: string;
-        runtimeSessionName?: string;
-        identity?: {
-          state?: string;
-          acpxRecordId?: string;
-          acpxSessionId?: string;
-        };
-        mode?: string;
-        runtimeOptions?: {
-          runtimeMode?: string;
-          timeoutSeconds?: number;
-        };
-        cwd?: string;
-        state?: string;
-      };
-    }
-  >;
-  expectResetAcpState(store["agent:main:main"]?.acp);
+  const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
+  expect(stored?.acp).toMatchObject({
+    backend: "acpx",
+    agent: "codex",
+    runtimeSessionName: "runtime:reset",
+    identity: {
+      state: "pending",
+      acpxRecordId: "agent:main:main",
+    },
+    mode: "persistent",
+    runtimeOptions: {
+      runtimeMode: "auto",
+      timeoutSeconds: 30,
+    },
+    cwd: "/tmp/acp-session",
+    state: "idle",
+  });
+  expect(stored?.acp?.identity?.acpxSessionId).toBeUndefined();
 });
 
 test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
     },
@@ -256,7 +251,7 @@ test("sessions.reset does not emit lifecycle events when key does not exist", as
 test("sessions.reset emits subagent targetKind for subagent sessions", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-subagent", "hello");
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
     },
@@ -290,7 +285,7 @@ test("sessions.reset emits subagent targetKind for subagent sessions", async () 
 test("sessions.reset directly unbinds thread bindings when hooks are unavailable", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
     },

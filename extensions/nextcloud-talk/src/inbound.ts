@@ -12,6 +12,7 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   createChannelPairingController,
   deliverFormattedTextWithAttachments,
+  dispatchChannelMessageReplyWithBase,
   logInboundDrop,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -301,7 +302,7 @@ export async function handleNextcloudTalkInbound(params: {
     runtime.log?.(`nextcloud-talk: drop room ${roomToken} (no mention)`);
     return;
   }
-  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+  const { route } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -316,10 +317,17 @@ export async function handleNextcloudTalkInbound(params: {
   });
 
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
-  const { storePath, body } = buildEnvelope({
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config as OpenClawConfig);
+  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+    agentId: route.agentId,
+    sessionKey: route.sessionKey,
+  });
+  const body = core.channel.reply.formatAgentEnvelope({
     channel: "Nextcloud Talk",
     from: fromLabel,
     timestamp: message.timestamp,
+    previousTimestamp,
+    envelope: envelopeOptions,
     body: rawBody,
   });
 
@@ -350,43 +358,34 @@ export async function handleNextcloudTalkInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await core.channel.turn.runAssembled({
+  await dispatchChannelMessageReplyWithBase({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
+    route,
     ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      deliver: async (payload) => {
-        await deliverNextcloudTalkReply({
-          cfg: config,
-          payload,
-          roomToken,
-          accountId: account.accountId,
-          statusSink,
-        });
-      },
-      onError: (err, info) => {
-        runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
-      },
+    core,
+    deliver: async (payload) => {
+      await deliverNextcloudTalkReply({
+        cfg: config,
+        payload,
+        roomToken,
+        accountId: account.accountId,
+        statusSink,
+      });
     },
-    replyPipeline: {},
+    onRecordError: (err) => {
+      runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
+    },
+    onDispatchError: (err, info) => {
+      runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
+    },
     replyOptions: {
       skillFilter: roomConfig?.skills,
       disableBlockStreaming:
         typeof account.config.blockStreaming === "boolean"
           ? !account.config.blockStreaming
           : undefined,
-    },
-    record: {
-      onRecordError: (err) => {
-        runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
-      },
     },
   });
 }

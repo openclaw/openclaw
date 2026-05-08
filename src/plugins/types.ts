@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import type { Command } from "commander";
 import type { AgentMessage, StreamFn } from "../agents/agent-core-contract.js";
 import type {

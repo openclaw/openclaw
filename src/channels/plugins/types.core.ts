@@ -152,12 +152,40 @@ export type ChannelHeartbeatDeps = {
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
-export type ChannelLegacyStateMigrationPlan = {
+export type ChannelLegacyStateMigrationApplyResult = {
+  changes: string[];
+  warnings: string[];
+};
+
+export type ChannelLegacyStateMigrationApplyContext = {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+};
+
+export type ChannelLegacyStateMigrationFilePlan = {
   kind: "copy" | "move";
   label: string;
   sourcePath: string;
   targetPath: string;
 };
+
+export type ChannelLegacyStateMigrationCustomPlan = {
+  kind: "custom";
+  label: string;
+  sourcePath: string;
+  targetPath?: string;
+  targetTable?: string;
+  recordCount?: number;
+  apply: (
+    context: ChannelLegacyStateMigrationApplyContext,
+  ) => ChannelLegacyStateMigrationApplyResult | Promise<ChannelLegacyStateMigrationApplyResult>;
+};
+
+export type ChannelLegacyStateMigrationPlan =
+  | ChannelLegacyStateMigrationFilePlan
+  | ChannelLegacyStateMigrationCustomPlan;
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */
 export type ChannelMeta = {

@@ -37,6 +37,7 @@ export type CodexAppServerAuthProfileLookup = {
 export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
   threadId: string;
+  sessionKey?: string;
   sessionFile: string;
   cwd: string;
   authProfileId?: string;
@@ -53,8 +54,31 @@ export type CodexAppServerThreadBinding = {
   updatedAt: string;
 };
 
-function codexAppServerBindingKvKey(sessionFile: string): string {
-  return sessionFile.trim();
+export type CodexAppServerBindingIdentity =
+  | string
+  | {
+      sessionKey?: string;
+      sessionFile?: string;
+    };
+
+function normalizeCodexAppServerBindingIdentity(identity: CodexAppServerBindingIdentity): {
+  primaryKey: string;
+  legacySessionFileKey?: string;
+  sessionKey?: string;
+  sessionFile: string;
+} {
+  if (typeof identity === "string") {
+    const sessionFile = identity.trim();
+    return { primaryKey: sessionFile, sessionFile };
+  }
+  const sessionKey = identity.sessionKey?.trim() || undefined;
+  const sessionFile = identity.sessionFile?.trim() || "";
+  return {
+    primaryKey: sessionKey ? `session-key:${sessionKey}` : sessionFile,
+    legacySessionFileKey: sessionKey && sessionFile ? sessionFile : undefined,
+    sessionKey,
+    sessionFile,
+  };
 }
 
 function codexAppServerBindingToJsonValue(
@@ -64,7 +88,7 @@ function codexAppServerBindingToJsonValue(
 }
 
 function normalizeCodexAppServerBinding(
-  sessionFile: string,
+  identity: ReturnType<typeof normalizeCodexAppServerBindingIdentity>,
   value: unknown,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId">,
 ): CodexAppServerThreadBinding | undefined {
@@ -76,7 +100,14 @@ function normalizeCodexAppServerBinding(
   return {
     schemaVersion: 1,
     threadId: parsed.threadId,
-    sessionFile,
+    sessionKey:
+      typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
+        ? parsed.sessionKey.trim()
+        : identity.sessionKey,
+    sessionFile:
+      typeof parsed.sessionFile === "string" && parsed.sessionFile.trim()
+        ? parsed.sessionFile
+        : identity.sessionFile,
     cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
     authProfileId,
     model: typeof parsed.model === "string" ? parsed.model : undefined,
@@ -105,34 +136,45 @@ function normalizeCodexAppServerBinding(
 }
 
 export async function readCodexAppServerBinding(
-  sessionFile: string,
+  identity: CodexAppServerBindingIdentity,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<CodexAppServerThreadBinding | undefined> {
-  const key = codexAppServerBindingKvKey(sessionFile);
-  if (!key) {
+  const normalized = normalizeCodexAppServerBindingIdentity(identity);
+  if (!normalized.primaryKey) {
     return undefined;
   }
-  return normalizeCodexAppServerBinding(
-    sessionFile,
-    readOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, key),
-    lookup,
-  );
+  const value = readOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, normalized.primaryKey);
+  if (value !== undefined) {
+    return normalizeCodexAppServerBinding(normalized, value, lookup);
+  }
+  if (normalized.legacySessionFileKey) {
+    return normalizeCodexAppServerBinding(
+      normalized,
+      readOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, normalized.legacySessionFileKey),
+      lookup,
+    );
+  }
+  return normalizeCodexAppServerBinding(normalized, undefined, lookup);
 }
 
 export async function writeCodexAppServerBinding(
-  sessionFile: string,
+  identity: CodexAppServerBindingIdentity,
   binding: Omit<
     CodexAppServerThreadBinding,
-    "schemaVersion" | "sessionFile" | "createdAt" | "updatedAt"
+    "schemaVersion" | "sessionKey" | "sessionFile" | "createdAt" | "updatedAt"
   > & {
+    sessionKey?: string;
+    sessionFile?: string;
     createdAt?: string;
   },
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<void> {
   const now = new Date().toISOString();
+  const normalized = normalizeCodexAppServerBindingIdentity(identity);
   const payload: CodexAppServerThreadBinding = {
     schemaVersion: 1,
-    sessionFile,
+    sessionKey: binding.sessionKey?.trim() || normalized.sessionKey,
+    sessionFile: binding.sessionFile?.trim() || normalized.sessionFile,
     threadId: binding.threadId,
     cwd: binding.cwd,
     authProfileId: binding.authProfileId,
@@ -154,9 +196,15 @@ export async function writeCodexAppServerBinding(
   };
   writeOpenClawStateKvJson(
     CODEX_APP_SERVER_BINDING_KV_SCOPE,
-    codexAppServerBindingKvKey(sessionFile),
+    normalized.primaryKey,
     codexAppServerBindingToJsonValue(payload),
   );
+  if (
+    normalized.legacySessionFileKey &&
+    normalized.legacySessionFileKey !== normalized.primaryKey
+  ) {
+    deleteOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, normalized.legacySessionFileKey);
+  }
 }
 
 function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | undefined {
@@ -216,11 +264,14 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
   };
 }
 
-export async function clearCodexAppServerBinding(sessionFile: string): Promise<void> {
-  deleteOpenClawStateKvJson(
-    CODEX_APP_SERVER_BINDING_KV_SCOPE,
-    codexAppServerBindingKvKey(sessionFile),
-  );
+export async function clearCodexAppServerBinding(
+  identity: CodexAppServerBindingIdentity,
+): Promise<void> {
+  const normalized = normalizeCodexAppServerBindingIdentity(identity);
+  deleteOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, normalized.primaryKey);
+  if (normalized.legacySessionFileKey) {
+    deleteOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, normalized.legacySessionFileKey);
+  }
 }
 
 export function isCodexAppServerNativeAuthProfile(

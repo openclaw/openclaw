@@ -177,7 +177,6 @@ function resolveZalouserInboundSessionKey(params: {
   core: ZalouserCoreRuntime;
   config: OpenClawConfig;
   route: { agentId: string; accountId: string; sessionKey: string };
-  storePath: string;
   isGroup: boolean;
   senderId: string;
 }): string {
@@ -205,12 +204,12 @@ function resolveZalouserInboundSessionKey(params: {
   );
   const hasDirectSession =
     params.core.channel.session.readSessionUpdatedAt({
-      storePath: params.storePath,
+      agentId: params.route.agentId,
       sessionKey: directSessionKey,
     }) !== undefined;
   const hasLegacySession =
     params.core.channel.session.readSessionUpdatedAt({
-      storePath: params.storePath,
+      agentId: params.route.agentId,
       sessionKey: legacySessionKey,
     }) !== undefined;
 
@@ -560,20 +559,16 @@ async function processMessage(
   }
 
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
   const inboundSessionKey = resolveZalouserInboundSessionKey({
     core,
     config,
     route,
-    storePath,
     isGroup,
     senderId,
   });
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    storePath,
+    agentId: route.agentId,
     sessionKey: inboundSessionKey,
   });
   const body = core.channel.reply.formatAgentEnvelope({
@@ -691,61 +686,77 @@ async function processMessage(
   await core.channel.turn.runAssembled({
     channel: "zalouser",
     accountId: account.accountId,
-    cfg: config,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
-    ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      preparePayload: (payload) => {
-        if (payload.text === undefined) {
-          return payload;
-        }
-        return {
-          ...payload,
-          text: core.channel.text.convertMarkdownTables(
-            payload.text,
-            core.channel.text.resolveMarkdownTableMode({
-              cfg: config,
-              channel: "zalouser",
-              accountId: account.accountId,
-            }),
-          ),
-        };
-      },
-      durable: () => ({
-        to: normalizedTo,
+    raw: message,
+    adapter: {
+      ingest: () => ({
+        id: messageSid ?? `${message.timestampMs}`,
+        timestamp: message.timestampMs,
+        rawText: rawBody,
+        textForAgent: rawBody,
+        textForCommands: commandBody,
+        raw: message,
       }),
-      deliver: async (payload) => {
-        return await deliverZalouserReply({
-          payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
-          profile: account.profile,
-          chatId,
-          isGroup,
-          runtime,
-          core,
-          config,
-          accountId: account.accountId,
-          tableMode: "off",
-        });
-      },
-      onDelivered: (_payload, _info, result) => {
-        if (result?.visibleReplySent !== false) {
-          statusSink?.({ lastOutboundAt: Date.now() });
-        }
-      },
-      onError: (err, info) => {
-        runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
-      },
-    },
-    replyPipeline,
-    record: {
-      onRecordError: (err) => {
-        runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
-      },
+      resolveTurn: () => ({
+        cfg: config,
+        channel: "zalouser",
+        accountId: account.accountId,
+        agentId: route.agentId,
+        routeSessionKey: route.sessionKey,
+        ctxPayload,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          preparePayload: (payload) => {
+            if (payload.text === undefined) {
+              return payload;
+            }
+            return {
+              ...payload,
+              text: core.channel.text.convertMarkdownTables(
+                payload.text,
+                core.channel.text.resolveMarkdownTableMode({
+                  cfg: config,
+                  channel: "zalouser",
+                  accountId: account.accountId,
+                }),
+              ),
+            };
+          },
+          durable: () => ({
+            to: normalizedTo,
+          }),
+          deliver: async (payload) => {
+            return await deliverZalouserReply({
+              payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+              profile: account.profile,
+              chatId,
+              isGroup,
+              runtime,
+              core,
+              config,
+              accountId: account.accountId,
+              tableMode: "off",
+            });
+          },
+          onDelivered: (_payload, _info, result) => {
+            if (result?.visibleReplySent !== false) {
+              statusSink?.({ lastOutboundAt: Date.now() });
+            }
+          },
+          onError: (err, info) => {
+            runtime.error(
+              `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
+            );
+          },
+        },
+        replyPipeline,
+        record: {
+          onRecordError: (err) => {
+            runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+          },
+        },
+      }),
     },
   });
   if (isGroup && historyKey) {

@@ -1,18 +1,17 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { listSessionEntries } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 
 export type AgentLocalStatus = {
   id: string;
   name?: string;
   workspaceDir: string | null;
   bootstrapPending: boolean | null;
-  sessionsPath: string;
+  sessionsDatabasePath: string;
   sessionsCount: number;
   lastUpdatedAt: number | null;
   lastActiveAgeMs: number | null;
@@ -25,11 +24,11 @@ type AgentLocalStatusesResult = {
   bootstrapPendingCount: number;
 };
 
-function loadStatusSessionStore(storePath: string): Record<string, SessionEntry | undefined> {
+function listStatusSessionEntries(agentId: string): ReturnType<typeof listSessionEntries> {
   try {
-    return loadSessionStore(storePath);
+    return listSessionEntries({ agentId });
   } catch {
-    return {};
+    return [];
   }
 }
 
@@ -53,11 +52,10 @@ export async function getAgentLocalStatuses(
     const bootstrapPath = workspaceDir != null ? path.join(workspaceDir, "BOOTSTRAP.md") : null;
     const bootstrapPending = bootstrapPath != null ? await pathExists(bootstrapPath) : null;
 
-    const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = loadStatusSessionStore(sessionsPath);
-    const sessions = Object.entries(store)
-      .filter(([key]) => key !== "global" && key !== "unknown")
-      .map(([, entry]) => entry);
+    const sessionsDatabasePath = resolveOpenClawAgentSqlitePath({ agentId });
+    const sessions = listStatusSessionEntries(agentId)
+      .filter((row) => row.sessionKey !== "global" && row.sessionKey !== "unknown")
+      .map((row) => row.entry);
     const sessionsCount = sessions.length;
     const lastUpdatedAt = sessions.reduce((max, e) => Math.max(max, e?.updatedAt ?? 0), 0);
     const resolvedLastUpdatedAt = lastUpdatedAt > 0 ? lastUpdatedAt : null;
@@ -68,7 +66,7 @@ export async function getAgentLocalStatuses(
       name: agent.name,
       workspaceDir,
       bootstrapPending,
-      sessionsPath,
+      sessionsDatabasePath,
       sessionsCount,
       lastUpdatedAt: resolvedLastUpdatedAt,
       lastActiveAgeMs,

@@ -1,7 +1,13 @@
-import fs from "node:fs";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
+  readMatrixLegacyCryptoMigrationState,
+  type MatrixLegacyCryptoMigrationState,
+  writeMatrixLegacyCryptoMigrationState,
+} from "../../legacy-crypto-migration-state.js";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import type { MatrixRoomKeyBackupRestoreResult } from "../sdk.js";
 import { maybeRestoreLegacyMatrixBackup } from "./legacy-crypto-restore.js";
@@ -18,11 +24,6 @@ function createBackupStatus() {
   };
 }
 
-function writeFile(filePath: string, value: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, value, "utf8");
-}
-
 const BASE_AUTH = {
   accountId: "default",
   homeserver: "https://matrix.example.org",
@@ -32,17 +33,19 @@ const BASE_AUTH = {
 
 type MatrixAuth = typeof BASE_AUTH;
 
-function readLegacyMigrationState(rootDir: string) {
-  const statePath = path.join(rootDir, "legacy-crypto-migration.json");
-  if (!fs.existsSync(statePath)) {
-    return null;
-  }
+function migrationStatePath(rootDir: string): string {
+  return path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME);
+}
 
-  return JSON.parse(fs.readFileSync(statePath, "utf8")) as Record<string, unknown>;
+async function readLegacyMigrationState(rootDir: string) {
+  return (await readMatrixLegacyCryptoMigrationState(migrationStatePath(rootDir))) as Record<
+    string,
+    unknown
+  > | null;
 }
 
 async function runLegacyRestoreScenario(params: {
-  migration: Record<string, unknown>;
+  migration: Partial<MatrixLegacyCryptoMigrationState>;
   auth?: MatrixAuth;
   sourceAuth?: MatrixAuth;
   restoreRoomKeyBackup: () => Promise<MatrixRoomKeyBackupRestoreResult>;
@@ -60,10 +63,14 @@ async function runLegacyRestoreScenario(params: {
       ...sourceAuth,
     });
 
-    writeFile(
-      path.join(sourceRootDir, "legacy-crypto-migration.json"),
-      JSON.stringify(params.migration),
-    );
+    const migrationState: MatrixLegacyCryptoMigrationState = {
+      version: 1,
+      accountId: "default",
+      roomKeyCounts: null,
+      restoreStatus: "pending",
+      ...params.migration,
+    };
+    await writeMatrixLegacyCryptoMigrationState(migrationStatePath(sourceRootDir), migrationState);
 
     const restoreRoomKeyBackup = vi.fn(params.restoreRoomKeyBackup);
     const result = await maybeRestoreLegacyMatrixBackup({
@@ -80,17 +87,19 @@ async function runLegacyRestoreScenario(params: {
     return {
       result,
       restoreRoomKeyBackup,
-      rootState: readLegacyMigrationState(rootDir),
-      rootStateExists: fs.existsSync(path.join(rootDir, "legacy-crypto-migration.json")),
-      sourceRootState: readLegacyMigrationState(sourceRootDir),
-      sourceRootStateExists: fs.existsSync(
-        path.join(sourceRootDir, "legacy-crypto-migration.json"),
-      ),
+      rootState: await readLegacyMigrationState(rootDir),
+      rootStateExists: Boolean(await readLegacyMigrationState(rootDir)),
+      sourceRootState: await readLegacyMigrationState(sourceRootDir),
+      sourceRootStateExists: Boolean(await readLegacyMigrationState(sourceRootDir)),
     };
   });
 }
 
 describe("maybeRestoreLegacyMatrixBackup", () => {
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   it("marks pending legacy backup restore as completed after success", async () => {
     const { result, sourceRootState } = await runLegacyRestoreScenario({
       migration: {

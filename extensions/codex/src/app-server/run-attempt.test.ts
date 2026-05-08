@@ -1,14 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  abortAgentHarnessRun,
-  queueAgentHarnessMessage,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness";
+import { abortAgentHarnessRun } from "openclaw/plugin-sdk/agent-harness";
 import { SessionManager } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  buildAgentRuntimePlan,
   embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
@@ -29,6 +24,7 @@ function queueActiveRunMessageForTest(
 ): boolean {
   return queueAgentHarnessMessage(...args);
 }
+import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
@@ -45,7 +41,11 @@ import {
 import type { CodexServerNotification } from "./protocol.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
-import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
+import {
+  clearCodexAppServerBinding,
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding,
+} from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildTurnCollaborationMode,
@@ -57,10 +57,11 @@ import {
 let tempDir: string;
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+  const sessionKey = `agent:main:${path.basename(path.dirname(sessionFile)) || "session-1"}`;
   return {
     prompt: "hello",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey,
     sessionFile,
     workspaceDir,
     runId: "run-1",
@@ -547,6 +548,12 @@ function extractRelayIdFromThreadRequest(params: unknown): string {
 describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
     resetAgentEventsForTest();
+    await clearCodexAppServerBinding({ sessionKey: "agent:main:session-1" });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "session-1",
+      events: [],
+    });
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -554,6 +561,12 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   afterEach(async () => {
+    await clearCodexAppServerBinding({ sessionKey: "agent:main:session-1" });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "session-1",
+      events: [],
+    });
     __testing.resetCodexAppServerClientFactoryForTests();
     __testing.resetOpenClawCodingToolsFactoryForTests();
     resetCodexRateLimitCacheForTests();
@@ -694,45 +707,34 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
 
-  it("passes auth profiles into Codex dynamic tool construction", async () => {
+  it("keys new app-server thread bindings by OpenClaw session key", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
-    const authProfileStore = {
-      version: 1,
-      profiles: {
-        "openai:api-key-backup": {
-          provider: "openai",
-          type: "api_key",
-          key: "not-a-real-key",
-        },
-      },
-    } satisfies EmbeddedRunAttemptParams["authProfileStore"];
-    params.disableTools = false;
-    params.authProfileStore = authProfileStore;
-
-    const factoryOptions: unknown[] = [];
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
-      factoryOptions.push(options);
-      return [];
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-keyed");
+      }
+      throw new Error(`unexpected method: ${method}`);
     });
 
-    await __testing.buildDynamicTools({
+    await startOrResumeThread({
+      client: { request } as never,
       params,
-      resolvedWorkspace: workspaceDir,
-      effectiveWorkspace: workspaceDir,
-      sandboxSessionKey: params.sessionKey!,
-      sandbox: null as never,
-      runAbortController: new AbortController(),
-      sessionAgentId: "main",
-      pluginConfig: {},
-      onYieldDetected: () => undefined,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
     });
 
-    expect(factoryOptions).toHaveLength(1);
-    expect((factoryOptions[0] as { authProfileStore?: unknown }).authProfileStore).toBe(
-      authProfileStore,
-    );
+    await expect(
+      readCodexAppServerBinding({ sessionKey: params.sessionKey }),
+    ).resolves.toMatchObject({
+      sessionKey: params.sessionKey,
+      sessionFile,
+      threadId: "thread-keyed",
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
@@ -1198,7 +1200,7 @@ describe("runCodexAppServerAttempt", () => {
       (event) => event.stream === "tool" && event.data.phase === "start",
     );
     expect(globalStartEvent?.runId).toBe("run-1");
-    expect(globalStartEvent?.sessionKey).toBe("agent:main:session-1");
+    expect(globalStartEvent?.sessionKey).toBe(params.sessionKey);
     expect(globalStartEvent?.data.name).toBe("message");
     expect(onExecutionPhase).toHaveBeenCalledWith({
       phase: "turn_accepted",
@@ -2324,7 +2326,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInputPayload.systemPrompt).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     expect(llmInputContext.runId).toBe("run-1");
     expect(llmInputContext.sessionId).toBe("session-1");
-    expect(llmInputContext.sessionKey).toBe("agent:main:session-1");
+    expect(llmInputContext.sessionKey).toBe(params.sessionKey);
 
     await harness.notify({
       method: "item/agentMessage/delta",
@@ -2373,13 +2375,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(endIndex).toBeGreaterThan(assistantIndex);
     const globalAssistantEvent = globalAgentEvents.find((event) => event.stream === "assistant");
     expect(globalAssistantEvent?.runId).toBe("run-1");
-    expect(globalAssistantEvent?.sessionKey).toBe("agent:main:session-1");
+    expect(globalAssistantEvent?.sessionKey).toBe(params.sessionKey);
     expect(globalAssistantEvent?.data).toEqual({ text: "hello back" });
     const globalEndEvent = globalAgentEvents.find(
       (event) => event.stream === "lifecycle" && event.data.phase === "end",
     );
     expect(globalEndEvent?.runId).toBe("run-1");
-    expect(globalEndEvent?.sessionKey).toBe("agent:main:session-1");
+    expect(globalEndEvent?.sessionKey).toBe(params.sessionKey);
 
     const [llmOutputPayload, llmOutputContext] = mockCall(llmOutput, "llm_output") as [
       {
@@ -4351,6 +4353,33 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
   });
 
+  it("resumes app-server thread bindings stored under the OpenClaw session key", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    await writeCodexAppServerBinding(
+      { sessionKey: params.sessionKey, sessionFile },
+      {
+        threadId: "thread-existing",
+        cwd: workspaceDir,
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+        dynamicToolsFingerprint: "[]",
+      },
+    );
+    const { requests, waitForMethod, completeTurn } = createResumeHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expectResumeRequest(requests, {
+      threadId: "thread-existing",
+      persistExtendedHistory: true,
+    });
+  });
+
   it("resumes a bound Codex thread when only dynamic tool descriptions change", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -4446,7 +4475,8 @@ describe("runCodexAppServerAttempt", () => {
       dynamicTools: [createMessageDynamicTool("Send and manage messages.")],
       appServer,
     });
-    const fingerprint = (await readCodexAppServerBinding(sessionFile))?.dynamicToolsFingerprint;
+    const fingerprint = (await readCodexAppServerBinding({ sessionKey: params.sessionKey }))
+      ?.dynamicToolsFingerprint;
     await startOrResumeThread({
       client: { request } as never,
       params,
@@ -4462,9 +4492,12 @@ describe("runCodexAppServerAttempt", () => {
       appServer,
     });
 
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.dynamicToolsFingerprint).toBe(fingerprint);
-    expect(binding?.threadId).toBe("thread-1");
+    await expect(
+      readCodexAppServerBinding({ sessionKey: params.sessionKey }),
+    ).resolves.toMatchObject({
+      dynamicToolsFingerprint: fingerprint,
+      threadId: "thread-1",
+    });
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
       "thread/start",
@@ -4495,8 +4528,14 @@ describe("runCodexAppServerAttempt", () => {
     ).rejects.toThrow("codex app-server client is closed");
 
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.threadId).toBe("thread-existing");
+    await expect(
+      readCodexAppServerBinding({
+        sessionKey: createParams(sessionFile, workspaceDir).sessionKey,
+        sessionFile,
+      }),
+    ).resolves.toMatchObject({
+      threadId: "thread-existing",
+    });
   });
 
   it("restarts the app-server once when a shared client closes during startup", async () => {

@@ -99,7 +99,7 @@ export interface MemorySearchManager {
   sync?(params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;

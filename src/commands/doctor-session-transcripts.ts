@@ -32,7 +32,6 @@ type TranscriptRepairResult = {
   repaired: boolean;
   originalEntries: number;
   activeEntries: number;
-  backupPath?: string;
   reason?: string;
 };
 
@@ -185,86 +184,6 @@ function hasBrokenPromptRewriteBranch(entries: TranscriptEntry[], activePath: Tr
     }
   }
   return false;
-}
-
-async function writeActiveTranscript(params: {
-  filePath: string;
-  entries: TranscriptEntry[];
-  activePath: TranscriptEntry[];
-}): Promise<string> {
-  const header = params.entries.find((entry) => entry.type === "session");
-  if (!header) {
-    throw new Error("missing session header");
-  }
-  const backupPath = `${params.filePath}.pre-doctor-branch-repair-${new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")}.bak`;
-  await fs.copyFile(params.filePath, backupPath);
-  const next = [header, ...params.activePath].map((entry) => JSON.stringify(entry)).join("\n");
-  await fs.writeFile(params.filePath, `${next}\n`, "utf-8");
-  return backupPath;
-}
-
-export async function repairBrokenSessionTranscriptFile(params: {
-  filePath: string;
-  shouldRepair: boolean;
-}): Promise<TranscriptRepairResult> {
-  try {
-    const raw = await fs.readFile(params.filePath, "utf-8");
-    const entries = parseTranscriptEntries(raw);
-    const activePath = selectActivePath(entries);
-    if (!activePath) {
-      return {
-        filePath: params.filePath,
-        broken: false,
-        repaired: false,
-        originalEntries: entries.length,
-        activeEntries: 0,
-        reason: "no active branch",
-      };
-    }
-    const broken = hasBrokenPromptRewriteBranch(entries, activePath);
-    if (!broken) {
-      return {
-        filePath: params.filePath,
-        broken: false,
-        repaired: false,
-        originalEntries: entries.length,
-        activeEntries: activePath.length,
-      };
-    }
-    if (!params.shouldRepair) {
-      return {
-        filePath: params.filePath,
-        broken: true,
-        repaired: false,
-        originalEntries: entries.length,
-        activeEntries: activePath.length,
-      };
-    }
-    const backupPath = await writeActiveTranscript({
-      filePath: params.filePath,
-      entries,
-      activePath,
-    });
-    return {
-      filePath: params.filePath,
-      broken: true,
-      repaired: true,
-      originalEntries: entries.length,
-      activeEntries: activePath.length,
-      backupPath,
-    };
-  } catch (err) {
-    return {
-      filePath: params.filePath,
-      broken: false,
-      repaired: false,
-      originalEntries: 0,
-      activeEntries: 0,
-      reason: String(err),
-    };
-  }
 }
 
 export async function migrateSessionTranscriptFileToSqlite(params: {

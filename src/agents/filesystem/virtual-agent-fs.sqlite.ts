@@ -1,10 +1,17 @@
 import path from "node:path";
-import type { SQLInputValue } from "node:sqlite";
+import type { Insertable, Selectable } from "kysely";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabaseOptions,
+} from "../../state/openclaw-agent-db.js";
+import { parseVirtualAgentFsEntryKind } from "./agent-filesystem.js";
 import type {
   VirtualAgentFs,
   VirtualAgentFsEntry,
@@ -15,15 +22,14 @@ import type {
   VirtualAgentFsWriteOptions,
 } from "./agent-filesystem.js";
 
-type VirtualAgentFsRow = {
-  path: string;
-  kind: VirtualAgentFsEntryKind;
-  content_blob: Buffer | null;
-  metadata_json: string;
-  updated_at: number | bigint;
+type VfsEntriesTable = OpenClawAgentKyselyDatabase["vfs_entries"];
+type VirtualAgentFsDatabase = Pick<OpenClawAgentKyselyDatabase, "vfs_entries">;
+
+type VirtualAgentFsRow = Selectable<VfsEntriesTable> & {
+  kind: string;
 };
 
-export type SqliteVirtualAgentFsOptions = OpenClawStateDatabaseOptions & {
+export type SqliteVirtualAgentFsOptions = OpenClawAgentDatabaseOptions & {
   agentId: string;
   namespace: string;
   now?: () => number;
@@ -67,28 +73,27 @@ function parseMetadata(raw: string): Record<string, unknown> {
 }
 
 function rowToEntry(row: VirtualAgentFsRow): VirtualAgentFsEntry {
+  const kind = parseVirtualAgentFsEntryKind(row.kind);
   const contentSize = row.content_blob?.byteLength ?? 0;
   const updatedAt = typeof row.updated_at === "bigint" ? Number(row.updated_at) : row.updated_at;
   return {
     path: row.path,
-    kind: row.kind,
-    size: row.kind === "file" ? contentSize : 0,
+    kind,
+    size: kind === "file" ? contentSize : 0,
     metadata: parseMetadata(row.metadata_json),
     updatedAt,
   };
 }
 
 function bindEntry(params: {
-  agentId: string;
   namespace: string;
   path: string;
   kind: VirtualAgentFsEntryKind;
   content: Buffer | null;
   metadata: Record<string, unknown>;
   updatedAt: number;
-}): Record<string, SQLInputValue> {
+}): Insertable<VfsEntriesTable> {
   return {
-    agent_id: params.agentId,
     namespace: params.namespace,
     path: params.path,
     kind: params.kind,
@@ -110,37 +115,31 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
   }
 
   #selectRow(filePath: string): VirtualAgentFsRow | null {
-    const database = openOpenClawStateDatabase(this.#options);
+    const database = openOpenClawAgentDatabase(this.#options);
+    const db = getNodeSqliteKysely<VirtualAgentFsDatabase>(database.db);
     return (
-      (database.db
-        .prepare(
-          `
-            SELECT path, kind, content_blob, metadata_json, updated_at
-            FROM vfs_entries
-            WHERE agent_id = ?
-              AND namespace = ?
-              AND path = ?
-          `,
-        )
-        .get(this.#options.agentId, this.#options.namespace, normalizeVfsPath(filePath)) as
-        | VirtualAgentFsRow
-        | undefined) ?? null
+      executeSqliteQueryTakeFirstSync<VirtualAgentFsRow>(
+        database.db,
+        db
+          .selectFrom("vfs_entries")
+          .select(["path", "kind", "content_blob", "metadata_json", "updated_at"])
+          .where("namespace", "=", this.#options.namespace)
+          .where("path", "=", normalizeVfsPath(filePath)),
+      ) ?? null
     );
   }
 
   #allRows(): VirtualAgentFsRow[] {
-    const database = openOpenClawStateDatabase(this.#options);
-    return database.db
-      .prepare(
-        `
-          SELECT path, kind, content_blob, metadata_json, updated_at
-          FROM vfs_entries
-          WHERE agent_id = ?
-            AND namespace = ?
-          ORDER BY path ASC
-        `,
-      )
-      .all(this.#options.agentId, this.#options.namespace) as VirtualAgentFsRow[];
+    const database = openOpenClawAgentDatabase(this.#options);
+    const db = getNodeSqliteKysely<VirtualAgentFsDatabase>(database.db);
+    return executeSqliteQuerySync<VirtualAgentFsRow>(
+      database.db,
+      db
+        .selectFrom("vfs_entries")
+        .select(["path", "kind", "content_blob", "metadata_json", "updated_at"])
+        .where("namespace", "=", this.#options.namespace)
+        .orderBy("path", "asc"),
+    ).rows;
   }
 
   #upsert(params: {
@@ -150,45 +149,30 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
     metadata?: Record<string, unknown>;
     updatedAt: number;
   }): void {
-    const database = openOpenClawStateDatabase(this.#options);
-    database.db
-      .prepare(
-        `
-          INSERT INTO vfs_entries (
-            agent_id,
-            namespace,
-            path,
-            kind,
-            content_blob,
-            metadata_json,
-            updated_at
-          ) VALUES (
-            @agent_id,
-            @namespace,
-            @path,
-            @kind,
-            @content_blob,
-            @metadata_json,
-            @updated_at
-          )
-          ON CONFLICT(agent_id, namespace, path) DO UPDATE SET
-            kind = excluded.kind,
-            content_blob = excluded.content_blob,
-            metadata_json = excluded.metadata_json,
-            updated_at = excluded.updated_at
-        `,
-      )
-      .run(
-        bindEntry({
-          agentId: this.#options.agentId,
-          namespace: this.#options.namespace,
-          path: params.path,
-          kind: params.kind,
-          content: params.content,
-          metadata: params.metadata ?? {},
-          updatedAt: params.updatedAt,
-        }),
-      );
+    const database = openOpenClawAgentDatabase(this.#options);
+    const db = getNodeSqliteKysely<VirtualAgentFsDatabase>(database.db);
+    const row = bindEntry({
+      namespace: this.#options.namespace,
+      path: params.path,
+      kind: params.kind,
+      content: params.content,
+      metadata: params.metadata ?? {},
+      updatedAt: params.updatedAt,
+    });
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("vfs_entries")
+        .values(row)
+        .onConflict((conflict) =>
+          conflict.columns(["namespace", "path"]).doUpdateSet({
+            kind: row.kind,
+            content_blob: row.content_blob,
+            metadata_json: row.metadata_json,
+            updated_at: row.updated_at,
+          }),
+        ),
+    );
   }
 
   #ensureParents(filePath: string, updatedAt: number): void {
@@ -222,7 +206,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
   ): void {
     const normalized = normalizeVfsPath(filePath);
     const updatedAt = this.#now();
-    runOpenClawStateWriteTransaction(() => {
+    runOpenClawAgentWriteTransaction(() => {
       this.#ensureParents(normalized, updatedAt);
       this.#upsert({
         path: normalized,
@@ -237,7 +221,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
   mkdir(dirPath: string, options: VirtualAgentFsWriteOptions = {}): void {
     const normalized = normalizeVfsPath(dirPath);
     const updatedAt = this.#now();
-    runOpenClawStateWriteTransaction(() => {
+    runOpenClawAgentWriteTransaction(() => {
       this.#ensureParents(normalized, updatedAt);
       this.#upsert({
         path: normalized,
@@ -296,7 +280,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
       })
       .map((row) => {
         const entry: VirtualAgentFsExportEntry = rowToEntry(row);
-        if (row.kind === "file") {
+        if (parseVirtualAgentFsEntryKind(row.kind) === "file") {
           entry.contentBase64 = Buffer.from(row.content_blob ?? Buffer.alloc(0)).toString("base64");
         }
         return entry;
@@ -309,17 +293,17 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
     if (descendants.length > 0 && !options.recursive) {
       throw new Error(`VFS directory is not empty: ${normalized}`);
     }
-    runOpenClawStateWriteTransaction((database) => {
-      database.db
-        .prepare(
-          `
-            DELETE FROM vfs_entries
-            WHERE agent_id = ?
-              AND namespace = ?
-              AND (path = ? OR path LIKE ?)
-          `,
-        )
-        .run(this.#options.agentId, this.#options.namespace, normalized, `${normalized}/%`);
+    runOpenClawAgentWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<VirtualAgentFsDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("vfs_entries")
+          .where("namespace", "=", this.#options.namespace)
+          .where((eb) =>
+            eb.or([eb("path", "=", normalized), eb("path", "like", `${normalized}/%`)]),
+          ),
+      );
     }, this.#options);
   }
 
@@ -333,22 +317,21 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
     if (rows.length === 0) {
       throw new Error(`VFS path not found: ${from}`);
     }
-    runOpenClawStateWriteTransaction((database) => {
+    runOpenClawAgentWriteTransaction((database) => {
       this.#ensureParents(to, updatedAt);
-      const deleteStatement = database.db.prepare(
-        `
-          DELETE FROM vfs_entries
-          WHERE agent_id = ?
-            AND namespace = ?
-            AND path = ?
-        `,
-      );
+      const db = getNodeSqliteKysely<VirtualAgentFsDatabase>(database.db);
       for (const row of rows) {
         const suffix = row.path === from ? "" : row.path.slice(from.length);
-        deleteStatement.run(this.#options.agentId, this.#options.namespace, row.path);
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .deleteFrom("vfs_entries")
+            .where("namespace", "=", this.#options.namespace)
+            .where("path", "=", row.path),
+        );
         this.#upsert({
           path: `${to}${suffix}`,
-          kind: row.kind,
+          kind: parseVirtualAgentFsEntryKind(row.kind),
           content: row.content_blob ? Buffer.from(row.content_blob) : null,
           metadata: parseMetadata(row.metadata_json),
           updatedAt,

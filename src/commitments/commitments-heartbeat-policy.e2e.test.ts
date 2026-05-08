@@ -63,7 +63,7 @@ describe("commitments heartbeat delivery policy e2e", () => {
           },
         },
         channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
         commitments: { enabled: true },
       };
       await seedSessionStore(storePath, sessionKey, {

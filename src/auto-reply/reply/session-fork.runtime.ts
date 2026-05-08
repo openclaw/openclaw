@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
@@ -26,7 +25,6 @@ import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/s
 type ForkSourceTranscript = {
   agentId: string;
   cwd: string;
-  sessionDir: string;
   leafId: string | null;
   branchEntries: PiSessionEntry[];
   labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
@@ -53,15 +51,16 @@ function maxPositiveTokenCount(...values: Array<number | undefined>): number | u
 
 async function estimateParentTranscriptTokensFromSqlite(params: {
   parentEntry: StoreSessionEntry;
-  storePath: string;
+  agentId: string;
 }): Promise<number | undefined> {
   try {
     const filePath = resolveSessionFilePath(
       params.parentEntry.sessionId,
       params.parentEntry,
-      resolveSessionFilePathOptions({ storePath: params.storePath }),
+      resolveSessionFilePathOptions({ agentId: params.agentId }),
     );
     const scope = resolveSqliteSessionTranscriptScope({
+      agentId: params.agentId,
       sessionId: params.parentEntry.sessionId,
       transcriptPath: filePath,
     });
@@ -80,7 +79,7 @@ async function estimateParentTranscriptTokensFromSqlite(params: {
 
 export async function resolveParentForkTokenCountRuntime(params: {
   parentEntry: StoreSessionEntry;
-  storePath: string;
+  agentId: string;
 }): Promise<number | undefined> {
   const freshPersistedTokens = resolveFreshSessionTotalTokens(params.parentEntry);
   if (typeof freshPersistedTokens === "number") {
@@ -92,9 +91,8 @@ export async function resolveParentForkTokenCountRuntime(params: {
   try {
     const usage = await readLatestRecentSessionUsageFromTranscriptAsync(
       params.parentEntry.sessionId,
-      params.storePath,
       params.parentEntry.sessionFile,
-      undefined,
+      params.agentId,
       1024 * 1024,
     );
     const promptTokens = resolvePositiveTokenCount(
@@ -205,7 +203,6 @@ async function readForkSourceTranscript(params: {
   return {
     agentId: params.agentId,
     cwd: header?.cwd ?? process.cwd(),
-    sessionDir: path.dirname(params.parentSessionFile),
     leafId,
     branchEntries,
     labelsToWrite: collectBranchLabels({ allEntries: entries, pathEntryIds }),
@@ -238,13 +235,11 @@ function buildBranchLabelEntries(params: {
 async function writeForkHeaderOnly(params: {
   parentSessionFile: string;
   agentId: string;
-  sessionDir: string;
   cwd: string;
 }): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
-  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-  const sessionFile = path.join(params.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
+  const sessionFile = sessionId;
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
@@ -268,8 +263,7 @@ async function writeBranchedSession(params: {
 }): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
-  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-  const sessionFile = path.join(params.source.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
+  const sessionFile = sessionId;
   const pathWithoutLabels = params.source.branchEntries.filter((entry) => entry.type !== "label");
   const pathEntryIds = new Set(pathWithoutLabels.map((entry) => entry.id));
   const labelEntries = buildBranchLabelEntries({
@@ -303,12 +297,11 @@ async function writeBranchedSession(params: {
 export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
-  sessionsDir: string;
 }): Promise<{ sessionId: string; sessionFile: string } | null> {
   const parentSessionFile = resolveSessionFilePath(
     params.parentEntry.sessionId,
     params.parentEntry,
-    { agentId: params.agentId, sessionsDir: params.sessionsDir },
+    { agentId: params.agentId },
   );
   if (!parentSessionFile) {
     return null;
@@ -327,7 +320,6 @@ export async function forkSessionFromParentRuntime(params: {
       : await writeForkHeaderOnly({
           parentSessionFile,
           agentId: source.agentId,
-          sessionDir: source.sessionDir,
           cwd: source.cwd,
         });
   } catch {

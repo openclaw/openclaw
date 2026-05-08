@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
+import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -60,7 +59,7 @@ describe("session-delivery queue storage", () => {
     });
   });
 
-  it("cleans up orphaned temporary queue files during load", async () => {
+  it("does not create legacy per-entry queue files", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
@@ -70,26 +69,12 @@ describe("session-delivery queue storage", () => {
         },
         tempDir,
       );
-      const tmpPath = path.join(resolveSessionDeliveryQueueDir(tempDir), "orphan-entry.tmp");
-      fs.writeFileSync(tmpPath, "stale tmp");
-      const staleAt = new Date(Date.now() - 60_000);
-      fs.utimesSync(tmpPath, staleAt, staleAt);
 
       await loadPendingSessionDeliveries(tempDir);
 
-      expect(fs.existsSync(tmpPath)).toBe(false);
-    });
-  });
-
-  it("keeps fresh temporary queue files while a write may still be in flight", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      const tmpPath = path.join(resolveSessionDeliveryQueueDir(tempDir), "active-entry.tmp");
-      fs.mkdirSync(path.dirname(tmpPath), { recursive: true });
-      fs.writeFileSync(tmpPath, "active tmp");
-
-      await loadPendingSessionDeliveries(tempDir);
-
-      expect(fs.existsSync(tmpPath)).toBe(true);
+      await expect(fs.access(resolveSessionDeliveryQueueDir(tempDir))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     });
   });
 });

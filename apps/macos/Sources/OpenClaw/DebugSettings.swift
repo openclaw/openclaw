@@ -19,8 +19,7 @@ struct DebugSettings: View {
     @State private var launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
     @State private var launchAgentWriteError: String?
     @State private var gatewayRootInput: String = GatewayProcessManager.shared.projectRootPath()
-    @State private var sessionStorePath: String = SessionLoader.defaultStorePath
-    @State private var sessionStoreSaveError: String?
+    @State private var sessionDatabasePath: String = SessionLoader.defaultDatabasePath
     @State private var debugSendInFlight = false
     @State private var debugSendStatus: String?
     @State private var debugSendError: String?
@@ -69,7 +68,7 @@ struct DebugSettings: View {
         .task {
             guard !self.isPreview else { return }
             await self.reloadModels()
-            self.loadSessionStorePath()
+            self.refreshSessionDatabasePath()
         }
         .alert(item: self.$pendingKill) { listener in
             Alert(
@@ -400,25 +399,17 @@ struct DebugSettings: View {
 
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow {
-                        self.gridLabel("Session store")
+                        self.gridLabel("Session database")
                         VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 8) {
-                                TextField("Path", text: self.$sessionStorePath)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.caption.monospaced())
-                                    .frame(width: 360)
-                                Button("Save") { self.saveSessionStorePath() }
-                                    .buttonStyle(.borderedProminent)
-                            }
-                            if let sessionStoreSaveError {
-                                Text(sessionStoreSaveError)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                Text("Used by the CLI session loader; stored in ~/.openclaw/openclaw.json.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                            Text(self.sessionDatabasePath)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                            Text("Runtime session state is stored in the per-agent SQLite database.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     GridRow {
@@ -759,31 +750,8 @@ struct DebugSettings: View {
         GatewayProcessManager.shared.setProjectRoot(path: self.gatewayRootInput)
     }
 
-    private func loadSessionStorePath() {
-        let parsed = OpenClawConfigFile.loadDict()
-        guard
-            let session = parsed["session"] as? [String: Any],
-            let path = session["store"] as? String
-        else {
-            self.sessionStorePath = SessionLoader.defaultStorePath
-            return
-        }
-        self.sessionStorePath = path
-    }
-
-    private func saveSessionStorePath() {
-        let trimmed = self.sessionStorePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        var root = OpenClawConfigFile.loadDict()
-
-        var session = root["session"] as? [String: Any] ?? [:]
-        session["store"] = trimmed.isEmpty ? SessionLoader.defaultStorePath : trimmed
-        root["session"] = session
-
-        guard OpenClawConfigFile.saveDict(root) else {
-            self.sessionStoreSaveError = "Config write rejected to protect gateway auth/mode."
-            return
-        }
-        self.sessionStoreSaveError = nil
+    private func refreshSessionDatabasePath() {
+        self.sessionDatabasePath = SessionLoader.defaultDatabasePath
     }
 
     private var bindingOverride: Binding<String> {
@@ -955,8 +923,7 @@ extension DebugSettings {
         view.modelsLoading = false
         view.modelsError = "Failed to load models"
         view.gatewayRootInput = "/tmp/openclaw"
-        view.sessionStorePath = "/tmp/sessions.json"
-        view.sessionStoreSaveError = "Save failed"
+        view.sessionDatabasePath = "/tmp/openclaw-agent.sqlite"
         view.debugSendInFlight = true
         view.debugSendStatus = "Sent"
         view.debugSendError = "Failed"
@@ -994,7 +961,7 @@ extension DebugSettings {
         _ = view.experimentsSection
         _ = view.gridLabel("Test")
 
-        view.loadSessionStorePath()
+        view.refreshSessionDatabasePath()
         await view.reloadModels()
     }
 }

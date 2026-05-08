@@ -282,18 +282,16 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBeUndefined();
+    expect(buildStatusReplyMock.mock.calls[0]?.[0]).not.toHaveProperty("storePath");
     expect(handleCommandsMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves storePath when routing inline status through the shared status builder", async () => {
+  it("does not route the legacy storePath through the shared status builder", async () => {
     const { result } = await runInlineStatusAction("/tmp/inline-status-store.json");
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBe(
-      "/tmp/inline-status-store.json",
-    );
+    expect(buildStatusReplyMock.mock.calls[0]?.[0]).not.toHaveProperty("storePath");
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 

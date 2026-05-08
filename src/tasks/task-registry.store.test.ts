@@ -1,4 +1,4 @@
-import { mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -12,11 +12,16 @@ import {
   maybeDeliverTaskStateChangeUpdate,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
-import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
+import {
+  resolveLegacyTaskRegistrySqlitePath,
+  resolveTaskRegistryDir,
+  resolveTaskRegistrySqlitePath,
+} from "./task-registry.paths.js";
 import {
   configureTaskRegistryRuntime,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
+import { importLegacyTaskRegistrySidecarToSqlite } from "./task-registry.store.sqlite.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
@@ -317,8 +322,111 @@ describe("task-registry store runtime", () => {
 
         const registryDir = resolveTaskRegistryDir(process.env);
         const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        expect(sqlitePath.endsWith(path.join("state", "openclaw.sqlite"))).toBe(true);
+        expect(existsSync(resolveLegacyTaskRegistrySqlitePath(process.env))).toBe(false);
         expect(statSync(registryDir).mode & 0o777).toBe(0o700);
         expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
+      },
+    );
+  });
+
+  it("imports legacy task sidecar sqlite into the shared state database", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-sidecar-" },
+      async () => {
+        const legacyPath = resolveLegacyTaskRegistrySqlitePath(process.env);
+        mkdirSync(path.dirname(legacyPath), { recursive: true });
+        const { DatabaseSync } = requireNodeSqlite();
+        const db = new DatabaseSync(legacyPath);
+        db.exec(`
+      CREATE TABLE task_runs (
+        task_id TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL,
+        task_kind TEXT,
+        source_id TEXT,
+        requester_session_key TEXT,
+        owner_key TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        child_session_key TEXT,
+        parent_flow_id TEXT,
+        parent_task_id TEXT,
+        agent_id TEXT,
+        run_id TEXT,
+        label TEXT,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL,
+        delivery_status TEXT NOT NULL,
+        notify_policy TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        last_event_at INTEGER,
+        cleanup_after INTEGER,
+        error TEXT,
+        progress_summary TEXT,
+        terminal_summary TEXT,
+        terminal_outcome TEXT
+      );
+      CREATE TABLE task_delivery_state (
+        task_id TEXT PRIMARY KEY,
+        requester_origin_json TEXT,
+        last_notified_event_at INTEGER
+      );
+    `);
+        db.prepare(`
+      INSERT INTO task_runs (
+        task_id,
+        runtime,
+        requester_session_key,
+        owner_key,
+        scope_kind,
+        run_id,
+        task,
+        status,
+        delivery_status,
+        notify_policy,
+        created_at,
+        last_event_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+          "legacy-sidecar-task",
+          "acp",
+          "agent:main:main",
+          "agent:main:main",
+          "session",
+          "legacy-sidecar-run",
+          "Legacy sidecar task",
+          "running",
+          "pending",
+          "done_only",
+          100,
+          100,
+        );
+        db.prepare(`
+      INSERT INTO task_delivery_state (
+        task_id,
+        requester_origin_json,
+        last_notified_event_at
+      ) VALUES (?, ?, ?)
+    `).run("legacy-sidecar-task", JSON.stringify({ channel: "slack", to: "C123" }), 125);
+        db.close();
+
+        const imported = importLegacyTaskRegistrySidecarToSqlite(process.env);
+        expect(imported).toMatchObject({
+          importedTasks: 1,
+          importedDeliveryStates: 1,
+          removedSource: true,
+          sourcePath: legacyPath,
+        });
+        expect(existsSync(legacyPath)).toBe(false);
+
+        resetTaskRegistryForTests({ persist: false });
+
+        expect(findTaskByRunId("legacy-sidecar-run")).toMatchObject({
+          taskId: "legacy-sidecar-task",
+          task: "Legacy sidecar task",
+          deliveryStatus: "pending",
+        });
       },
     );
   });
@@ -327,7 +435,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-legacy-" },
       async () => {
-        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        const sqlitePath = resolveLegacyTaskRegistrySqlitePath(process.env);
         mkdirSync(path.dirname(sqlitePath), { recursive: true });
         const { DatabaseSync } = requireNodeSqlite();
         const db = new DatabaseSync(sqlitePath);
@@ -395,6 +503,11 @@ describe("task-registry store runtime", () => {
         );
         db.close();
 
+        const imported = importLegacyTaskRegistrySidecarToSqlite(process.env);
+
+        expect(imported.importedTasks).toBe(1);
+        expect(imported.removedSource).toBe(true);
+
         resetTaskRegistryForTests({ persist: false });
 
         const restored = findTaskByRunId("legacy-cron-run");
@@ -411,7 +524,7 @@ describe("task-registry store runtime", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-store-legacy-write-" },
       async () => {
-        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        const sqlitePath = resolveLegacyTaskRegistrySqlitePath(process.env);
         mkdirSync(path.dirname(sqlitePath), { recursive: true });
         const { DatabaseSync } = requireNodeSqlite();
         const db = new DatabaseSync(sqlitePath);
@@ -474,6 +587,11 @@ describe("task-registry store runtime", () => {
           100,
         );
         db.close();
+
+        const imported = importLegacyTaskRegistrySidecarToSqlite(process.env);
+
+        expect(imported.importedTasks).toBe(1);
+        expect(imported.removedSource).toBe(true);
 
         resetTaskRegistryForTests({ persist: false });
 

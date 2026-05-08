@@ -1,5 +1,7 @@
-import { statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow,
@@ -9,10 +11,12 @@ import {
   setFlowWaiting,
 } from "./task-flow-registry.js";
 import {
+  resolveLegacyTaskFlowRegistrySqlitePath,
   resolveTaskFlowRegistryDir,
   resolveTaskFlowRegistrySqlitePath,
 } from "./task-flow-registry.paths.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import { importLegacyTaskFlowRegistrySidecarToSqlite } from "./task-flow-registry.store.sqlite.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 function createStoredFlow(): TaskFlowRecord {
@@ -212,8 +216,93 @@ describe("task-flow-registry store runtime", () => {
 
       const registryDir = resolveTaskFlowRegistryDir(process.env);
       const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
+      expect(sqlitePath.endsWith(path.join("state", "openclaw.sqlite"))).toBe(true);
+      expect(existsSync(resolveLegacyTaskFlowRegistrySqlitePath(process.env))).toBe(false);
       expect(statSync(registryDir).mode & 0o777).toBe(0o700);
       expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it("imports legacy Task Flow sidecar sqlite into the shared state database", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      const legacyPath = resolveLegacyTaskFlowRegistrySqlitePath(process.env);
+      mkdirSync(path.dirname(legacyPath), { recursive: true });
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(legacyPath);
+      db.exec(`
+        CREATE TABLE flow_runs (
+          flow_id TEXT PRIMARY KEY,
+          shape TEXT,
+          sync_mode TEXT NOT NULL DEFAULT 'managed',
+          owner_key TEXT NOT NULL,
+          requester_origin_json TEXT,
+          controller_id TEXT,
+          revision INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL,
+          notify_policy TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          current_step TEXT,
+          blocked_task_id TEXT,
+          blocked_summary TEXT,
+          state_json TEXT,
+          wait_json TEXT,
+          cancel_requested_at INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          ended_at INTEGER
+        );
+      `);
+      db.prepare(`
+        INSERT INTO flow_runs (
+          flow_id,
+          sync_mode,
+          owner_key,
+          controller_id,
+          revision,
+          status,
+          notify_policy,
+          goal,
+          current_step,
+          state_json,
+          wait_json,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "legacy-sidecar-flow",
+        "managed",
+        "agent:main:main",
+        "tests/legacy-flow",
+        2,
+        "waiting",
+        "done_only",
+        "Legacy sidecar flow",
+        "wait",
+        JSON.stringify({ phase: "wait" }),
+        JSON.stringify({ kind: "external_event", topic: "forum" }),
+        100,
+        120,
+      );
+      db.close();
+
+      const imported = importLegacyTaskFlowRegistrySidecarToSqlite(process.env);
+      expect(imported).toMatchObject({
+        importedFlows: 1,
+        removedSource: true,
+        sourcePath: legacyPath,
+      });
+      expect(existsSync(legacyPath)).toBe(false);
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      expect(getTaskFlowById("legacy-sidecar-flow")).toMatchObject({
+        flowId: "legacy-sidecar-flow",
+        controllerId: "tests/legacy-flow",
+        revision: 2,
+        stateJson: { phase: "wait" },
+        waitJson: { kind: "external_event", topic: "forum" },
+      });
     });
   });
 });

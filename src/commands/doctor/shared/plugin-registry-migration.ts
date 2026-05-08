@@ -83,17 +83,23 @@ export function preflightPluginRegistryInstallMigration(
       deprecationWarnings,
     };
   }
+  const currentRegistry = !force ? readPersistedInstalledPluginIndexSync(params) : null;
+  if (currentRegistry) {
+    return {
+      action: "skip-existing",
+      filePath,
+      force,
+      deprecationWarnings,
+    };
+  }
   const pathExists = params.existsSync ?? fs.existsSync;
-  if (!force && pathExists(filePath)) {
-    const currentRegistry = readPersistedInstalledPluginIndexSync(params);
-    if (currentRegistry) {
-      return {
-        action: "skip-existing",
-        filePath,
-        force,
-        deprecationWarnings,
-      };
-    }
+  if (!force && pathExists(filePath) && readPersistedInstalledPluginIndexSync(params)) {
+    return {
+      action: "skip-existing",
+      filePath,
+      force,
+      deprecationWarnings,
+    };
   }
   return {
     action: "migrate",

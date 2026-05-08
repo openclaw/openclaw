@@ -92,14 +92,14 @@ sessions should expire on a timer.
 All session state is owned by the **gateway**. UI clients query the gateway for
 session data.
 
-- **Store:** `~/.openclaw/state/openclaw.sqlite` by default. Legacy `sessions.json` indexes are imported by `openclaw doctor --fix`.
-- **Transcripts:** `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
+- **Store:** `~/.openclaw/state/openclaw.sqlite` for global state plus `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` for agent-owned rows. Legacy `sessions.json` indexes are imported by `openclaw doctor --fix`.
+- **Transcripts:** SQLite `transcript_events` rows in the per-agent database. JSONL transcript files are import/export/debug shape, not runtime storage.
 
 The session store keeps separate lifecycle timestamps:
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
-- `updatedAt`: last store-row mutation; useful for listing and pruning, but not
+- `updatedAt`: last store-row mutation; useful for listing, but not
   authoritative for daily/idle reset freshness.
 
 Older rows without `sessionStartedAt` are resolved from the SQLite transcript
@@ -107,42 +107,20 @@ session header when available. If an older row also lacks `lastInteractionAt`,
 idle freshness falls back to that session start time, not to later bookkeeping
 writes.
 
-## Session maintenance
+## Session Repair
 
-OpenClaw bounds SQLite session rows through explicit maintenance. By default, it
-runs in `warn` mode (reports what would be cleaned). Set
-`session.maintenance.mode` to `"enforce"` and run `openclaw sessions cleanup`
-when you want cleanup to apply:
+SQLite is the durable session store. Gateway runtime writes do not prune, cap,
+or import session rows, and session store reads do not run cleanup during
+startup. Legacy `session.maintenance` settings are handled only by
+`openclaw doctor --fix`, which removes them from older config files.
 
-```json5
-{
-  session: {
-    maintenance: {
-      mode: "enforce",
-      pruneAfter: "30d",
-      maxEntries: 500,
-    },
-  },
-}
-```
-
-Gateway runtime writes do not prune, cap, or import session rows. Session store reads also do not prune or cap entries during Gateway startup. This avoids running cleanup on every startup or isolated cron session. `openclaw sessions cleanup --enforce` applies row age/count retention explicitly.
-
-Maintenance preserves durable external conversation pointers, including group
-sessions and thread-scoped chat sessions, while still allowing synthetic cron,
-hook, heartbeat, ACP, and sub-agent entries to age out.
-
-If you previously used direct-message isolation and later returned
-`session.dmScope` to `main`, preview stale peer-keyed DM rows with
-`openclaw sessions cleanup --dry-run --fix-dm-scope`. Applying the same flag
-retires those old direct-DM rows and keeps their transcripts as deleted
-archives.
-
-Preview with `openclaw sessions cleanup --dry-run`.
+Use `openclaw doctor --fix` to import remaining legacy session files. If a row
+still references a transcript that no longer exists after doctor runs, reset or
+delete that session explicitly.
 
 ## Inspecting sessions
 
-- `openclaw status` -- session store path and recent activity.
+- `openclaw status` -- agent database path and recent activity.
 - `openclaw sessions --json` -- all sessions (filter with `--active <minutes>`).
 - `/status` in chat -- context usage, model, and toggles.
 - `/context list` -- what is in the system prompt.

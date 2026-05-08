@@ -1091,7 +1091,7 @@ export async function runEmbeddedPiAgent(
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
-      // Pi owns JSONL persistence; this marker only lets the outer retry avoid
+      // Pi owns transcript persistence; this marker only lets the outer retry avoid
       // replaying the same inbound channel message after overflow compaction.
       let lastPersistedCurrentMessageId: string | number | undefined;
       const onUserMessagePersisted: RunEmbeddedPiAgentParams["onUserMessagePersisted"] = (

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import {
   createDiscordNativeApprovalAdapter,
@@ -28,7 +27,6 @@ const NATIVE_DELIVERY_CFG = {
 
 function writeStore(store: Record<string, unknown>) {
   fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-  clearSessionStoreCacheForTest();
 }
 
 describe("createDiscordNativeApprovalAdapter", () => {
@@ -186,7 +184,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const target = await adapter.native?.resolveOriginTarget?.({
       cfg: {
         ...NATIVE_DELIVERY_CFG,
-        session: { store: STORE_PATH },
+        session: {},
       } as never,
       accountId: "main",
       approvalKind: "plugin",

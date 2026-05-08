@@ -474,7 +474,7 @@ struct GeneralSettings: View {
                 Text("\(linkLabel) auth age: \(healthAgeString(linkAge))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("Session store: \(snap.sessions.path) (\(snap.sessions.count) entries)")
+                Text("Session database: \(snap.sessions.databasePath) (\(snap.sessions.count) entries)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let recent = snap.sessions.recent.first {

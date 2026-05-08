@@ -23,11 +23,12 @@ openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 ## Notes
 
 - The archive includes a `manifest.json` file with the resolved source paths and archive layout.
+- SQLite databases under the state directory are snapshotted with SQLite `VACUUM INTO`; live `*.sqlite-wal` and `*.sqlite-shm` sidecars are not archived directly.
 - Default output is a timestamped `.tar.gz` archive in the current working directory.
 - If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten.
 - Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
-- `openclaw backup verify <archive>` validates that the archive contains exactly one root manifest, rejects traversal-style archive paths, and checks that every manifest-declared payload exists in the tarball.
+- `openclaw backup verify <archive>` validates that the archive contains exactly one root manifest, rejects traversal-style archive paths, checks that every manifest-declared payload exists in the tarball, and runs SQLite integrity checks for manifest-declared database snapshots.
 - `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
 

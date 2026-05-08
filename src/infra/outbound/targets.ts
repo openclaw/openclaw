@@ -126,7 +126,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     turnSourceTo: resolvedTurnSource?.to,
     turnSourceAccountId: resolvedTurnSource?.accountId,
     // Only pass threadId from an explicit turn source (e.g., restart sentinel's
-    // delivery context). Do NOT fall back to session-stored threadId here —
+    // delivery context). Do NOT fall back to a persisted session-row threadId here —
     // heartbeat mode intentionally drops inherited thread IDs to avoid replying
     // in stale threads (e.g., Slack thread_ts). The sentinel's delivery context
     // carries the correct topic/thread ID when present.

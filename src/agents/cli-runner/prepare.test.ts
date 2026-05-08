@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { __testing as cliBackendsTesting } from "../cli-backends.js";
@@ -118,18 +122,20 @@ function createSessionFile() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "session-test.jsonl");
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  fs.writeFileSync(
-    sessionFile,
-    `${JSON.stringify({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "session-test",
-      timestamp: new Date(0).toISOString(),
-      cwd: dir,
-    })}\n`,
-    "utf-8",
-  );
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "session-test",
+    transcriptPath: sessionFile,
+    events: [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "session-test",
+        timestamp: new Date(0).toISOString(),
+        cwd: dir,
+      },
+    ],
+  });
   return { dir, sessionFile };
 }
 
@@ -142,17 +148,25 @@ function appendTranscriptEntry(
     message: unknown;
   },
 ): void {
-  fs.appendFileSync(
-    sessionFile,
-    `${JSON.stringify({
-      type: "message",
-      id: entry.id,
-      parentId: entry.parentId,
-      timestamp: entry.timestamp,
-      message: entry.message,
-    })}\n`,
-    "utf-8",
-  );
+  const events = loadSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "session-test",
+  }).map((row) => row.event);
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "session-test",
+    transcriptPath: sessionFile,
+    events: [
+      ...events,
+      {
+        type: "message",
+        id: entry.id,
+        parentId: entry.parentId,
+        timestamp: entry.timestamp,
+        message: entry.message,
+      },
+    ],
+  });
 }
 
 describe("shouldSkipLocalCliCredentialEpoch", () => {

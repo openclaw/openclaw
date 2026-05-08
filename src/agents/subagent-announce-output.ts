@@ -7,10 +7,9 @@ import {
 } from "./subagent-announce-capture.js";
 import {
   callGateway,
+  getSessionEntry,
   getRuntimeConfig,
-  loadSessionStore,
   resolveAgentIdFromSessionKey,
-  resolveStorePath,
 } from "./subagent-announce.runtime.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
@@ -570,10 +569,8 @@ export async function buildCompactAnnounceStatsLine(params: {
   startedAt?: number;
   endedAt?: number;
 }) {
-  const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  let entry = loadSessionStore(storePath)[params.sessionKey];
+  let entry = getSessionEntry({ agentId, sessionKey: params.sessionKey });
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     const hasTokenData =
@@ -586,7 +583,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     if (!isFastTestMode()) {
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
-    entry = loadSessionStore(storePath)[params.sessionKey];
+    entry = getSessionEntry({ agentId, sessionKey: params.sessionKey });
   }
 
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;

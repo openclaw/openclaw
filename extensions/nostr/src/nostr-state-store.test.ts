@@ -1,37 +1,41 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
 import {
+  createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { describe, expect, it } from "vitest";
+import {
+  NOSTR_BUS_STATE_NAMESPACE,
+  NOSTR_PROFILE_STATE_NAMESPACE,
+  normalizeNostrStateAccountId,
   readNostrBusState,
   readNostrProfileState,
   writeNostrBusState,
   writeNostrProfileState,
   computeSinceTimestamp,
 } from "./nostr-state-store.js";
-import { setNostrRuntime } from "./runtime.js";
+
+const busStateSeedStore = createPluginStateKeyedStore<unknown>("nostr", {
+  namespace: NOSTR_BUS_STATE_NAMESPACE,
+  maxEntries: 1_000,
+});
+
+const profileStateSeedStore = createPluginStateKeyedStore<unknown>("nostr", {
+  namespace: NOSTR_PROFILE_STATE_NAMESPACE,
+  maxEntries: 1_000,
+});
 
 async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
   const previous = process.env.OPENCLAW_STATE_DIR;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nostr-"));
   process.env.OPENCLAW_STATE_DIR = dir;
-  setNostrRuntime({
-    state: {
-      resolveStateDir: (env, homedir) => {
-        const stateEnv = env ?? process.env;
-        const override = stateEnv.OPENCLAW_STATE_DIR?.trim();
-        if (override) {
-          return override;
-        }
-        const resolveHome = homedir ?? os.homedir;
-        return path.join(resolveHome(), ".openclaw");
-      },
-    },
-  } as PluginRuntime);
+  resetPluginStateStoreForTests();
   try {
     return await fn(dir);
   } finally {
+    resetPluginStateStoreForTests();
     if (previous === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -86,19 +90,13 @@ describe("nostr bus state store", () => {
     });
   });
 
-  it("upgrades v1 bus state files on read", async () => {
-    await withTempStateDir(async (dir) => {
-      const filePath = path.join(dir, "nostr", "bus-state-test-bot.json");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 1,
-          lastProcessedAt: 1700000000,
-          gatewayStartedAt: 1700000100,
-        }),
-        "utf-8",
-      );
+  it("upgrades v1 bus state entries on read", async () => {
+    await withTempStateDir(async () => {
+      await busStateSeedStore.register(normalizeNostrStateAccountId("test-bot"), {
+        version: 1,
+        lastProcessedAt: 1700000000,
+        gatewayStartedAt: 1700000100,
+      });
 
       const state = await readNostrBusState({ accountId: "test-bot" });
       expect(state).toEqual({
@@ -111,19 +109,13 @@ describe("nostr bus state store", () => {
   });
 
   it("drops malformed recent event ids while keeping the state", async () => {
-    await withTempStateDir(async (dir) => {
-      const filePath = path.join(dir, "nostr", "bus-state-test-bot.json");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 2,
-          lastProcessedAt: 1700000000,
-          gatewayStartedAt: 1700000100,
-          recentEventIds: ["evt-1", 2, null],
-        }),
-        "utf-8",
-      );
+    await withTempStateDir(async () => {
+      await busStateSeedStore.register(normalizeNostrStateAccountId("test-bot"), {
+        version: 2,
+        lastProcessedAt: 1700000000,
+        gatewayStartedAt: 1700000100,
+        recentEventIds: ["evt-1", 2, null],
+      });
 
       const state = await readNostrBusState({ accountId: "test-bot" });
       expect(state).toEqual({
@@ -161,22 +153,16 @@ describe("nostr profile state store", () => {
   });
 
   it("drops malformed relay results while keeping valid state fields", async () => {
-    await withTempStateDir(async (dir) => {
-      const filePath = path.join(dir, "nostr", "profile-state-test-bot.json");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 1,
-          lastPublishedAt: 1700000000,
-          lastPublishedEventId: "evt-1",
-          lastPublishResults: {
-            "wss://relay.example": "ok",
-            "wss://relay.bad": "unknown",
-          },
-        }),
-        "utf-8",
-      );
+    await withTempStateDir(async () => {
+      await profileStateSeedStore.register(normalizeNostrStateAccountId("test-bot"), {
+        version: 1,
+        lastPublishedAt: 1700000000,
+        lastPublishedEventId: "evt-1",
+        lastPublishResults: {
+          "wss://relay.example": "ok",
+          "wss://relay.bad": "unknown",
+        },
+      });
 
       const state = await readNostrProfileState({ accountId: "test-bot" });
       expect(state).toEqual({

@@ -48,7 +48,7 @@ const mocks = vi.hoisted(() => {
           updatedAt: 0,
         },
         store: {},
-        storePath: "/tmp/sessions.json",
+        agentId: "main",
         canonicalKey: "agent:main:main",
         legacyKey: undefined,
       }),
@@ -384,7 +384,7 @@ describe("scheduleRestartSentinelWake", () => {
         updatedAt: 0,
       },
       store: {},
-      storePath: "/tmp/sessions.json",
+      agentId: "main",
       canonicalKey: "agent:main:main",
       legacyKey: undefined,
     });
@@ -644,7 +644,7 @@ describe("scheduleRestartSentinelWake", () => {
         origin: { provider: "telegram", chatType: "group" },
       },
       store: {},
-      storePath: "/tmp/sessions.json",
+      agentId: "main",
       canonicalKey: "agent:main:group",
       legacyKey: undefined,
     });
@@ -1306,7 +1306,7 @@ describe("scheduleRestartSentinelWake", () => {
           origin: { provider: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
         },
         store: {},
-        storePath: "/tmp/sessions.json",
+        agentId: "main",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
         legacyKey: undefined,
       })
@@ -1319,7 +1319,7 @@ describe("scheduleRestartSentinelWake", () => {
           lastTo: "room:!MixedCase:example.org",
         },
         store: {},
-        storePath: "/tmp/sessions.json",
+        agentId: "main",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org",
         legacyKey: undefined,
       });

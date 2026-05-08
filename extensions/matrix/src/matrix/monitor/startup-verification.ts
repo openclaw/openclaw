@@ -1,16 +1,23 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { MatrixConfig } from "../../types.js";
-import { resolveMatrixStoragePaths } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";
 import { formatMatrixErrorMessage } from "../errors.js";
 import type { MatrixClient, MatrixOwnDeviceVerificationStatus } from "../sdk.js";
+import { withMatrixSqliteStateEnvAsync } from "../sqlite-state.js";
 
-const STARTUP_VERIFICATION_STATE_FILENAME = "startup-verification.json";
+const MATRIX_PLUGIN_ID = "matrix";
+const STARTUP_VERIFICATION_NAMESPACE = "startup-verification";
+const STARTUP_VERIFICATION_MAX_ENTRIES = 1_000;
 const DEFAULT_STARTUP_VERIFICATION_MODE = "if-unverified" as const;
 const DEFAULT_STARTUP_VERIFICATION_COOLDOWN_HOURS = 24;
 const DEFAULT_STARTUP_VERIFICATION_FAILURE_COOLDOWN_MS = 60 * 60 * 1000;
+const startupVerificationStore = createPluginStateKeyedStore<MatrixStartupVerificationState>(
+  MATRIX_PLUGIN_ID,
+  {
+    namespace: STARTUP_VERIFICATION_NAMESPACE,
+    maxEntries: STARTUP_VERIFICATION_MAX_ENTRIES,
+  },
+);
 
 type MatrixStartupVerificationState = {
   userId?: string | null;
@@ -43,33 +50,56 @@ function normalizeCooldownHours(value: number | undefined): number {
   return Math.max(0, value);
 }
 
-function resolveStartupVerificationStatePath(params: {
-  auth: MatrixAuth;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const storagePaths = resolveMatrixStoragePaths({
-    homeserver: params.auth.homeserver,
-    userId: params.auth.userId,
-    accessToken: params.auth.accessToken,
-    accountId: params.auth.accountId,
-    deviceId: params.auth.deviceId,
-    env: params.env,
-  });
-  return path.join(storagePaths.rootDir, STARTUP_VERIFICATION_STATE_FILENAME);
+function buildStartupVerificationKey(auth: MatrixAuth): string {
+  return auth.accountId.trim() || "default";
 }
 
-async function readStartupVerificationState(
-  filePath: string,
-): Promise<MatrixStartupVerificationState | null> {
-  const { value } = await readJsonFileWithFallback<MatrixStartupVerificationState | null>(
-    filePath,
-    null,
+async function readStartupVerificationState(params: {
+  auth: MatrixAuth;
+  env?: NodeJS.ProcessEnv;
+  stateFilePath?: string;
+}): Promise<MatrixStartupVerificationState | null> {
+  const value = await withMatrixSqliteStateEnvAsync(
+    {
+      env: params.env,
+      storagePath: params.stateFilePath,
+    },
+    () => startupVerificationStore.lookup(buildStartupVerificationKey(params.auth)),
   );
   return value && typeof value === "object" ? value : null;
 }
 
-async function clearStartupVerificationState(filePath: string): Promise<void> {
-  await fs.rm(filePath, { force: true }).catch(() => {});
+async function clearStartupVerificationState(params: {
+  auth: MatrixAuth;
+  env?: NodeJS.ProcessEnv;
+  stateFilePath?: string;
+}): Promise<void> {
+  await withMatrixSqliteStateEnvAsync(
+    {
+      env: params.env,
+      storagePath: params.stateFilePath,
+    },
+    () => startupVerificationStore.delete(buildStartupVerificationKey(params.auth)),
+  ).catch(() => {});
+}
+
+async function writeStartupVerificationState(params: {
+  auth: MatrixAuth;
+  env?: NodeJS.ProcessEnv;
+  stateFilePath?: string;
+  state: MatrixStartupVerificationState;
+}): Promise<void> {
+  await withMatrixSqliteStateEnvAsync(
+    {
+      env: params.env,
+      storagePath: params.stateFilePath,
+    },
+    () =>
+      startupVerificationStore.register(
+        buildStartupVerificationKey(params.auth),
+        JSON.parse(JSON.stringify(params.state)) as MatrixStartupVerificationState,
+      ),
+  );
 }
 
 function resolveStateCooldownMs(
@@ -152,15 +182,8 @@ export async function ensureMatrixStartupVerification(params: {
   }
 
   const verification = await params.client.getOwnDeviceVerificationStatus();
-  const statePath =
-    params.stateFilePath ??
-    resolveStartupVerificationStatePath({
-      auth: params.auth,
-      env: params.env,
-    });
-
   if (verification.verified) {
-    await clearStartupVerificationState(statePath);
+    await clearStartupVerificationState(params);
     return {
       kind: "verified",
       verification,
@@ -169,7 +192,7 @@ export async function ensureMatrixStartupVerification(params: {
 
   const mode = params.accountConfig.startupVerification ?? DEFAULT_STARTUP_VERIFICATION_MODE;
   if (mode === "off") {
-    await clearStartupVerificationState(statePath);
+    await clearStartupVerificationState(params);
     return {
       kind: "disabled",
       verification,
@@ -189,7 +212,7 @@ export async function ensureMatrixStartupVerification(params: {
   );
   const cooldownMs = cooldownHours * 60 * 60 * 1000;
   const nowMs = params.nowMs ?? Date.now();
-  const state = await readStartupVerificationState(statePath);
+  const state = await readStartupVerificationState(params);
   const stateCooldownMs = resolveStateCooldownMs(state, cooldownMs);
   if (shouldHonorCooldown({ state, verification, stateCooldownMs, nowMs })) {
     return {
@@ -205,14 +228,17 @@ export async function ensureMatrixStartupVerification(params: {
 
   try {
     const request = await params.client.crypto.requestVerification({ ownUser: true });
-    await writeJsonFileAtomically(statePath, {
-      userId: verification.userId,
-      deviceId: verification.deviceId,
-      attemptedAt: new Date(nowMs).toISOString(),
-      outcome: "requested",
-      requestId: request.id,
-      transactionId: request.transactionId,
-    } satisfies MatrixStartupVerificationState);
+    await writeStartupVerificationState({
+      ...params,
+      state: {
+        userId: verification.userId,
+        deviceId: verification.deviceId,
+        attemptedAt: new Date(nowMs).toISOString(),
+        outcome: "requested",
+        requestId: request.id,
+        transactionId: request.transactionId,
+      },
+    });
     return {
       kind: "requested",
       verification,
@@ -221,13 +247,16 @@ export async function ensureMatrixStartupVerification(params: {
     };
   } catch (err) {
     const error = formatMatrixErrorMessage(err);
-    await writeJsonFileAtomically(statePath, {
-      userId: verification.userId,
-      deviceId: verification.deviceId,
-      attemptedAt: new Date(nowMs).toISOString(),
-      outcome: "failed",
-      error,
-    } satisfies MatrixStartupVerificationState).catch(() => {});
+    await writeStartupVerificationState({
+      ...params,
+      state: {
+        userId: verification.userId,
+        deviceId: verification.deviceId,
+        attemptedAt: new Date(nowMs).toISOString(),
+        outcome: "failed",
+        error,
+      },
+    }).catch(() => {});
     return {
       kind: "request-failed",
       verification,

@@ -3,13 +3,13 @@ import type { SessionEntry } from "../config/sessions/types.js";
 
 const {
   loadConfigMock,
-  loadCombinedSessionStoreForGatewayMock,
-  resolveGatewaySessionStoreTargetMock,
+  loadCombinedSessionEntriesForGatewayMock,
+  resolveGatewaySessionDatabaseTargetMock,
   resolveSessionTranscriptCandidatesMock,
 } = vi.hoisted(() => ({
   loadConfigMock: vi.fn(() => ({ session: {} })),
-  loadCombinedSessionStoreForGatewayMock: vi.fn(),
-  resolveGatewaySessionStoreTargetMock: vi.fn(),
+  loadCombinedSessionEntriesForGatewayMock: vi.fn(),
+  resolveGatewaySessionDatabaseTargetMock: vi.fn(),
   resolveSessionTranscriptCandidatesMock: vi.fn(),
 }));
 
@@ -18,8 +18,8 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("./session-utils.js", () => ({
-  loadCombinedSessionStoreForGateway: loadCombinedSessionStoreForGatewayMock,
-  resolveGatewaySessionStoreTarget: resolveGatewaySessionStoreTargetMock,
+  loadCombinedSessionEntriesForGateway: loadCombinedSessionEntriesForGatewayMock,
+  resolveGatewaySessionDatabaseTarget: resolveGatewaySessionDatabaseTargetMock,
   resolveSessionTranscriptCandidates: resolveSessionTranscriptCandidatesMock,
 }));
 
@@ -34,12 +34,12 @@ describe("resolveSessionKeyForTranscriptFile", () => {
   beforeEach(() => {
     clearSessionTranscriptKeyCacheForTests();
     loadConfigMock.mockClear();
-    loadCombinedSessionStoreForGatewayMock.mockReset();
-    resolveGatewaySessionStoreTargetMock.mockReset();
+    loadCombinedSessionEntriesForGatewayMock.mockReset();
+    resolveGatewaySessionDatabaseTargetMock.mockReset();
     resolveSessionTranscriptCandidatesMock.mockReset();
-    resolveGatewaySessionStoreTargetMock.mockImplementation(({ key }: { key: string }) => ({
+    resolveGatewaySessionDatabaseTargetMock.mockImplementation(({ key }: { key: string }) => ({
       agentId: "main",
-      storePath: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       canonicalKey: key,
       storeKeys: [key],
     }));
@@ -50,9 +50,9 @@ describe("resolveSessionKeyForTranscriptFile", () => {
       "agent:main:one": { sessionId: "sess-1", updatedAt: now },
       "agent:main:two": { sessionId: "sess-2", updatedAt: now },
     } satisfies Record<string, SessionEntry>;
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store,
+    loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
+      databasePath: "(multiple)",
+      entries: store,
     });
     resolveSessionTranscriptCandidatesMock.mockImplementation((sessionId: string) => {
       if (sessionId === "sess-1") {
@@ -76,12 +76,12 @@ describe("resolveSessionKeyForTranscriptFile", () => {
       "agent:main:alpha": { sessionId: "sess-alpha", updatedAt: now },
       "agent:main:beta": { sessionId: "sess-beta", updatedAt: now },
     };
-    loadCombinedSessionStoreForGatewayMock.mockImplementation(() => ({
-      storePath: "(multiple)",
-      store,
+    loadCombinedSessionEntriesForGatewayMock.mockImplementation(() => ({
+      databasePath: "(multiple)",
+      entries: store,
     }));
     resolveSessionTranscriptCandidatesMock.mockImplementation(
-      (sessionId: string, _storePath?: string, sessionFile?: string) => {
+      (sessionId: string, sessionFile?: string) => {
         if (sessionId === "sess-alpha") {
           return ["/tmp/alpha.jsonl"];
         }
@@ -111,7 +111,7 @@ describe("resolveSessionKeyForTranscriptFile", () => {
 
   it("returns undefined for blank transcript paths", () => {
     expect(resolveSessionKeyForTranscriptFile("   ")).toBeUndefined();
-    expect(loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
+    expect(loadCombinedSessionEntriesForGatewayMock).not.toHaveBeenCalled();
   });
 
   it("prefers the deterministic session key when duplicate sessionIds share a transcript path", () => {
@@ -119,9 +119,9 @@ describe("resolveSessionKeyForTranscriptFile", () => {
       "agent:other:main": { sessionId: "run-dup", updatedAt: now + 1 },
       "agent:main:acp:run-dup": { sessionId: "run-dup", updatedAt: now },
     } satisfies Record<string, SessionEntry>;
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store,
+    loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
+      databasePath: "(multiple)",
+      entries: store,
     });
     resolveSessionTranscriptCandidatesMock.mockReturnValue(["/tmp/shared.jsonl"]);
 
@@ -133,9 +133,9 @@ describe("resolveSessionKeyForTranscriptFile", () => {
       "agent:main:older": { sessionId: "sess-old", updatedAt: now },
       "agent:main:newer": { sessionId: "sess-new", updatedAt: now + 10 },
     } satisfies Record<string, SessionEntry>;
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store,
+    loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
+      databasePath: "(multiple)",
+      entries: store,
     });
     resolveSessionTranscriptCandidatesMock.mockReturnValue(["/tmp/shared.jsonl"]);
 
@@ -150,9 +150,9 @@ describe("resolveSessionKeyForTranscriptFile", () => {
       const store = {
         [sessionKey]: { sessionId: `sid-${i}`, updatedAt: now + i },
       } satisfies Record<string, SessionEntry>;
-      loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-        storePath: "(multiple)",
-        store,
+      loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
+        databasePath: "(multiple)",
+        entries: store,
       });
       resolveSessionTranscriptCandidatesMock.mockReturnValue([transcriptPath]);
       resolveSessionKeyForTranscriptFile(transcriptPath);
@@ -164,9 +164,9 @@ describe("resolveSessionKeyForTranscriptFile", () => {
     const overflowStore = {
       [overflowKey]: { sessionId: "sid-overflow", updatedAt: now + 999 },
     } satisfies Record<string, SessionEntry>;
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: overflowStore,
+    loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
+      databasePath: "(multiple)",
+      entries: overflowStore,
     });
     resolveSessionTranscriptCandidatesMock.mockReturnValue([overflowPath]);
     expect(resolveSessionKeyForTranscriptFile(overflowPath)).toBe(overflowKey);
@@ -174,9 +174,9 @@ describe("resolveSessionKeyForTranscriptFile", () => {
     // session-0 should have been evicted from cache — next lookup will
     // re-resolve from the store (returns undefined since store was mocked
     // with only the overflow entry).
-    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: overflowStore,
+    loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
+      databasePath: "(multiple)",
+      entries: overflowStore,
     });
     resolveSessionTranscriptCandidatesMock.mockReturnValue([]);
     expect(resolveSessionKeyForTranscriptFile("/tmp/session-0.jsonl")).toBeUndefined();

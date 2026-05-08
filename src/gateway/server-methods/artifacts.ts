@@ -308,15 +308,14 @@ async function loadArtifacts(
   if (!sessionKey) {
     return { artifacts: [] };
   }
-  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const { entry } = loadSessionEntry(sessionKey);
   const sessionId = entry?.sessionId;
-  if (!sessionId || !storePath) {
+  if (!sessionId) {
     return { sessionKey, artifacts: [] };
   }
   const artifacts: ArtifactRecord[] = [];
   await visitSessionMessagesAsync(
     sessionId,
-    storePath,
     entry?.sessionFile,
     (message, seq) => {
       collectArtifactsFromMessage({

@@ -209,7 +209,6 @@ export function makeReplyConfig(home: string) {
         allowFrom: ["*"],
       },
     },
-    session: { store: path.join(home, "sessions.json") },
   });
 }
 

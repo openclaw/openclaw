@@ -7,7 +7,6 @@ type DreamingArtifactsAuditIssue = {
   code:
     | "dreaming-session-corpus-unreadable"
     | "dreaming-session-corpus-self-ingested"
-    | "dreaming-session-ingestion-unreadable"
     | "dreaming-diary-unreadable";
   message: string;
   fixable: boolean;
@@ -19,8 +18,6 @@ export type DreamingArtifactsAuditSummary = {
   sessionCorpusFileCount: number;
   suspiciousSessionCorpusFileCount: number;
   suspiciousSessionCorpusLineCount: number;
-  sessionIngestionPath: string;
-  sessionIngestionExists: boolean;
   issues: DreamingArtifactsAuditIssue[];
 };
 
@@ -29,14 +26,12 @@ export type RepairDreamingArtifactsResult = {
   archiveDir?: string;
   archivedDreamsDiary: boolean;
   archivedSessionCorpus: boolean;
-  archivedSessionIngestion: boolean;
   archivedPaths: string[];
   warnings: string[];
 };
 
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
-const SESSION_INGESTION_RELATIVE_PATH = path.join("memory", ".dreams", "session-ingestion.json");
 const REPAIR_ARCHIVE_RELATIVE_DIR = path.join(".openclaw-repair", "dreaming");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 const DREAMING_NARRATIVE_PROMPT_PREFIX = "Write a dream diary entry from these memory fragments";
@@ -129,12 +124,10 @@ export async function auditDreamingArtifacts(params: {
   const workspaceDir = requireAbsoluteWorkspaceDir(params.workspaceDir);
   const dreamsPath = await resolveExistingDreamsPath(workspaceDir);
   const sessionCorpusDir = path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR);
-  const sessionIngestionPath = path.join(workspaceDir, SESSION_INGESTION_RELATIVE_PATH);
   const issues: DreamingArtifactsAuditIssue[] = [];
   let sessionCorpusFileCount = 0;
   let suspiciousSessionCorpusFileCount = 0;
   let suspiciousSessionCorpusLineCount = 0;
-  let sessionIngestionExists = false;
 
   if (dreamsPath) {
     try {
@@ -174,20 +167,6 @@ export async function auditDreamingArtifacts(params: {
     }
   }
 
-  try {
-    await fs.access(sessionIngestionPath);
-    sessionIngestionExists = true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      issues.push({
-        severity: "error",
-        code: "dreaming-session-ingestion-unreadable",
-        message: `Dreaming session-ingestion state could not be inspected: ${(err as NodeJS.ErrnoException).code ?? "error"}.`,
-        fixable: false,
-      });
-    }
-  }
-
   if (suspiciousSessionCorpusLineCount > 0) {
     issues.push({
       severity: "warn",
@@ -203,8 +182,6 @@ export async function auditDreamingArtifacts(params: {
     sessionCorpusFileCount,
     suspiciousSessionCorpusFileCount,
     suspiciousSessionCorpusLineCount,
-    sessionIngestionPath,
-    sessionIngestionExists,
     issues,
   };
 }
@@ -220,7 +197,6 @@ export async function repairDreamingArtifacts(params: {
   let archiveDir: string | undefined;
   let archivedDreamsDiary = false;
   let archivedSessionCorpus = false;
-  let archivedSessionIngestion = false;
 
   const ensureArchiveDir = () => {
     archiveDir ??= path.join(
@@ -248,14 +224,6 @@ export async function repairDreamingArtifacts(params: {
     archivedPaths.push(sessionCorpusDestination);
   }
 
-  const sessionIngestionDestination = await archivePathIfPresent(
-    path.join(workspaceDir, SESSION_INGESTION_RELATIVE_PATH),
-  );
-  if (sessionIngestionDestination) {
-    archivedSessionIngestion = true;
-    archivedPaths.push(sessionIngestionDestination);
-  }
-
   if (params.archiveDiary) {
     const dreamsPath = await resolveExistingDreamsPath(workspaceDir);
     if (dreamsPath) {
@@ -267,13 +235,12 @@ export async function repairDreamingArtifacts(params: {
     }
   }
 
-  const changed = archivedDreamsDiary || archivedSessionCorpus || archivedSessionIngestion;
+  const changed = archivedDreamsDiary || archivedSessionCorpus;
   return {
     changed,
     ...(archiveDir ? { archiveDir } : {}),
     archivedDreamsDiary,
     archivedSessionCorpus,
-    archivedSessionIngestion,
     archivedPaths,
     warnings,
   };

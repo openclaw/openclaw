@@ -110,7 +110,10 @@ async function compactCodexNativeThread(
   options: { pluginConfig?: unknown } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
-  const binding = await readCodexAppServerBinding(params.sessionFile, { config: params.config });
+  const binding = await readCodexAppServerBinding(
+    { sessionKey: params.sessionKey, sessionFile: params.sessionFile },
+    { config: params.config },
+  );
   if (!binding?.threadId) {
     return { ok: false, compacted: false, reason: "no codex app-server thread binding" };
   }

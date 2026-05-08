@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -57,6 +59,7 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -84,7 +87,10 @@ describe("plugin index install records store", () => {
 
     const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
     expect(indexPath).toBe(path.join(stateDir, "plugins", "installs.json"));
-    const persisted = JSON.parse(fs.readFileSync(indexPath, "utf8")) as {
+    expect(fs.existsSync(indexPath)).toBe(false);
+    const persisted = readOpenClawStateKvJson("installed_plugin_index", "current", {
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    }) as {
       version?: number;
       generatedAtMs?: number;
       installRecords?: Record<string, unknown>;
@@ -127,9 +133,10 @@ describe("plugin index install records store", () => {
       },
     );
 
-    const persisted = JSON.parse(
-      fs.readFileSync(resolveInstalledPluginIndexRecordsStorePath({ stateDir }), "utf8"),
-    ) as { installRecords?: Record<string, unknown>; plugins?: unknown[] };
+    expect(fs.existsSync(resolveInstalledPluginIndexRecordsStorePath({ stateDir }))).toBe(false);
+    const persisted = readOpenClawStateKvJson("installed_plugin_index", "current", {
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    }) as { installRecords?: Record<string, unknown>; plugins?: unknown[] };
     expectRecordFields(persisted.installRecords?.missing, {
       source: "npm",
       spec: "missing-plugin@1.0.0",
@@ -170,7 +177,7 @@ describe("plugin index install records store", () => {
     });
   });
 
-  it("reads legacy persisted records when the plugin index has no plugin list", async () => {
+  it("ignores legacy persisted records until doctor imports the plugin index", async () => {
     const stateDir = makeStateDir();
     const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
     fs.mkdirSync(path.dirname(indexPath), { recursive: true });
@@ -188,13 +195,7 @@ describe("plugin index install records store", () => {
       "utf8",
     );
 
-    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
-      legacy: {
-        source: "npm",
-        spec: "legacy@1.0.0",
-        installPath: path.join(stateDir, "plugins", "legacy"),
-      },
-    });
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({});
   });
 
   it("recovers managed npm plugin records when the persisted ledger is empty", async () => {

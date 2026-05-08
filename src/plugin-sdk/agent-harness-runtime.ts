@@ -135,11 +135,6 @@ export { resolveSandboxContext } from "../agents/sandbox.js";
 export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
-export {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockAcquireTimeoutMs,
-  type SessionWriteLockAcquireTimeoutConfig,
-} from "../agents/session-write-lock.js";
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export {
   deleteOpenClawStateKvJson,
@@ -148,6 +143,7 @@ export {
   type OpenClawStateJsonValue,
 } from "../state/openclaw-state-kv.js";
 export {
+  appendSqliteSessionTranscriptEvent,
   hasSqliteSessionTranscriptEvents,
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
@@ -200,6 +196,11 @@ export {
   __testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";
+export {
+  createTrajectoryRuntimeRecorder,
+  toTrajectoryToolDefinitions as toRuntimeTrajectoryToolDefinitions,
+} from "../trajectory/runtime.js";
+export type { TrajectoryToolDefinition } from "../trajectory/types.js";
 
 /**
  * Derive the same compact user-facing tool detail that Pi uses for progress logs.

@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureMatrixStartupVerification } from "./startup-verification.js";
 
 function createTempStateDir(): string {
@@ -80,6 +81,10 @@ function createHarness(params?: {
 }
 
 describe("ensureMatrixStartupVerification", () => {
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   it("skips automatic requests when the device is already verified", async () => {
     const tempHome = createTempStateDir();
     const harness = createHarness({ verified: true });
@@ -169,7 +174,14 @@ describe("ensureMatrixStartupVerification", () => {
     const tempHome = createTempStateDir();
     const harness = createHarness();
     const stateFilePath = createStateFilePath(tempHome);
-    fs.writeFileSync(stateFilePath, JSON.stringify({ attemptedAt: "2026-03-08T12:00:00.000Z" }));
+    await ensureMatrixStartupVerification({
+      client: harness.client as never,
+      auth: createAuth(),
+      accountConfig: {},
+      stateFilePath,
+      nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
+    });
+    expect(harness.client.crypto.requestVerification).toHaveBeenCalledTimes(1);
 
     const result = await ensureMatrixStartupVerification({
       client: harness.client as never,
@@ -181,7 +193,7 @@ describe("ensureMatrixStartupVerification", () => {
     });
 
     expect(result.kind).toBe("disabled");
-    expect(harness.client.crypto.requestVerification).not.toHaveBeenCalled();
+    expect(harness.client.crypto.requestVerification).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(stateFilePath)).toBe(false);
   });
 
@@ -199,8 +211,7 @@ describe("ensureMatrixStartupVerification", () => {
 
     expect(result.kind).toBe("requested");
     expect(harness.client.crypto.requestVerification).toHaveBeenCalledWith({ ownUser: true });
-
-    expect(fs.existsSync(createStateFilePath(tempHome))).toBe(true);
+    expect(fs.existsSync(createStateFilePath(tempHome))).toBe(false);
   });
 
   it("keeps startup verification failures non-fatal", async () => {
@@ -278,7 +289,7 @@ describe("ensureMatrixStartupVerification", () => {
       nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
     });
 
-    expect(fs.existsSync(stateFilePath)).toBe(true);
+    expect(fs.existsSync(stateFilePath)).toBe(false);
 
     const verified = createHarness({ verified: true });
     const result = await ensureMatrixStartupVerification({

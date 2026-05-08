@@ -18,6 +18,7 @@ import {
   resetPluginRuntimeStateForTest,
 } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
@@ -293,26 +294,23 @@ async function writePluginBindingApproval(params: {
   accountId: string;
 }): Promise<void> {
   const openclawDir = path.join(params.homeDir, ".openclaw");
-  await fs.mkdir(openclawDir, { recursive: true });
-  await fs.writeFile(
-    path.join(openclawDir, "plugin-binding-approvals.json"),
-    `${JSON.stringify(
-      {
-        version: 1,
-        approvals: [
-          {
-            pluginRoot: params.pluginRoot,
-            pluginId: "codex",
-            pluginName: "Codex",
-            channel: params.channel,
-            accountId: params.accountId,
-            approvedAt: Date.now(),
-          },
-        ],
-      },
-      null,
-      2,
-    )}\n`,
+  writeOpenClawStateKvJson(
+    "plugin_binding_approvals",
+    "current",
+    {
+      version: 1,
+      approvals: [
+        {
+          pluginRoot: params.pluginRoot,
+          pluginId: "codex",
+          pluginName: "Codex",
+          channel: params.channel,
+          accountId: params.accountId,
+          approvedAt: Date.now(),
+        },
+      ],
+    },
+    { env: { ...process.env, OPENCLAW_STATE_DIR: openclawDir } },
   );
 }
 

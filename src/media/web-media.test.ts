@@ -6,6 +6,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { saveMediaBuffer } from "./store.js";
 
 let LocalMediaAccessError: typeof import("./web-media.js").LocalMediaAccessError;
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
@@ -621,41 +622,43 @@ describe("loadWebMedia", () => {
   });
 
   it("hydrates inbound media store URIs before allowed-root checks", async () => {
-    const id = `signal-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
-    const filePath = path.join(stateDir, "media", "inbound", id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const saved = await saveMediaBuffer(
+      Buffer.from(TINY_PNG_BASE64, "base64"),
+      "image/png",
+      "inbound",
+    );
 
     try {
-      const result = await loadWebMedia(`media://inbound/${id}`, {
+      const result = await loadWebMedia(`media://inbound/${saved.id}`, {
         maxBytes: 1024 * 1024,
       });
 
       expect(result.kind).toBe("image");
       expect(result.buffer.length).toBeGreaterThan(0);
-      expect(result.fileName).toBe(id);
+      expect(result.fileName).toBe(saved.id);
     } finally {
-      await fs.rm(filePath, { force: true });
+      await fs.rm(saved.path, { force: true });
     }
   });
 
   it("allows managed inbound absolute paths before allowed-root checks", async () => {
-    const id = `signal-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
-    const filePath = path.join(stateDir, "media", "inbound", id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const saved = await saveMediaBuffer(
+      Buffer.from(TINY_PNG_BASE64, "base64"),
+      "image/png",
+      "inbound",
+    );
 
     try {
-      const result = await loadWebMedia(filePath, {
+      const result = await loadWebMedia(saved.path, {
         maxBytes: 1024 * 1024,
         localRoots: [],
       });
 
       expect(result.kind).toBe("image");
       expect(result.buffer.length).toBeGreaterThan(0);
-      expect(result.fileName).toBe(id);
+      expect(result.fileName).toBe(saved.id);
     } finally {
-      await fs.rm(filePath, { force: true });
+      await fs.rm(saved.path, { force: true });
     }
   });
 

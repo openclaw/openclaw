@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -34,16 +33,18 @@ import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
+  deleteSessionEntry,
+  getSessionEntry,
   resolveGroupSessionKey,
-  resolveSessionTranscriptPath,
   type SessionEntry,
-  updateSessionStore,
+  upsertSessionEntry,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   hasNonEmptyString,
@@ -1100,12 +1101,15 @@ export async function runAgentTurnWithFallback(params: {
   runtimePolicySessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
+  const sessionAgentId =
+    params.followupRun.run.agentId ??
+    resolveAgentIdFromSessionKey(params.sessionKey ?? "") ??
+    "main";
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -1256,9 +1260,10 @@ export async function runAgentTurnWithFallback(params: {
     ) {
       return undefined;
     }
+    const sessionKey = params.sessionKey;
 
     const activeSessionEntry =
-      params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
+      params.getActiveSessionEntry() ?? params.activeSessionStore[sessionKey];
     if (!activeSessionEntry) {
       return undefined;
     }
@@ -1294,22 +1299,24 @@ export async function runAgentTurnWithFallback(params: {
     if (!applied.updated || !nextState) {
       return undefined;
     }
-    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+    params.activeSessionStore[sessionKey] = activeSessionEntry;
 
     try {
-      if (params.storePath) {
-        await updateSessionStore(params.storePath, (store) => {
-          const persistedEntry = store[params.sessionKey!];
-          if (!persistedEntry) {
-            return;
-          }
-          applyFallbackSelectionState(persistedEntry, nextState);
-          store[params.sessionKey!] = persistedEntry;
+      const persistedEntry = getSessionEntry({
+        agentId: sessionAgentId,
+        sessionKey,
+      });
+      if (persistedEntry) {
+        applyFallbackSelectionState(persistedEntry, nextState);
+        upsertSessionEntry({
+          agentId: sessionAgentId,
+          sessionKey,
+          entry: persistedEntry,
         });
       }
     } catch (error) {
       rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
-      params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+      params.activeSessionStore[sessionKey] = activeSessionEntry;
       throw error;
     }
 
@@ -1320,20 +1327,21 @@ export async function runAgentTurnWithFallback(params: {
         previousState,
       );
       if (rolledBackInMemory) {
-        params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
+        params.activeSessionStore![sessionKey] = activeSessionEntry;
       }
-      if (!params.storePath) {
-        return;
-      }
-      await updateSessionStore(params.storePath, (store) => {
-        const persistedEntry = store[params.sessionKey!];
-        if (!persistedEntry) {
-          return;
-        }
-        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
-          store[params.sessionKey!] = persistedEntry;
-        }
+      const persistedEntry = getSessionEntry({
+        agentId: sessionAgentId,
+        sessionKey,
       });
+      if (persistedEntry) {
+        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
+          upsertSessionEntry({
+            agentId: sessionAgentId,
+            sessionKey,
+            entry: persistedEntry,
+          });
+        }
+      }
     };
   };
 
@@ -2072,7 +2080,7 @@ export async function runAgentTurnWithFallback(params: {
         if (liveModelSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
           // Prevent infinite loop when persisted session selection keeps
           // conflicting with fallback model choices (e.g. overloaded primary
-          // triggers fallback, but session store keeps pulling back to the
+          // triggers fallback, but the persisted session row keeps pulling back to the
           // overloaded model). Surface the last error to the user instead.
           // See: https://github.com/openclaw/openclaw/issues/58348
           defaultRuntime.error(
@@ -2193,35 +2201,21 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       // Auto-recover from Gemini session corruption by resetting the session
-      if (
-        isSessionCorruption &&
-        params.sessionKey &&
-        params.activeSessionStore &&
-        params.storePath
-      ) {
+      if (isSessionCorruption && params.sessionKey) {
         const sessionKey = params.sessionKey;
-        const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
         defaultRuntime.error(
           `Session history corrupted (Gemini function call ordering). Resetting session: ${params.sessionKey}`,
         );
 
         try {
-          // Delete transcript file if it exists
-          if (corruptedSessionId) {
-            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
-            try {
-              fs.unlinkSync(transcriptPath);
-            } catch {
-              // Ignore if file doesn't exist
-            }
+          // Keep the in-memory snapshot consistent with the SQLite row reset.
+          if (params.activeSessionStore) {
+            delete params.activeSessionStore[sessionKey];
           }
 
-          // Keep the in-memory snapshot consistent with the on-disk store reset.
-          delete params.activeSessionStore[sessionKey];
-
-          // Remove session entry from store using a fresh, locked snapshot.
-          await updateSessionStore(params.storePath, (store) => {
-            delete store[sessionKey];
+          deleteSessionEntry({
+            agentId: sessionAgentId,
+            sessionKey,
           });
         } catch (cleanupErr) {
           defaultRuntime.error(

@@ -168,10 +168,14 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     }
 
     migrateThreadBinding(next.session, changes, "session");
-    const sessionMaintenance = asRecord(asRecord(next.session)?.maintenance);
-    if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
-      delete sessionMaintenance.rotateBytes;
-      changes.push("Removed deprecated session.maintenance.rotateBytes.");
+    const sessionConfig = asRecord(next.session);
+    if (sessionConfig && "maintenance" in sessionConfig) {
+      delete sessionConfig.maintenance;
+      changes.push("Removed ignored session.maintenance; SQLite sessions do not prune rows.");
+    }
+    if (sessionConfig && "writeLock" in sessionConfig) {
+      delete sessionConfig.writeLock;
+      changes.push("Removed ignored session.writeLock; SQLite serializes session writes.");
     }
     const channels = asRecord(next.channels);
     for (const [channelId, channelRaw] of Object.entries(channels ?? {})) {
@@ -357,11 +361,18 @@ vi.mock("../config/legacy.js", () => {
         );
       }
       const sessionMaintenance = asRecord(asRecord(root.session)?.maintenance);
-      if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
+      if (sessionMaintenance) {
         addIssue(
           issues,
           ["session", "maintenance"],
-          'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
+          'session.maintenance is ignored with SQLite-backed sessions; run "openclaw doctor --fix" to remove it.',
+        );
+      }
+      if (asRecord(root.session)?.writeLock) {
+        addIssue(
+          issues,
+          ["session", "writeLock"],
+          'session.writeLock is ignored because SQLite serializes session writes; run "openclaw doctor --fix" to remove it.',
         );
       }
       const xSearch = asRecord(asRecord(asRecord(root.tools)?.web)?.x_search);
@@ -2550,6 +2561,9 @@ describe("doctor config flow", () => {
             maintenance: {
               rotateBytes: "10mb",
             },
+            writeLock: {
+              acquireTimeoutMs: 1_000,
+            },
             threadBindings: {
               ttlHours: 24,
             },
@@ -2590,8 +2604,9 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("does not rewrite this shape automatically");
       expect(legacyMessages).toContain("session.threadBindings.ttlHours");
       expect(legacyMessages).toContain("session.threadBindings.idleHours");
-      expect(legacyMessages).toContain("session.maintenance.rotateBytes");
-      expect(legacyMessages).toContain("deprecated and ignored");
+      expect(legacyMessages).toContain("session.maintenance");
+      expect(legacyMessages).toContain("session.writeLock");
+      expect(legacyMessages).toContain("ignored");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
       expect(legacyMessages).toContain("talk:");

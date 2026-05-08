@@ -55,15 +55,13 @@ This plan has started landing in slices:
   compatibility/export store. Runtime session reads and writes normalize and
   persist only: no JSON import, row pruning, capping, archive cleanup, or
   disk-budget cleanup runs on the hot path. The old maintenance write options
-  have been removed from the session-store API; doctor owns legacy import and
-  `openclaw sessions cleanup` owns explicit SQLite row cleanup only. Status and
-  discovery now use the primary session-store loader instead of a duplicated
+  and explicit session cleanup command have been removed from the session-store
+  API; doctor owns legacy import. Status and discovery now use the primary session-store loader instead of a duplicated
   read-only JSON parser, and SQLite-backed agent session directories remain
   discoverable after doctor deletes the legacy `sessions.json` file. The legacy
   JSON session-store object/serialized cache is gone; JSON fallback reads now
   parse directly while canonical SQLite stores avoid that path. The cron timer
-  no longer runs a dedicated session reaper; cron run sessions are maintained
-  through the same explicit row cleanup path as other rows.
+  no longer runs a dedicated session reaper.
 - Transcript events are SQLite-primary. OpenClaw-owned append paths require
   agent/session scope and write `transcript_events` directly; `*.jsonl` is no
   longer a runtime mirror for those paths. JSONL is now an explicit
@@ -104,19 +102,20 @@ This plan has started landing in slices:
 - Managed outgoing image attachment metadata now uses the shared SQLite `kv`
   store as the primary record path. Older per-attachment JSON files are imported
   and removed by `openclaw doctor --fix`; runtime media reads only SQLite.
-- Cron runtime schedule state and run history now use the shared SQLite state
-  database. `openclaw doctor --fix` imports legacy `jobs-state.json` and
-  `cron/runs/*.jsonl` files into SQLite and removes those file sources after a
-  successful import. Runtime cron paths no longer write new schedule-state or
-  run-history JSON files; `jobs.json` remains the hand-editable job definition
-  file.
+- Cron job definitions, runtime schedule state, and run history now use the
+  shared SQLite state database. `openclaw doctor --fix` imports legacy
+  `jobs.json`, `jobs-state.json`, and `cron/runs/*.jsonl` files into SQLite and
+  removes those file sources after a successful import. Runtime cron paths no
+  longer write job-definition, schedule-state, or run-history JSON files.
 - The subagent run registry now uses the shared SQLite `kv` store as the
   primary record path. `openclaw doctor --fix` imports legacy
   `subagents/runs.json` files into SQLite and removes them after import.
   Runtime paths no longer import or delete that JSON file.
-- Sandbox container and browser registries now use the shared SQLite `kv` store
-  as the primary record path. Legacy monolithic registry files migrate only
-  through `openclaw doctor --fix`; runtime reads no longer import registry JSON.
+- Sandbox container and browser registries now use the shared SQLite
+  `sandbox_registry_entries` table as the primary record path. Legacy
+  monolithic and sharded registry JSON migrates only through
+  `openclaw doctor --fix`; runtime reads and writes no longer touch registry
+  JSON.
 - OpenRouter model capability cache now uses the shared SQLite `kv` store as
   the primary persistent cache. The older
   `cache/openrouter-models.json` file is imported and removed by
@@ -225,13 +224,13 @@ This plan has started landing in slices:
   helpers have one OpenClaw-owned implementation under `src/agents/transcript`
   instead of duplicated facade/file-state logic. OpenClaw also owns a
   synchronous SQLite-backed transcript session manager that implements the live
-  `SessionManager` shape over `TranscriptFileState`, including header creation,
+  `SessionManager` shape over `TranscriptState`, including header creation,
   append persistence, tree, label, branch, session name, branch-summary,
   in-memory, create/open, list/listAll, and fork APIs. Live embedded runs,
   compaction, compatibility tests, and gateway checkpoint helpers now use that
   OpenClaw-owned manager instead of PI's concrete `SessionManager` value. CLI
   budget compaction reads transcript branches through the OpenClaw-owned
-  transcript file state instead of opening PI `SessionManager` for read-only
+  transcript state instead of opening PI `SessionManager` for read-only
   branch extraction. The PI coding-agent facade no longer re-exports transcript
   parser, migration, context, version, entry, or `SessionManager` symbols; those
   now come from the OpenClaw transcript contract.
@@ -343,8 +342,9 @@ Early success means most files outside the adapter no longer import
 
 ## Workstream 2: Consolidate State In SQLite
 
-OpenClaw already has good SQLite precedent in the task registry and plugin state
-store. Reuse that pattern:
+OpenClaw already has a shared SQLite state layer. Task, Task Flow, and plugin
+state runtime writes use `~/.openclaw/state/openclaw.sqlite`; legacy sidecars
+are doctor-import inputs.
 
 - `node:sqlite`
 - WAL mode
@@ -372,8 +372,9 @@ tool_artifacts(agent_id, run_id, artifact_id, kind, metadata_json, blob, created
 
 Migration order:
 
-1. Keep current task registry and plugin state as is.
-2. Add shared SQLite connection and migration helpers.
+1. Add shared SQLite connection and migration helpers. Done.
+2. Move task registry, Task Flow, and plugin state into shared SQLite. Runtime
+   writes are done; legacy sidecar import remains in doctor.
 3. Move `sessions.json` behind a `SessionStoreBackend` interface. Done for
    canonical per-agent stores.
 4. Make SQLite primary for session entries. Done for canonical per-agent

@@ -2,7 +2,7 @@
 summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
-  - You are changing session queueing, transcript writes, or session write lock behavior
+  - You are changing session queueing or transcript writes
 title: "Agent loop"
 ---
 
@@ -48,22 +48,16 @@ wired end-to-end.
 - This prevents tool/session races and keeps session history consistent.
 - Messaging channels can choose queue modes (collect/steer/followup) that feed this lane system.
   See [Command Queue](/concepts/queue).
-- Transcript writes are also protected by a session write lock on the session file. The lock is
-  process-aware and file-based, so it catches writers that bypass the in-process queue or come from
-  another process. Session transcript writers wait up to `session.writeLock.acquireTimeoutMs`
-  before reporting the session as busy; the default is `60000` ms.
-- Session write locks are non-reentrant by default. If a helper intentionally nests acquisition of
-  the same lock while preserving one logical writer, it must opt in explicitly with
-  `allowReentrant: true`.
+- Transcript writes persist through SQLite. The old `session.writeLock`
+  file-lock setting is doctor-migrated legacy config, not runtime behavior.
 
 ## Session + workspace preparation
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt report.
-- A session write lock is acquired; `SessionManager` is opened and prepared before streaming. Any
-  later transcript rewrite, compaction, or truncation path must take the same lock before opening or
-  mutating the transcript file.
+- `SessionManager` is opened and prepared before streaming. Later transcript
+  rewrite, compaction, or truncation paths mutate the SQLite transcript rows.
 
 ## Prompt assembly + system prompt
 

@@ -155,16 +155,49 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
-  const registeredToolHandler = firstMockCall(
-    mocks.realtimeHandlerRegisterToolHandler.mock.calls,
-    "realtime tool handler registration",
-  );
-  expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
-  if (typeof registeredToolHandler[1] !== "function") {
-    throw new Error("expected realtime tool handler callback");
-  }
-  return registeredToolHandler[1] as RealtimeConsultToolHandler;
+function createSessionRuntimeMock(sessionStore: Record<string, unknown>) {
+  return {
+    getSessionEntry: vi.fn(
+      ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as never,
+    ),
+    listSessionEntries: vi.fn(() =>
+      Object.entries(sessionStore).map(([sessionKey, entry]) => ({
+        sessionKey,
+        entry: entry as never,
+      })),
+    ),
+    patchSessionEntry: vi.fn(
+      async ({
+        sessionKey,
+        fallbackEntry,
+        update,
+      }: {
+        sessionKey: string;
+        fallbackEntry?: Record<string, unknown>;
+        update: (
+          entry: Record<string, unknown>,
+        ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
+      }) => {
+        const existing = (sessionStore[sessionKey] ?? fallbackEntry) as
+          | Record<string, unknown>
+          | undefined;
+        if (!existing) {
+          return null;
+        }
+        const patch = await update(existing);
+        if (!patch) {
+          return existing;
+        }
+        const next = { ...existing, ...patch };
+        sessionStore[sessionKey] = next;
+        return next;
+      },
+    ),
+    upsertSessionEntry: vi.fn(({ sessionKey, entry }: { sessionKey: string; entry: unknown }) => {
+      sessionStore[sessionKey] = entry;
+    }),
+    resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+  };
 }
 
 describe("createVoiceCallRuntime lifecycle", () => {
@@ -364,13 +397,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
+      session: createSessionRuntimeMock(sessionStore),
       runEmbeddedPiAgent,
     };
     mocks.managerGetCall.mockReturnValue({
@@ -450,13 +477,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
+      session: createSessionRuntimeMock(sessionStore),
       runEmbeddedPiAgent,
     };
     mocks.managerGetCall.mockReturnValue({
@@ -508,13 +529,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveThinkingDefault: vi.fn(() => "high"),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-      },
+      session: createSessionRuntimeMock(sessionStore),
       runEmbeddedPiAgent,
     };
     mocks.managerGetCall.mockReturnValue({

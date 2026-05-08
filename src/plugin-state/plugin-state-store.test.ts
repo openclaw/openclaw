@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync, statSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -483,6 +484,28 @@ describe("plugin state keyed store", () => {
       await store.register("k", { ok: true });
       closePluginStateSqliteStore();
       await expect(store.lookup("k")).resolves.toEqual({ ok: true });
+    });
+  });
+
+  it("reopens after the shared state DB cache closes its handle", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateKeyedStore("discord", {
+        namespace: "cache-switch",
+        maxEntries: 10,
+      });
+      await store.register("k", { ok: true });
+
+      const secondary = await createOpenClawTestState({
+        label: "plugin-state-cache-secondary",
+        applyEnv: false,
+      });
+      try {
+        openOpenClawStateDatabase({ env: secondary.env });
+        testState?.applyEnv();
+        await expect(store.lookup("k")).resolves.toEqual({ ok: true });
+      } finally {
+        await secondary.cleanup();
+      }
     });
   });
 

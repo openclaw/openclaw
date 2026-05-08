@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
 import {
   forkSessionFromParent,
@@ -81,13 +80,12 @@ function resolveDeliverySessionFields(context?: DeliveryContext): Partial<Sessio
 
 function resolveRealtimeVoiceAgentDeliveryContext(params: {
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
-  storePath: string;
+  agentId: string;
   sessionKey: string;
   spawnedBy?: string | null;
 }): DeliveryContext | undefined {
   const requesterSessionKey = params.spawnedBy?.trim();
   try {
-    const store = params.agentRuntime.session.loadSessionStore(params.storePath);
     const candidates: string[] = [];
     if (requesterSessionKey) {
       const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
@@ -97,7 +95,12 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
     }
     candidates.push(params.sessionKey);
     for (const key of candidates) {
-      const context = deliveryContextFromSession(store[key] as SessionEntry | undefined);
+      const context = deliveryContextFromSession(
+        params.agentRuntime.session.getSessionEntry({
+          agentId: parseAgentSessionKey(key)?.agentId ?? params.agentId,
+          sessionKey: key,
+        }),
+      );
       if (hasRoutableDeliveryContext(context)) {
         return context;
       }
@@ -114,69 +117,83 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   spawnedBy?: string | null;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
   deliveryContext?: DeliveryContext;
-  storePath: string;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   logger: Pick<RuntimeLogger, "warn">;
 }): Promise<SessionEntry> {
   const now = Date.now();
-  return await params.agentRuntime.session.updateSessionStore(params.storePath, async (store) => {
-    const existing = store[params.sessionKey] as SessionEntry | undefined;
-    const deliveryFields = resolveDeliverySessionFields(params.deliveryContext);
-    if (existing?.sessionId?.trim()) {
-      const next: SessionEntry = { ...existing, ...deliveryFields, updatedAt: now };
-      store[params.sessionKey] = next;
-      return next;
-    }
+  const existing = params.agentRuntime.session.getSessionEntry({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const deliveryFields = resolveDeliverySessionFields(params.deliveryContext);
+  if (existing?.sessionId?.trim()) {
+    const next: SessionEntry = { ...existing, ...deliveryFields, updatedAt: now };
+    params.agentRuntime.session.upsertSessionEntry({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      entry: next,
+    });
+    return next;
+  }
 
-    const requesterSessionKey = params.spawnedBy?.trim();
-    const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
-    const shouldFork =
-      params.contextMode === "fork" &&
-      requesterSessionKey &&
-      (!requesterAgentId || requesterAgentId === params.agentId);
+  const requesterSessionKey = params.spawnedBy?.trim();
+  const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
+  const shouldFork =
+    params.contextMode === "fork" &&
+    requesterSessionKey &&
+    (!requesterAgentId || requesterAgentId === params.agentId);
 
-    if (shouldFork) {
-      const parentEntry = store[requesterSessionKey] as SessionEntry | undefined;
-      if (parentEntry?.sessionId?.trim()) {
-        const decision = await realtimeVoiceAgentConsultDeps.resolveParentForkDecision({
+  if (shouldFork) {
+    const parentEntry = params.agentRuntime.session.getSessionEntry({
+      agentId: requesterAgentId ?? params.agentId,
+      sessionKey: requesterSessionKey,
+    });
+    if (parentEntry?.sessionId?.trim()) {
+      const decision = await realtimeVoiceAgentConsultDeps.resolveParentForkDecision({
+        parentEntry,
+        agentId: params.agentId,
+      });
+      if (decision.status === "fork") {
+        const fork = await realtimeVoiceAgentConsultDeps.forkSessionFromParent({
           parentEntry,
-          storePath: params.storePath,
+          agentId: params.agentId,
         });
-        if (decision.status === "fork") {
-          const fork = await realtimeVoiceAgentConsultDeps.forkSessionFromParent({
-            parentEntry,
+        if (fork) {
+          const next: SessionEntry = {
+            ...existing,
+            ...deliveryFields,
+            sessionId: fork.sessionId,
+            sessionFile: fork.sessionFile,
+            spawnedBy: requesterSessionKey,
+            forkedFromParent: true,
+            updatedAt: now,
+          };
+          params.agentRuntime.session.upsertSessionEntry({
             agentId: params.agentId,
-            sessionsDir: path.dirname(params.storePath),
+            sessionKey: params.sessionKey,
+            entry: next,
           });
-          if (fork) {
-            const next: SessionEntry = {
-              ...existing,
-              ...deliveryFields,
-              sessionId: fork.sessionId,
-              sessionFile: fork.sessionFile,
-              spawnedBy: requesterSessionKey,
-              forkedFromParent: true,
-              updatedAt: now,
-            };
-            store[params.sessionKey] = next;
-            return next;
-          }
-        } else {
-          params.logger.warn(`[talk] ${decision.message}`);
+          return next;
         }
+      } else {
+        params.logger.warn(`[talk] ${decision.message}`);
       }
     }
+  }
 
-    const next: SessionEntry = {
-      ...existing,
-      ...deliveryFields,
-      sessionId: realtimeVoiceAgentConsultDeps.randomUUID(),
-      ...(requesterSessionKey ? { spawnedBy: requesterSessionKey } : {}),
-      updatedAt: now,
-    };
-    store[params.sessionKey] = next;
-    return next;
+  const next: SessionEntry = {
+    ...existing,
+    ...deliveryFields,
+    sessionId: realtimeVoiceAgentConsultDeps.randomUUID(),
+    ...(requesterSessionKey ? { spawnedBy: requesterSessionKey } : {}),
+    updatedAt: now,
+  };
+  params.agentRuntime.session.upsertSessionEntry({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    entry: next,
   });
+  return next;
 }
 
 export async function consultRealtimeVoiceAgent(params: {
@@ -210,12 +227,9 @@ export async function consultRealtimeVoiceAgent(params: {
   const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId);
   await params.agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
-  const storePath = params.agentRuntime.session.resolveStorePath(params.cfg.session?.store, {
-    agentId,
-  });
   const resolvedDeliveryContext = resolveRealtimeVoiceAgentDeliveryContext({
     agentRuntime: params.agentRuntime,
-    storePath,
+    agentId,
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
   });
@@ -225,7 +239,6 @@ export async function consultRealtimeVoiceAgent(params: {
     spawnedBy: params.spawnedBy,
     contextMode: params.contextMode,
     deliveryContext: resolvedDeliveryContext,
-    storePath,
     agentRuntime: params.agentRuntime,
     logger: params.logger,
   });

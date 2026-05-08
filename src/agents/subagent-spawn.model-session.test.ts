@@ -3,14 +3,13 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
-  installSessionStoreCaptureMock,
+  installSessionEntryCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
 
 const callGatewayMock = vi.fn();
-const updateSessionStoreMock = vi.fn();
-const pruneLegacyStoreKeysMock = vi.fn();
+const upsertSessionEntryMock = vi.fn();
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
@@ -20,8 +19,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
       getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
-      updateSessionStoreMock,
-      pruneLegacyStoreKeysMock,
+      upsertSessionEntryMock,
       workspaceDir: os.tmpdir(),
     }));
   });
@@ -29,20 +27,10 @@ describe("spawnSubagentDirect runtime model persistence", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
-    updateSessionStoreMock.mockReset();
-    pruneLegacyStoreKeysMock.mockReset();
+    upsertSessionEntryMock.mockReset();
     setupAcceptedSubagentGatewayMock(callGatewayMock);
 
-    updateSessionStoreMock.mockImplementation(
-      async (
-        _storePath: string,
-        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
-      ) => {
-        const store: Record<string, Record<string, unknown>> = {};
-        await mutator(store);
-        return store;
-      },
-    );
+    upsertSessionEntryMock.mockImplementation(() => undefined);
   });
 
   it("persists runtime model fields on the child session before starting the run", async () => {
@@ -61,7 +49,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       return {};
     });
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    installSessionStoreCaptureMock(updateSessionStoreMock, {
+    installSessionEntryCaptureMock(upsertSessionEntryMock, {
       operations,
       onStore: (store) => {
         persistedStore = store;
@@ -79,9 +67,11 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.modelApplied).toBe(true);
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+    expect(upsertSessionEntryMock).toHaveBeenCalledTimes(3);
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: /^agent:main:subagent:/,
@@ -89,10 +79,9 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       model: "gpt-5.4",
       overrideSource: "user",
     });
-    expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
-    expect(operations.indexOf("store:update")).toBeGreaterThan(-1);
+    expect(operations.indexOf("store:upsert")).toBeGreaterThan(-1);
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
-      operations.lastIndexOf("store:update"),
+      operations.lastIndexOf("store:upsert"),
     );
   });
 });

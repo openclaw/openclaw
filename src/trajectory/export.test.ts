@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { writeSqliteToolArtifact } from "../agents/filesystem/tool-artifact-store.sqlite.js";
 import type { Message, Usage } from "../agents/pi-ai-contract.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, resolveTrajectoryPointerFilePath } from "./paths.js";
@@ -16,6 +18,9 @@ const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 function makeTempDir(): string {
   const dir = path.join(tempRoot, `case-${tempDirId++}`);
   fs.mkdirSync(dir, { recursive: true });
+  if (process.env.OPENCLAW_STATE_DIR === originalOpenClawStateDir) {
+    process.env.OPENCLAW_STATE_DIR = path.join(dir, "state");
+  }
   return dir;
 }
 
@@ -70,6 +75,16 @@ function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] 
   return events.map((event) => event.type);
 }
 
+function writeSessionTranscript(sessionFile: string, entries: Record<string, unknown>[]): void {
+  const header = entries.find((entry) => entry.type === "session") as { id?: unknown } | undefined;
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: typeof header?.id === "string" ? header.id : "session-1",
+    transcriptPath: sessionFile,
+    events: entries,
+  });
+}
+
 function writeSimpleSessionFile(
   sessionFile: string,
   params: { userEntryTimestamp?: string | number } = {},
@@ -95,11 +110,7 @@ function writeSimpleSessionFile(
     timestamp: "2026-04-01T05:46:41.000Z",
     message: assistantMessage([{ type: "text", text: "done" }]),
   };
-  fs.writeFileSync(
-    sessionFile,
-    `${[header, userEntry, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
+  writeSessionTranscript(sessionFile, [header, userEntry, assistantEntry]);
 }
 
 function writeToolCallOnlySessionFile(sessionFile: string): void {
@@ -124,11 +135,7 @@ function writeToolCallOnlySessionFile(sessionFile: string): void {
       },
     ]),
   };
-  fs.writeFileSync(
-    sessionFile,
-    `${[header, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
+  writeSessionTranscript(sessionFile, [header, assistantEntry]);
 }
 
 function writeToolCallSessionFile(sessionFile: string): void {
@@ -180,11 +187,7 @@ function writeToolCallSessionFile(sessionFile: string): void {
       message: assistantMessage([{ type: "text", text: "done" }]),
     },
   ];
-  fs.writeFileSync(
-    sessionFile,
-    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    "utf8",
-  );
+  writeSessionTranscript(sessionFile, entries);
 }
 
 afterAll(() => {
@@ -192,6 +195,7 @@ afterAll(() => {
 });
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   if (originalOpenClawStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -364,12 +368,10 @@ describe("exportTrajectoryBundle", () => {
     ).rejects.toThrow(/too large/u);
   });
 
-  it("rejects oversized session transcript files before export", async () => {
+  it("rejects legacy transcript files that were not imported into SQLite", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const outputDir = path.join(tmpDir, "bundle");
-    fs.closeSync(fs.openSync(sessionFile, "w"));
-    fs.truncateSync(sessionFile, 50 * 1024 * 1024 + 1);
 
     await expect(
       exportTrajectoryBundle({
@@ -378,7 +380,7 @@ describe("exportTrajectoryBundle", () => {
         sessionId: "session-1",
         workspaceDir: tmpDir,
       }),
-    ).rejects.toThrow(/session file is too large/u);
+    ).rejects.toThrow(/Transcript is not in SQLite/u);
   });
 
   it("skips malformed-but-valid runtime json rows before sorting", async () => {

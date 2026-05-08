@@ -1,22 +1,15 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   getProviderUsageMocks,
   getRunEmbeddedPiAgentMock,
   makeCfg,
-  requireSessionStorePath,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
+import { listSessionEntries } from "../config/sessions/store.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
 const usageMocks = getProviderUsageMocks();
-
-async function readSessionStore(storePath: string): Promise<Record<string, unknown>> {
-  const raw = await readFile(storePath, "utf-8");
-  return JSON.parse(raw) as Record<string, unknown>;
-}
 
 function pickFirstStoreEntry(store: Record<string, unknown>): unknown {
   const entries = Object.values(store);
@@ -85,8 +78,6 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
         const getReplyFromConfig = getReplyFromConfigNow(params.getReplyFromConfig);
         const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, "usage-cycle.sessions.json") };
-        const usageStorePath = requireSessionStorePath(cfg);
 
         const r0 = await getReplyFromConfig(
           {
@@ -144,7 +135,12 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         );
         expect(replyText(r3)).toContain("Usage footer: tokens");
 
-        const finalStore = await readSessionStore(usageStorePath);
+        const finalStore = Object.fromEntries(
+          listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [
+            sessionKey,
+            entry,
+          ]),
+        );
         expect((pickFirstStoreEntry(finalStore) as { responseUsage?: string })?.responseUsage).toBe(
           "tokens",
         );

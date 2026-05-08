@@ -2,7 +2,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureMatrixSdkLoggingConfiguredMock = vi.hoisted(() => vi.fn());
 const resolveValidatedMatrixHomeserverUrlMock = vi.hoisted(() => vi.fn());
-const maybeMigrateLegacyStorageMock = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveMatrixStoragePathsMock = vi.hoisted(() => vi.fn());
 const writeStorageMetaMock = vi.hoisted(() => vi.fn());
 const MatrixClientMock = vi.hoisted(() => vi.fn());
@@ -16,7 +15,6 @@ vi.mock("./config.js", () => ({
 }));
 
 vi.mock("./storage.js", () => ({
-  maybeMigrateLegacyStorage: maybeMigrateLegacyStorageMock,
   resolveMatrixStoragePaths: resolveMatrixStoragePathsMock,
   writeStorageMeta: writeStorageMetaMock,
 }));

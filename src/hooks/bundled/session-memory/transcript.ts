@@ -27,12 +27,12 @@ function extractTextMessageContent(content: unknown): string | undefined {
   return undefined;
 }
 
-export async function getRecentSessionContent(
-  sessionFilePath: string,
+export async function getRecentTranscriptContent(
+  transcriptPath: string,
   messageCount: number = 15,
 ): Promise<string | null> {
   try {
-    const scope = resolveScopeForTranscriptPath(sessionFilePath);
+    const scope = resolveScopeForTranscriptPath(transcriptPath);
     if (!scope) {
       return null;
     }
@@ -73,8 +73,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function extractSessionIdFromTranscriptPath(sessionFilePath: string): string | undefined {
-  const base = path.basename(sessionFilePath);
+function extractSessionIdFromTranscriptPath(transcriptPath: string): string | undefined {
+  const base = path.basename(transcriptPath);
   if (!base.endsWith(".jsonl")) {
     return undefined;
   }
@@ -84,19 +84,19 @@ function extractSessionIdFromTranscriptPath(sessionFilePath: string): string | u
 }
 
 function resolveScopeForTranscriptPath(
-  sessionFilePath: string,
+  transcriptPath: string,
 ): SqliteSessionTranscriptScope | undefined {
-  const byPath = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFilePath });
+  const byPath = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
   if (byPath) {
     return byPath;
   }
-  const sessionId = extractSessionIdFromTranscriptPath(sessionFilePath);
+  const sessionId = extractSessionIdFromTranscriptPath(transcriptPath);
   if (!sessionId) {
     return undefined;
   }
   return resolveSqliteSessionTranscriptScope({
     sessionId,
-    transcriptPath: sessionFilePath,
+    transcriptPath,
   });
 }
 
@@ -122,7 +122,7 @@ function resolveRememberedPathInSessionsDir(params: {
   return canonical?.path ?? candidates[0]?.path;
 }
 
-export async function findPreviousSessionFile(params: {
+export async function findPreviousTranscriptPath(params: {
   sessionsDir: string;
   sessionId?: string;
 }): Promise<string | undefined> {

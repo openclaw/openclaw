@@ -286,9 +286,9 @@ struct MenuContent: View {
                     Label("App Logging", systemImage: "doc.text")
                 }
                 Button {
-                    DebugActions.openSessionStore()
+                    DebugActions.openSessionDatabase()
                 } label: {
-                    Label("Open Session Store", systemImage: "externaldrive")
+                    Label("Open Session Database", systemImage: "externaldrive")
                 }
                 Divider()
                 Button {

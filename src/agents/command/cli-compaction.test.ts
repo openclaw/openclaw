@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "../../config/sessions/store.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { CURRENT_SESSION_VERSION } from "../transcript/session-transcript-contract.js";
 import {
   resetCliCompactionTestDeps,
@@ -88,6 +90,7 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   afterEach(async () => {
     resetCliCompactionTestDeps();
+    closeOpenClawAgentDatabasesForTest();
     vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -96,7 +99,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli";
     const sessionFile = path.join(tmpDir, "session.jsonl");
-    const storePath = path.join(tmpDir, "sessions.json");
     await writeSessionFile({ sessionFile, sessionId });
 
     const sessionEntry: SessionEntry = {
@@ -115,7 +117,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       claudeCliSessionId: "claude-session",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    upsertSessionEntry({ agentId: "main", sessionKey, entry: sessionEntry });
 
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
     const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
@@ -145,7 +147,6 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionKey,
       sessionEntry,
       sessionStore,
-      storePath,
       sessionAgentId: "main",
       workspaceDir: tmpDir,
       agentDir: tmpDir,

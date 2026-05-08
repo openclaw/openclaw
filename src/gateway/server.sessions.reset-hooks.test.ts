@@ -1,11 +1,8 @@
 import path from "node:path";
 import { expect, test } from "vitest";
-import { loadSessionStore } from "../config/sessions.js";
-import {
-  appendSqliteSessionTranscriptEvent,
-  replaceSqliteSessionTranscriptEvents,
-} from "../config/sessions/transcript-store.sqlite.js";
-import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
+import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import { embeddedRunMock, seedGatewaySessionEntries, testState } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   bootstrapCacheMocks,
@@ -74,7 +71,7 @@ test("sessions.reset emits internal command hook with reason", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
     },
@@ -134,7 +131,7 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
     ],
   });
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: {
         sessionId: "sess-main",
@@ -177,7 +174,7 @@ test("sessions.reset emits before_reset hook with scoped SQLite transcript conte
     ],
   });
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: {
         sessionId: "sess-main-sqlite",
@@ -231,7 +228,7 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
     ],
   });
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: {
         sessionId: "sess-main",
@@ -278,7 +275,7 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
 });
 
 test("sessions.reset returns unavailable when active run does not stop", async () => {
-  const { storePath } = await seedActiveMainSession();
+  await seedActiveMainSession();
   const waitCallCountAtSnapshotClear: number[] = [];
   bootstrapCacheMocks.clearBootstrapSnapshot.mockImplementation(() => {
     waitCallCountAtSnapshotClear.push(embeddedRunMock.waitCalls.length);
@@ -299,11 +296,12 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
-  const store = loadSessionStore(storePath);
-  expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
+  expect(getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" })?.sessionId).toBe(
+    "sess-main",
+  );
 });
 
-test("sessions.reset emits before_reset for the entry actually reset in the writer slot", async () => {
+test("sessions.reset emits before_reset for the entry actually reset in the SQLite patch", async () => {
   const { dir } = await createSessionStoreDir();
   const oldTranscriptPath = path.join(dir, "sess-old.jsonl");
   const newTranscriptPath = path.join(dir, "sess-new.jsonl");
@@ -332,7 +330,7 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
     ],
   });
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: {
         sessionId: "sess-old",
@@ -343,22 +341,13 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
   });
 
   beforeResetHookState.hasBeforeResetHook = true;
-  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }, { updateSessionStore }] =
-    await Promise.all([
-      import("../config/config.js"),
-      import("./session-utils.js"),
-      import("../config/sessions.js"),
-    ]);
-  const gatewayStorePath = resolveGatewaySessionStoreTarget({
-    cfg: getRuntimeConfig(),
-    key: "main",
-  }).storePath;
-
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  await updateSessionStore(gatewayStorePath, (store) => {
-    store["agent:main:main"] = sessionStoreEntry("sess-new", {
+  upsertSessionEntry({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    entry: sessionStoreEntry("sess-new", {
       sessionFile: newTranscriptPath,
-    });
+    }),
   });
 
   const reset = await performGatewaySessionReset({
@@ -381,7 +370,7 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-parent", "hello from parent");
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-parent"),
     },
@@ -426,7 +415,7 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
     ],
   });
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: {
         sessionId: "sess-parent-hooks",
@@ -483,7 +472,7 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
 
   testState.sessionConfig = { dmScope: "main" };
   try {
-    await writeSessionStore({
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-parent-dms",
@@ -526,7 +515,7 @@ test("sessions.create without emitCommandHooks does not fire command:new hook (#
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-parent2", "hello from parent 2");
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-parent2"),
     },

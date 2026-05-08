@@ -53,6 +53,12 @@ describe("agent runtime worker entry filesystem", () => {
         blob: "artifact",
         metadata: { source: filesystemMode },
       });
+      const runArtifact = filesystem.runArtifacts?.write({
+        path: "reports/output.txt",
+        kind: "worker/report",
+        blob: "report",
+        metadata: { source: filesystemMode },
+      });
 
       expect(filesystem.workspace).toEqual({ root: "/tmp/workspace" });
       expect(filesystem.scratch.readFile("/scratch/output.txt").toString("utf8")).toBe("hello");
@@ -65,6 +71,16 @@ describe("agent runtime worker entry filesystem", () => {
         runId: `run-${filesystemMode}`,
         kind: "worker/test",
         size: 8,
+      });
+      expect(runArtifact).toMatchObject({
+        agentId: "main",
+        runId: `run-${filesystemMode}`,
+        path: "/reports/output.txt",
+        kind: "worker/report",
+        size: 6,
+      });
+      expect(filesystem.runArtifacts?.read("/reports/output.txt")).toMatchObject({
+        blobBase64: "cmVwb3J0",
       });
     },
   );
@@ -95,6 +111,12 @@ describe("agent runtime worker entry control", () => {
     const context = await createWorkerRuntimeContext(createPreparedRun("vfs-scratch"), {
       port,
     });
+    context.cache?.write({
+      key: "plan",
+      value: { ok: true },
+      blob: "cached",
+      ttlMs: 60_000,
+    });
     const messages: unknown[] = [];
     context.control?.onMessage((message) => {
       messages.push(message);
@@ -111,6 +133,13 @@ describe("agent runtime worker entry control", () => {
 
     expect(context.signal?.aborted).toBe(true);
     expect(context.signal?.reason).toEqual(expect.any(Error));
+    expect(context.cache?.read("plan")).toMatchObject({
+      agentId: "main",
+      scope: "run:run-vfs-scratch",
+      key: "plan",
+      value: { ok: true },
+      blob: Buffer.from("cached"),
+    });
     expect(messages).toEqual([
       { type: "queue_message", text: "keep going" },
       { type: "cancel", reason: "user_abort" },

@@ -76,12 +76,13 @@ const mocks = vi.hoisted(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     session: { mainKey: "main", scope: "per-sender" as const },
   })),
-  loadSessionStore: vi.fn(() => ({})),
+  sessionRows: vi.fn(() => ({})),
+  getSessionEntry: vi.fn(),
+  listSessionEntries: vi.fn(),
+  upsertSessionEntry: vi.fn(),
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
     return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
   }),
-  resolveStorePath: vi.fn(() => "/tmp/test-session-store.json"),
-  updateSessionStore: vi.fn(),
   emitSessionLifecycleEvent: vi.fn(),
   persistSubagentRunsToDisk: vi.fn(),
   restoreSubagentRunsFromDisk: vi.fn(() => 0),
@@ -117,10 +118,10 @@ vi.mock("../config/config.js", () => {
 });
 
 vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: mocks.loadSessionStore,
+  getSessionEntry: mocks.getSessionEntry,
+  listSessionEntries: mocks.listSessionEntries,
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
-  resolveStorePath: mocks.resolveStorePath,
-  updateSessionStore: mocks.updateSessionStore,
+  upsertSessionEntry: mocks.upsertSessionEntry,
 }));
 
 vi.mock("../sessions/session-lifecycle-events.js", () => ({
@@ -186,13 +187,23 @@ describe("subagent registry seam flow", () => {
     mocks.resolveAgentIdFromSessionKey.mockImplementation((sessionKey: string) => {
       return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
     });
-    mocks.resolveStorePath.mockReturnValue("/tmp/test-session-store.json");
-    mocks.loadSessionStore.mockReturnValue({
+    mocks.sessionRows.mockReturnValue({
       "agent:main:subagent:child": {
         sessionId: "sess-child",
         updatedAt: 1,
       },
     });
+    mocks.getSessionEntry.mockImplementation(({ sessionKey }: { sessionKey: string }) => {
+      const store = mocks.sessionRows() as Record<string, unknown>;
+      return store[sessionKey];
+    });
+    mocks.listSessionEntries.mockImplementation(() => {
+      return Object.entries(mocks.sessionRows()).map(([sessionKey, entry]) => ({
+        sessionKey,
+        entry,
+      }));
+    });
+    mocks.upsertSessionEntry.mockImplementation(() => {});
     mocks.getGlobalHookRunner.mockReturnValue(null);
     mocks.resolveContextEngine.mockResolvedValue({
       onSubagentEnded: mocks.onSubagentEnded,
@@ -319,7 +330,7 @@ describe("subagent registry seam flow", () => {
     });
     const persistedStartedAt = Date.parse("2026-03-24T11:58:00Z");
     const persistedEndedAt = persistedStartedAt + 111;
-    mocks.loadSessionStore.mockReturnValue({
+    mocks.sessionRows.mockReturnValue({
       "agent:main:subagent:child": {
         sessionId: "sess-child",
         updatedAt: persistedEndedAt,
@@ -383,7 +394,7 @@ describe("subagent registry seam flow", () => {
       }
       return {};
     });
-    mocks.loadSessionStore.mockReturnValue({
+    mocks.sessionRows.mockReturnValue({
       "agent:main:subagent:child": {
         sessionId: "sess-child",
         updatedAt: 333,
@@ -461,34 +472,18 @@ describe("subagent registry seam flow", () => {
       "completion announce params",
     );
 
-    expect(mocks.updateSessionStore).toHaveBeenCalledTimes(1);
-    expect(getMockCallArg(mocks.updateSessionStore, 0, 0, "session store update")).toBe(
-      "/tmp/test-session-store.json",
-    );
-    expect(getMockCallArg(mocks.updateSessionStore, 0, 1, "session store update")).toBeTypeOf(
-      "function",
-    );
-
-    const updateStore = mocks.updateSessionStore.mock.calls.at(0)?.[1] as
-      | ((store: Record<string, Record<string, unknown>>) => void)
-      | undefined;
-    expect(updateStore).toBeTypeOf("function");
-    const store = {
-      "agent:main:subagent:child": {
+    expect(mocks.upsertSessionEntry).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertSessionEntry).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:subagent:child",
+      entry: expect.objectContaining({
         sessionId: "sess-child",
-      },
-    };
-    updateStore?.(store);
-    expectRecordFields(
-      store["agent:main:subagent:child"],
-      {
         startedAt: Date.parse("2026-03-24T12:00:00Z"),
         endedAt: 222,
         runtimeMs: 111,
         status: "done",
-      },
-      "updated child session store entry",
-    );
+      }),
+    });
 
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(6);
   });
@@ -653,7 +648,7 @@ describe("subagent registry seam flow", () => {
   });
 
   it("finalizes expired delete-mode parents when descendant cleanup retriggers deferred announce handling", async () => {
-    mocks.loadSessionStore.mockReturnValue({
+    mocks.sessionRows.mockReturnValue({
       "agent:main:subagent:parent": {
         sessionId: "sess-parent",
         updatedAt: 1,

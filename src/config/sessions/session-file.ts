@@ -1,18 +1,18 @@
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveSessionFilePath } from "./paths.js";
-import { updateSessionStore } from "./store.js";
+import { upsertSessionEntry } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 export async function resolveAndPersistSessionFile(params: {
   sessionId: string;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
-  storePath: string;
   sessionEntry?: SessionEntry;
   agentId?: string;
   sessionsDir?: string;
   fallbackSessionFile?: string;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
-  const { sessionId, sessionKey, sessionStore, storePath } = params;
+  const { sessionId, sessionKey, sessionStore } = params;
   const now = Date.now();
   const baseEntry = params.sessionEntry ??
     sessionStore[sessionKey] ?? { sessionId, updatedAt: now, sessionStartedAt: now };
@@ -38,11 +38,14 @@ export async function resolveAndPersistSessionFile(params: {
   };
   if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {
     sessionStore[sessionKey] = persistedEntry;
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = {
-        ...store[sessionKey],
-        ...persistedEntry,
-      };
+    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+    if (!agentId) {
+      throw new Error(`Session stores are SQLite-only; cannot resolve agent for ${sessionKey}`);
+    }
+    upsertSessionEntry({
+      agentId,
+      sessionKey,
+      entry: persistedEntry,
     });
     return { sessionFile, sessionEntry: persistedEntry };
   }

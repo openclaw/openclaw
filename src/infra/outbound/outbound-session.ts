@@ -2,10 +2,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import {
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-} from "../../config/sessions/inbound.runtime.js";
+import { recordSessionMetaFromInbound } from "../../config/sessions/inbound.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RoutePeer } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -138,9 +135,7 @@ export async function ensureOutboundSessionEntry(params: {
   accountId?: string | null;
   route: OutboundSessionRoute;
 }): Promise<void> {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: resolveAgentIdFromSessionKey(params.route.sessionKey),
-  });
+  const agentId = resolveAgentIdFromSessionKey(params.route.sessionKey);
   const ctx: MsgContext = {
     From: params.route.from,
     To: params.route.to,
@@ -155,7 +150,7 @@ export async function ensureOutboundSessionEntry(params: {
   };
   try {
     await recordSessionMetaFromInbound({
-      storePath,
+      agentId,
       sessionKey: params.route.sessionKey,
       ctx,
     });

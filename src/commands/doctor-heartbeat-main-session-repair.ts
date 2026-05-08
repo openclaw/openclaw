@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { formatFilesystemTimestamp } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
@@ -6,7 +5,11 @@ import {
   resolveSessionFilePath,
   type resolveSessionFilePathOptions,
 } from "../config/sessions/paths.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+import {
+  deleteSessionEntry,
+  getSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
@@ -43,14 +46,6 @@ export type HeartbeatMainSessionRepairCandidate = {
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function existsFile(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
 }
 
 function sessionEntryHasSyntheticHeartbeatOwnership(entry: SessionEntry): boolean {
@@ -184,45 +179,6 @@ export function moveHeartbeatMainSessionEntry(params: {
   return true;
 }
 
-export function clearTuiLastSessionPointers(params: {
-  filePath: string;
-  sessionKeys: ReadonlySet<string>;
-}): number {
-  if (params.sessionKeys.size === 0 || !existsFile(params.filePath)) {
-    return 0;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(params.filePath, "utf8"));
-  } catch {
-    return 0;
-  }
-  const store = asNullableObjectRecord(parsed);
-  if (!store) {
-    return 0;
-  }
-  let removed = 0;
-  const next: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(store)) {
-    const record = asNullableObjectRecord(value);
-    const sessionKey = record?.sessionKey;
-    if (typeof sessionKey === "string" && params.sessionKeys.has(sessionKey)) {
-      removed += 1;
-      continue;
-    }
-    next[key] = value;
-  }
-  if (removed === 0) {
-    return 0;
-  }
-  try {
-    fs.writeFileSync(params.filePath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  } catch {
-    return 0;
-  }
-  return removed;
-}
-
 export async function repairHeartbeatPoisonedMainSession(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -244,10 +200,18 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   } catch {
     transcriptPath = undefined;
   }
-  const candidate = resolveHeartbeatMainSessionRepairCandidate({
-    entry: mainEntry,
-    transcriptPath,
-  });
+  const resolveCandidate = (entry: SessionEntry | undefined) =>
+    resolveHeartbeatMainSessionRepairCandidate({
+      entry,
+      transcriptPath,
+    }) ??
+    (mainEntry.sessionFile && mainEntry.sessionFile !== transcriptPath
+      ? resolveHeartbeatMainSessionRepairCandidate({
+          entry,
+          transcriptPath: mainEntry.sessionFile,
+        })
+      : null);
+  const candidate = resolveCandidate(mainEntry);
   if (!candidate) {
     return;
   }
@@ -278,24 +242,24 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   if (!shouldRepair) {
     return;
   }
-  let movedEntry: SessionEntry | undefined;
-  await updateSessionStore(params.absoluteStorePath, (currentStore) => {
-    const currentEntry = currentStore[mainKey];
-    const currentCandidate = resolveHeartbeatMainSessionRepairCandidate({
-      entry: currentEntry,
-      transcriptPath,
-    });
-    if (!currentCandidate && currentEntry?.sessionId !== mainEntry.sessionId) {
-      return;
-    }
-    if (moveHeartbeatMainSessionEntry({ store: currentStore, mainKey, recoveredKey })) {
-      movedEntry = currentEntry;
-    }
-  });
-  if (!movedEntry) {
+  const agentId = parseAgentSessionKey(mainKey)?.agentId ?? "main";
+  const currentEntry = getSessionEntry({ agentId, sessionKey: mainKey });
+  const currentCandidate = resolveCandidate(currentEntry);
+  if (!currentCandidate && currentEntry?.sessionId !== mainEntry.sessionId) {
     params.warnings.push(`- Main session ${mainKey} changed before repair could move it.`);
     return;
   }
+  if (!currentEntry) {
+    params.warnings.push(`- Main session ${mainKey} changed before repair could move it.`);
+    return;
+  }
+  const movedEntry = structuredClone(currentEntry);
+  upsertSessionEntry({
+    agentId,
+    sessionKey: recoveredKey,
+    entry: movedEntry,
+  });
+  deleteSessionEntry({ agentId, sessionKey: mainKey });
   params.store[recoveredKey] = movedEntry;
   delete params.store[mainKey];
   const clearedPointers = await clearTuiLastSessionPointersFromState({

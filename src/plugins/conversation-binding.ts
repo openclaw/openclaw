@@ -8,9 +8,9 @@ import {
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { writeJson } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -18,6 +18,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import {
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
@@ -30,6 +36,8 @@ import { getActivePluginRegistry } from "./runtime.js";
 const log = createSubsystemLogger("plugins/binding");
 
 const APPROVALS_PATH = "~/.openclaw/plugin-binding-approvals.json";
+const APPROVALS_KV_SCOPE = "plugin_binding_approvals";
+const APPROVALS_KV_KEY = "current";
 const PLUGIN_BINDING_CUSTOM_ID_PREFIX = "pluginbind";
 const PLUGIN_BINDING_OWNER = "plugin";
 const PLUGIN_BINDING_SESSION_PREFIX = "plugin-binding";
@@ -156,7 +164,16 @@ function getPluginBindingGlobalState(): PluginBindingGlobalState {
 }
 
 function resolveApprovalsPath(): string {
+  if (process.env.OPENCLAW_STATE_DIR?.trim()) {
+    return path.join(resolveStateDir(process.env), "plugin-binding-approvals.json");
+  }
   return expandHomePrefix(APPROVALS_PATH);
+}
+
+function pluginBindingApprovalDbOptions(): OpenClawStateDatabaseOptions {
+  return {
+    env: { ...process.env, OPENCLAW_STATE_DIR: path.dirname(resolveApprovalsPath()) },
+  };
 }
 
 function normalizeChannel(value: string): string {
@@ -336,37 +353,41 @@ function createApprovalRequestId(): string {
   return crypto.randomBytes(9).toString("base64url");
 }
 
-function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
-  const filePath = resolveApprovalsPath();
+function normalizeApprovalsFile(value: unknown): PluginBindingApprovalsFile {
+  const parsed = value as Partial<PluginBindingApprovalsFile> | undefined;
+  if (!Array.isArray(parsed?.approvals)) {
+    return { version: 1, approvals: [] };
+  }
+  return {
+    version: 1,
+    approvals: parsed.approvals
+      .filter(
+        (entry): entry is PluginBindingApprovalEntry => entry !== null && typeof entry === "object",
+      )
+      .map((entry) => ({
+        pluginRoot: typeof entry.pluginRoot === "string" ? entry.pluginRoot : "",
+        pluginId: typeof entry.pluginId === "string" ? entry.pluginId : "",
+        pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
+        channel: typeof entry.channel === "string" ? normalizeChannel(entry.channel) : "",
+        accountId: normalizeOptionalString(entry.accountId) ?? "default",
+        approvedAt:
+          typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
+            ? Math.floor(entry.approvedAt)
+            : Date.now(),
+      }))
+      .filter((entry) => entry.pluginRoot && entry.pluginId && entry.channel),
+  };
+}
+
+function loadApprovalsFromSqlite(): PluginBindingApprovalsFile {
   try {
-    if (!fs.existsSync(filePath)) {
-      return { version: 1, approvals: [] };
-    }
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<PluginBindingApprovalsFile>;
-    if (!Array.isArray(parsed.approvals)) {
-      return { version: 1, approvals: [] };
-    }
-    return {
-      version: 1,
-      approvals: parsed.approvals
-        .filter(
-          (entry): entry is PluginBindingApprovalEntry =>
-            entry !== null && typeof entry === "object",
-        )
-        .map((entry) => ({
-          pluginRoot: typeof entry.pluginRoot === "string" ? entry.pluginRoot : "",
-          pluginId: typeof entry.pluginId === "string" ? entry.pluginId : "",
-          pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
-          channel: typeof entry.channel === "string" ? normalizeChannel(entry.channel) : "",
-          accountId: normalizeOptionalString(entry.accountId) ?? "default",
-          approvedAt:
-            typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
-              ? Math.floor(entry.approvedAt)
-              : Date.now(),
-        }))
-        .filter((entry) => entry.pluginRoot && entry.pluginId && entry.channel),
-    };
+    return normalizeApprovalsFile(
+      readOpenClawStateKvJson(
+        APPROVALS_KV_SCOPE,
+        APPROVALS_KV_KEY,
+        pluginBindingApprovalDbOptions(),
+      ),
+    );
   } catch (error) {
     log.warn(`plugin binding approvals load failed: ${String(error)}`);
     return { version: 1, approvals: [] };
@@ -374,21 +395,21 @@ function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
 }
 
 async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
-  const filePath = resolveApprovalsPath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const state = getPluginBindingGlobalState();
   state.approvalsCache = file;
   state.approvalsLoaded = true;
-  await writeJson(filePath, file, {
-    mode: 0o600,
-    trailingNewline: true,
-  });
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    APPROVALS_KV_SCOPE,
+    APPROVALS_KV_KEY,
+    file as unknown as OpenClawStateJsonValue,
+    pluginBindingApprovalDbOptions(),
+  );
 }
 
 function getApprovals(): PluginBindingApprovalsFile {
   const state = getPluginBindingGlobalState();
   if (!state.approvalsLoaded || !state.approvalsCache) {
-    state.approvalsCache = loadApprovalsFromDisk();
+    state.approvalsCache = loadApprovalsFromSqlite();
     state.approvalsLoaded = true;
   }
   return state.approvalsCache;
@@ -426,6 +447,43 @@ async function addPersistentApproval(entry: PluginBindingApprovalEntry): Promise
     version: 1,
     approvals,
   });
+}
+
+export function legacyPluginBindingApprovalFileExists(): boolean {
+  try {
+    return fs.statSync(resolveApprovalsPath()).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export function importLegacyPluginBindingApprovalFileToSqlite(): {
+  imported: boolean;
+  approvals: number;
+} {
+  const filePath = resolveApprovalsPath();
+  if (!legacyPluginBindingApprovalFileExists()) {
+    return { imported: false, approvals: 0 };
+  }
+  const file = normalizeApprovalsFile(JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown);
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    APPROVALS_KV_SCOPE,
+    APPROVALS_KV_KEY,
+    file as unknown as OpenClawStateJsonValue,
+    pluginBindingApprovalDbOptions(),
+  );
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // Import succeeded; a later doctor pass can remove the stale file.
+  }
+  const state = getPluginBindingGlobalState();
+  state.approvalsCache = file;
+  state.approvalsLoaded = true;
+  return { imported: true, approvals: file.approvals.length };
 }
 
 function buildBindingMetadata(params: {

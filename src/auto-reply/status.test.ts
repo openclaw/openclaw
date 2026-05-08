@@ -1,11 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
   buildCommandsMessage,
@@ -37,6 +38,8 @@ afterEach(() => {
   listPluginCommands.mockReset();
   listPluginCommands.mockImplementation(() => []);
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("buildStatusMessage", () => {
@@ -1449,7 +1452,6 @@ describe("buildStatusMessage", () => {
   });
 
   function writeTranscriptUsageLog(params: {
-    dir: string;
     agentId: string;
     sessionId: string;
     model?: string;
@@ -1460,30 +1462,22 @@ describe("buildStatusMessage", () => {
       cacheWrite: number;
       totalTokens: number;
     };
+    events?: unknown[];
   }) {
-    const logPath = path.join(
-      params.dir,
-      ".openclaw",
-      "agents",
-      params.agentId,
-      "sessions",
-      `${params.sessionId}.jsonl`,
-    );
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    fs.writeFileSync(
-      logPath,
-      [
-        JSON.stringify({
+    replaceSqliteSessionTranscriptEvents({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      events: params.events ?? [
+        {
           type: "message",
           message: {
             role: "assistant",
             model: params.model ?? "claude-opus-4-6",
             usage: params.usage,
           },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
+        },
+      ],
+    });
   }
 
   const baselineTranscriptUsage = {
@@ -1494,11 +1488,7 @@ describe("buildStatusMessage", () => {
     totalTokens: 1003,
   } as const;
 
-  function writeBaselineTranscriptUsageLog(params: {
-    dir: string;
-    agentId: string;
-    sessionId: string;
-  }) {
+  function writeBaselineTranscriptUsageLog(params: { agentId: string; sessionId: string }) {
     writeTranscriptUsageLog({
       ...params,
       usage: baselineTranscriptUsage,
@@ -1527,10 +1517,9 @@ describe("buildStatusMessage", () => {
 
   it("prefers cached prompt tokens from the session log", async () => {
     await withTempHome(
-      async (dir) => {
+      async () => {
         const sessionId = "sess-1";
         writeBaselineTranscriptUsageLog({
-          dir,
           agentId: "main",
           sessionId,
         });
@@ -1548,10 +1537,9 @@ describe("buildStatusMessage", () => {
 
   it("does not render stale context usage from transcript fallback", async () => {
     await withTempHome(
-      async (dir) => {
+      async () => {
         const sessionId = "sess-stale-transcript-context";
         writeTranscriptUsageLog({
-          dir,
           agentId: "main",
           sessionId,
           usage: {
@@ -1595,10 +1583,9 @@ describe("buildStatusMessage", () => {
 
   it("reads transcript usage for non-default agents", async () => {
     await withTempHome(
-      async (dir) => {
+      async () => {
         const sessionId = "sess-worker1";
         writeBaselineTranscriptUsageLog({
-          dir,
           agentId: "worker1",
           sessionId,
         });
@@ -1616,10 +1603,9 @@ describe("buildStatusMessage", () => {
 
   it("reads transcript usage using explicit agentId when sessionKey is missing", async () => {
     await withTempHome(
-      async (dir) => {
+      async () => {
         const sessionId = "sess-worker2";
         writeTranscriptUsageLog({
-          dir,
           agentId: "worker2",
           sessionId,
           usage: {
@@ -1658,10 +1644,9 @@ describe("buildStatusMessage", () => {
 
   it("hydrates cache usage from transcript fallback", async () => {
     await withTempHome(
-      async (dir) => {
+      async () => {
         const sessionId = "sess-cache-hydration";
         writeBaselineTranscriptUsageLog({
-          dir,
           agentId: "main",
           sessionId,
         });
@@ -1679,22 +1664,15 @@ describe("buildStatusMessage", () => {
 
   it("uses the same transcript usage fallback as sessions.list when a delivery mirror is last", async () => {
     await withTempHome(
-      async (dir) => {
+      async () => {
         const sessionId = "sess-cache-delivery-mirror";
-        const logPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "sessions",
-          `${sessionId}.jsonl`,
-        );
-        fs.mkdirSync(path.dirname(logPath), { recursive: true });
-        fs.writeFileSync(
-          logPath,
-          [
-            JSON.stringify({ type: "session", version: 1, id: sessionId }),
-            JSON.stringify({
+        writeTranscriptUsageLog({
+          agentId: "main",
+          sessionId,
+          usage: baselineTranscriptUsage,
+          events: [
+            { type: "session", version: 1, id: sessionId },
+            {
               type: "message",
               message: {
                 role: "assistant",
@@ -1708,8 +1686,8 @@ describe("buildStatusMessage", () => {
                   totalTokens: 1003,
                 },
               },
-            }),
-            JSON.stringify({
+            },
+            {
               type: "message",
               message: {
                 role: "assistant",
@@ -1723,10 +1701,9 @@ describe("buildStatusMessage", () => {
                   totalTokens: 0,
                 },
               },
-            }),
-          ].join("\n"),
-          "utf-8",
-        );
+            },
+          ],
+        });
 
         const text = buildTranscriptStatusText({
           sessionId,
@@ -1742,10 +1719,9 @@ describe("buildStatusMessage", () => {
 
   it("preserves existing nonzero cache usage over transcript fallback values", async () => {
     await withTempHome(
-      async (dir) => {
+      async () => {
         const sessionId = "sess-cache-preserve";
         writeBaselineTranscriptUsageLog({
-          dir,
           agentId: "main",
           sessionId,
         });
@@ -1778,12 +1754,11 @@ describe("buildStatusMessage", () => {
 
   it("keeps transcript-derived slash model ids on model-only context lookup", async () => {
     await withTempHome(
-      async (dir) => {
+      async () => {
         MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
 
         const sessionId = "sess-openrouter-google";
         writeTranscriptUsageLog({
-          dir,
           agentId: "main",
           sessionId,
           model: "google/gemini-2.5-pro",
@@ -1941,13 +1916,12 @@ describe("buildStatusMessage", () => {
 
   it("keeps provider-aware lookup for bare transcript model ids", async () => {
     await withTempHome(
-      async (dir) => {
+      async () => {
         MODEL_CONTEXT_TOKEN_CACHE.set("gemini-2.5-pro", 128_000);
         MODEL_CONTEXT_TOKEN_CACHE.set("google-gemini-cli/gemini-2.5-pro", 1_000_000);
 
         const sessionId = "sess-google-bare-model";
         writeTranscriptUsageLog({
-          dir,
           agentId: "main",
           sessionId,
           model: "gemini-2.5-pro",

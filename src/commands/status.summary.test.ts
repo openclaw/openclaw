@@ -3,7 +3,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
-  loadSessionStore: vi.fn(() => ({})),
+  listSessionEntries: vi.fn(
+    () => [] as Array<{ sessionKey: string; entry: Record<string, unknown> }>,
+  ),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -40,12 +42,8 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-}));
-
-vi.mock("../config/sessions/store-load.js", () => ({
-  loadSessionStore: statusSummaryMocks.loadSessionStore,
+vi.mock("../config/sessions/store.js", () => ({
+  listSessionEntries: statusSummaryMocks.listSessionEntries,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -142,7 +140,7 @@ describe("getStatusSummary", () => {
     vi.clearAllMocks();
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
-    statusSummaryMocks.loadSessionStore.mockReturnValue({});
+    statusSummaryMocks.listSessionEntries.mockReturnValue([]);
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -189,12 +187,15 @@ describe("getStatusSummary", () => {
 
   it("includes the selected agent runtime on recent sessions", async () => {
     vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
-    statusSummaryMocks.loadSessionStore.mockReturnValue({
-      "agent:main:main": {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
+    statusSummaryMocks.listSessionEntries.mockReturnValue([
+      {
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
       },
-    });
+    ]);
 
     const summary = await getStatusSummary();
 

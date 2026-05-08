@@ -10,11 +10,10 @@ vi.mock("../terminal/note.js", () => ({
 }));
 
 import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
-import {
-  noteSessionTranscriptHealth,
-  repairBrokenSessionTranscriptFile,
-} from "./doctor-session-transcripts.js";
+import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -44,6 +43,8 @@ describe("doctor session transcript repair", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -56,7 +57,7 @@ describe("doctor session transcript repair", () => {
     return filePath;
   }
 
-  it("rewrites affected prompt-rewrite branches to the active branch", async () => {
+  it("imports affected prompt-rewrite branches as active SQLite transcript rows", async () => {
     const filePath = await writeTranscript([
       { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
       {
@@ -99,22 +100,17 @@ describe("doctor session transcript repair", () => {
         message: { role: "assistant", content: "answer" },
       },
     ]);
+    const sessionsDir = path.dirname(filePath);
 
-    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
+    await noteSessionTranscriptHealth({ shouldRepair: true, sessionDirs: [sessionsDir] });
 
-    expect(result.broken).toBe(true);
-    expect(result.repaired).toBe(true);
-    expect(result.originalEntries).toBe(6);
-    expect(result.activeEntries).toBe(3);
-    if (result.backupPath === undefined) {
-      throw new Error("expected transcript backup path");
-    }
-    await expect(fs.access(result.backupPath)).resolves.toBeUndefined();
-    const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
-    expect(lines).toHaveLength(4);
+    await expect(fs.access(filePath)).rejects.toThrow();
     expect(
-      lines
-        .map((line) => JSON.parse(line))
+      loadSqliteSessionTranscriptEvents({
+        agentId: "main",
+        sessionId: "session-1",
+      })
+        .map((entry) => entry.event as { type?: string; id?: string })
         .filter((entry) => entry.type !== "session")
         .map((entry) => entry.id),
     ).toEqual(["parent", "plain-user", "plain-assistant"]);
@@ -234,9 +230,17 @@ describe("doctor session transcript repair", () => {
       },
     ]);
 
-    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
+    await noteSessionTranscriptHealth({
+      shouldRepair: true,
+      sessionDirs: [path.dirname(filePath)],
+    });
 
-    expect(result.broken).toBe(false);
-    expect(countNonEmptyLines(await fs.readFile(filePath, "utf-8"))).toBe(3);
+    await expect(fs.access(filePath)).rejects.toThrow();
+    expect(
+      loadSqliteSessionTranscriptEvents({
+        agentId: "main",
+        sessionId: "session-1",
+      }).map((entry) => entry.event),
+    ).toHaveLength(3);
   });
 });

@@ -1,16 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Insertable } from "kysely";
 import { z } from "zod";
-import { writeJson } from "../../infra/json-files.js";
-import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import {
-  deleteOpenClawStateKvJson,
-  listOpenClawStateKvJson,
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-} from "../../state/openclaw-state-kv.js";
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
+} from "../../state/openclaw-state-db.js";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
-import { acquireSessionWriteLock } from "../session-write-lock.js";
 import {
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_BROWSERS_DIR,
@@ -18,7 +22,6 @@ import {
   SANDBOX_REGISTRY_PATH,
   SANDBOX_STATE_DIR,
 } from "./constants.js";
-import { hashTextSha256 } from "./hash.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
@@ -91,9 +94,6 @@ const RegistryFileSchema = z.object({
   entries: z.array(RegistryEntrySchema),
 });
 
-const SANDBOX_CONTAINER_REGISTRY_KV_SCOPE = "sandbox_registry_containers";
-const SANDBOX_BROWSER_REGISTRY_KV_SCOPE = "sandbox_registry_browsers";
-
 function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegistryEntry {
   return {
     ...entry,
@@ -101,19 +101,6 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
     runtimeLabel: entry.runtimeLabel?.trim() || entry.containerName,
     configLabelKind: entry.configLabelKind?.trim() || "Image",
   };
-}
-
-async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionWriteLock({
-    sessionFile: registryPath,
-    allowReentrant: false,
-    timeoutMs: 60_000,
-  });
-  try {
-    return await fn();
-  } finally {
-    await lock.release();
-  }
 }
 
 async function readLegacyRegistryFile(registryPath: string): Promise<RegistryFile | null> {
@@ -134,7 +121,7 @@ async function readLegacyRegistryFile(registryPath: string): Promise<RegistryFil
 }
 
 export async function readRegistry(): Promise<SandboxRegistry> {
-  const entries = await readShardedEntries<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR);
+  const entries = readRegistryEntries<SandboxRegistryEntry>("containers");
   return {
     entries: entries.map((entry) => normalizeSandboxRegistryEntry(entry)),
   };
@@ -149,139 +136,99 @@ function sandboxRegistryDbOptions(): OpenClawStateDatabaseOptions {
   };
 }
 
-function registryKvScopeForDir(dir: string): string {
-  return dir === SANDBOX_BROWSERS_DIR
-    ? SANDBOX_BROWSER_REGISTRY_KV_SCOPE
-    : SANDBOX_CONTAINER_REGISTRY_KV_SCOPE;
-}
+type SandboxRegistryRow = {
+  container_name: string;
+  entry_json: string;
+};
 
-function shardedEntryFilePath(dir: string, containerName: string): string {
-  return path.join(dir, `${hashTextSha256(containerName)}.json`);
-}
+type SandboxRegistryEntriesTable = OpenClawStateKyselyDatabase["sandbox_registry_entries"];
+type SandboxRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "sandbox_registry_entries">;
 
-async function withEntryLock<T>(
-  dir: string,
-  containerName: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const entryPath = shardedEntryFilePath(dir, containerName);
-  const lock = await acquireSessionWriteLock({
-    sessionFile: entryPath,
-    allowReentrant: false,
-    timeoutMs: 60_000,
-  });
+function parseRegistryEntry(row: SandboxRegistryRow): RegistryEntry | null {
   try {
-    return await fn();
-  } finally {
-    await lock.release();
+    const parsed = JSON.parse(row.entry_json) as unknown;
+    const entry = RegistryEntrySchema.safeParse(parsed);
+    return entry.success && entry.data.containerName === row.container_name ? entry.data : null;
+  } catch {
+    return null;
   }
 }
 
-async function readShardedEntry<T extends RegistryEntry>(
-  dir: string,
+function getSandboxRegistryKysely(database: OpenClawStateDatabase) {
+  return getNodeSqliteKysely<SandboxRegistryDatabase>(database.db);
+}
+
+function bindRegistryEntry(
+  kind: LegacyRegistryKind,
+  entry: RegistryEntryPayload,
+): Insertable<SandboxRegistryEntriesTable> {
+  return {
+    registry_kind: kind,
+    container_name: entry.containerName,
+    entry_json: JSON.stringify(entry),
+    updated_at: Date.now(),
+  };
+}
+
+function getRegistryEntry(
+  database: OpenClawStateDatabase,
+  kind: LegacyRegistryKind,
   containerName: string,
-): Promise<T | null> {
-  const sqliteEntry = readOpenClawStateKvJson(
-    registryKvScopeForDir(dir),
+): RegistryEntry | null {
+  const row = executeSqliteQueryTakeFirstSync<SandboxRegistryRow>(
+    database.db,
+    getSandboxRegistryKysely(database)
+      .selectFrom("sandbox_registry_entries")
+      .select(["container_name", "entry_json"])
+      .where("registry_kind", "=", kind)
+      .where("container_name", "=", containerName),
+  );
+  return row ? parseRegistryEntry(row) : null;
+}
+
+function readRegistryEntryByKind(
+  kind: LegacyRegistryKind,
+  containerName: string,
+): RegistryEntry | null {
+  return getRegistryEntry(
+    openOpenClawStateDatabase(sandboxRegistryDbOptions()),
+    kind,
     containerName,
-    sandboxRegistryDbOptions(),
-  ) as T | undefined;
-  if (sqliteEntry?.containerName === containerName) {
-    return sqliteEntry;
-  }
-
-  let raw: string;
-  try {
-    raw = await fs.readFile(shardedEntryFilePath(dir, containerName), "utf-8");
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-  const parsed = safeParseJsonWithSchema(RegistryEntrySchema, raw) as T | null;
-  if (parsed?.containerName === containerName) {
-    writeOpenClawStateKvJson(
-      registryKvScopeForDir(dir),
-      parsed.containerName,
-      parsed,
-      sandboxRegistryDbOptions(),
-    );
-  }
-  return parsed?.containerName === containerName ? parsed : null;
+  );
 }
 
-async function writeShardedEntry(dir: string, entry: RegistryEntryPayload): Promise<void> {
-  writeOpenClawStateKvJson(
-    registryKvScopeForDir(dir),
-    entry.containerName,
-    entry,
-    sandboxRegistryDbOptions(),
-  );
-  await fs.mkdir(dir, { recursive: true });
-  await writeJson(shardedEntryFilePath(dir, entry.containerName), entry, {
-    trailingNewline: true,
+function readRegistryEntries<T extends RegistryEntry>(kind: LegacyRegistryKind): T[] {
+  const database = openOpenClawStateDatabase(sandboxRegistryDbOptions());
+  const rows = executeSqliteQuerySync<SandboxRegistryRow>(
+    database.db,
+    getSandboxRegistryKysely(database)
+      .selectFrom("sandbox_registry_entries")
+      .select(["container_name", "entry_json"])
+      .where("registry_kind", "=", kind)
+      .orderBy("container_name", "asc"),
+  ).rows;
+  return rows.flatMap((row) => {
+    const entry = parseRegistryEntry(row);
+    return entry ? [entry as T] : [];
   });
 }
 
-async function removeShardedEntry(dir: string, containerName: string): Promise<void> {
-  deleteOpenClawStateKvJson(registryKvScopeForDir(dir), containerName, sandboxRegistryDbOptions());
-  await fs.rm(shardedEntryFilePath(dir, containerName), { force: true });
-}
-
-async function readShardedEntries<T extends RegistryEntry>(dir: string): Promise<T[]> {
-  const byName = new Map<string, T>();
-  for (const entry of listOpenClawStateKvJson<T>(
-    registryKvScopeForDir(dir),
-    sandboxRegistryDbOptions(),
-  )) {
-    if (entry.value?.containerName) {
-      byName.set(entry.value.containerName, entry.value);
-    }
-  }
-
-  let files: string[];
-  try {
-    files = await fs.readdir(dir);
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code === "ENOENT") {
-      return [...byName.values()].toSorted((left, right) =>
-        left.containerName.localeCompare(right.containerName),
-      );
-    }
-    throw error;
-  }
-
-  const entries = await Promise.all(
-    files
-      .filter((name) => name.endsWith(".json"))
-      .toSorted()
-      .map(async (name) => {
-        try {
-          const raw = await fs.readFile(path.join(dir, name), "utf-8");
-          return safeParseJsonWithSchema(RegistryEntrySchema, raw) as T | null;
-        } catch {
-          return null;
-        }
-      }),
-  );
-  for (const entry of entries) {
-    if (entry) {
-      if (!byName.has(entry.containerName)) {
-        writeOpenClawStateKvJson(
-          registryKvScopeForDir(dir),
-          entry.containerName,
-          entry,
-          sandboxRegistryDbOptions(),
-        );
-        byName.set(entry.containerName, entry);
-      }
-    }
-  }
-  return [...byName.values()].toSorted((left, right) =>
-    left.containerName.localeCompare(right.containerName),
+function upsertRegistryEntry(
+  database: OpenClawStateDatabase,
+  kind: LegacyRegistryKind,
+  entry: RegistryEntryPayload,
+): void {
+  executeSqliteQuerySync(
+    database.db,
+    getSandboxRegistryKysely(database)
+      .insertInto("sandbox_registry_entries")
+      .values(bindRegistryEntry(kind, entry))
+      .onConflict((conflict) =>
+        conflict.columns(["registry_kind", "container_name"]).doUpdateSet({
+          entry_json: (eb) => eb.ref("excluded.entry_json"),
+          updated_at: (eb) => eb.ref("excluded.updated_at"),
+        }),
+      ),
   );
 }
 
@@ -296,42 +243,116 @@ async function quarantineLegacyRegistry(registryPath: string): Promise<string> {
   return quarantinePath;
 }
 
-async function migrateMonolithicIfNeeded(
-  target: LegacyRegistryTarget,
-): Promise<LegacySandboxRegistryMigrationResult> {
-  const { registryPath, shardedDir } = target;
+async function legacyShardPaths(dir: string): Promise<string[]> {
   try {
-    await fs.access(registryPath);
+    const names = await fs.readdir(dir);
+    return names
+      .filter((name) => name.endsWith(".json"))
+      .toSorted()
+      .map((name) => path.join(dir, name));
   } catch (error) {
     const code = (error as { code?: string } | null)?.code;
     if (code === "ENOENT") {
-      return { ...target, status: "missing", entries: 0 };
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function readLegacyShardFile(shardPath: string): Promise<RegistryEntryPayload | null> {
+  try {
+    const raw = await fs.readFile(shardPath, "utf-8");
+    return safeParseJsonWithSchema(RegistryEntrySchema, raw) as RegistryEntryPayload | null;
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function inspectMonolithicLegacyRegistry(target: LegacyRegistryTarget): Promise<{
+  exists: boolean;
+  valid: boolean;
+  entries: RegistryEntryPayload[];
+}> {
+  try {
+    await fs.access(target.registryPath);
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return { exists: false, valid: true, entries: [] };
     }
     throw error;
   }
 
-  return await withRegistryLock(registryPath, async () => {
-    const registry = await readLegacyRegistryFile(registryPath);
-    if (!registry) {
-      const quarantinePath = await quarantineLegacyRegistry(registryPath);
-      return { ...target, status: "quarantined-invalid", entries: 0, quarantinePath };
+  const registry = await readLegacyRegistryFile(target.registryPath);
+  return {
+    exists: true,
+    valid: Boolean(registry),
+    entries: registry?.entries ?? [],
+  };
+}
+
+async function inspectShardedLegacyRegistry(target: LegacyRegistryTarget): Promise<{
+  exists: boolean;
+  valid: boolean;
+  entries: RegistryEntryPayload[];
+  invalidPath?: string;
+}> {
+  const shardPaths = await legacyShardPaths(target.shardedDir);
+  const entries: RegistryEntryPayload[] = [];
+  for (const shardPath of shardPaths) {
+    const entry = await readLegacyShardFile(shardPath);
+    if (!entry) {
+      return { exists: true, valid: false, entries, invalidPath: shardPath };
     }
-    if (registry.entries.length === 0) {
-      await fs.rm(registryPath, { force: true });
-      return { ...target, status: "removed-empty", entries: 0 };
+    entries.push(entry);
+  }
+  return { exists: shardPaths.length > 0, valid: true, entries };
+}
+
+async function migrateTargetIfNeeded(
+  target: LegacyRegistryTarget,
+): Promise<LegacySandboxRegistryMigrationResult> {
+  const monolithic = await inspectMonolithicLegacyRegistry(target);
+  if (!monolithic.valid) {
+    const quarantinePath = await quarantineLegacyRegistry(target.registryPath);
+    return { ...target, status: "quarantined-invalid", entries: 0, quarantinePath };
+  }
+  const sharded = await inspectShardedLegacyRegistry(target);
+  if (!sharded.valid) {
+    const quarantinePath = sharded.invalidPath
+      ? await quarantineLegacyRegistry(sharded.invalidPath)
+      : undefined;
+    return { ...target, status: "quarantined-invalid", entries: 0, quarantinePath };
+  }
+
+  if (!monolithic.exists && !sharded.exists) {
+    return { ...target, status: "missing", entries: 0 };
+  }
+
+  const entries = [...monolithic.entries, ...sharded.entries];
+  if (entries.length === 0) {
+    await fs.rm(target.registryPath, { force: true });
+    await fs.rm(`${target.registryPath}.lock`, { force: true });
+    await fs.rm(target.shardedDir, { recursive: true, force: true });
+    return { ...target, status: "removed-empty", entries: 0 };
+  }
+
+  runOpenClawStateWriteTransaction((database) => {
+    for (const entry of entries) {
+      if (!getRegistryEntry(database, target.kind, entry.containerName)) {
+        upsertRegistryEntry(database, target.kind, entry);
+      }
     }
-    await fs.mkdir(shardedDir, { recursive: true });
-    for (const entry of registry.entries) {
-      await withEntryLock(shardedDir, entry.containerName, async () => {
-        const existing = await readShardedEntry(shardedDir, entry.containerName);
-        if (!existing) {
-          await writeShardedEntry(shardedDir, entry);
-        }
-      });
-    }
-    await fs.rm(registryPath, { force: true });
-    return { ...target, status: "migrated", entries: registry.entries.length };
-  });
+  }, sandboxRegistryDbOptions());
+
+  await fs.rm(target.registryPath, { force: true });
+  await fs.rm(`${target.registryPath}.lock`, { force: true });
+  await fs.rm(target.shardedDir, { recursive: true, force: true });
+  return { ...target, status: "migrated", entries: entries.length };
 }
 
 function legacyRegistryTargets(): LegacyRegistryTarget[] {
@@ -354,23 +375,15 @@ export async function inspectLegacySandboxRegistryFiles(): Promise<
 > {
   const inspections: LegacySandboxRegistryInspection[] = [];
   for (const target of legacyRegistryTargets()) {
-    try {
-      await fs.access(target.registryPath);
-    } catch (error) {
-      const code = (error as { code?: string } | null)?.code;
-      if (code === "ENOENT") {
-        inspections.push({ ...target, exists: false, valid: true, entries: 0 });
-        continue;
-      }
-      throw error;
-    }
-
-    const registry = await readLegacyRegistryFile(target.registryPath);
+    const monolithic = await inspectMonolithicLegacyRegistry(target);
+    const sharded = monolithic.valid
+      ? await inspectShardedLegacyRegistry(target)
+      : { exists: false, valid: true, entries: [] };
     inspections.push({
       ...target,
-      exists: true,
-      valid: Boolean(registry),
-      entries: registry?.entries.length ?? 0,
+      exists: monolithic.exists || sharded.exists,
+      valid: monolithic.valid && sharded.valid,
+      entries: monolithic.entries.length + sharded.entries.length,
     });
   }
   return inspections;
@@ -381,7 +394,7 @@ export async function migrateLegacySandboxRegistryFiles(): Promise<
 > {
   const results: LegacySandboxRegistryMigrationResult[] = [];
   for (const target of legacyRegistryTargets()) {
-    results.push(await migrateMonolithicIfNeeded(target));
+    results.push(await migrateTargetIfNeeded(target));
   }
   return results;
 }
@@ -389,17 +402,18 @@ export async function migrateLegacySandboxRegistryFiles(): Promise<
 export async function readRegistryEntry(
   containerName: string,
 ): Promise<SandboxRegistryEntry | null> {
-  const entry = await readShardedEntry<SandboxRegistryEntry>(SANDBOX_CONTAINERS_DIR, containerName);
+  const entry = readRegistryEntryByKind("containers", containerName) as SandboxRegistryEntry | null;
   return entry ? normalizeSandboxRegistryEntry(entry) : null;
 }
 
 export async function updateRegistry(entry: SandboxRegistryEntry) {
-  await withEntryLock(SANDBOX_CONTAINERS_DIR, entry.containerName, async () => {
-    const existing = await readShardedEntry<SandboxRegistryEntry>(
-      SANDBOX_CONTAINERS_DIR,
+  runOpenClawStateWriteTransaction((database) => {
+    const existing = getRegistryEntry(
+      database,
+      "containers",
       entry.containerName,
-    );
-    await writeShardedEntry(SANDBOX_CONTAINERS_DIR, {
+    ) as SandboxRegistryEntry | null;
+    upsertRegistryEntry(database, "containers", {
       ...entry,
       backendId: entry.backendId ?? existing?.backendId,
       runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
@@ -408,36 +422,49 @@ export async function updateRegistry(entry: SandboxRegistryEntry) {
       configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
       configHash: entry.configHash ?? existing?.configHash,
     });
-  });
+  }, sandboxRegistryDbOptions());
 }
 
 export async function removeRegistryEntry(containerName: string) {
-  await withEntryLock(SANDBOX_CONTAINERS_DIR, containerName, async () => {
-    await removeShardedEntry(SANDBOX_CONTAINERS_DIR, containerName);
-  });
+  runOpenClawStateWriteTransaction((database) => {
+    executeSqliteQuerySync(
+      database.db,
+      getSandboxRegistryKysely(database)
+        .deleteFrom("sandbox_registry_entries")
+        .where("registry_kind", "=", "containers")
+        .where("container_name", "=", containerName),
+    );
+  }, sandboxRegistryDbOptions());
 }
 
 export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
-  return { entries: await readShardedEntries<SandboxBrowserRegistryEntry>(SANDBOX_BROWSERS_DIR) };
+  return { entries: readRegistryEntries<SandboxBrowserRegistryEntry>("browsers") };
 }
 
 export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
-  await withEntryLock(SANDBOX_BROWSERS_DIR, entry.containerName, async () => {
-    const existing = await readShardedEntry<SandboxBrowserRegistryEntry>(
-      SANDBOX_BROWSERS_DIR,
+  runOpenClawStateWriteTransaction((database) => {
+    const existing = getRegistryEntry(
+      database,
+      "browsers",
       entry.containerName,
-    );
-    await writeShardedEntry(SANDBOX_BROWSERS_DIR, {
+    ) as SandboxBrowserRegistryEntry | null;
+    upsertRegistryEntry(database, "browsers", {
       ...entry,
       createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
       image: existing?.image ?? entry.image,
       configHash: entry.configHash ?? existing?.configHash,
     });
-  });
+  }, sandboxRegistryDbOptions());
 }
 
 export async function removeBrowserRegistryEntry(containerName: string) {
-  await withEntryLock(SANDBOX_BROWSERS_DIR, containerName, async () => {
-    await removeShardedEntry(SANDBOX_BROWSERS_DIR, containerName);
-  });
+  runOpenClawStateWriteTransaction((database) => {
+    executeSqliteQuerySync(
+      database.db,
+      getSandboxRegistryKysely(database)
+        .deleteFrom("sandbox_registry_entries")
+        .where("registry_kind", "=", "browsers")
+        .where("container_name", "=", containerName),
+    );
+  }, sandboxRegistryDbOptions());
 }

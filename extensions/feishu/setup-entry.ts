@@ -2,6 +2,9 @@ import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entr
 
 export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
+  features: {
+    legacyStateMigrations: true,
+  },
   plugin: {
     specifier: "./setup-api.js",
     exportName: "feishuPlugin",
@@ -9,5 +12,9 @@ export default defineBundledChannelSetupEntry({
   secrets: {
     specifier: "./secret-contract-api.js",
     exportName: "channelSecrets",
+  },
+  legacyStateMigrations: {
+    specifier: "./legacy-state-migrations-api.js",
+    exportName: "detectFeishuLegacyStateMigrations",
   },
 });

@@ -1,10 +1,11 @@
-import type { AgentMessage } from "../agent-core-contract.js";
-import type { SessionEntry } from "../transcript/session-transcript-contract.js";
 import {
-  readTranscriptFileState,
-  TranscriptFileState,
-  writeTranscriptFileAtomic,
-} from "../transcript/transcript-file-state.js";
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../../config/sessions/transcript-store.sqlite.js";
+import type { AgentMessage } from "../agent-core-contract.js";
+import type { SessionEntry, SessionHeader } from "../transcript/session-transcript-contract.js";
+import { TranscriptState } from "../transcript/transcript-state.js";
 
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 
@@ -13,6 +14,7 @@ export type HardenedManualCompactionBoundary = {
   firstKeptEntryId?: string;
   leafId?: string;
   messages: AgentMessage[];
+  sessionManager?: TranscriptState;
 };
 
 function replaceLatestCompactionBoundary(params: {
@@ -73,12 +75,26 @@ export async function hardenManualCompactionBoundary(params: {
   sessionFile: string;
   preserveRecentTail?: boolean;
 }): Promise<HardenedManualCompactionBoundary> {
-  const state = await readTranscriptFileState(params.sessionFile);
-  const header = state.getHeader();
+  const scope = resolveSqliteSessionTranscriptScopeForPath({
+    transcriptPath: params.sessionFile,
+  });
+  if (!scope) {
+    throw new Error(
+      `Legacy transcript has not been imported into SQLite: ${params.sessionFile}. Run "openclaw doctor --fix" to build the session database.`,
+    );
+  }
+  const events = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
+  const fileEntries = events.filter((event): event is SessionEntry | SessionHeader =>
+    Boolean(event && typeof event === "object"),
+  );
+  const header = fileEntries.find((entry) => entry?.type === "session") ?? null;
+  const entries = fileEntries.filter((entry): entry is SessionEntry => entry?.type !== "session");
+  const state = new TranscriptState({ header, entries });
   if (!header) {
     return {
       applied: false,
       messages: [],
+      sessionManager: state,
     };
   }
 
@@ -89,6 +105,7 @@ export async function hardenManualCompactionBoundary(params: {
       applied: false,
       leafId: state.getLeafId() ?? undefined,
       messages: sessionContext.messages,
+      sessionManager: state,
     };
   }
 
@@ -99,6 +116,7 @@ export async function hardenManualCompactionBoundary(params: {
       firstKeptEntryId: leaf.firstKeptEntryId,
       leafId: state.getLeafId() ?? undefined,
       messages: sessionContext.messages,
+      sessionManager: state,
     };
   }
 
@@ -108,6 +126,7 @@ export async function hardenManualCompactionBoundary(params: {
       firstKeptEntryId: leaf.id,
       leafId: state.getLeafId() ?? undefined,
       messages: sessionContext.messages,
+      sessionManager: state,
     };
   }
 
@@ -130,11 +149,15 @@ export async function hardenManualCompactionBoundary(params: {
     entries: state.getEntries(),
     compactionEntryId: leaf.id,
   });
-  const replacedState = new TranscriptFileState({
+  const replacedState = new TranscriptState({
     header,
     entries: replacedEntries,
   });
-  await writeTranscriptFileAtomic(params.sessionFile, [header, ...replacedEntries]);
+  replaceSqliteSessionTranscriptEvents({
+    ...scope,
+    transcriptPath: params.sessionFile,
+    events: [header, ...replacedEntries],
+  });
 
   const replacedSessionContext = replacedState.buildSessionContext();
   return {
@@ -142,5 +165,6 @@ export async function hardenManualCompactionBoundary(params: {
     firstKeptEntryId: leaf.id,
     leafId: replacedState.getLeafId() ?? undefined,
     messages: replacedSessionContext.messages,
+    sessionManager: replacedState,
   };
 }

@@ -24,7 +24,7 @@ const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) =
   bytesFreed: 77,
   rewrittenEntries: 1,
 }));
-const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown) => ({
+const rewriteTranscriptEntriesInSqliteTranscriptMock = vi.fn(async (_params?: unknown) => ({
   changed: true,
   bytesFreed: 123,
   rewrittenEntries: 2,
@@ -91,8 +91,8 @@ vi.mock("./context-engine-capabilities.js", () => ({
 vi.mock("./transcript-rewrite.js", () => ({
   rewriteTranscriptEntriesInSessionManager: (params: unknown) =>
     rewriteTranscriptEntriesInSessionManagerMock(params),
-  rewriteTranscriptEntriesInSessionFile: (params: unknown) =>
-    rewriteTranscriptEntriesInSessionFileMock(params),
+  rewriteTranscriptEntriesInSqliteTranscript: (params: unknown) =>
+    rewriteTranscriptEntriesInSqliteTranscriptMock(params),
 }));
 
 async function loadFreshContextEngineMaintenanceModuleForTest() {
@@ -108,13 +108,13 @@ async function loadFreshContextEngineMaintenanceModuleForTest() {
 describe("buildContextEngineMaintenanceRuntimeContext", () => {
   beforeEach(async () => {
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
-    rewriteTranscriptEntriesInSessionFileMock.mockClear();
+    rewriteTranscriptEntriesInSqliteTranscriptMock.mockClear();
     resetSystemEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
-  it("adds a transcript rewrite helper that targets the current session file", async () => {
+  it("adds a transcript rewrite helper that targets the current SQLite transcript", async () => {
     const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
@@ -138,8 +138,8 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       bytesFreed: 123,
       rewrittenEntries: 2,
     });
-    expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
-      sessionFile: "/tmp/session.jsonl",
+    expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
+      transcriptPath: "/tmp/session.jsonl",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       config: undefined,
@@ -179,7 +179,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
         { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
       ],
     });
-    expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
+    expect(rewriteTranscriptEntriesInSqliteTranscriptMock).not.toHaveBeenCalled();
   });
 
   it("defers file rewrites onto the session lane when requested", async () => {
@@ -199,7 +199,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       });
       await Promise.resolve();
 
-      rewriteTranscriptEntriesInSessionFileMock.mockImplementationOnce(
+      rewriteTranscriptEntriesInSqliteTranscriptMock.mockImplementationOnce(
         async (_params?: unknown) => {
           events.push("rewrite");
           return {
@@ -225,7 +225,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       expect(rewritePromise?.then).toBeTypeOf("function");
 
       await flushAsyncWork();
-      expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
+      expect(rewriteTranscriptEntriesInSqliteTranscriptMock).not.toHaveBeenCalled();
 
       if (!releaseForeground) {
         throw new Error("Expected foreground turn release callback to be initialized");
@@ -297,7 +297,7 @@ describe("createDeferredTurnMaintenanceAbortSignal", () => {
 describe("runContextEngineMaintenance", () => {
   beforeEach(async () => {
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
-    rewriteTranscriptEntriesInSessionFileMock.mockClear();
+    rewriteTranscriptEntriesInSqliteTranscriptMock.mockClear();
     await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
@@ -395,15 +395,14 @@ describe("runContextEngineMaintenance", () => {
       reason: "turn",
       executionMode: "background",
       sessionManager,
-      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
     });
 
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
-    expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
-      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
+    expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
+      transcriptPath: "/tmp/session-background-file-rewrite.jsonl",
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
-      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
+      config: undefined,
       request: {
         replacements: [
           {
@@ -485,7 +484,6 @@ describe("runContextEngineMaintenance", () => {
             tokenBudget: 2048,
             currentTokenCount: 1536,
           },
-          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
         });
 
         expect(result).toBeUndefined();
@@ -523,11 +521,11 @@ describe("runContextEngineMaintenance", () => {
           tokenBudget: 2048,
           currentTokenCount: 1536,
         });
-        expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
-          sessionFile: "/tmp/session.jsonl",
+        expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
+          transcriptPath: "/tmp/session.jsonl",
           sessionId: "session-1",
           sessionKey,
-          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
+          config: undefined,
           request: {
             replacements: [
               {
@@ -960,7 +958,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        rewriteTranscriptEntriesInSessionFileMock.mockImplementationOnce(
+        rewriteTranscriptEntriesInSqliteTranscriptMock.mockImplementationOnce(
           async (_params?: unknown) => {
             events.push("rewrite");
             return {

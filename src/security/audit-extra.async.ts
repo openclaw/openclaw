@@ -474,7 +474,6 @@ export async function collectIncludeFilePermFindings(params: {
 
   const { formatPermissionDetail, formatPermissionRemediation, inspectPathPermissions } =
     await loadAuditFsModule();
-
   for (const p of includePaths) {
     const perms = await inspectPathPermissions(p, {
       env: params.env,
@@ -543,6 +542,50 @@ export async function collectStateDeepFilesystemFindings(params: {
   const oauthDir = resolveOAuthDir(params.env, params.stateDir);
   const { formatPermissionDetail, formatPermissionRemediation, inspectPathPermissions } =
     await loadAuditFsModule();
+  const inspectPrivateStateFile = async (paramsForFile: {
+    filePath: string;
+    checkIdPrefix: string;
+    titlePrefix: string;
+    detailSubject: string;
+  }) => {
+    const perms = await inspectPathPermissions(paramsForFile.filePath, {
+      env: params.env,
+      platform: params.platform,
+      exec: params.execIcacls,
+    });
+    if (!perms.ok) {
+      return;
+    }
+    if (perms.worldWritable || perms.groupWritable) {
+      findings.push({
+        checkId: `${paramsForFile.checkIdPrefix}.perms_writable`,
+        severity: "critical",
+        title: `${paramsForFile.titlePrefix} is writable by others`,
+        detail: `${formatPermissionDetail(paramsForFile.filePath, perms)}; another user could tamper with ${paramsForFile.detailSubject}.`,
+        remediation: formatPermissionRemediation({
+          targetPath: paramsForFile.filePath,
+          perms,
+          isDir: false,
+          posixMode: 0o600,
+          env: params.env,
+        }),
+      });
+    } else if (perms.worldReadable || perms.groupReadable) {
+      findings.push({
+        checkId: `${paramsForFile.checkIdPrefix}.perms_readable`,
+        severity: "warn",
+        title: `${paramsForFile.titlePrefix} is readable by others`,
+        detail: `${formatPermissionDetail(paramsForFile.filePath, perms)}; ${paramsForFile.detailSubject} can include private runtime data.`,
+        remediation: formatPermissionRemediation({
+          targetPath: paramsForFile.filePath,
+          perms,
+          isDir: false,
+          posixMode: 0o600,
+          env: params.env,
+        }),
+      });
+    }
+  };
 
   const oauthPerms = await inspectPathPermissions(oauthDir, {
     env: params.env,
@@ -595,6 +638,16 @@ export async function collectStateDeepFilesystemFindings(params: {
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const ids = Array.from(new Set([defaultAgentId, ...agentIds])).map((id) => normalizeAgentId(id));
 
+  const globalDbPath = path.join(params.stateDir, "state", "openclaw.sqlite");
+  for (const suffix of ["", "-wal", "-shm"]) {
+    await inspectPrivateStateFile({
+      filePath: `${globalDbPath}${suffix}`,
+      checkIdPrefix: "fs.global_state_db",
+      titlePrefix: "Global SQLite state database",
+      detailSubject: "shared OpenClaw state",
+    });
+  }
+
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
     const authPath = path.join(agentDir, "auth-profiles.json");
@@ -635,28 +688,20 @@ export async function collectStateDeepFilesystemFindings(params: {
       }
     }
 
-    const storePath = path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json");
-    const storePerms = await inspectPathPermissions(storePath, {
-      env: params.env,
-      platform: params.platform,
-      exec: params.execIcacls,
-    });
-    if (storePerms.ok) {
-      if (storePerms.worldReadable || storePerms.groupReadable) {
-        findings.push({
-          checkId: "fs.sessions_store.perms_readable",
-          severity: "warn",
-          title: "sessions.json is readable by others",
-          detail: `${formatPermissionDetail(storePath, storePerms)}; routing and transcript metadata can be sensitive.`,
-          remediation: formatPermissionRemediation({
-            targetPath: storePath,
-            perms: storePerms,
-            isDir: false,
-            posixMode: 0o600,
-            env: params.env,
-          }),
-        });
-      }
+    const agentDbPath = path.join(
+      params.stateDir,
+      "agents",
+      agentId,
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await inspectPrivateStateFile({
+        filePath: `${agentDbPath}${suffix}`,
+        checkIdPrefix: "fs.agent_state_db",
+        titlePrefix: "Agent SQLite state database",
+        detailSubject: "agent sessions, transcripts, VFS rows, artifacts, and caches",
+      });
     }
   }
 

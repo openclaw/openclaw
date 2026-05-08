@@ -1,7 +1,6 @@
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
-import { updateSessionStoreEntry } from "../../config/sessions/store.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
@@ -9,6 +8,7 @@ import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
+import { writeSessionEntryRow } from "./session-row-patch.js";
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
   const mutableCtx = ctx as Record<string, unknown>;
@@ -72,10 +72,11 @@ export async function maybeHandleResetCommand(
       if (params.sessionStore && params.sessionKey) {
         params.sessionStore[params.sessionKey] = targetSessionEntry;
       }
-      if (params.storePath && params.sessionKey) {
-        await updateSessionStoreEntry({
-          storePath: params.storePath,
+      if (params.sessionKey) {
+        await writeSessionEntryRow({
           sessionKey: params.sessionKey,
+          fallbackEntry: targetSessionEntry,
+          sessionStore: params.sessionStore,
           update: async (entry) => {
             const next = { ...entry };
             clearAllCliSessions(next);

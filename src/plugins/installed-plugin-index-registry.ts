@@ -1,6 +1,5 @@
 import { normalizePluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { LoadInstalledPluginIndexParams } from "./installed-plugin-index-types.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 
@@ -23,8 +22,7 @@ export function resolveInstalledPluginIndexRegistry(params: LoadInstalledPluginI
   }
 
   const normalized = normalizePluginsConfig(params.config?.plugins);
-  const installRecords =
-    params.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
+  const installRecords = params.installRecords ?? {};
   const discovery = discoverOpenClawPlugins({
     workspaceDir: params.workspaceDir,
     extraPaths: normalized.loadPaths,

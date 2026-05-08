@@ -6,7 +6,6 @@ const mocks = vi.hoisted(() => ({
   statusCommand: vi.fn(),
   healthCommand: vi.fn(),
   sessionsCommand: vi.fn(),
-  sessionsCleanupCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   commitmentsListCommand: vi.fn(),
   commitmentsDismissCommand: vi.fn(),
@@ -30,7 +29,6 @@ const mocks = vi.hoisted(() => ({
 const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
 const sessionsCommand = mocks.sessionsCommand;
-const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const commitmentsListCommand = mocks.commitmentsListCommand;
 const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
@@ -84,10 +82,6 @@ vi.mock("../../commands/sessions.js", () => ({
   sessionsCommand: mocks.sessionsCommand,
 }));
 
-vi.mock("../../commands/sessions-cleanup.js", () => ({
-  sessionsCleanupCommand: mocks.sessionsCleanupCommand,
-}));
-
 vi.mock("../../commands/export-trajectory.js", () => ({
   exportTrajectoryCommand: mocks.exportTrajectoryCommand,
 }));
@@ -133,7 +127,6 @@ describe("registerStatusHealthSessionsCommands", () => {
     statusCommand.mockResolvedValue(undefined);
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
-    sessionsCleanupCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
     commitmentsListCommand.mockResolvedValue(undefined);
     commitmentsDismissCommand.mockResolvedValue(undefined);
@@ -203,22 +196,11 @@ describe("registerStatusHealthSessionsCommands", () => {
   });
 
   it("runs sessions command with forwarded options", async () => {
-    await runCli([
-      "sessions",
-      "--json",
-      "--verbose",
-      "--store",
-      "/tmp/sessions.json",
-      "--active",
-      "120",
-      "--limit",
-      "25",
-    ]);
+    await runCli(["sessions", "--json", "--verbose", "--active", "120", "--limit", "25"]);
 
     expect(setVerbose).toHaveBeenCalledWith(true);
     expectCommandOptions(sessionsCommand, {
       json: true,
-      store: "/tmp/sessions.json",
       active: "120",
       limit: "25",
     });
@@ -241,47 +223,9 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
-  it("runs sessions cleanup subcommand with forwarded options", async () => {
-    await runCli([
-      "sessions",
-      "cleanup",
-      "--store",
-      "/tmp/sessions.json",
-      "--dry-run",
-      "--enforce",
-      "--fix-missing",
-      "--fix-dm-scope",
-      "--active-key",
-      "agent:main:main",
-      "--json",
-    ]);
-
-    expectCommandOptions(sessionsCleanupCommand, {
-      store: "/tmp/sessions.json",
-      agent: undefined,
-      allAgents: false,
-      dryRun: true,
-      enforce: true,
-      fixMissing: true,
-      fixDmScope: true,
-      activeKey: "agent:main:main",
-      json: true,
-    });
-  });
-
-  it("forwards parent-level all-agents to cleanup subcommand", async () => {
-    await runCli(["sessions", "--all-agents", "cleanup", "--dry-run"]);
-
-    expectCommandOptions(sessionsCleanupCommand, {
-      allAgents: true,
-    });
-  });
-
   it("runs sessions export-trajectory with owner-routable export options", async () => {
     await runCli([
       "sessions",
-      "--store",
-      "/tmp/sessions.json",
       "export-trajectory",
       "--session-key",
       "agent:main:telegram:direct:owner",
@@ -296,7 +240,6 @@ describe("registerStatusHealthSessionsCommands", () => {
       sessionKey: "agent:main:telegram:direct:owner",
       output: "bug-123",
       workspace: "/workspace",
-      store: "/tmp/sessions.json",
       json: true,
     });
   });

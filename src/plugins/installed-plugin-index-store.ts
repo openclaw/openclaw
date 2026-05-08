@@ -1,33 +1,47 @@
-import { z } from "zod";
-import { saveJsonFile } from "../infra/json-file.js";
-import { tryReadJson, tryReadJsonSync, writeJson } from "../infra/json-files.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { safeParseWithSchema } from "../utils/zod-parse.js";
+import fs from "node:fs";
+import { tryReadJsonSync } from "../infra/json-files.js";
+import {
+  deleteOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import { buildInstalledPluginIndex } from "./installed-plugin-index-build.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
-import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
+import { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-index-invalidation.js";
+import {
+  INSTALLED_PLUGIN_INDEX_KV_KEY,
+  INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+  parseInstalledPluginIndex,
+  readPersistedInstalledPluginIndex,
+  readPersistedInstalledPluginIndexSync,
+  resolveInstalledPluginIndexStateDbOptions,
+} from "./installed-plugin-index-persisted-read.js";
+import {
+  resolveCompatRegistryVersion,
+  resolveInstalledPluginIndexPolicyHash,
+} from "./installed-plugin-index-policy.js";
 import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 import {
-  diffInstalledPluginIndexInvalidationReasons,
-  extractPluginInstallRecordsFromInstalledPluginIndex,
-  INSTALLED_PLUGIN_INDEX_WARNING,
-  INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-  loadInstalledPluginIndex,
-  resolveInstalledPluginIndexPolicyHash,
-  refreshInstalledPluginIndex,
+  INSTALLED_PLUGIN_INDEX_VERSION,
+  INSTALLED_PLUGIN_INDEX_WARNING,
   type InstalledPluginIndex,
-  type InstalledPluginInstallRecordInfo,
   type InstalledPluginIndexRefreshReason,
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
-} from "./installed-plugin-index.js";
+} from "./installed-plugin-index-types.js";
+export {
+  readPersistedInstalledPluginIndex,
+  readPersistedInstalledPluginIndexSync,
+} from "./installed-plugin-index-persisted-read.js";
 export {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
@@ -42,134 +56,10 @@ export type InstalledPluginIndexStoreInspection = {
   current: InstalledPluginIndex;
 };
 
-const StringArraySchema = z.array(z.string());
-
-const InstalledPluginIndexStartupSchema = z.object({
-  sidecar: z.boolean(),
-  memory: z.boolean(),
-  deferConfiguredChannelFullLoadUntilAfterListen: z.boolean(),
-  agentHarnesses: StringArraySchema,
-});
-
-const InstalledPluginFileSignatureSchema = z.object({
-  size: z.number(),
-  mtimeMs: z.number(),
-  ctimeMs: z.number().optional(),
-});
-
-const InstalledPluginIndexRecordSchema = z.object({
-  pluginId: z.string(),
-  packageName: z.string().optional(),
-  packageVersion: z.string().optional(),
-  installRecord: z.record(z.string(), z.unknown()).optional(),
-  installRecordHash: z.string().optional(),
-  packageInstall: z.unknown().optional(),
-  packageChannel: z.unknown().optional(),
-  manifestPath: z.string(),
-  manifestHash: z.string(),
-  manifestFile: InstalledPluginFileSignatureSchema.optional(),
-  format: z.string().optional(),
-  bundleFormat: z.string().optional(),
-  source: z.string().optional(),
-  setupSource: z.string().optional(),
-  packageJson: z
-    .object({
-      path: z.string(),
-      hash: z.string(),
-      fileSignature: InstalledPluginFileSignatureSchema.optional(),
-    })
-    .optional(),
-  rootDir: z.string(),
-  origin: z.string(),
-  enabled: z.boolean(),
-  enabledByDefault: z.boolean().optional(),
-  enabledByDefaultOnPlatforms: StringArraySchema.optional(),
-  syntheticAuthRefs: StringArraySchema.optional(),
-  startup: InstalledPluginIndexStartupSchema,
-  compat: z.array(z.string()),
-});
-
-const InstalledPluginInstallRecordSchema = z.record(z.string(), z.unknown());
-
-const PluginDiagnosticSchema = z.object({
-  level: z.union([z.literal("warn"), z.literal("error")]),
-  message: z.string(),
-  pluginId: z.string().optional(),
-  source: z.string().optional(),
-});
-
-const InstalledPluginIndexSchema = z.object({
-  version: z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
-  warning: z.string().optional(),
-  hostContractVersion: z.string(),
-  compatRegistryVersion: z.string(),
-  migrationVersion: z.literal(INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION),
-  policyHash: z.string(),
-  generatedAtMs: z.number(),
-  refreshReason: z.string().optional(),
-  installRecords: z.record(z.string(), InstalledPluginInstallRecordSchema).optional(),
-  plugins: z.array(InstalledPluginIndexRecordSchema),
-  diagnostics: z.array(PluginDiagnosticSchema),
-});
-
-function copySafeInstallRecords(
-  records: Readonly<Record<string, InstalledPluginInstallRecordInfo>> | undefined,
-): Record<string, InstalledPluginInstallRecordInfo> | undefined {
-  if (!records) {
-    return undefined;
-  }
-  const safeRecords: Record<string, InstalledPluginInstallRecordInfo> = {};
-  for (const [pluginId, record] of Object.entries(records)) {
-    if (isBlockedObjectKey(pluginId)) {
-      continue;
-    }
-    safeRecords[pluginId] = record;
-  }
-  return safeRecords;
-}
-
-function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex | null {
-  const parsed = safeParseWithSchema(InstalledPluginIndexSchema, value) as
-    | (Omit<InstalledPluginIndex, "installRecords"> & {
-        installRecords?: InstalledPluginIndex["installRecords"];
-      })
-    | null;
-  if (!parsed) {
-    return null;
-  }
-  const installRecords =
-    copySafeInstallRecords(parsed.installRecords) ??
-    copySafeInstallRecords(
-      extractPluginInstallRecordsFromInstalledPluginIndex(parsed as InstalledPluginIndex),
-    ) ??
-    {};
-  return {
-    version: parsed.version,
-    ...(parsed.warning ? { warning: parsed.warning } : {}),
-    hostContractVersion: parsed.hostContractVersion,
-    compatRegistryVersion: parsed.compatRegistryVersion,
-    migrationVersion: parsed.migrationVersion,
-    policyHash: parsed.policyHash,
-    generatedAtMs: parsed.generatedAtMs,
-    ...(parsed.refreshReason ? { refreshReason: parsed.refreshReason } : {}),
-    installRecords,
-    plugins: parsed.plugins,
-    diagnostics: parsed.diagnostics,
-  };
-}
-
-export async function readPersistedInstalledPluginIndex(
-  options: InstalledPluginIndexStoreOptions = {},
-): Promise<InstalledPluginIndex | null> {
-  const parsed = await tryReadJson<unknown>(resolveInstalledPluginIndexStorePath(options));
-  return parseInstalledPluginIndex(parsed);
-}
-
-export function readPersistedInstalledPluginIndexSync(
-  options: InstalledPluginIndexStoreOptions = {},
-): InstalledPluginIndex | null {
-  const parsed = tryReadJsonSync(resolveInstalledPluginIndexStorePath(options));
-  return parseInstalledPluginIndex(parsed);
+function withInstalledPluginIndexWarning(index: InstalledPluginIndex): InstalledPluginIndex & {
+  warning: string;
+} {
+  return { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING };
 }
 
 export async function writePersistedInstalledPluginIndex(
@@ -177,14 +67,11 @@ export async function writePersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
   const filePath = resolveInstalledPluginIndexStorePath(options);
-  await writeJson(
-    filePath,
-    { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING },
-    {
-      trailingNewline: true,
-      dirMode: 0o700,
-      mode: 0o600,
-    },
+  writeOpenClawStateKvJson(
+    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+    INSTALLED_PLUGIN_INDEX_KV_KEY,
+    withInstalledPluginIndexWarning(index) as unknown as OpenClawStateJsonValue,
+    resolveInstalledPluginIndexStateDbOptions(options),
   );
   clearCurrentPluginMetadataSnapshotState();
   return filePath;
@@ -195,9 +82,87 @@ export function writePersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): string {
   const filePath = resolveInstalledPluginIndexStorePath(options);
-  saveJsonFile(filePath, { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING });
+  writeOpenClawStateKvJson(
+    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+    INSTALLED_PLUGIN_INDEX_KV_KEY,
+    withInstalledPluginIndexWarning(index) as unknown as OpenClawStateJsonValue,
+    resolveInstalledPluginIndexStateDbOptions(options),
+  );
   clearCurrentPluginMetadataSnapshotState();
   return filePath;
+}
+
+export function deletePersistedInstalledPluginIndexSync(
+  options: InstalledPluginIndexStoreOptions = {},
+): boolean {
+  if (options.filePath) {
+    try {
+      fs.unlinkSync(resolveInstalledPluginIndexStorePath(options));
+      clearCurrentPluginMetadataSnapshotState();
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+      return false;
+    }
+  }
+  const removed = deleteOpenClawStateKvJson(
+    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+    INSTALLED_PLUGIN_INDEX_KV_KEY,
+    resolveInstalledPluginIndexStateDbOptions(options),
+  );
+  if (removed) {
+    clearCurrentPluginMetadataSnapshotState();
+  }
+  return removed;
+}
+
+export function legacyInstalledPluginIndexFileExists(
+  options: InstalledPluginIndexStoreOptions = {},
+): boolean {
+  try {
+    return fs.existsSync(resolveInstalledPluginIndexStorePath(options));
+  } catch {
+    return false;
+  }
+}
+
+export type ImportLegacyInstalledPluginIndexResult = {
+  imported: boolean;
+  plugins: number;
+  installRecords: number;
+  removedSource: boolean;
+};
+
+export function importLegacyInstalledPluginIndexFileToSqlite(
+  options: InstalledPluginIndexStoreOptions = {},
+): ImportLegacyInstalledPluginIndexResult {
+  const filePath = resolveInstalledPluginIndexStorePath(options);
+  const parsed = parseInstalledPluginIndex(tryReadJsonSync(filePath));
+  if (!parsed) {
+    return { imported: false, plugins: 0, installRecords: 0, removedSource: false };
+  }
+  writeOpenClawStateKvJson(
+    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+    INSTALLED_PLUGIN_INDEX_KV_KEY,
+    withInstalledPluginIndexWarning(parsed) as unknown as OpenClawStateJsonValue,
+    resolveInstalledPluginIndexStateDbOptions({ env: options.env, stateDir: options.stateDir }),
+  );
+  let removedSource = false;
+  try {
+    fs.unlinkSync(filePath);
+    removedSource = true;
+  } catch {
+    removedSource = false;
+  }
+  clearCurrentPluginMetadataSnapshotState();
+  return {
+    imported: true,
+    plugins: parsed.plugins.length,
+    installRecords: Object.keys(parsed.installRecords ?? {}).length,
+    removedSource,
+  };
 }
 
 function hasPolicyRefreshTargets(
@@ -263,10 +228,10 @@ export async function inspectPersistedInstalledPluginIndex(
   params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndexStoreInspection> {
   const persisted = await readPersistedInstalledPluginIndex(params);
-  const current = loadInstalledPluginIndex({
+  const current = buildInstalledPluginIndex({
     ...params,
     installRecords:
-      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted) ?? {},
   });
   if (!persisted) {
     return {
@@ -298,10 +263,11 @@ export async function refreshPersistedInstalledPluginIndex(
     await writePersistedInstalledPluginIndex(index, params);
     return index;
   }
-  const index = refreshInstalledPluginIndex({
+  const index = buildInstalledPluginIndex({
     ...params,
+    refreshReason: params.reason,
     installRecords:
-      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted) ?? {},
   });
   await writePersistedInstalledPluginIndex(index, params);
   return index;
@@ -319,10 +285,11 @@ export function refreshPersistedInstalledPluginIndexSync(
     writePersistedInstalledPluginIndexSync(index, params);
     return index;
   }
-  const index = refreshInstalledPluginIndex({
+  const index = buildInstalledPluginIndex({
     ...params,
+    refreshReason: params.reason,
     installRecords:
-      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
+      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted) ?? {},
   });
   writePersistedInstalledPluginIndexSync(index, params);
   return index;

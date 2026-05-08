@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { listSessionTranscriptsForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -17,8 +17,6 @@ import {
   normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
   resolveDefaultAgentId,
-  resolveSessionTranscriptsDirForAgent,
-  resolveStateDir,
   setVerbose,
   shortenHomeInString,
   shortenHomePath,
@@ -56,7 +54,6 @@ import {
   recordGroundedShortTermCandidates,
   recordShortTermRecalls,
   rankShortTermPromotionCandidates,
-  resolveShortTermRecallLockPath,
   resolveShortTermRecallStorePath,
   type RepairShortTermPromotionArtifactsResult,
   type ShortTermAuditSummary,
@@ -234,9 +231,6 @@ function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): s
       `rewrote store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
     );
   }
-  if (repair.removedStaleLock) {
-    actions.push("removed stale lock");
-  }
   return actions.length > 0 ? actions.join(" · ") : "no changes";
 }
 
@@ -244,7 +238,6 @@ function formatDreamingAuditSummary(audit: DreamingArtifactsAuditSummary): strin
   const bits = [
     audit.dreamsPath ? "diary present" : "diary absent",
     `${audit.sessionCorpusFileCount} corpus files`,
-    audit.sessionIngestionExists ? "ingestion state present" : "ingestion state absent",
     audit.suspiciousSessionCorpusLineCount > 0
       ? `${audit.suspiciousSessionCorpusLineCount} suspicious lines`
       : null,
@@ -256,9 +249,6 @@ function formatDreamingRepairSummary(repair: RepairDreamingArtifactsResult): str
   const actions: string[] = [];
   if (repair.archivedSessionCorpus) {
     actions.push("archived session corpus");
-  }
-  if (repair.archivedSessionIngestion) {
-    actions.push("archived ingestion state");
   }
   if (repair.archivedDreamsDiary) {
     actions.push("archived diary");
@@ -276,10 +266,7 @@ function formatSourceLabel(source: string, workspaceDir: string, agentId: string
     );
   }
   if (source === "sessions") {
-    const stateDir = resolveStateDir(process.env, os.homedir);
-    return shortenHomeInString(
-      `sessions (${path.join(stateDir, "agents", agentId, "sessions")}${path.sep}*.jsonl)`,
-    );
+    return shortenHomeInString(`sessions (SQLite transcripts for ${agentId})`);
   }
   return source;
 }
@@ -484,24 +471,14 @@ async function checkReadableFile(pathname: string): Promise<{ exists: boolean; i
   }
 }
 
-async function scanSessionFiles(agentId: string): Promise<SourceScan> {
+async function scanSessionTranscripts(agentId: string): Promise<SourceScan> {
   const issues: string[] = [];
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
-    const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
-    const totalFiles = entries.filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
-    ).length;
-    return { source: "sessions", totalFiles, issues };
+    const transcripts = await listSessionTranscriptsForAgent(agentId);
+    return { source: "sessions", totalFiles: transcripts.length, issues };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      issues.push(`sessions directory missing (${shortenHomePath(sessionsDir)})`);
-      return { source: "sessions", totalFiles: 0, issues };
-    }
-    issues.push(
-      `sessions directory not accessible (${shortenHomePath(sessionsDir)}): ${code ?? "error"}`,
-    );
+    issues.push(`SQLite session transcripts not accessible: ${code ?? "error"}`);
     return { source: "sessions", totalFiles: null, issues };
   }
 }
@@ -635,7 +612,7 @@ async function scanMemorySources(params: {
       scans.push(await scanMemoryFiles(params.workspaceDir, extraPaths));
     }
     if (source === "sessions") {
-      scans.push(await scanSessionFiles(params.agentId));
+      scans.push(await scanSessionTranscripts(params.agentId));
     }
   }
   const issues = scans.flatMap((scan) => scan.issues);
@@ -969,9 +946,6 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       lines.push(
         `${label("Dream corpus")} ${info(shortenHomePath(dreamingAudit.sessionCorpusDir))}`,
       );
-      lines.push(
-        `${label("Dream ingestion")} ${info(shortenHomePath(dreamingAudit.sessionIngestionPath))}`,
-      );
       if (dreamingAudit.dreamsPath) {
         lines.push(`${label("Dream diary")} ${info(shortenHomePath(dreamingAudit.dreamsPath))}`);
       }
@@ -1302,7 +1276,6 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
       }
 
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
-      const lockPath = resolveShortTermRecallLockPath(workspaceDir);
       const customQmd = asRecord(asRecord(status.custom)?.qmd);
       const audit = await auditShortTermPromotionArtifacts({
         workspaceDir,
@@ -1320,7 +1293,6 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
         defaultRuntime.writeJson({
           workspaceDir,
           storePath,
-          lockPath,
           audit,
           candidates,
           apply: applyResult

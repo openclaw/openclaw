@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 
 type PluginManifestMetadataRecord = {
   pluginDir: string;
@@ -123,8 +124,8 @@ function manifestFileFingerprint(pluginDir: string): string {
 }
 
 function listPersistedIndexPluginDirs(env: NodeJS.ProcessEnv, startOrder: number): CandidateDir[] {
-  const index = readJsonObject(path.join(resolveStateDir(env), "plugins", "installs.json"));
-  if (!index || !Array.isArray(index.plugins)) {
+  const index = readPersistedInstalledPluginIndexSync({ env });
+  if (!index) {
     return [];
   }
 

@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   createAbortAwareIsolatedRunner,
@@ -78,10 +77,7 @@ describe("cron service timer regressions", () => {
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
 
-    state.store = { version: 1, jobs: [] };
-    await fs.writeFile(store.storePath, JSON.stringify(state.store), "utf8");
-
-    state.store.jobs.push({
+    const job = {
       id: "far-future",
       name: "far-future",
       enabled: true,
@@ -92,7 +88,9 @@ describe("cron service timer regressions", () => {
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "future" },
       state: { nextRunAtMs: Date.parse("2035-01-01T00:00:00.000Z") },
-    });
+    } satisfies CronJob;
+    state.store = { version: 1, jobs: [job] };
+    await writeCronJobs(store.storePath, [job]);
 
     await onTimer(state);
 
@@ -990,11 +988,7 @@ describe("cron service timer regressions", () => {
     const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
     const first = createDueIsolatedJob({ id: "batch-first", nowMs: dueAt, nextRunAtMs: dueAt });
     const second = createDueIsolatedJob({ id: "batch-second", nowMs: dueAt, nextRunAtMs: dueAt });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({ version: 1, jobs: [first, second] }),
-      "utf-8",
-    );
+    await writeCronJobs(store.storePath, [first, second]);
 
     let now = dueAt;
     const events: CronEvent[] = [];
@@ -1040,11 +1034,7 @@ describe("cron service timer regressions", () => {
       nowMs: dueAt,
       nextRunAtMs: dueAt,
     });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({ version: 1, jobs: [first, second] }),
-      "utf-8",
-    );
+    await writeCronJobs(store.storePath, [first, second]);
 
     let now = dueAt;
     let activeRuns = 0;
@@ -1130,7 +1120,7 @@ describe("cron service timer regressions", () => {
         events.push(evt);
       },
       runIsolatedAgentJob: vi.fn(async (params: { job: { id: string } }) => {
-        await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [] }), "utf-8");
+        await writeCronJobs(store.storePath, []);
         return {
           status: "ok" as const,
           summary: `finished ${params.job.id}`,
@@ -1192,7 +1182,7 @@ describe("cron service timer regressions", () => {
         events.push(evt);
       },
       runIsolatedAgentJob: vi.fn(async () => {
-        await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [] }), "utf-8");
+        await writeCronJobs(store.storePath, []);
         return { status: "error" as const, error: "agent failed after removal" };
       }),
     });

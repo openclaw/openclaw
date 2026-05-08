@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { modelKey } from "../agents/model-ref-shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,

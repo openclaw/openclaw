@@ -7,17 +7,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { AgentMessage } from "../agent-core-contract.js";
 import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
-import {
-  acquireSessionWriteLock,
-  type SessionWriteLockAcquireTimeoutConfig,
-  resolveSessionWriteLockAcquireTimeoutMs,
-} from "../session-write-lock.js";
 import type { SessionManager } from "../transcript/session-manager-contract.js";
 import {
   persistTranscriptStateMutation,
-  readTranscriptFileState,
-  type TranscriptFileState,
-} from "../transcript/transcript-file-state.js";
+  readTranscriptState,
+  type TranscriptState,
+} from "../transcript/transcript-state.js";
 import { log } from "./logger.js";
 
 type SessionBranchEntry = ReturnType<SessionManager["getBranch"]>[number];
@@ -93,7 +88,7 @@ function appendBranchEntry(params: {
 }
 
 function appendTranscriptStateBranchEntry(params: {
-  state: TranscriptFileState;
+  state: TranscriptState;
   entry: SessionBranchEntry;
   rewrittenEntryIds: ReadonlyMap<string, string>;
 }): SessionBranchEntry {
@@ -249,7 +244,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
 }
 
 export function rewriteTranscriptEntriesInState(params: {
-  state: TranscriptFileState;
+  state: TranscriptState;
   replacements: TranscriptRewriteReplacement[];
 }): TranscriptRewriteResult & { appendedEntries: SessionBranchEntry[] } {
   const replacementsById = new Map(
@@ -351,35 +346,30 @@ export function rewriteTranscriptEntriesInState(params: {
 }
 
 /**
- * Open a transcript file, rewrite message entries on the active branch, and
- * emit a transcript update when the active branch changed.
+ * Rewrite message entries on the active SQLite transcript branch and emit a
+ * transcript update when the active branch changed.
  */
-export async function rewriteTranscriptEntriesInSessionFile(params: {
-  sessionFile: string;
+export async function rewriteTranscriptEntriesInSqliteTranscript(params: {
+  transcriptPath: string;
   sessionId?: string;
   sessionKey?: string;
   request: TranscriptRewriteRequest;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: unknown;
 }): Promise<TranscriptRewriteResult> {
-  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
   try {
-    sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-    });
-    const state = await readTranscriptFileState(params.sessionFile);
+    const state = await readTranscriptState(params.transcriptPath);
     const result = rewriteTranscriptEntriesInState({
       state,
       replacements: params.request.replacements,
     });
     if (result.changed) {
       await persistTranscriptStateMutation({
-        sessionFile: params.sessionFile,
+        sessionFile: params.transcriptPath,
         state,
         appendedEntries: result.appendedEntries,
       });
       emitSessionTranscriptUpdate({
-        sessionFile: params.sessionFile,
+        sessionFile: params.transcriptPath,
         sessionKey: params.sessionKey,
       });
       log.info(
@@ -399,7 +389,5 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
       rewrittenEntries: 0,
       reason,
     };
-  } finally {
-    await sessionLock?.release();
   }
 }

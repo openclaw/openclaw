@@ -563,7 +563,6 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       id: chatId,
     },
     runtime: core.channel,
-    sessionStore: config.session?.store,
   });
 
   if (
@@ -576,7 +575,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   }
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
-  const { storePath, body } = buildEnvelope({
+  const { body } = buildEnvelope({
     channel: "Zalo",
     from: fromLabel,
     timestamp: date ? date * 1000 : undefined,
@@ -668,57 +667,74 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
-    ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      preparePayload: (payload) =>
-        prepareZaloDurableReplyPayload({
-          payload,
-          tableMode,
-          convertMarkdownTables: core.channel.text.convertMarkdownTables,
-        }),
-      durable: (payload, info) =>
-        resolveZaloDurableReplyOptions({
-          payload,
-          infoKind: info.kind,
-          chatId,
-        }),
-      deliver: async (payload) => {
-        await deliverZaloReply({
-          payload,
-          token,
-          chatId,
-          runtime,
-          core,
-          config,
-          webhookUrl: params.webhookUrl,
-          webhookPath: params.webhookPath,
-          proxyUrl: account.config.proxy,
-          mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
-          canHostMedia: params.canHostMedia,
-          accountId: account.accountId,
-          statusSink,
-          fetcher,
-          tableMode: "off",
-        });
-      },
-      onDelivered: () => {
-        statusSink?.({ lastOutboundAt: Date.now() });
-      },
-      onError: (err, info) => {
-        runtime.error?.(`[${account.accountId}] Zalo ${info.kind} reply failed: ${String(err)}`);
-      },
-    },
-    replyPipeline,
-    record: {
-      onRecordError: (err) => {
-        runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
-      },
+    raw: message,
+    adapter: {
+      ingest: () => ({
+        id: message_id,
+        timestamp: date ? date * 1000 : undefined,
+        rawText: rawBody,
+        textForAgent: rawBody,
+        textForCommands: rawBody,
+        raw: message,
+      }),
+      resolveTurn: () => ({
+        cfg: config,
+        channel: "zalo",
+        accountId: account.accountId,
+        agentId: route.agentId,
+        routeSessionKey: route.sessionKey,
+        ctxPayload,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          preparePayload: (payload) =>
+            prepareZaloDurableReplyPayload({
+              payload,
+              tableMode,
+              convertMarkdownTables: core.channel.text.convertMarkdownTables,
+            }),
+          durable: (payload, info) =>
+            resolveZaloDurableReplyOptions({
+              payload,
+              infoKind: info.kind,
+              chatId,
+            }),
+          deliver: async (payload) => {
+            await deliverZaloReply({
+              payload,
+              token,
+              chatId,
+              runtime,
+              core,
+              config,
+              webhookUrl: params.webhookUrl,
+              webhookPath: params.webhookPath,
+              proxyUrl: account.config.proxy,
+              mediaMaxBytes: params.mediaMaxMb * 1024 * 1024,
+              canHostMedia: params.canHostMedia,
+              accountId: account.accountId,
+              statusSink,
+              fetcher,
+              tableMode: "off",
+            });
+          },
+          onDelivered: () => {
+            statusSink?.({ lastOutboundAt: Date.now() });
+          },
+          onError: (err, info) => {
+            runtime.error?.(
+              `[${account.accountId}] Zalo ${info.kind} reply failed: ${String(err)}`,
+            );
+          },
+        },
+        replyPipeline,
+        record: {
+          onRecordError: (err) => {
+            runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+          },
+        },
+      }),
     },
   });
 }

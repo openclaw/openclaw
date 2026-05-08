@@ -15,6 +15,16 @@ export type PluginStateKeyedStore<T> = {
   clear(): Promise<void>;
 };
 
+export type PluginStateSyncKeyedStore<T> = {
+  register(key: string, value: T, opts?: { ttlMs?: number }): void;
+  registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): boolean;
+  lookup(key: string): T | undefined;
+  consume(key: string): T | undefined;
+  delete(key: string): boolean;
+  entries(): PluginStateEntry<T>[];
+  clear(): void;
+};
+
 export type OpenKeyedStoreOptions = {
   namespace: string;
   maxEntries: number;

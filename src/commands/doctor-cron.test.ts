@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadCronStore } from "../cron/store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } from "./doctor-cron.js";
 
@@ -102,13 +103,6 @@ function requirePersistedJob(jobs: Array<Record<string, unknown>>, index: number
   return job;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
-
 function expectNoteContaining(message: string, title: string): void {
   expect(
     noteMock.mock.calls.some(
@@ -138,24 +132,29 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.jobId).toBeUndefined();
-    expect(job.id).toBe("legacy-job");
-    expect(job.notify).toBeUndefined();
-    const schedule = requireRecord(job.schedule, "cron schedule");
-    expect(schedule.kind).toBe("cron");
-    expect(schedule.expr).toBe("0 7 * * *");
-    expect(schedule.tz).toBe("UTC");
-    const delivery = requireRecord(job.delivery, "cron delivery");
-    expect(delivery.mode).toBe("webhook");
-    expect(delivery.to).toBe("https://example.invalid/cron-finished");
-    const payload = requireRecord(job.payload, "cron payload");
-    expect(payload.kind).toBe("systemEvent");
-    expect(payload.text).toBe("Morning brief");
+    const persisted = await loadCronStore(storePath);
+    const [job] = persisted.jobs;
+    const legacyJob = job as Record<string, unknown> | undefined;
+    expect(legacyJob?.jobId).toBeUndefined();
+    expect(job?.id).toBe("legacy-job");
+    expect(legacyJob?.notify).toBeUndefined();
+    expect(job?.schedule).toMatchObject({
+      kind: "cron",
+      expr: "0 7 * * *",
+      tz: "UTC",
+    });
+    expect(job.delivery).toMatchObject({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
+    expect(job.payload).toMatchObject({
+      kind: "systemEvent",
+      text: "Morning brief",
+    });
 
     expectNoteContaining("Legacy cron job storage detected", "Cron");
     expectNoteContaining("Cron store normalized", "Doctor changes");
+    await expect(fs.stat(storePath)).rejects.toThrow();
   });
 
   it("imports legacy cron runtime state sidecars into SQLite", async () => {
@@ -198,7 +197,6 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const { loadCronStore } = await import("../cron/store.js");
     const loaded = await loadCronStore(storePath);
     expect(loaded.jobs[0]?.updatedAtMs).toBe(Date.parse("2026-02-01T00:01:00.000Z"));
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(Date.parse("2026-02-01T00:02:00.000Z"));
@@ -271,12 +269,10 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const firstJob = requirePersistedJob(jobs, 0);
-    const secondJob = requirePersistedJob(jobs, 1);
-    expect(firstJob.id).toBe("42");
-    expect(typeof secondJob.id).toBe("string");
-    expect(String(secondJob.id)).toMatch(/^cron-/);
+    const persisted = await loadCronStore(storePath);
+    expect(persisted.jobs[0]?.id).toBe("42");
+    expect(typeof persisted.jobs[1]?.id).toBe("string");
+    expect(persisted.jobs[1]?.id).toMatch(/^cron-/);
     expectNoteContaining("stores `id` as a non-string value", "Cron");
     expectNoteContaining("missing a canonical string `id`", "Cron");
   });
@@ -322,9 +318,8 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.notify).toBe(true);
+    const persisted = await loadCronStore(storePath);
+    expect((persisted.jobs[0] as Record<string, unknown> | undefined)?.notify).toBe(true);
     expectNoteContaining(
       'uses legacy notify fallback alongside delivery mode "announce"',
       "Doctor warnings",
@@ -396,12 +391,12 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.notify).toBeUndefined();
-    const delivery = requireRecord(job.delivery, "cron delivery");
-    expect(delivery.mode).toBe("webhook");
-    expect(delivery.to).toBe("https://example.invalid/cron-finished");
+    const persisted = await loadCronStore(storePath);
+    expect((persisted.jobs[0] as Record<string, unknown> | undefined)?.notify).toBeUndefined();
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
+      mode: "webhook",
+      to: "https://example.invalid/cron-finished",
+    });
   });
 
   it("repairs legacy root delivery threadId hints into delivery", async () => {
@@ -433,16 +428,17 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.channel).toBeUndefined();
-    expect(job.to).toBeUndefined();
-    expect(job.threadId).toBeUndefined();
-    const delivery = requireRecord(job.delivery, "cron delivery");
-    expect(delivery.mode).toBe("announce");
-    expect(delivery.channel).toBe("telegram");
-    expect(delivery.to).toBe("-1001234567890");
-    expect(delivery.threadId).toBe("99");
+    const persisted = await loadCronStore(storePath);
+    const legacyJob = persisted.jobs[0] as Record<string, unknown> | undefined;
+    expect(legacyJob?.channel).toBeUndefined();
+    expect(legacyJob?.to).toBeUndefined();
+    expect(legacyJob?.threadId).toBeUndefined();
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: "99",
+    });
   });
 
   it("rewrites stale managed dreaming jobs to the isolated agentTurn shape", async () => {
@@ -473,17 +469,17 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
-    const job = requirePersistedJob(persisted.jobs, 0);
-    expect(job.sessionTarget).toBe("isolated");
-    const payload = requireRecord(job.payload, "cron payload");
-    expect(payload.kind).toBe("agentTurn");
-    expect(payload.message).toBe("__openclaw_memory_core_short_term_promotion_dream__");
-    expect(payload.lightContext).toBe(true);
-    const delivery = requireRecord(job.delivery, "cron delivery");
-    expect(delivery.mode).toBe("none");
+    const persisted = await loadCronStore(storePath);
+    const [job] = persisted.jobs;
+    expect(job).toMatchObject({
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_short_term_promotion_dream__",
+        lightContext: true,
+      },
+      delivery: { mode: "none" },
+    });
     expectNoteContaining("managed dreaming job", "Cron");
     expectNoteContaining("Rewrote 1 managed dreaming job", "Doctor changes");
   });

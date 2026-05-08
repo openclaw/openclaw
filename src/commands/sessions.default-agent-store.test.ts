@@ -3,12 +3,13 @@ import type { RuntimeEnv } from "../runtime.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
-const resolveStorePathMock = vi.hoisted(() =>
-  vi.fn((_store: string | undefined, opts?: { agentId?: string }) => {
-    return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
-  }),
+type MockSessionEntryRow = {
+  sessionKey: string;
+  entry: { sessionId: string; updatedAt: number; model: string };
+};
+const listSessionEntriesMock = vi.hoisted(() =>
+  vi.fn((_params: { agentId: string }): MockSessionEntryRow[] => []),
 );
-const loadSessionStoreMock = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
@@ -24,14 +25,13 @@ vi.mock("../config/sessions.js", async () => {
     await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
-    resolveStorePath: resolveStorePathMock,
-    loadSessionStore: loadSessionStoreMock,
+    listSessionEntries: listSessionEntriesMock,
   };
 });
 
 import { sessionsCommand } from "./sessions.js";
 
-function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
+function createSessionsConfig() {
   return {
     agents: {
       defaults: {
@@ -44,7 +44,6 @@ function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
         { id: "voice", default: true },
       ],
     },
-    session: { store },
   };
 }
 
@@ -64,24 +63,26 @@ describe("sessionsCommand default store agent selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loadConfigMock.mockImplementation(() => createSessionsConfig());
-    resolveStorePathMock.mockImplementation(
-      (_store: string | undefined, opts?: { agentId?: string }) => {
-        return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
-      },
-    );
-    loadSessionStoreMock.mockImplementation(() => ({}));
+    listSessionEntriesMock.mockImplementation(() => []);
   });
 
   it("includes agentId on sessions rows for --all-agents JSON output", async () => {
-    resolveStorePathMock.mockClear();
-    loadSessionStoreMock.mockReset();
-    loadSessionStoreMock
-      .mockReturnValueOnce({
-        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
-      })
-      .mockReturnValueOnce({
-        voice_row: { sessionId: "s2", updatedAt: Date.now() - 120_000, model: "pi:opus" },
-      });
+    listSessionEntriesMock.mockReset();
+    listSessionEntriesMock.mockImplementation(({ agentId }: { agentId: string }) =>
+      agentId === "voice"
+        ? [
+            {
+              sessionKey: "voice_row",
+              entry: { sessionId: "s2", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+            },
+          ]
+        : [
+            {
+              sessionKey: "main_row",
+              entry: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+            },
+          ],
+    );
     const { runtime, logs } = createRuntime();
 
     await sessionsCommand({ allAgents: true, json: true }, runtime);
@@ -95,58 +96,72 @@ describe("sessionsCommand default store agent selection", () => {
     expect(payload.sessions?.map((session) => session.agentId)).toContain("voice");
   });
 
-  it("avoids duplicate rows when --all-agents resolves to a shared store path", async () => {
-    loadConfigMock.mockImplementation(() => createSessionsConfig("/tmp/shared-sessions.json"));
-    loadSessionStoreMock.mockReset();
-    loadSessionStoreMock.mockReturnValue({
-      "agent:main:room": { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
-      "agent:voice:room": { sessionId: "s2", updatedAt: Date.now() - 30_000, model: "pi:opus" },
-    });
+  it("keeps per-agent rows in --all-agents database output", async () => {
+    listSessionEntriesMock.mockReset();
+    listSessionEntriesMock.mockImplementation(({ agentId }: { agentId: string }) => [
+      {
+        sessionKey: `agent:${agentId}:room`,
+        entry: {
+          sessionId: agentId === "voice" ? "s2" : "s1",
+          updatedAt: Date.now() - (agentId === "voice" ? 30_000 : 60_000),
+          model: "pi:opus",
+        },
+      },
+    ]);
     const { runtime, logs } = createRuntime();
 
     await sessionsCommand({ allAgents: true, json: true }, runtime);
 
     const payload = JSON.parse(logs[0] ?? "{}") as {
       count?: number;
-      stores?: Array<{ agentId: string; path: string }>;
+      databases?: Array<{ agentId: string; path: string }>;
       allAgents?: boolean;
       sessions?: Array<{ key: string; agentId?: string }>;
     };
     expect(payload.count).toBe(2);
     expect(payload.allAgents).toBe(true);
-    expect(payload.stores).toEqual([{ agentId: "main", path: "/tmp/shared-sessions.json" }]);
+    expect(payload.databases?.map((database) => database.agentId)).toEqual(["main", "voice"]);
+    expect(
+      payload.databases?.every((database) => database.path.endsWith("openclaw-agent.sqlite")),
+    ).toBe(true);
     expect(payload.sessions?.map((session) => session.agentId).toSorted()).toEqual([
       "main",
       "voice",
     ]);
-    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(listSessionEntriesMock).toHaveBeenCalledTimes(2);
   });
 
-  it("uses configured default agent id when resolving implicit session store path", async () => {
-    loadSessionStoreMock.mockReset();
-    loadSessionStoreMock.mockReturnValue({});
+  it("uses configured default agent id when resolving implicit session database", async () => {
+    listSessionEntriesMock.mockReset();
+    listSessionEntriesMock.mockReturnValue([]);
     const { runtime, logs } = createRuntime();
 
     await sessionsCommand({}, runtime);
 
-    expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/sessions-voice.json");
-    expect(logs[0]).toContain("Session store: /tmp/sessions-voice.json");
+    expect(listSessionEntriesMock).toHaveBeenCalledWith({ agentId: "voice" });
+    expect(logs[0]).toContain("Session database:");
+    expect(logs[0]).toContain("agents/voice/agent/openclaw-agent.sqlite");
   });
 
   it("uses all configured agent stores with --all-agents", async () => {
-    loadSessionStoreMock.mockReset();
-    loadSessionStoreMock
-      .mockReturnValueOnce({
-        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
-      })
-      .mockReturnValueOnce({});
+    listSessionEntriesMock.mockReset();
+    listSessionEntriesMock.mockImplementation(({ agentId }: { agentId: string }) =>
+      agentId === "main"
+        ? [
+            {
+              sessionKey: "main_row",
+              entry: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+            },
+          ]
+        : [],
+    );
     const { runtime, logs } = createRuntime();
 
     await sessionsCommand({ allAgents: true }, runtime);
 
-    expect(loadSessionStoreMock).toHaveBeenNthCalledWith(1, "/tmp/sessions-main.json");
-    expect(loadSessionStoreMock).toHaveBeenNthCalledWith(2, "/tmp/sessions-voice.json");
-    expect(logs[0]).toContain("Session stores: 2 (main, voice)");
+    expect(listSessionEntriesMock).toHaveBeenNthCalledWith(1, { agentId: "main" });
+    expect(listSessionEntriesMock).toHaveBeenNthCalledWith(2, { agentId: "voice" });
+    expect(logs[0]).toContain("Session databases: 2 (main, voice)");
     expect(logs[2]).toContain("Agent");
   });
 });

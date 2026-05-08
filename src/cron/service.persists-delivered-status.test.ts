@@ -84,8 +84,9 @@ async function runSingleJobAndReadState(params: {
 }) {
   const job = await params.cron.add(params.job);
   vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
+  const finished = params.finished.waitForOk(job.id);
   await vi.runOnlyPendingTimersAsync();
-  await params.finished.waitForOk(job.id);
+  await finished;
 
   const jobs = await params.cron.list({ includeDisabled: true });
   return { job, updated: jobs.find((entry) => entry.id === job.id) };

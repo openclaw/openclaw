@@ -15,7 +15,7 @@ import {
   stopSubagentsForRequester,
 } from "./abort.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
-import { persistAbortTargetEntry } from "./commands-session-store.js";
+import { persistAbortTargetEntry } from "./commands-session-entry.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
@@ -85,7 +85,6 @@ function resolveAbortCutoffForTarget(params: {
 async function applyAbortTarget(params: {
   abortTarget: AbortTarget;
   sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
   abortKey?: string;
   abortCutoff?: AbortCutoff;
 }) {
@@ -101,7 +100,6 @@ async function applyAbortTarget(params: {
     entry: abortTarget.entry,
     key: abortTarget.key,
     sessionStore: params.sessionStore,
-    storePath: params.storePath,
     abortCutoff: params.abortCutoff,
   });
   if (!persisted && params.abortKey) {
@@ -116,7 +114,6 @@ function buildAbortTargetApplyParams(
   return {
     abortTarget,
     sessionStore: params.sessionStore,
-    storePath: params.storePath,
     abortKey: params.command.abortKey,
     abortCutoff: resolveAbortCutoffForTarget({
       ctx: params.ctx,

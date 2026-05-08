@@ -230,21 +230,16 @@ describe("info command handlers", () => {
     expect(statusReplyParams.parentSessionKey).toBe("discord:group:parent-room");
   });
 
-  it("preserves the shared session store path when routing /status", async () => {
+  it("does not route the legacy session store path through /status", async () => {
     const params = buildInfoParams("/status", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
-    params.storePath = "/tmp/target-session-store.json";
 
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    const statusReplyParams = firstMockArg(
-      vi.mocked(buildStatusReply),
-      "buildStatusReply",
-    ) as Parameters<typeof buildStatusReply>[0];
-    expect(statusReplyParams.storePath).toBe("/tmp/target-session-store.json");
+    expect(vi.mocked(buildStatusReply).mock.calls[0]?.[0]).not.toHaveProperty("storePath");
   });
 
   it("prefers the target session entry when routing /status", async () => {

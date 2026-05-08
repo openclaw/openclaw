@@ -212,6 +212,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
       plans: [],
     },
+    sqlite: {
+      hasLegacy: false,
+      legacyTables: [],
+    },
     preview: params?.preview ?? [],
   };
 }
@@ -416,6 +420,7 @@ vi.mock("../daemon/service.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
+  legacyChannelPairingFilesExist: vi.fn().mockResolvedValue(false),
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));

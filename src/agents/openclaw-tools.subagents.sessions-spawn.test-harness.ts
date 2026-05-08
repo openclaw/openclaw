@@ -202,7 +202,6 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
       sessionId: "forked-session-id",
       sessionFile: "/tmp/forked-session.jsonl",
     }),
-    updateSessionStore: async (_storePath, mutator) => mutator({}),
   });
   cachedSubagentRegistryTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
@@ -342,7 +341,9 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: () => hoisted.sessionStore,
+  getSessionEntry: ({ sessionKey }: { sessionKey: string }) => hoisted.sessionStore[sessionKey],
+  listSessionEntries: () =>
+    Object.entries(hoisted.sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   mergeSessionEntry: (existing: object | undefined, patch: object) => ({
     ...existing,
     ...patch,
@@ -351,12 +352,14 @@ vi.mock("../config/sessions.js", () => ({
     cfg?: { session?: { mainKey?: string } };
     agentId: string;
   }) => `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
-  resolveStorePath: () => "/tmp/openclaw-sessions-spawn-test-store.json",
-  updateSessionStore: async (
-    _storePath: string,
-    mutator: (store: typeof hoisted.sessionStore) => void | Promise<void>,
-  ) => {
-    await mutator(hoisted.sessionStore);
+  upsertSessionEntry: async ({
+    sessionKey,
+    entry,
+  }: {
+    sessionKey: string;
+    entry: (typeof hoisted.sessionStore)[string];
+  }) => {
+    hoisted.sessionStore[sessionKey] = entry;
   },
 }));
 

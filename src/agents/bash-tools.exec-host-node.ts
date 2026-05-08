@@ -1,3 +1,4 @@
+import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import {
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,

@@ -1,25 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import {
+  findPendingMatrixLegacyCryptoMigrationState,
+  isMatrixLegacyCryptoMigrationState,
+  MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
+  readMatrixLegacyCryptoMigrationState,
+  resolveMatrixLegacyCryptoMigrationStateKey,
+  writeMatrixLegacyCryptoMigrationStateByKey,
+  type MatrixLegacyCryptoMigrationState,
+} from "../../legacy-crypto-migration-state.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { resolveMatrixStoragePaths } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";
 import type { MatrixClient } from "../sdk.js";
-
-type MatrixLegacyCryptoMigrationState = {
-  version: 1;
-  accountId: string;
-  roomKeyCounts: {
-    total: number;
-    backedUp: number;
-  } | null;
-  restoreStatus: "pending" | "completed" | "manual-action-required";
-  restoredAt?: string;
-  importedCount?: number;
-  totalCount?: number;
-  lastError?: string | null;
-};
 
 export type MatrixLegacyCryptoRestoreResult =
   | { kind: "skipped" }
@@ -35,17 +29,12 @@ export type MatrixLegacyCryptoRestoreResult =
       localOnlyKeys: number;
     };
 
-function isMigrationState(value: unknown): value is MatrixLegacyCryptoMigrationState {
-  return (
-    Boolean(value) && typeof value === "object" && (value as { version?: unknown }).version === 1
-  );
-}
-
 async function resolvePendingMigrationStatePath(params: {
   stateDir: string;
   auth: Pick<MatrixAuth, "homeserver" | "userId" | "accessToken" | "accountId" | "deviceId">;
 }): Promise<{
   statePath: string;
+  stateKey: string;
   value: MatrixLegacyCryptoMigrationState | null;
 }> {
   const { rootDir } = resolveMatrixStoragePaths({
@@ -56,11 +45,11 @@ async function resolvePendingMigrationStatePath(params: {
     deviceId: params.auth.deviceId,
     stateDir: params.stateDir,
   });
-  const directStatePath = path.join(rootDir, "legacy-crypto-migration.json");
-  const { value: directValue } =
-    await readJsonFileWithFallback<MatrixLegacyCryptoMigrationState | null>(directStatePath, null);
-  if (isMigrationState(directValue) && directValue.restoreStatus === "pending") {
-    return { statePath: directStatePath, value: directValue };
+  const directStatePath = path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME);
+  const directStateKey = resolveMatrixLegacyCryptoMigrationStateKey(directStatePath);
+  const directValue = await readMatrixLegacyCryptoMigrationState(directStatePath);
+  if (isMatrixLegacyCryptoMigrationState(directValue) && directValue.restoreStatus === "pending") {
+    return { statePath: directStatePath, stateKey: directStateKey, value: directValue };
   }
 
   const accountStorageDir = path.dirname(rootDir);
@@ -72,20 +61,33 @@ async function resolvePendingMigrationStatePath(params: {
       .filter((entry) => path.join(accountStorageDir, entry) !== rootDir)
       .toSorted((left, right) => left.localeCompare(right));
   } catch {
-    return { statePath: directStatePath, value: directValue };
+    siblingEntries = [];
   }
 
   for (const sibling of siblingEntries) {
-    const siblingStatePath = path.join(accountStorageDir, sibling, "legacy-crypto-migration.json");
-    const { value } = await readJsonFileWithFallback<MatrixLegacyCryptoMigrationState | null>(
-      siblingStatePath,
-      null,
+    const siblingStatePath = path.join(
+      accountStorageDir,
+      sibling,
+      MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
     );
-    if (isMigrationState(value) && value.restoreStatus === "pending") {
-      return { statePath: siblingStatePath, value };
+    const value = await readMatrixLegacyCryptoMigrationState(siblingStatePath);
+    if (isMatrixLegacyCryptoMigrationState(value) && value.restoreStatus === "pending") {
+      return {
+        statePath: siblingStatePath,
+        stateKey: resolveMatrixLegacyCryptoMigrationStateKey(siblingStatePath),
+        value,
+      };
     }
   }
-  return { statePath: directStatePath, value: directValue };
+  const accountPending = await findPendingMatrixLegacyCryptoMigrationState(params.auth.accountId);
+  if (accountPending) {
+    return {
+      statePath: directStatePath,
+      stateKey: accountPending.key,
+      value: accountPending.value,
+    };
+  }
+  return { statePath: directStatePath, stateKey: directStateKey, value: directValue };
 }
 
 export async function maybeRestoreLegacyMatrixBackup(params: {
@@ -96,11 +98,11 @@ export async function maybeRestoreLegacyMatrixBackup(params: {
 }): Promise<MatrixLegacyCryptoRestoreResult> {
   const env = params.env ?? process.env;
   const stateDir = params.stateDir ?? getMatrixRuntime().state.resolveStateDir(env, os.homedir);
-  const { statePath, value } = await resolvePendingMigrationStatePath({
+  const { stateKey, value } = await resolvePendingMigrationStatePath({
     stateDir,
     auth: params.auth,
   });
-  if (!isMigrationState(value) || value.restoreStatus !== "pending") {
+  if (!isMatrixLegacyCryptoMigrationState(value) || value.restoreStatus !== "pending") {
     return { kind: "skipped" };
   }
 
@@ -111,7 +113,7 @@ export async function maybeRestoreLegacyMatrixBackup(params: {
       : 0;
 
   if (restore.success) {
-    await writeJsonFileAtomically(statePath, {
+    await writeMatrixLegacyCryptoMigrationStateByKey(stateKey, {
       ...value,
       restoreStatus: "completed",
       restoredAt: restore.restoredAt ?? new Date().toISOString(),
@@ -127,7 +129,7 @@ export async function maybeRestoreLegacyMatrixBackup(params: {
     };
   }
 
-  await writeJsonFileAtomically(statePath, {
+  await writeMatrixLegacyCryptoMigrationStateByKey(stateKey, {
     ...value,
     lastError: restore.error ?? "unknown",
   } satisfies MatrixLegacyCryptoMigrationState);

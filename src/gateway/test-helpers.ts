@@ -30,5 +30,5 @@ export {
   trackConnectChallengeNonce,
   waitForSystemEvent,
   withGatewayServer,
-  writeSessionStore,
+  seedGatewaySessionEntries,
 } from "./test-helpers.server.js";

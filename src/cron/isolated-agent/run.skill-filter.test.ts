@@ -132,7 +132,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   it("refreshes cached snapshot when skillFilter changes without version bump", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue(["weather"]);
     resolveCronSessionMock.mockReturnValue({
-      storePath: "/tmp/store.json",
       store: {},
       sessionEntry: {
         sessionId: "test-session-id",
@@ -168,7 +167,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue([" weather ", "meme-factory", "weather"]);
     resolveCronSessionMock.mockReturnValue({
-      storePath: "/tmp/store.json",
       store: {},
       sessionEntry: {
         sessionId: "test-session-id",
@@ -349,7 +347,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       // Make runWithModelFallback invoke the run callback so the CLI path executes.
       mockCliFallbackInvocation();
       resolveCronSessionMock.mockReturnValue({
-        storePath: "/tmp/store.json",
         store: {},
         sessionEntry: {
           sessionId: "test-session-fresh",
@@ -381,7 +378,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       mockCliFallbackInvocation();
       resolveCronSessionMock.mockReturnValue({
-        storePath: "/tmp/store.json",
         store: {},
         sessionEntry: {
           sessionId: "test-session-continuation",

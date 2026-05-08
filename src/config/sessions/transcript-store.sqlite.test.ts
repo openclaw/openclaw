@@ -2,13 +2,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import {
   appendSqliteSessionTranscriptEvent,
+  appendSqliteSessionTranscriptMessage,
+  deleteSqliteSessionTranscript,
   exportSqliteSessionTranscriptJsonl,
   importJsonlTranscriptToSqlite,
   loadSqliteSessionTranscriptEvents,
-  writeSqliteSessionTranscriptJsonl,
+  recordSqliteSessionTranscriptSnapshot,
 } from "./transcript-store.sqlite.js";
 
 function createTempDir(): string {
@@ -16,6 +25,7 @@ function createTempDir(): string {
 }
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -60,6 +70,81 @@ describe("SQLite session transcript store", () => {
     ]);
   });
 
+  it("dedupes message appends by SQLite idempotency identity", () => {
+    const stateDir = createTempDir();
+    const options = {
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "session-1",
+      sessionVersion: 1,
+      message: { role: "user", content: "hi", idempotencyKey: "idem-1" },
+      now: () => 100,
+    };
+
+    const first = appendSqliteSessionTranscriptMessage(options);
+    const second = appendSqliteSessionTranscriptMessage(options);
+
+    expect(second.messageId).toBe(first.messageId);
+    expect(
+      loadSqliteSessionTranscriptEvents({
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        agentId: "main",
+        sessionId: "session-1",
+      }).map((entry) => entry.event),
+    ).toEqual([
+      expect.objectContaining({ type: "session", id: "session-1" }),
+      expect.objectContaining({
+        type: "message",
+        id: first.messageId,
+        parentId: null,
+        message: { role: "user", content: "hi", idempotencyKey: "idem-1" },
+      }),
+    ]);
+
+    const database = openOpenClawAgentDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+    });
+    const identityRows = database.db
+      .prepare(
+        "SELECT message_idempotency_key FROM transcript_event_identities WHERE session_id = ? AND message_idempotency_key IS NOT NULL",
+      )
+      .all("session-1");
+    expect(identityRows).toEqual([{ message_idempotency_key: "idem-1" }]);
+  });
+
+  it("links transcript message parents inside the SQLite append transaction", () => {
+    const stateDir = createTempDir();
+    const first = appendSqliteSessionTranscriptMessage({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "session-1",
+      sessionVersion: 1,
+      message: { role: "user", content: "one", idempotencyKey: "idem-1" },
+      now: () => 100,
+    });
+    const second = appendSqliteSessionTranscriptMessage({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "session-1",
+      sessionVersion: 1,
+      message: { role: "assistant", content: "two", idempotencyKey: "idem-2" },
+      now: () => 200,
+    });
+
+    const events = loadSqliteSessionTranscriptEvents({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "session-1",
+    }).map((entry) => entry.event as { id?: string; parentId?: string | null });
+
+    expect(events).toEqual([
+      expect.objectContaining({ id: "session-1" }),
+      expect.objectContaining({ id: first.messageId, parentId: null }),
+      expect.objectContaining({ id: second.messageId, parentId: first.messageId }),
+    ]);
+  });
+
   it("keeps transcript events isolated by agent id", () => {
     const stateDir = createTempDir();
 
@@ -85,10 +170,66 @@ describe("SQLite session transcript store", () => {
     ).toEqual([{ type: "message", id: "main" }]);
   });
 
-  it("imports and exports JSONL transcript compatibility files", async () => {
+  it("cascades transcript file mappings when an agent database registration is removed", () => {
+    const stateDir = createTempDir();
+    appendSqliteSessionTranscriptEvent({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "session-1",
+      transcriptPath: path.join(stateDir, "session.jsonl"),
+      event: { type: "session", id: "session-1" },
+    });
+
+    const stateDatabase = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      stateDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_files").get(),
+    ).toEqual({ count: 1 });
+    stateDatabase.db.prepare("DELETE FROM agent_databases WHERE agent_id = ?").run("main");
+    expect(
+      stateDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_files").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("deletes transcript snapshots and file mappings with the transcript", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const transcriptPath = path.join(stateDir, "session.jsonl");
+
+    appendSqliteSessionTranscriptEvent({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      transcriptPath,
+      event: { type: "session", id: "session-1" },
+    });
+    recordSqliteSessionTranscriptSnapshot({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      snapshotId: "snapshot-1",
+      reason: "compaction",
+      eventCount: 1,
+    });
+
+    expect(deleteSqliteSessionTranscript({ env, agentId: "main", sessionId: "session-1" })).toBe(
+      true,
+    );
+
+    const agentDatabase = openOpenClawAgentDatabase({ env, agentId: "main" });
+    expect(
+      agentDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_snapshots").get(),
+    ).toEqual({ count: 0 });
+    const stateDatabase = openOpenClawStateDatabase({ env });
+    expect(
+      stateDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_files").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("imports legacy JSONL transcript files and renders JSONL from SQLite", () => {
     const stateDir = createTempDir();
     const sourcePath = path.join(stateDir, "source.jsonl");
-    const exportedPath = path.join(stateDir, "exported.jsonl");
     fs.writeFileSync(
       sourcePath,
       [
@@ -121,21 +262,6 @@ describe("SQLite session transcript store", () => {
         id: "m1",
         message: { role: "user", content: "hi" },
       })}\n`,
-    );
-    await expect(
-      writeSqliteSessionTranscriptJsonl({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        agentId: "main",
-        sessionId: "session-1",
-        transcriptPath: exportedPath,
-      }),
-    ).resolves.toEqual({ exported: 2, transcriptPath: exportedPath });
-    expect(fs.readFileSync(exportedPath, "utf-8")).toBe(
-      exportSqliteSessionTranscriptJsonl({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        agentId: "main",
-        sessionId: "session-1",
-      }),
     );
   });
 });

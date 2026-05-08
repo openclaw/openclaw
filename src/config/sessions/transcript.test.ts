@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
-import { saveSessionStore } from "./store.js";
+import { upsertSessionEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import {
@@ -48,7 +48,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       },
     },
   ) {
-    await saveSessionStore(fixture.storePath(), store);
+    for (const [key, entry] of Object.entries(store)) {
+      upsertSessionEntry({ agentId: "main", sessionKey: key, entry });
+    }
   }
 
   function readEvents(targetSessionId = sessionId) {
@@ -115,7 +117,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
       text: "Hello from delivery mirror!",
-      storePath: fixture.storePath(),
     });
 
     expect(result.ok).toBe(true);
@@ -147,7 +148,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await appendAssistantMessageToSessionTranscript({
       sessionKey,
       text: "Hello from delivery mirror!",
-      storePath: fixture.storePath(),
     });
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
@@ -178,13 +178,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       sessionKey,
       text: "Hello from delivery mirror!",
       idempotencyKey: "mirror:test-source-message",
-      storePath: fixture.storePath(),
     });
     await appendAssistantMessageToSessionTranscript({
       sessionKey,
       text: "Hello from delivery mirror!",
       idempotencyKey: "mirror:test-source-message",
-      storePath: fixture.storePath(),
     });
 
     const events = readEvents();
@@ -220,7 +218,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       sessionKey,
       text: "Hello from SQLite mirror!",
       idempotencyKey: "mirror:sqlite-source-message",
-      storePath: fixture.storePath(),
     });
 
     expect(result).toMatchObject({
@@ -237,7 +234,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const exactResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
-      storePath: fixture.storePath(),
       message: createExactAssistantMessage({ text: "Hello from Codex!" }),
     });
 
@@ -246,7 +242,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
       sessionKey,
       text: "Hello from Codex!",
-      storePath: fixture.storePath(),
     });
 
     expect(mirrorResult.ok).toBe(true);
@@ -281,7 +276,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       agentId: "main",
       sessionKey,
       text: "Already delivered",
-      storePath: fixture.storePath(),
     });
 
     expect(result).toMatchObject({
@@ -298,20 +292,17 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const olderResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
-      storePath: fixture.storePath(),
       message: createExactAssistantMessage({ text: "Repeated answer" }),
     });
 
     const latestResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
-      storePath: fixture.storePath(),
       message: createExactAssistantMessage({ text: "Different latest answer" }),
     });
 
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
       sessionKey,
       text: "Repeated answer",
-      storePath: fixture.storePath(),
     });
 
     expect(olderResult.ok).toBe(true);
@@ -342,12 +333,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         updatedAt: 1,
       },
     };
-    await saveSessionStore(fixture.storePath(), store);
+    await writeTranscriptStore(store);
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: "agent:main:iMessage:direct:+15551234567",
       text: "Hello normalized!",
-      storePath: fixture.storePath(),
     });
 
     expect(result.ok).toBe(true);
@@ -363,12 +353,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         updatedAt: 1,
       },
     };
-    await saveSessionStore(fixture.storePath(), store);
+    await writeTranscriptStore(store);
 
     const result = await appendAssistantMessageToSessionTranscript({
       sessionKey: "agent:main:slack:direct:U12345ABC",
       text: "Hello Slack user!",
-      storePath: fixture.storePath(),
     });
 
     expect(result.ok).toBe(true);
@@ -381,7 +370,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       sessionKey,
       text: "Hello from delivery mirror!",
       idempotencyKey: "mirror:test-source-message",
-      storePath: fixture.storePath(),
     });
 
     expect(result.ok).toBe(true);
@@ -393,7 +381,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
-      storePath: fixture.storePath(),
       message: createExactAssistantMessage({
         content: [
           {
@@ -436,7 +423,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
-      storePath: fixture.storePath(),
       updateMode: "file-only",
       message: createExactAssistantMessage({
         text: "Done.",

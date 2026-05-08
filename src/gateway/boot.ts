@@ -9,8 +9,11 @@ import {
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import {
+  deleteSessionEntry,
+  getSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -25,7 +28,6 @@ function generateBootSessionId(): string {
 }
 
 type SessionMappingSnapshot = {
-  storePath: string;
   sessionKey: string;
   canRestore: boolean;
   hadEntry: boolean;
@@ -79,20 +81,16 @@ function snapshotMainSessionMapping(params: {
   sessionKey: string;
 }): SessionMappingSnapshot {
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
   try {
-    const store = loadSessionStore(storePath);
-    const entry = store[params.sessionKey];
+    const entry = getSessionEntry({ agentId, sessionKey: params.sessionKey });
     if (!entry) {
       return {
-        storePath,
         sessionKey: params.sessionKey,
         canRestore: true,
         hadEntry: false,
       };
     }
     return {
-      storePath,
       sessionKey: params.sessionKey,
       canRestore: true,
       hadEntry: true,
@@ -104,7 +102,6 @@ function snapshotMainSessionMapping(params: {
       error: String(err),
     });
     return {
-      storePath,
       sessionKey: params.sessionKey,
       canRestore: false,
       hadEntry: false,
@@ -119,13 +116,19 @@ async function restoreMainSessionMapping(
     return undefined;
   }
   try {
-    await updateSessionStore(snapshot.storePath, (store) => {
-      if (snapshot.hadEntry && snapshot.entry) {
-        store[snapshot.sessionKey] = snapshot.entry;
-        return;
-      }
-      delete store[snapshot.sessionKey];
-    });
+    const agentId = resolveAgentIdFromSessionKey(snapshot.sessionKey);
+    if (snapshot.hadEntry && snapshot.entry) {
+      upsertSessionEntry({
+        agentId,
+        sessionKey: snapshot.sessionKey,
+        entry: snapshot.entry,
+      });
+    } else {
+      deleteSessionEntry({
+        agentId,
+        sessionKey: snapshot.sessionKey,
+      });
+    }
     return undefined;
   } catch (err) {
     return formatErrorMessage(err);

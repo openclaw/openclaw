@@ -5,7 +5,7 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveTextCommand } from "../commands-registry.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
-import { persistSessionEntry } from "./commands-session-store.js";
+import { persistSessionEntry } from "./commands-session-entry.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const DOCK_KEY_PREFIX = "dock:";

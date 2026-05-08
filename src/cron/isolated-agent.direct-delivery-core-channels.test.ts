@@ -16,8 +16,8 @@ import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
   makeJob,
+  seedMainRouteSession,
   withTempCronHome,
-  writeSessionStore,
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
@@ -64,13 +64,13 @@ const CASES: ChannelCase[] = [
 ];
 
 async function runExplicitAnnounceTurn(params: {
-  cfg: ReturnType<typeof makeCfg>;
+  home: string;
   deps: CliDeps;
   channel: ChannelCase["channel"];
   to: string;
 }) {
   return await runCronIsolatedAgentTurn({
-    cfg: params.cfg,
+    cfg: makeCfg(params.home),
     deps: params.deps,
     job: {
       ...makeJob({ kind: "agentTurn", message: "do it" }),
@@ -124,8 +124,7 @@ async function expectCoreChannelAnnounceDelivery({
   testCase: ChannelCase;
 }): Promise<void> {
   await withTempCronHome(async (home) => {
-    const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-    const cfg = makeCfg(home, storePath);
+    await seedMainRouteSession(home, { lastProvider: "webchat", lastTo: "" });
     const deps = createCliDeps();
     if (meta) {
       mockAgentPayloads(payloads, meta);
@@ -134,7 +133,7 @@ async function expectCoreChannelAnnounceDelivery({
     }
 
     const res = await runExplicitAnnounceTurn({
-      cfg,
+      home,
       deps,
       channel: testCase.channel,
       to: testCase.to,
@@ -227,7 +226,7 @@ async function expectTelegramAnnounceDelivery({
   to: string;
 }): Promise<void> {
   await withTempCronHome(async (home) => {
-    const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+    await seedMainRouteSession(home, { lastProvider: "webchat", lastTo: "" });
     const deps = createCliDeps();
     if (meta) {
       mockAgentPayloads(payloads, meta);
@@ -237,7 +236,6 @@ async function expectTelegramAnnounceDelivery({
 
     const res = await runTelegramAnnounceTurn({
       home,
-      storePath,
       deps,
       delivery: { mode: "announce", channel: "telegram", to },
     });

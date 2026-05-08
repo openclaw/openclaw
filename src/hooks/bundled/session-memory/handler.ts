@@ -24,7 +24,7 @@ import {
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousSessionFile, getRecentSessionContent } from "./transcript.js";
+import { findPreviousTranscriptPath, getRecentTranscriptContent } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -171,33 +171,33 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       unknown
     >;
     const currentSessionId = sessionEntry.sessionId as string;
-    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
+    let currentTranscriptPath = (sessionEntry.sessionFile as string) || undefined;
 
-    if (!currentSessionFile) {
+    if (!currentTranscriptPath) {
       const sessionsDirs = new Set<string>();
       sessionsDirs.add(path.join(workspaceDir, "sessions"));
 
       for (const sessionsDir of sessionsDirs) {
-        const recoveredSessionFile = await findPreviousSessionFile({
+        const recoveredTranscriptPath = await findPreviousTranscriptPath({
           sessionsDir,
           sessionId: currentSessionId,
         });
-        if (!recoveredSessionFile) {
+        if (!recoveredTranscriptPath) {
           continue;
         }
-        currentSessionFile = recoveredSessionFile;
-        log.debug("Found previous session file", { file: currentSessionFile });
+        currentTranscriptPath = recoveredTranscriptPath;
+        log.debug("Found previous transcript path", { path: currentTranscriptPath });
         break;
       }
     }
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
-      sessionFile: currentSessionFile,
+      transcriptPath: currentTranscriptPath,
       hasCfg: Boolean(cfg),
     });
 
-    const sessionFile = currentSessionFile || undefined;
+    const transcriptPath = currentTranscriptPath || undefined;
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -209,8 +209,8 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (sessionFile) {
-      sessionContent = await getRecentSessionContent(sessionFile, messageCount);
+    if (transcriptPath) {
+      sessionContent = await getRecentTranscriptContent(transcriptPath, messageCount);
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,

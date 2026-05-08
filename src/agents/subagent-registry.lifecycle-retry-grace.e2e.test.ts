@@ -93,11 +93,9 @@ const registryStoreMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: vi.fn(() => sessionStore),
+  getSessionEntry: vi.fn(({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey]),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveStorePath: () => "/tmp/test-store",
   resolveMainSessionKey: () => "agent:main:main",
-  updateSessionStore: vi.fn(),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -109,7 +107,7 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
 }));
 
 vi.mock("./subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: () => 0,
+  getSubagentDepthFromSessionEntries: () => 0,
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({

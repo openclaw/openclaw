@@ -5,7 +5,7 @@ import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-k
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
-import { appendCrestodianAuditEntry, resolveCrestodianAuditPath } from "./audit.js";
+import { appendCrestodianAuditEntry } from "./audit.js";
 import type { CrestodianOverview } from "./overview.js";
 
 type ConfigModule = typeof import("../config/config.js");
@@ -584,7 +584,7 @@ export async function executeCrestodianOperation(
     return { applied: false };
   }
   if (operation.kind === "audit") {
-    runtime.log(`Audit log: ${resolveCrestodianAuditPath()}`);
+    runtime.log("Audit log: SQLite core:crestodian/audit state");
     runtime.log("Only applied writes/actions are recorded; discovery stays quiet.");
     return { applied: false };
   }

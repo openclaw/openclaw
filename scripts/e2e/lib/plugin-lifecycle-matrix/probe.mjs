@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readInstalledPluginRecords } from "../installed-plugin-index.mjs";
 
 const home = os.homedir();
 
@@ -17,8 +18,7 @@ function readJson(file) {
 }
 
 function records() {
-  const index = readJson(openclawPath("plugins", "installs.json"));
-  return index.installRecords ?? index.records ?? {};
+  return readInstalledPluginRecords({ allowLegacyFile: true });
 }
 
 function recordFor(pluginId) {

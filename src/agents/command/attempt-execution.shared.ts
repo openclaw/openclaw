@@ -1,5 +1,6 @@
-import { updateSessionStore } from "../../config/sessions/store.js";
+import { patchSessionEntry } from "../../config/sessions/store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   formatAgentInternalEventsForPlainPrompt,
   formatAgentInternalEventsForPrompt,
@@ -13,23 +14,32 @@ import type { AgentCommandOpts } from "./types.js";
 export type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
-  storePath: string;
   entry: SessionEntry;
   clearedFields?: string[];
 };
 
 export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
-  const persisted = await updateSessionStore(params.storePath, (store) => {
-    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
-    for (const field of params.clearedFields ?? []) {
-      if (!Object.hasOwn(params.entry, field)) {
-        Reflect.deleteProperty(merged, field);
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve session agent for ${params.sessionKey}`);
+  }
+  const persisted = await patchSessionEntry({
+    agentId,
+    sessionKey: params.sessionKey,
+    fallbackEntry: params.sessionStore[params.sessionKey] ?? params.entry,
+    update: () => {
+      const merged = mergeSessionEntry(params.sessionStore[params.sessionKey], params.entry);
+      for (const field of params.clearedFields ?? []) {
+        if (!Object.hasOwn(params.entry, field)) {
+          (merged as Record<string, unknown>)[field] = undefined;
+        }
       }
-    }
-    store[params.sessionKey] = merged;
-    return merged;
+      return merged;
+    },
   });
-  params.sessionStore[params.sessionKey] = persisted;
+  if (persisted) {
+    params.sessionStore[params.sessionKey] = persisted;
+  }
 }
 
 export function prependInternalEventContext(

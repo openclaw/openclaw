@@ -232,6 +232,8 @@ describe("session cost usage", () => {
         "utf-8",
       );
 
+      expect(await refreshCostUsageCache()).toBe("refreshed");
+      requestCostUsageCacheRefresh({ sessionTranscripts: [sessionPath(root, "sess-cache")] });
       const summary = await loadCostUsageSummaryFromCache({
         startMs: Date.UTC(2026, 1, 5),
         endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,

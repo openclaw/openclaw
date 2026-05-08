@@ -126,7 +126,6 @@ function installRuntime(params: {
     | Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0];
   const dispatchAssembled = vi.fn(async (turn: ResolvedTurn) => {
     await turn.recordInboundSession({
-      storePath: turn.storePath,
       sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
       ctx: turn.ctxPayload,
       groupResolution: turn.record?.groupResolution,
@@ -270,7 +269,6 @@ function installRuntime(params: {
         resolveAgentRoute,
       },
       session: {
-        resolveStorePath: vi.fn(() => "/tmp"),
         readSessionUpdatedAt,
         recordInboundSession: vi.fn(async () => {}),
       },

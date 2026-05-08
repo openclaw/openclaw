@@ -20,7 +20,7 @@ import {
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId } from "./media-helpers.js";
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
-import { setPendingUploadActivityIdFs } from "./pending-uploads-fs.js";
+import { setPendingUploadActivityIdState } from "./pending-uploads-state.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
@@ -223,7 +223,7 @@ export async function sendMessageMSTeams(
       // card in-place. Mirror it into the FS store too because the invoke
       // callback may be delivered to a different process than the CLI send.
       setPendingUploadActivityId(uploadId, messageId);
-      await setPendingUploadActivityIdFs(uploadId, messageId);
+      await setPendingUploadActivityIdState(uploadId, messageId);
 
       log.info("sent file consent card", { conversationId, messageId, uploadId });
 

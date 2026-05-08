@@ -10,6 +10,10 @@ import type {
 } from "../agents/transcript/session-transcript-contract.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScope,
+} from "../config/sessions/transcript-store.sqlite.js";
+import {
   jsonSupportBundleFile,
   jsonlSupportBundleFile,
   supportBundleContents,
@@ -30,6 +34,7 @@ import {
   resolveTrajectoryPointerFilePath,
   safeTrajectorySessionFileName,
 } from "./paths.js";
+import { listTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type {
   TrajectoryBundleManifest,
   TrajectoryEvent,
@@ -60,21 +65,6 @@ type TrajectoryExportRedaction = SupportRedactionContext & {
 
 const MAX_TRAJECTORY_RUNTIME_EVENTS = 200_000;
 const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
-const MAX_TRAJECTORY_SESSION_FILE_BYTES = 50 * 1024 * 1024;
-
-function parseSessionEntries(content: string): FileEntry[] {
-  return content
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as FileEntry];
-      } catch {
-        return [];
-      }
-    });
-}
 
 function migrateLegacySessionEntries(entries: FileEntry[]): void {
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
@@ -119,12 +109,31 @@ function migrateLegacySessionEntries(entries: FileEntry[]): void {
   }
 }
 
-async function readSessionBranch(filePath: string): Promise<{
+function readSessionBranch(params: {
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+}): {
   header: SessionHeader | null;
   leafId: string | null;
   branchEntries: SessionEntry[];
-}> {
-  const fileEntries = parseSessionEntries(await fsp.readFile(filePath, "utf8"));
+} {
+  const scope = resolveSqliteSessionTranscriptScope({
+    agentId: params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined,
+    sessionId: params.sessionId,
+    transcriptPath: params.sessionFile,
+  }) ?? {
+    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    sessionId: params.sessionId,
+  };
+  const fileEntries = loadSqliteSessionTranscriptEvents(scope)
+    .map((entry) => entry.event)
+    .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
+  if (fileEntries.length === 0) {
+    throw new Error(
+      `Transcript is not in SQLite: ${params.sessionFile}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
+    );
+  }
   migrateLegacySessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -296,6 +305,21 @@ async function resolveTrajectoryRuntimeFile(params: {
     }
   }
   return undefined;
+}
+
+function loadSqliteRuntimeTrajectoryEvents(params: {
+  sessionId: string;
+  sessionKey?: string;
+}): TrajectoryEvent[] {
+  try {
+    return listTrajectoryRuntimeEvents({
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      sessionId: params.sessionId,
+      limit: MAX_TRAJECTORY_RUNTIME_EVENTS,
+    }).filter((event) => isRuntimeTrajectoryEventForSession(event, params.sessionId));
+  } catch {
+    return [];
+  }
 }
 
 function normalizeTimestamp(value: unknown): string {
@@ -878,26 +902,30 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
   });
-  const sessionStat = await fsp.stat(params.sessionFile);
-  if (sessionStat.size > MAX_TRAJECTORY_SESSION_FILE_BYTES) {
-    throw new Error(
-      `Trajectory session file is too large to export (${sessionStat.size} bytes; limit ${MAX_TRAJECTORY_SESSION_FILE_BYTES})`,
-    );
-  }
-  const { header, leafId, branchEntries } = await readSessionBranch(params.sessionFile);
+  const { header, leafId, branchEntries } = readSessionBranch({
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
   const runtimeFile = await resolveTrajectoryRuntimeFile({
     runtimeFile: params.runtimeFile,
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
   });
-  const runtimeEvents = runtimeFile
-    ? await parseJsonlFile<TrajectoryEvent>(runtimeFile, {
-        maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-        maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
-        validate: (value): value is TrajectoryEvent =>
-          isRuntimeTrajectoryEventForSession(value, params.sessionId),
-      })
-    : [];
+  const sqliteRuntimeEvents = loadSqliteRuntimeTrajectoryEvents({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
+  const legacyRuntimeEvents =
+    sqliteRuntimeEvents.length === 0 && runtimeFile
+      ? await parseJsonlFile<TrajectoryEvent>(runtimeFile, {
+          maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+          maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
+          validate: (value): value is TrajectoryEvent =>
+            isRuntimeTrajectoryEventForSession(value, params.sessionId),
+        })
+      : [];
+  const runtimeEvents = sqliteRuntimeEvents.length > 0 ? sqliteRuntimeEvents : legacyRuntimeEvents;
   const transcriptEvents = buildTranscriptEvents({
     entries: branchEntries,
     sessionId: params.sessionId,
@@ -929,9 +957,11 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     sourceFiles: {
       session: maybeRedactPathString(params.sessionFile, redaction),
       runtime:
-        runtimeFile && (await isRegularNonSymlinkFile(runtimeFile))
-          ? maybeRedactPathString(runtimeFile, redaction)
-          : undefined,
+        sqliteRuntimeEvents.length > 0
+          ? `agent-db:${resolveAgentIdFromSessionKey(params.sessionKey)}:trajectory_runtime_events:${params.sessionId}`
+          : runtimeFile && (await isRegularNonSymlinkFile(runtimeFile))
+            ? maybeRedactPathString(runtimeFile, redaction)
+            : undefined,
     },
   };
 

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
@@ -24,8 +23,6 @@ import type {
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   resolveFreshSessionTotalTokens,
@@ -85,7 +82,6 @@ export type StatusArgs = {
   sessionKey?: string;
   parentSessionKey?: string;
   sessionScope?: SessionScope;
-  sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedFast?: boolean;
@@ -248,7 +244,6 @@ const readUsageFromSessionLog = (
   sessionEntry?: SessionEntry,
   agentId?: string,
   sessionKey?: string,
-  storePath?: string,
 ):
   | {
       input: number;
@@ -260,32 +255,18 @@ const readUsageFromSessionLog = (
       model?: string;
     }
   | undefined => {
-  // Transcripts are stored at the session file path (fallback: ~/.openclaw/sessions/<SessionId>.jsonl)
+  // Session-file-shaped paths are stable transcript identities; content is read from SQLite.
   if (!sessionId) {
-    return undefined;
-  }
-  let logPath: string;
-  try {
-    const resolvedAgentId =
-      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-    logPath = resolveSessionFilePath(
-      sessionId,
-      sessionEntry,
-      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath }),
-    );
-  } catch {
-    return undefined;
-  }
-  if (!fs.existsSync(logPath)) {
     return undefined;
   }
 
   try {
+    const resolvedAgentId =
+      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
     const snapshot = readRecentSessionUsageFromTranscript(
       sessionId,
-      storePath,
       sessionEntry?.sessionFile,
-      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+      resolvedAgentId,
       256 * 1024,
     );
     if (!snapshot) {
@@ -596,7 +577,6 @@ export function buildStatusMessage(args: StatusArgs): string {
       entry,
       args.agentId,
       args.sessionKey,
-      args.sessionStorePath,
     );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;

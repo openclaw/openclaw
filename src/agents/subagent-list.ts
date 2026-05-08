@@ -1,9 +1,8 @@
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { getSessionEntry } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../routing/session-key.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   formatDurationCompact,
@@ -56,31 +55,30 @@ type BuiltSubagentList = {
 };
 
 type SessionEntryResolution = {
-  storePath: string;
   entry: SessionEntry | undefined;
 };
-
-function resolveStorePathForKey(cfg: OpenClawConfig, parsed?: ParsedAgentSessionKey | null) {
-  return resolveStorePath(cfg.session?.store, {
-    agentId: parsed?.agentId,
-  });
-}
 
 export function resolveSessionEntryForKey(params: {
   cfg: OpenClawConfig;
   key: string;
-  cache: Map<string, Record<string, SessionEntry>>;
+  cache: Map<string, SessionEntry | undefined>;
 }): SessionEntryResolution {
   const parsed = parseAgentSessionKey(params.key);
-  const storePath = resolveStorePathForKey(params.cfg, parsed);
-  let store = params.cache.get(storePath);
-  if (!store) {
-    store = loadSessionStore(storePath);
-    params.cache.set(storePath, store);
+  const agentId = parsed?.agentId;
+  if (!agentId) {
+    return { entry: undefined };
+  }
+  if (!params.cache.has(params.key)) {
+    params.cache.set(
+      params.key,
+      getSessionEntry({
+        agentId,
+        sessionKey: params.key,
+      }),
+    );
   }
   return {
-    storePath,
-    entry: store[params.key],
+    entry: params.cache.get(params.key),
   };
 }
 
@@ -231,7 +229,7 @@ export function buildSubagentList(params: {
     seenChildSessionKeys.add(entry.childSessionKey);
     dedupedRuns.push(entry);
   }
-  const cache = new Map<string, Record<string, SessionEntry>>();
+  const cache = new Map<string, SessionEntry | undefined>();
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
   const { childSessionsByController } = buildLatestSubagentRunIndex(snapshot);
   const pendingDescendantCount = createPendingDescendantCounter(snapshot);

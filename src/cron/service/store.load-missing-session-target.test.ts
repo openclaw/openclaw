@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";
+import { saveCronStore } from "../store.js";
+import type { CronJob } from "../types.js";
 import { assertSupportedJobSpec, findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
@@ -13,8 +13,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
 
 async function writeSingleJobStore(storePath: string, job: Record<string, unknown>) {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs: [job] }, null, 2), "utf8");
+  await saveCronStore(storePath, { version: 1, jobs: [job as unknown as CronJob] });
 }
 
 function createStoreTestState(storePath: string) {

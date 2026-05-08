@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -20,15 +19,6 @@ function invalidateStaleNextRunOnScheduleChange(params: {
   params.hydrated.state.nextRunAtMs = undefined;
 }
 
-async function getFileMtimeMs(path: string): Promise<number | null> {
-  try {
-    const stats = await fs.promises.stat(path);
-    return stats.mtimeMs;
-  } catch {
-    return null;
-  }
-}
-
 export async function ensureLoaded(
   state: CronServiceState,
   opts?: {
@@ -47,10 +37,6 @@ export async function ensureLoaded(
   for (const job of state.store?.jobs ?? []) {
     previousJobsById.set(job.id, job);
   }
-  // Force reload always re-reads the file to avoid missing cross-service
-  // edits on filesystems with coarse mtime resolution.
-
-  const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
   for (const [index, job] of jobs.entries()) {
@@ -110,14 +96,14 @@ export async function ensureLoaded(
         hydrated.sessionTarget = defaulted;
         // `ensureLoaded` is called with `forceReload: true` on every tick;
         // warn once per jobId per process to avoid log spam on repeated
-        // loads of the same still-broken store file.
+        // loads of the same still-broken legacy row.
         const jobId = typeof hydrated.id === "string" ? hydrated.id : undefined;
         const dedupeKey = jobId ?? "<unknown>";
         if (!state.warnedMissingSessionTargetJobIds.has(dedupeKey)) {
           state.warnedMissingSessionTargetJobIds.add(dedupeKey);
           state.deps.log.warn(
             { storePath: state.deps.storePath, jobId, defaulted },
-            "cron: job missing sessionTarget; defaulted in memory (edit jobs.json to persist canonical shape)",
+            "cron: job missing sessionTarget; defaulted in memory (run openclaw doctor --fix to persist canonical shape)",
           );
         }
       }
@@ -128,7 +114,6 @@ export async function ensureLoaded(
     jobs,
   };
   state.storeLoadedAtMs = state.deps.nowMs();
-  state.storeFileMtimeMs = fileMtimeMs;
 
   if (!opts?.skipRecompute) {
     recomputeNextRuns(state);
@@ -157,6 +142,4 @@ export async function persist(
     return;
   }
   await saveCronStore(state.deps.storePath, state.store, opts);
-  // Update file mtime after save to prevent immediate reload
-  state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }

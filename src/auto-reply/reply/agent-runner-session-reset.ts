@@ -1,11 +1,10 @@
-import fs from "node:fs";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  getSessionEntry,
+  mergeSessionEntry,
   resolveAgentIdFromSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
-  updateSessionStore,
+  upsertSessionEntry,
 } from "../../config/sessions.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -15,12 +14,12 @@ import { replayRecentUserAssistantMessages } from "./session-transcript-replay.j
 type ResetSessionOptions = {
   failureLabel: string;
   buildLogMessage: (nextSessionId: string) => string;
-  cleanupTranscripts?: boolean;
 };
 
 const deps = {
   generateSecureUuid,
-  updateSessionStore,
+  getSessionEntry,
+  upsertSessionEntry,
   refreshQueuedFollowupSession,
   error: (message: string) => defaultRuntime.error(message),
 };
@@ -28,7 +27,8 @@ const deps = {
 export function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof deps>): void {
   Object.assign(deps, {
     generateSecureUuid,
-    updateSessionStore,
+    getSessionEntry,
+    upsertSessionEntry,
     refreshQueuedFollowupSession,
     error: (message: string) => defaultRuntime.error(message),
     ...overrides,
@@ -41,20 +41,22 @@ export async function resetReplyRunSession(params: {
   queueKey: string;
   activeSessionEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
   messageThreadId?: string;
   followupRun: FollowupRun;
   onActiveSessionEntry: (entry: SessionEntry) => void;
   onNewSession: (newSessionId: string, nextSessionFile: string) => void;
 }): Promise<boolean> {
-  if (!params.sessionKey || !params.activeSessionStore || !params.storePath) {
+  if (!params.sessionKey) {
     return false;
   }
-  const prevEntry = params.activeSessionStore[params.sessionKey] ?? params.activeSessionEntry;
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey) ?? "main";
+  const prevEntry =
+    params.activeSessionStore?.[params.sessionKey] ??
+    params.activeSessionEntry ??
+    deps.getSessionEntry({ agentId, sessionKey: params.sessionKey });
   if (!prevEntry) {
     return false;
   }
-  const prevSessionId = params.options.cleanupTranscripts ? prevEntry.sessionId : undefined;
   const nextSessionId = deps.generateSecureUuid();
   const now = Date.now();
   const nextEntry: SessionEntry = {
@@ -84,17 +86,22 @@ export async function resetReplyRunSession(params: {
     fallbackNoticeActiveModel: undefined,
     fallbackNoticeReason: undefined,
   };
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const nextSessionFile = resolveSessionTranscriptPath(
     nextSessionId,
     agentId,
     params.messageThreadId,
   );
   nextEntry.sessionFile = nextSessionFile;
-  params.activeSessionStore[params.sessionKey] = nextEntry;
+  if (params.activeSessionStore) {
+    params.activeSessionStore[params.sessionKey] = nextEntry;
+  }
   try {
-    await deps.updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey!] = nextEntry;
+    deps.upsertSessionEntry({
+      agentId,
+      sessionKey: params.sessionKey,
+      entry: mergeSessionEntry(deps.getSessionEntry({ agentId, sessionKey: params.sessionKey }), {
+        ...nextEntry,
+      }),
     });
   } catch (err) {
     deps.error(
@@ -122,24 +129,5 @@ export async function resetReplyRunSession(params: {
   params.onActiveSessionEntry(nextEntry);
   params.onNewSession(nextSessionId, nextSessionFile);
   deps.error(params.options.buildLogMessage(nextSessionId));
-  if (params.options.cleanupTranscripts && prevSessionId) {
-    const transcriptCandidates = new Set<string>();
-    const resolved = resolveSessionFilePath(
-      prevSessionId,
-      prevEntry,
-      resolveSessionFilePathOptions({ agentId, storePath: params.storePath }),
-    );
-    if (resolved) {
-      transcriptCandidates.add(resolved);
-    }
-    transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
-    for (const candidate of transcriptCandidates) {
-      try {
-        fs.unlinkSync(candidate);
-      } catch {
-        // Best-effort cleanup.
-      }
-    }
-  }
   return true;
 }

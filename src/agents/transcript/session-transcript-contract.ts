@@ -169,6 +169,10 @@ export type SessionManager = {
   getTree(): SessionTreeNode[];
   branch(branchFromId: string): void;
   resetLeaf(): void;
+  removeTailEntries(
+    shouldRemove: (entry: SessionEntry) => boolean,
+    options?: { maxEntries?: number; minEntries?: number },
+  ): number;
   branchWithSummary(
     branchFromId: string | null,
     summary: string,

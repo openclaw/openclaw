@@ -1,7 +1,10 @@
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
-import { resolveAllAgentSessionStoreTargets } from "../../config/sessions/targets.js";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../../config/sessions/store.js";
+import { resolveAllAgentSessionDatabaseTargets } from "../../config/sessions/targets.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
@@ -11,18 +14,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
-let sessionStoreRuntimePromise:
-  | Promise<typeof import("../../config/sessions/store.runtime.js")>
-  | undefined;
-
-function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
-}
-
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
-  storePath: string;
+  agentId?: string;
   sessionKey: string;
   storeSessionKey: string;
   entry?: SessionEntry;
@@ -50,16 +44,37 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
   return lower;
 }
 
-export function resolveSessionStorePathForAcp(params: {
-  sessionKey: string;
-  cfg?: OpenClawConfig;
-}): { cfg: OpenClawConfig; storePath: string } {
+function readSessionEntryWithAlias(params: { agentId: string; sessionKey: string }): {
+  storeSessionKey: string;
+  entry?: SessionEntry;
+  storeReadFailed?: boolean;
+} {
+  try {
+    const entry = getSessionEntry(params);
+    if (entry) {
+      return { storeSessionKey: params.sessionKey, entry };
+    }
+    const store: Record<string, SessionEntry> = {};
+    for (const row of listSessionEntries({ agentId: params.agentId })) {
+      store[row.sessionKey] = row.entry;
+    }
+    const storeSessionKey = resolveStoreSessionKey(store, params.sessionKey);
+    return {
+      storeSessionKey,
+      entry: store[storeSessionKey],
+    };
+  } catch {
+    return { storeSessionKey: params.sessionKey, storeReadFailed: true };
+  }
+}
+
+function resolveSessionAgentForAcp(params: { sessionKey: string; cfg?: OpenClawConfig }): {
+  cfg: OpenClawConfig;
+  agentId?: string;
+} {
   const cfg = params.cfg ?? getRuntimeConfig();
   const parsed = parseAgentSessionKey(params.sessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: parsed?.agentId,
-  });
-  return { cfg, storePath };
+  return { cfg, agentId: parsed?.agentId };
 }
 
 export function readAcpSessionEntry(params: {
@@ -70,23 +85,22 @@ export function readAcpSessionEntry(params: {
   if (!sessionKey) {
     return null;
   }
-  const { cfg, storePath } = resolveSessionStorePathForAcp({
+  const { cfg, agentId } = resolveSessionAgentForAcp({
     sessionKey,
     cfg: params.cfg,
   });
-  let store: Record<string, SessionEntry>;
+  let storeSessionKey = sessionKey;
+  let entry: SessionEntry | undefined;
   let storeReadFailed = false;
-  try {
-    store = loadSessionStore(storePath);
-  } catch {
-    storeReadFailed = true;
-    store = {};
+  if (agentId) {
+    const resolved = readSessionEntryWithAlias({ agentId, sessionKey });
+    storeSessionKey = resolved.storeSessionKey;
+    entry = resolved.entry;
+    storeReadFailed = resolved.storeReadFailed === true;
   }
-  const storeSessionKey = resolveStoreSessionKey(store, sessionKey);
-  const entry = store[storeSessionKey];
   return {
     cfg,
-    storePath,
+    agentId,
     sessionKey,
     storeSessionKey,
     entry,
@@ -100,27 +114,29 @@ export async function listAcpSessionEntries(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<AcpSessionStoreEntry[]> {
   const cfg = params.cfg ?? getRuntimeConfig();
-  const storeTargets = await resolveAllAgentSessionStoreTargets(
+  const storeTargets = await resolveAllAgentSessionDatabaseTargets(
     cfg,
     params.env ? { env: params.env } : undefined,
   );
   const entries: AcpSessionStoreEntry[] = [];
 
   for (const target of storeTargets) {
-    const storePath = target.storePath;
-    let store: Record<string, SessionEntry>;
+    let rows: Array<{ sessionKey: string; entry: SessionEntry }>;
     try {
-      store = loadSessionStore(storePath);
+      rows = listSessionEntries({
+        agentId: target.agentId,
+        ...(params.env ? { env: params.env } : {}),
+      });
     } catch {
       continue;
     }
-    for (const [sessionKey, entry] of Object.entries(store)) {
+    for (const { sessionKey, entry } of rows) {
       if (!entry?.acp) {
         continue;
       }
       entries.push({
         cfg,
-        storePath,
+        agentId: target.agentId,
         sessionKey,
         storeSessionKey: sessionKey,
         entry,
@@ -144,33 +160,32 @@ export async function upsertAcpSessionMeta(params: {
   if (!sessionKey) {
     return null;
   }
-  const { storePath } = resolveSessionStorePathForAcp({
+  const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (!agentId) {
+    return null;
+  }
+  const { storeSessionKey, entry: currentEntry } = readSessionEntryWithAlias({
+    agentId,
     sessionKey,
-    cfg: params.cfg,
   });
-  const { updateSessionStore } = await loadSessionStoreRuntime();
-  return await updateSessionStore(
-    storePath,
-    (store) => {
-      const storeSessionKey = resolveStoreSessionKey(store, sessionKey);
-      const currentEntry = store[storeSessionKey];
-      const nextMeta = params.mutate(currentEntry?.acp, currentEntry);
-      if (nextMeta === undefined) {
-        return currentEntry ?? null;
-      }
-      if (nextMeta === null && !currentEntry) {
-        return null;
-      }
+  const nextMeta = params.mutate(currentEntry?.acp, currentEntry);
+  if (nextMeta === undefined) {
+    return currentEntry ?? null;
+  }
+  if (nextMeta === null && !currentEntry) {
+    return null;
+  }
 
-      const nextEntry = mergeSessionEntry(currentEntry, {
-        acp: nextMeta ?? undefined,
-      });
-      if (nextMeta === null) {
-        delete nextEntry.acp;
-      }
-      store[storeSessionKey] = nextEntry;
-      return nextEntry;
-    },
-    { allowDropAcpMetaSessionKeys: [sessionKey] },
-  );
+  const nextEntry = mergeSessionEntry(currentEntry, {
+    acp: nextMeta ?? undefined,
+  });
+  if (nextMeta === null) {
+    delete nextEntry.acp;
+  }
+  upsertSessionEntry({
+    agentId,
+    sessionKey: storeSessionKey,
+    entry: nextEntry,
+  });
+  return nextEntry;
 }

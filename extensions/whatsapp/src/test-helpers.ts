@@ -1,6 +1,3 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { vi } from "vitest";
@@ -30,7 +27,6 @@ if (!(globalThis as Record<symbol, unknown>)[CONFIG_KEY]) {
 if (!(globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY]) {
   (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY] = () => loadConfigMock();
 }
-
 export function setLoadConfigMock(fn: unknown) {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = typeof fn === "function" ? fn : () => fn;
 }
@@ -43,21 +39,6 @@ export function setRuntimeConfigSourceSnapshotMock(fn: unknown) {
 export function resetLoadConfigMock() {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
   (globalThis as Record<symbol, unknown>)[SOURCE_CONFIG_KEY] = () => loadConfigMock();
-}
-
-function resolveStorePathFallback(store?: string, opts?: { agentId?: string }) {
-  if (!store) {
-    const agentId = normalizeLowercaseStringOrEmpty(opts?.agentId?.trim() || "main");
-    return path.join(
-      process.env.HOME ?? "/tmp",
-      ".openclaw",
-      "agents",
-      agentId,
-      "sessions",
-      "sessions.json",
-    );
-  }
-  return path.resolve(store.replaceAll("{agentId}", opts?.agentId?.trim() || "main"));
 }
 
 function loadConfigMock() {
@@ -76,29 +57,8 @@ function loadRuntimeConfigSourceSnapshotMock() {
   return loadConfigMock();
 }
 
-async function updateLastRouteMock(params: {
-  storePath: string;
-  sessionKey: string;
-  deliveryContext: { channel: string; to: string; accountId?: string };
-}) {
-  const raw = await fs.readFile(params.storePath, "utf8").catch(() => "{}");
-  const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-  const current = store[params.sessionKey] ?? {};
-  store[params.sessionKey] = {
-    ...current,
-    lastChannel: params.deliveryContext.channel,
-    lastTo: params.deliveryContext.to,
-    lastAccountId: params.deliveryContext.accountId,
-  };
-  await fs.writeFile(params.storePath, JSON.stringify(store));
-}
-
-function loadSessionStoreMock(storePath: string) {
-  try {
-    return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+async function updateLastRouteMock() {
+  return null;
 }
 
 type BufferedDispatchReplyParams = {
@@ -434,9 +394,7 @@ vi.mock("./auto-reply/config.runtime.js", () => ({
   getRuntimeConfigSourceSnapshot: loadRuntimeConfigSourceSnapshotMock,
   loadConfig: loadConfigMock,
   updateLastRoute: updateLastRouteMock,
-  loadSessionStore: loadSessionStoreMock,
   recordSessionMetaFromInbound: async () => undefined,
-  resolveStorePath: resolveStorePathFallback,
   evaluateSessionFreshness: () => ({ fresh: false }),
   resolveChannelContextVisibilityMode: resolveChannelContextVisibilityModeMock,
   resolveChannelGroupPolicy: resolveChannelGroupPolicyMock,
@@ -513,7 +471,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
     cfg: { session?: { store?: string } } & Parameters<typeof resolveEnvelopeOptionsMock>[0];
     agentId: string;
   }) => ({
-    storePath: resolveStorePathFallback(params.cfg.session?.store, { agentId: params.agentId }),
+    agentId: params.agentId,
     envelopeOptions: resolveEnvelopeOptionsMock(params.cfg),
     previousTimestamp: undefined,
   }),

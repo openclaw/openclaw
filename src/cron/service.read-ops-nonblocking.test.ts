@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { CronService } from "./service.js";
 import { writeCronStoreSnapshot } from "./service.test-harness.js";
 
@@ -36,9 +37,17 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 
 async function makeStorePath() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
+  const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(dir, "state");
   return {
     storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {
+      closeOpenClawStateDatabaseForTest();
+      if (originalOpenClawStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+      }
       // On macOS, teardown can race with trailing async fs writes and leave
       // transient ENOTEMPTY/EBUSY errors; let fs.rm handle retries natively.
       try {

@@ -18,9 +18,10 @@ export async function readCodexMirroredSessionHistoryMessages(
 ): Promise<AgentMessage[] | undefined> {
   try {
     const resolvedScope =
-      scope.agentId && scope.sessionId
+      resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: scope.sessionFile }) ??
+      (scope.agentId && scope.sessionId
         ? { agentId: scope.agentId, sessionId: scope.sessionId }
-        : resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: scope.sessionFile });
+        : undefined);
     if (!resolvedScope) {
       return [];
     }

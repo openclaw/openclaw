@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+import { upsertSessionEntry } from "../config/sessions/store.js";
 import { buildSubagentList } from "./subagent-list.js";
 import {
   addSubagentRunForTests,
@@ -13,12 +13,20 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { STALE_UNENDED_SUBAGENT_RUN_MS } from "./subagent-run-liveness.js";
 
 let testWorkspaceDir = os.tmpdir();
+let previousOpenClawHome: string | undefined;
 
 beforeAll(async () => {
   testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-list-"));
+  previousOpenClawHome = process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_HOME = testWorkspaceDir;
 });
 
 afterAll(async () => {
+  if (previousOpenClawHome === undefined) {
+    delete process.env.OPENCLAW_HOME;
+  } else {
+    process.env.OPENCLAW_HOME = previousOpenClawHome;
+  }
   await fs.rm(testWorkspaceDir, {
     recursive: true,
     force: true,
@@ -202,21 +210,21 @@ describe("buildSubagentList", () => {
       startedAt: 1000,
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
-    const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
-    await updateSessionStore(storePath, (store) => {
-      store["agent:main:subagent:usage"] = {
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:subagent:usage",
+      entry: {
         sessionId: "child-session-usage",
         updatedAt: Date.now(),
         inputTokens: 12,
         outputTokens: 1000,
         totalTokens: 197000,
         model: "opencode/claude-opus-4-6",
-      };
+      },
     });
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: storePath },
     } as OpenClawConfig;
     const list = buildSubagentList({
       cfg,

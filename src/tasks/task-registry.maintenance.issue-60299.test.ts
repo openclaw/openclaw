@@ -54,8 +54,7 @@ afterEach(() => {
 function createTaskRegistryMaintenanceHarness(params: {
   tasks: TaskRecord[];
   sessionStore?: Record<string, SessionEntry>;
-  loadSessionStore?: TaskRegistryMaintenanceRuntime["loadSessionStore"];
-  resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
+  getSessionEntry?: TaskRegistryMaintenanceRuntime["getSessionEntry"];
   deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
   acpEntry?: AcpSessionStoreEntry["entry"];
   activeCronJobIds?: string[];
@@ -77,7 +76,7 @@ function createTaskRegistryMaintenanceHarness(params: {
       acpEntry !== undefined
         ? ({
             cfg: {} as never,
-            storePath: "",
+            agentId: "main",
             sessionKey: "",
             storeSessionKey: "",
             entry: acpEntry,
@@ -85,14 +84,17 @@ function createTaskRegistryMaintenanceHarness(params: {
           } satisfies AcpSessionStoreEntry)
         : ({
             cfg: {} as never,
-            storePath: "",
+            agentId: "main",
             sessionKey: "",
             storeSessionKey: "",
             entry: undefined,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
-    loadSessionStore: params.loadSessionStore ?? (() => sessionStore),
-    resolveStorePath: params.resolveStorePath ?? (() => ""),
+    getSessionEntry:
+      params.getSessionEntry ??
+      (({ sessionKey }) => {
+        return sessionStore[sessionKey];
+      }),
     ...(params.deriveSessionChatTypeFromKey
       ? { deriveSessionChatTypeFromKey: params.deriveSessionChatTypeFromKey }
       : {}),
@@ -203,7 +205,7 @@ function expectTaskStatus(
 }
 
 describe("task-registry maintenance issue #60299", () => {
-  it("reuses session store reads across stale subagent task checks in one pass", async () => {
+  it("checks stale subagent task backing sessions with row reads", async () => {
     const tasks = Array.from({ length: 10 }, (_, index) =>
       makeStaleTask({
         runtime: "subagent",
@@ -211,16 +213,15 @@ describe("task-registry maintenance issue #60299", () => {
         childSessionKey: `agent:main:subagent:stale-${index}`,
       }),
     );
-    const loadSessionStoreMock = vi.fn(() => ({}));
+    const getSessionEntryMock = vi.fn(() => undefined);
 
     createTaskRegistryMaintenanceHarness({
       tasks,
-      loadSessionStore: loadSessionStoreMock,
-      resolveStorePath: () => "/tmp/openclaw-test-sessions-main.json",
+      getSessionEntry: getSessionEntryMock,
     });
 
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: tasks.length });
-    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(getSessionEntryMock).toHaveBeenCalledTimes(tasks.length);
   });
 
   it("reuses CLI channel session type derivation across duplicate stale task checks", async () => {

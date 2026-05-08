@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { listCrestodianAuditEntriesForTests } from "./audit.js";
 import { extractCrestodianRescueMessage, runCrestodianRescueMessage } from "./rescue-message.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -104,6 +106,12 @@ vi.mock("../config/model-input.js", () => ({
     typeof model === "string" ? model : model?.primary,
 }));
 
+async function readLatestCrestodianAuditEntryForTests() {
+  const entries = await listCrestodianAuditEntriesForTests();
+  expect(entries.length).toBeGreaterThan(0);
+  return entries.at(-1)!.value;
+}
+
 async function makeStateDir(prefix: string): Promise<string> {
   const dir = path.join(tempRoot, `${prefix}${tempDirId++}`);
   await fs.mkdir(dir, { recursive: true });
@@ -160,6 +168,7 @@ describe("Crestodian rescue message", () => {
   });
 
   afterEach(() => {
+    resetPluginStateStoreForTests();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -258,17 +267,15 @@ describe("Crestodian rescue message", () => {
       "Default model: openai/gpt-5.2",
     );
 
-    const currentConfig = mockConfig.currentConfig() as {
-      agents?: { defaults?: { model?: { primary?: string } } };
-    };
-    expect(currentConfig.agents?.defaults?.model?.primary).toBe("openai/gpt-5.2");
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
-      details?: { rescue?: boolean; channel?: string; senderId?: string };
-    };
-    expect(audit.details?.rescue).toBe(true);
-    expect(audit.details?.channel).toBe("whatsapp");
-    expect(audit.details?.senderId).toBe("user:owner");
+    expect(mockConfig.currentConfig()).toMatchObject({
+      agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+    });
+    const audit = await readLatestCrestodianAuditEntryForTests();
+    expect(audit.details).toMatchObject({
+      rescue: true,
+      channel: "whatsapp",
+      senderId: "user:owner",
+    });
   });
 
   it("queues and applies gateway restart through conversational approval", async () => {
@@ -285,15 +292,15 @@ describe("Crestodian rescue message", () => {
     );
 
     expect(deps.runGatewayRestart).toHaveBeenCalledTimes(1);
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim()) as {
-      operation?: string;
-      details?: { rescue?: boolean; channel?: string; senderId?: string };
-    };
-    expect(audit.operation).toBe("gateway.restart");
-    expect(audit.details?.rescue).toBe(true);
-    expect(audit.details?.channel).toBe("whatsapp");
-    expect(audit.details?.senderId).toBe("user:owner");
+    const audit = await readLatestCrestodianAuditEntryForTests();
+    expect(audit).toMatchObject({
+      operation: "gateway.restart",
+      details: {
+        rescue: true,
+        channel: "whatsapp",
+        senderId: "user:owner",
+      },
+    });
   });
 
   it("queues and applies agent creation through conversational approval", async () => {
@@ -312,18 +319,25 @@ describe("Crestodian rescue message", () => {
     );
 
     expect(deps.runAgentsAdd).toHaveBeenCalledTimes(1);
-    const [agentParams, agentRuntime, agentOptions] = requireFirstMockCall(
-      deps.runAgentsAdd,
-      "agents add",
-    ) as unknown as [
-      { name: string; workspace: string; nonInteractive: boolean },
-      object,
-      { hasFlags: boolean },
-    ];
-    expect(agentParams).toEqual({
-      name: "work",
-      workspace: "/tmp/work",
-      nonInteractive: true,
+    expect(deps.runAgentsAdd).toHaveBeenCalledWith(
+      {
+        name: "work",
+        workspace: "/tmp/work",
+        nonInteractive: true,
+      },
+      expect.any(Object),
+      { hasFlags: true },
+    );
+    const audit = await readLatestCrestodianAuditEntryForTests();
+    expect(audit).toMatchObject({
+      operation: "agents.create",
+      details: {
+        rescue: true,
+        channel: "whatsapp",
+        senderId: "user:owner",
+        agentId: "work",
+        workspace: "/tmp/work",
+      },
     });
     expect(agentRuntime).toBeTypeOf("object");
     expect(agentOptions).toEqual({ hasFlags: true });

@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
+  importLegacyInstalledPluginIndexFileToSqlite,
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
@@ -15,6 +18,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -148,26 +152,26 @@ describe("installed plugin index persistence", () => {
     );
   });
 
-  it("writes and reads the installed plugin index atomically", async () => {
+  it("writes and reads the installed plugin index from SQLite", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     const index = createIndex();
 
     await expect(writePersistedInstalledPluginIndex(index, { stateDir })).resolves.toBe(filePath);
 
-    const raw = fs.readFileSync(filePath, "utf8");
-    expect(raw).toContain('"warning": "DO NOT EDIT.');
-    expect(raw).toContain('"pluginId": "demo"');
-    if (process.platform !== "win32") {
-      expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
-    }
-    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
-    expect(persisted.version).toBe(index.version);
-    expect(persisted.policyHash).toBe(index.policyHash);
-    expectPluginIds(persisted, ["demo"]);
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(
+      readOpenClawStateKvJson("installed_plugin_index", "current", {
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toMatchObject({
+      warning: expect.stringContaining("DO NOT EDIT."),
+      plugins: [expect.objectContaining({ pluginId: "demo" })],
+    });
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject(index);
   });
 
-  it("does not preserve prototype poison keys from persisted index JSON", async () => {
+  it("imports legacy JSON without preserving prototype poison keys", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -189,6 +193,12 @@ describe("installed plugin index persistence", () => {
     });
     fs.writeFileSync(filePath, JSON.stringify(index), "utf8");
 
+    expect(importLegacyInstalledPluginIndexFileToSqlite({ stateDir })).toMatchObject({
+      imported: true,
+      plugins: 1,
+      installRecords: 1,
+      removedSource: true,
+    });
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
 
     const persistedIndex = requirePersisted(persisted);
@@ -199,6 +209,7 @@ describe("installed plugin index persistence", () => {
       false,
     );
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(fs.existsSync(filePath)).toBe(false);
   });
 
   it("returns null for missing or invalid persisted indexes", async () => {
@@ -209,10 +220,13 @@ describe("installed plugin index persistence", () => {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, JSON.stringify({ version: 999 }), "utf8");
 
+    expect(importLegacyInstalledPluginIndexFileToSqlite({ stateDir })).toMatchObject({
+      imported: false,
+    });
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });
 
-  it("rejects pre-migration persisted indexes so update can rebuild them", async () => {
+  it("rejects pre-migration legacy indexes so update can rebuild them", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -220,6 +234,9 @@ describe("installed plugin index persistence", () => {
     delete (legacyIndex as unknown as Record<string, unknown>).migrationVersion;
     fs.writeFileSync(filePath, JSON.stringify(legacyIndex), "utf8");
 
+    expect(importLegacyInstalledPluginIndexFileToSqlite({ stateDir })).toMatchObject({
+      imported: false,
+    });
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });
 

@@ -5,7 +5,6 @@ import {
   emitSessionTranscriptUpdate,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
-  type SessionWriteLockAcquireTimeoutConfig,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 const DEFAULT_AGENT_ID = "main";
@@ -72,7 +71,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: unknown;
 }): Promise<void> {
   const messages = params.messages.filter(
     (message): message is MirroredAgentMessage =>

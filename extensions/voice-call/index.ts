@@ -304,6 +304,7 @@ export default definePluginEntry({
             fullConfig: api.config,
             agentRuntime: api.runtime.agent,
             ttsRuntime: api.runtime.tts,
+            openKeyedStore: api.runtime.state.openKeyedStore,
             logger: api.logger,
           });
           runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] = runtimePromise;

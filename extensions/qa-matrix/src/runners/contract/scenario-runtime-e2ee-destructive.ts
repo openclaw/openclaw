@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { chmod, copyFile, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMatrixQaClient } from "../../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -36,6 +37,17 @@ import { waitForMatrixSyncStoreWithCursor } from "./scenario-runtime-state-files
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
+
+type MatrixQaStorageMetadata = {
+  rootDir?: string;
+  userId?: string;
+  deviceId?: string | null;
+};
+
+const matrixStorageMetaStore = createPluginStateKeyedStore<MatrixQaStorageMetadata>("matrix", {
+  namespace: "storage-meta",
+  maxEntries: 10_000,
+});
 
 type MatrixQaCliBackupStatus = {
   backup?: {
@@ -462,33 +474,8 @@ function isMatrixQaDeletedDeviceStatus(params: {
   };
 }
 
-async function findFilesByName(params: { filename: string; rootDir: string }): Promise<string[]> {
-  const matches: string[] = [];
-  async function visit(dir: string, depth: number): Promise<void> {
-    if (depth > 10) {
-      return;
-    }
-    let entries: Array<{
-      isDirectory(): boolean;
-      isFile(): boolean;
-      name: string;
-    }>;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name === params.filename) {
-        matches.push(entryPath);
-      } else if (entry.isDirectory()) {
-        await visit(entryPath, depth + 1);
-      }
-    }
-  }
-  await visit(params.rootDir, 0);
-  return matches.toSorted();
+function resolveMatrixStorageMetaKey(rootDir: string): string {
+  return createHash("sha256").update(path.resolve(rootDir), "utf8").digest("hex").slice(0, 32);
 }
 
 async function findMatrixQaCliAccountRoot(params: {
@@ -496,21 +483,47 @@ async function findMatrixQaCliAccountRoot(params: {
   runtime: MatrixQaCliRuntime;
   userId: string;
 }) {
-  const metadataPaths = await findFilesByName({
-    filename: "storage-meta.json",
-    rootDir: params.runtime.stateDir,
-  });
-  for (const metadataPath of metadataPaths) {
+  const entries = await matrixStorageMetaStore.entries();
+  for (const entry of entries) {
+    const metadata = entry.value;
+    if (
+      metadata.userId === params.userId &&
+      metadata.deviceId === params.deviceId &&
+      metadata.rootDir &&
+      path.resolve(metadata.rootDir).startsWith(path.resolve(params.runtime.stateDir))
+    ) {
+      return metadata.rootDir;
+    }
+  }
+
+  // Older migration snapshots may not have rootDir in the metadata value. Fall
+  // back to scanning Matrix token roots and checking the deterministic store key.
+  const matrixRoot = path.join(params.runtime.stateDir, "matrix");
+  const candidateRoots: string[] = [];
+  async function visit(dir: string, depth: number): Promise<void> {
+    if (depth > 10) {
+      return;
+    }
+    let entries: Array<{ isDirectory(): boolean; name: string }>;
     try {
-      const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
-        deviceId?: unknown;
-        userId?: unknown;
-      };
-      if (metadata.userId === params.userId && metadata.deviceId === params.deviceId) {
-        return path.dirname(metadataPath);
-      }
+      entries = await readdir(dir, { withFileTypes: true });
     } catch {
-      continue;
+      return;
+    }
+    if (entries.some((entry) => entry.isDirectory() && entry.name === "crypto")) {
+      candidateRoots.push(dir);
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        await visit(path.join(dir, entry.name), depth + 1);
+      }
+    }
+  }
+  await visit(matrixRoot, 0);
+  for (const rootDir of candidateRoots.toSorted()) {
+    const metadata = await matrixStorageMetaStore.lookup(resolveMatrixStorageMetaKey(rootDir));
+    if (metadata?.userId === params.userId && metadata.deviceId === params.deviceId) {
+      return rootDir;
     }
   }
   throw new Error(`Matrix CLI account storage root was not created for ${params.userId}`);

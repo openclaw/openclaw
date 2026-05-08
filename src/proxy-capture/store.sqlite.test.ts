@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  collectSqliteSchemaShape,
+  createSqliteSchemaShapeFromSql,
+} from "../state/sqlite-schema-shape.test-support.js";
+import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
   DebugProxyCaptureStore,
@@ -56,6 +60,14 @@ describe("DebugProxyCaptureStore", () => {
     store.close();
     store.close();
     expect(store.isClosed).toBe(true);
+  });
+
+  it("creates the capture schema from the committed SQL shape", () => {
+    const store = makeStore();
+
+    expect(collectSqliteSchemaShape(store.db)).toEqual(
+      createSqliteSchemaShapeFromSql(new URL("./schema.sql", import.meta.url)),
+    );
   });
 
   it("stores sessions, blobs, and duplicate-send query results", () => {

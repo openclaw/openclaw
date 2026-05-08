@@ -2,31 +2,32 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createSqliteVirtualAgentFs } from "./virtual-agent-fs.sqlite.js";
 
-function createTempDbPath(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vfs-"));
-  return path.join(root, "state", "openclaw.sqlite");
+function createTempStateDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vfs-"));
 }
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("SqliteVirtualAgentFs", () => {
   it("stores scratch files by agent and namespace", () => {
-    const dbPath = createTempDbPath();
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const mainScratch = createSqliteVirtualAgentFs({
       agentId: "main",
       namespace: "scratch",
-      path: dbPath,
+      env,
       now: () => 1000,
     });
     const opsScratch = createSqliteVirtualAgentFs({
       agentId: "ops",
       namespace: "scratch",
-      path: dbPath,
+      env,
       now: () => 2000,
     });
 
@@ -50,11 +51,11 @@ describe("SqliteVirtualAgentFs", () => {
   });
 
   it("renames and removes directory trees", () => {
-    const dbPath = createTempDbPath();
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const scratch = createSqliteVirtualAgentFs({
       agentId: "main",
       namespace: "scratch",
-      path: dbPath,
+      env,
       now: () => 3000,
     });
 
@@ -71,11 +72,11 @@ describe("SqliteVirtualAgentFs", () => {
   });
 
   it("lists and exports VFS contents for support bundles", () => {
-    const dbPath = createTempDbPath();
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const scratch = createSqliteVirtualAgentFs({
       agentId: "main",
       namespace: "run:abc",
-      path: dbPath,
+      env,
       now: () => 4000,
     });
 

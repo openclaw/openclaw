@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
-  QaRawSessionStoreEntry,
+  QaRawSessionEntry,
   QaSkillStatusEntry,
   QaSuiteRuntimeEnv,
 } from "./suite-runtime-types.js";
@@ -73,24 +71,48 @@ async function readSkillStatus(
   return payload.skills ?? [];
 }
 
-async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
-  const storePath = path.join(
-    env.gateway.tempRoot,
-    "state",
-    "agents",
-    "qa",
-    "sessions",
-    "sessions.json",
+async function readRawQaSessionEntries(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
+  const payload = (await env.gateway.call(
+    "sessions.list",
+    {
+      agentId: "qa",
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 1000,
+    },
+    {
+      timeoutMs: 45_000,
+    },
+  )) as {
+    sessions?: Array<
+      QaRawSessionEntry & {
+        key?: string;
+      }
+    >;
+  };
+  return Object.fromEntries(
+    (payload.sessions ?? []).flatMap((session) => {
+      const key = session.key?.trim();
+      if (!key) {
+        return [];
+      }
+      return [
+        [
+          key,
+          {
+            ...(session.sessionId ? { sessionId: session.sessionId } : {}),
+            ...(session.status ? { status: session.status } : {}),
+            ...(session.spawnedBy ? { spawnedBy: session.spawnedBy } : {}),
+            ...(session.label ? { label: session.label } : {}),
+            ...(typeof session.abortedLastRun === "boolean"
+              ? { abortedLastRun: session.abortedLastRun }
+              : {}),
+            ...(typeof session.updatedAt === "number" ? { updatedAt: session.updatedAt } : {}),
+          } satisfies QaRawSessionEntry,
+        ],
+      ];
+    }),
   );
-  try {
-    const raw = await fs.readFile(storePath, "utf8");
-    return JSON.parse(raw) as Record<string, QaRawSessionStoreEntry>;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    throw error;
-  }
 }
 
-export { createSession, readEffectiveTools, readRawQaSessionStore, readSkillStatus };
+export { createSession, readEffectiveTools, readRawQaSessionEntries, readSkillStatus };

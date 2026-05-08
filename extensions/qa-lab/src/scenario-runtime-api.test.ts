@@ -47,7 +47,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     createSession: fn,
     readEffectiveTools: fn,
     readSkillStatus: fn,
-    readRawQaSessionStore: fn,
+    readRawQaSessionEntries: fn,
     runQaCli: fn,
     extractMediaPathFromText: fn,
     resolveGeneratedImagePath: fn,

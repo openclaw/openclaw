@@ -13,7 +13,7 @@ import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js"
 import { stripEnvelope } from "./chat-sanitize.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
-export { resolveSessionTranscriptCandidates } from "./session-transcript-files.fs.js";
+export { resolveSessionTranscriptCandidates } from "./session-transcript-paths.js";
 
 type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -237,22 +237,15 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
-export function readSessionMessages(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-): unknown[] {
-  void storePath;
+export function readSessionMessages(sessionId: string, sessionFile?: string): unknown[] {
   return loadScopedSessionMessages({ sessionId, sessionFile }) ?? [];
 }
 
 export function readRecentSessionMessages(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile?: string,
   opts?: ReadRecentSessionMessagesOptions,
 ): unknown[] {
-  void storePath;
   const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
   if (maxMessages === 0) {
     return [];
@@ -268,11 +261,9 @@ export function readRecentSessionMessages(
 
 export function visitSessionMessages(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile: string | undefined,
   visit: (message: unknown, seq: number) => void,
 ): number {
-  void storePath;
   const messages = loadScopedSessionMessages({ sessionId, sessionFile }) ?? [];
   for (const [index, message] of messages.entries()) {
     visit(message, index + 1);
@@ -280,22 +271,15 @@ export function visitSessionMessages(
   return messages.length;
 }
 
-export function readSessionMessageCount(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-): number {
-  void storePath;
+export function readSessionMessageCount(sessionId: string, sessionFile?: string): number {
   return loadScopedSessionMessages({ sessionId, sessionFile })?.length ?? 0;
 }
 
 export async function readSessionMessagesAsync(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile: string | undefined,
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
-  void storePath;
   const messages =
     loadScopedSessionMessages({ agentId: opts.agentId, sessionId, sessionFile }) ?? [];
   return opts.mode === "recent"
@@ -305,12 +289,10 @@ export async function readSessionMessagesAsync(
 
 export async function visitSessionMessagesAsync(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile: string | undefined,
   visit: (message: unknown, seq: number) => void,
   opts: { mode: "full"; reason: string; agentId?: string },
 ): Promise<number> {
-  void storePath;
   void opts.mode;
   void opts.reason;
   const messages =
@@ -323,22 +305,19 @@ export async function visitSessionMessagesAsync(
 
 export async function readSessionMessageCountAsync(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
 ): Promise<number> {
-  void storePath;
   return loadScopedSessionMessages({ agentId, sessionId, sessionFile })?.length ?? 0;
 }
 
 export function readRecentSessionMessagesWithStats(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile: string | undefined,
   opts: ReadRecentSessionMessagesOptions,
 ): ReadRecentSessionMessagesResult {
-  const totalMessages = readSessionMessageCount(sessionId, storePath, sessionFile);
-  const messages = readRecentSessionMessages(sessionId, storePath, sessionFile, opts);
+  const totalMessages = readSessionMessageCount(sessionId, sessionFile);
+  const messages = readRecentSessionMessages(sessionId, sessionFile, opts);
   const firstSeq = Math.max(1, totalMessages - messages.length + 1);
   const messagesWithSeq = messages.map((message, index) =>
     attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
@@ -348,30 +327,26 @@ export function readRecentSessionMessagesWithStats(
 
 export async function readRecentSessionMessagesAsync(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile?: string,
   opts?: ReadRecentSessionMessagesOptions,
 ): Promise<unknown[]> {
-  return readRecentSessionMessages(sessionId, storePath, sessionFile, opts);
+  return readRecentSessionMessages(sessionId, sessionFile, opts);
 }
 
 export async function readRecentSessionMessagesWithStatsAsync(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile: string | undefined,
   opts: ReadRecentSessionMessagesOptions,
 ): Promise<ReadRecentSessionMessagesResult> {
-  return readRecentSessionMessagesWithStats(sessionId, storePath, sessionFile, opts);
+  return readRecentSessionMessagesWithStats(sessionId, sessionFile, opts);
 }
 
 export function readRecentSessionTranscriptLines(params: {
   sessionId: string;
-  storePath: string | undefined;
   sessionFile?: string;
   agentId?: string;
   maxLines: number;
 }): { lines: string[]; totalLines: number } | null {
-  void params.storePath;
   const lines = loadScopedTranscriptJsonLines({
     agentId: params.agentId,
     sessionId: params.sessionId,
@@ -492,44 +467,37 @@ function readSessionTitleFieldsFromScopedTranscript(
 
 export function readSessionTitleFieldsFromTranscript(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields {
-  void storePath;
   return readSessionTitleFieldsFromScopedTranscript(sessionId, agentId, sessionFile, opts);
 }
 
 export async function readSessionTitleFieldsFromTranscriptAsync(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
   opts?: { includeInterSession?: boolean },
 ): Promise<SessionTitleFields> {
-  return readSessionTitleFieldsFromTranscript(sessionId, storePath, sessionFile, agentId, opts);
+  return readSessionTitleFieldsFromTranscript(sessionId, sessionFile, agentId, opts);
 }
 
 export function readFirstUserMessageFromTranscript(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
   opts?: { includeInterSession?: boolean },
 ): string | null {
-  void storePath;
   const events = loadScopedTranscriptEvents({ agentId, sessionId, sessionFile });
   return events ? extractFirstUserMessageFromTranscriptEvents(events, opts) : null;
 }
 
 export function readLastMessagePreviewFromTranscript(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
 ): string | null {
-  void storePath;
   const events = loadScopedTranscriptEvents({ agentId, sessionId, sessionFile });
   return events ? extractLastMessagePreviewFromTranscriptEvents(events) : null;
 }
@@ -740,32 +708,27 @@ function loadUsageEvents(params: {
 
 export function readLatestSessionUsageFromTranscript(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
 ): SessionTranscriptUsageSnapshot | null {
-  void storePath;
   const events = loadUsageEvents({ agentId, sessionId, sessionFile });
   return events ? extractAggregateUsageFromTranscriptEvents(events) : null;
 }
 
 export async function readLatestSessionUsageFromTranscriptAsync(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
-  return readLatestSessionUsageFromTranscript(sessionId, storePath, sessionFile, agentId);
+  return readLatestSessionUsageFromTranscript(sessionId, sessionFile, agentId);
 }
 
 export async function readRecentSessionUsageFromTranscriptAsync(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile: string | undefined,
   agentId: string | undefined,
   maxBytes: number,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
-  void storePath;
   void maxBytes;
   const events = loadUsageEvents({ agentId, sessionId, sessionFile });
   return events ? extractLatestUsageFromTranscriptEvents(events) : null;
@@ -773,28 +736,19 @@ export async function readRecentSessionUsageFromTranscriptAsync(
 
 export async function readLatestRecentSessionUsageFromTranscriptAsync(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile: string | undefined,
   agentId: string | undefined,
   maxBytes: number,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
-  return readRecentSessionUsageFromTranscriptAsync(
-    sessionId,
-    storePath,
-    sessionFile,
-    agentId,
-    maxBytes,
-  );
+  return readRecentSessionUsageFromTranscriptAsync(sessionId, sessionFile, agentId, maxBytes);
 }
 
 export function readRecentSessionUsageFromTranscript(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile: string | undefined,
   agentId: string | undefined,
   maxBytes: number,
 ): SessionTranscriptUsageSnapshot | null {
-  void storePath;
   void maxBytes;
   const events = loadUsageEvents({ agentId, sessionId, sessionFile });
   return events ? extractAggregateUsageFromTranscriptEvents(events) : null;
@@ -968,13 +922,11 @@ function readRecentMessagesFromScopedTranscript(
 
 export function readSessionPreviewItemsFromTranscript(
   sessionId: string,
-  storePath: string | undefined,
   sessionFile: string | undefined,
   agentId: string | undefined,
   maxItems: number,
   maxChars: number,
 ): SessionPreviewItem[] {
-  void storePath;
   const boundedItems = Math.max(1, Math.min(maxItems, 50));
   const boundedChars = Math.max(20, Math.min(maxChars, 2000));
   const scopedMessages = readRecentMessagesFromScopedTranscript(

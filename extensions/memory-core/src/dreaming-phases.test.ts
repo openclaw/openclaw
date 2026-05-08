@@ -3,23 +3,27 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  appendSqliteSessionTranscriptEvent,
+  replaceSqliteSessionTranscriptEvents,
+  resolveSessionTranscriptsDirForAgent,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   resolveMemoryCorePluginConfig,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, type MockInstance, vi } from "vitest";
 import {
   __testing,
   filterRecallEntriesWithinLookback,
   runDreamingSweepPhases,
 } from "./dreaming-phases.js";
-import { previewRemHarness } from "./rem-harness.js";
+import { previewRemHarness as previewRemHarnessBase } from "./rem-harness.js";
 import {
-  rankShortTermPromotionCandidates,
-  recordShortTermRecalls,
-  resolveShortTermPhaseSignalStorePath,
+  __testing as shortTermTesting,
+  rankShortTermPromotionCandidates as rankShortTermPromotionCandidatesBase,
+  recordShortTermRecalls as recordShortTermRecallsBase,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
@@ -76,44 +80,6 @@ function requireCandidateKeyByPath(
   return key;
 }
 
-function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
-  return mock.mock.calls.map((call) => {
-    const message = call[0];
-    return typeof message === "string" ? message : "";
-  });
-}
-
-function expectIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.join("\n")).toContain(expected);
-}
-
-function expectNotIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.join("\n")).not.toContain(expected);
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error) {
-      expect(error.code).toBe("ENOENT");
-      return;
-    }
-    throw error;
-  }
-  throw new Error(`expected path to be missing: ${targetPath}`);
-}
-
-function requireFirstIngestionEntry(sessionIngestion: {
-  files: Record<string, { lineCount: number; lastContentLine: number; contentHash: string }>;
-}) {
-  const firstEntry = Object.values(sessionIngestion.files)[0];
-  if (!firstEntry) {
-    throw new Error("expected session ingestion entry");
-  }
-  return firstEntry;
-}
-
 function createHarness(
   config: OpenClawConfig,
   workspaceDir?: string,
@@ -152,33 +118,36 @@ function createHarness(
     event: { cleanedBody: string },
     ctx: { trigger?: string; workspaceDir?: string },
   ) => {
-    const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: resolvedConfig });
-    const lightResult = await __testing.runPhaseIfTriggered({
-      cleanedBody: event.cleanedBody,
-      trigger: ctx.trigger,
-      workspaceDir: ctx.workspaceDir,
-      cfg: resolvedConfig,
-      logger,
-      subagent,
-      phase: "light",
-      eventText: __testing.constants.LIGHT_SLEEP_EVENT_TEXT,
-      config: light,
-    });
-    if (lightResult) {
-      return lightResult;
-    }
-    const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: resolvedConfig });
-    return await __testing.runPhaseIfTriggered({
-      cleanedBody: event.cleanedBody,
-      trigger: ctx.trigger,
-      workspaceDir: ctx.workspaceDir,
-      cfg: resolvedConfig,
-      logger,
-      subagent,
-      phase: "rem",
-      eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
-      config: rem,
-    });
+    const run = async () => {
+      const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: resolvedConfig });
+      const lightResult = await __testing.runPhaseIfTriggered({
+        cleanedBody: event.cleanedBody,
+        trigger: ctx.trigger,
+        workspaceDir: ctx.workspaceDir,
+        cfg: resolvedConfig,
+        logger,
+        subagent,
+        phase: "light",
+        eventText: __testing.constants.LIGHT_SLEEP_EVENT_TEXT,
+        config: light,
+      });
+      if (lightResult) {
+        return lightResult;
+      }
+      const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: resolvedConfig });
+      return await __testing.runPhaseIfTriggered({
+        cleanedBody: event.cleanedBody,
+        trigger: ctx.trigger,
+        workspaceDir: ctx.workspaceDir,
+        cfg: resolvedConfig,
+        logger,
+        subagent,
+        phase: "rem",
+        eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
+        config: rem,
+      });
+    };
+    return ctx.workspaceDir ? await withWorkspaceStateEnv(ctx.workspaceDir, run) : await run();
   };
   return { beforeAgentReply, logger };
 }
@@ -228,6 +197,186 @@ async function writeDailyNote(workspaceDir: string, lines: string[]): Promise<vo
     "utf-8",
   );
 }
+
+function timestampFromTranscriptEvent(event: unknown, fallback: number): number {
+  const message =
+    event && typeof event === "object"
+      ? (event as { message?: { timestamp?: unknown } }).message
+      : undefined;
+  const parsed =
+    typeof message?.timestamp === "string" ? Date.parse(message.timestamp) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+async function writeSqliteTranscript(params: {
+  workspaceDir: string;
+  agentId?: string;
+  transcriptPath: string;
+  raw: string;
+  replace?: boolean;
+}): Promise<void> {
+  const sessionId = path.basename(params.transcriptPath).replace(/\.jsonl$/i, "");
+  const fallbackNow = Date.parse("2026-04-05T00:00:00.000Z");
+  const events = params.raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as unknown);
+  const createdAt = events.reduce<number>(
+    (latest, event) => Math.max(latest, timestampFromTranscriptEvent(event, fallbackNow)),
+    fallbackNow,
+  );
+  if (params.replace) {
+    replaceSqliteSessionTranscriptEvents({
+      env: { OPENCLAW_STATE_DIR: path.join(params.workspaceDir, ".state") },
+      agentId: params.agentId ?? "main",
+      sessionId,
+      transcriptPath: params.transcriptPath,
+      events,
+      now: () => createdAt,
+    });
+    return;
+  }
+  for (const event of events) {
+    appendSqliteSessionTranscriptEvent({
+      env: { OPENCLAW_STATE_DIR: path.join(params.workspaceDir, ".state") },
+      agentId: params.agentId ?? "main",
+      sessionId,
+      transcriptPath: params.transcriptPath,
+      event,
+      now: () => timestampFromTranscriptEvent(event, fallbackNow),
+    });
+  }
+}
+
+async function withWorkspaceStateEnv<T>(workspaceDir: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(workspaceDir, ".state");
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+  }
+}
+
+async function readDailyIngestionStateForTest(workspaceDir: string) {
+  return await withWorkspaceStateEnv(workspaceDir, () =>
+    __testing.readDailyIngestionState(workspaceDir),
+  );
+}
+
+async function readSessionIngestionStateForTest(workspaceDir: string) {
+  return await withWorkspaceStateEnv(workspaceDir, () =>
+    __testing.readSessionIngestionState(workspaceDir),
+  );
+}
+
+async function rankShortTermPromotionCandidates(
+  params: Parameters<typeof rankShortTermPromotionCandidatesBase>[0],
+) {
+  return await withWorkspaceStateEnv(params.workspaceDir, () =>
+    rankShortTermPromotionCandidatesBase(params),
+  );
+}
+
+async function recordShortTermRecalls(params: Parameters<typeof recordShortTermRecallsBase>[0]) {
+  return await withWorkspaceStateEnv(params.workspaceDir!, () =>
+    recordShortTermRecallsBase(params),
+  );
+}
+
+async function previewRemHarness(params: Parameters<typeof previewRemHarnessBase>[0]) {
+  return await withWorkspaceStateEnv(params.workspaceDir, () => previewRemHarnessBase(params));
+}
+
+async function readPhaseSignalStoreForTest(workspaceDir: string, nowMs: number) {
+  return await withWorkspaceStateEnv(workspaceDir, () =>
+    shortTermTesting.readPhaseSignalStore(workspaceDir, new Date(nowMs).toISOString()),
+  );
+}
+
+function parseTestTranscriptPath(transcriptPath: string):
+  | {
+      workspaceDir: string;
+      agentId: string;
+    }
+  | undefined {
+  const parts = path.normalize(path.resolve(transcriptPath)).split(path.sep);
+  const stateIndex = parts.lastIndexOf(".state");
+  const agentsIndex = parts.lastIndexOf("agents");
+  const sessionsIndex = parts.lastIndexOf("sessions");
+  if (
+    stateIndex <= 0 ||
+    agentsIndex !== stateIndex + 1 ||
+    sessionsIndex !== agentsIndex + 2 ||
+    !parts[agentsIndex + 1]
+  ) {
+    return undefined;
+  }
+  return {
+    workspaceDir: parts.slice(0, stateIndex).join(path.sep) || path.sep,
+    agentId: parts[agentsIndex + 1],
+  };
+}
+
+let writeFileSpy: MockInstance | undefined;
+let utimesSpy: MockInstance | undefined;
+
+function fsPathToString(file: unknown): string | null {
+  if (typeof file === "string") {
+    return file;
+  }
+  if (file instanceof URL) {
+    return file.pathname;
+  }
+  if (Buffer.isBuffer(file)) {
+    return file.toString("utf8");
+  }
+  return null;
+}
+
+beforeAll(() => {
+  const actualWriteFile = fs.writeFile.bind(fs);
+  const actualUtimes = fs.utimes.bind(fs);
+  writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+    const transcriptPath = fsPathToString(file);
+    if (transcriptPath?.endsWith(".jsonl")) {
+      const parsed = parseTestTranscriptPath(transcriptPath);
+      if (parsed) {
+        await writeSqliteTranscript({
+          workspaceDir: parsed.workspaceDir,
+          agentId: parsed.agentId,
+          transcriptPath,
+          raw:
+            typeof data === "string"
+              ? data
+              : Buffer.from(data as unknown as ArrayBuffer).toString("utf8"),
+          replace: true,
+        });
+        return;
+      }
+    }
+    return await actualWriteFile(file, data, options);
+  });
+  utimesSpy = vi.spyOn(fs, "utimes").mockImplementation(async (file, atime, mtime) => {
+    const transcriptPath = fsPathToString(file);
+    if (transcriptPath?.endsWith(".jsonl") && parseTestTranscriptPath(transcriptPath)) {
+      void atime;
+      void mtime;
+      return;
+    }
+    return await actualUtimes(file, atime, mtime);
+  });
+});
+
+afterAll(() => {
+  writeFileSpy?.mockRestore();
+  utimesSpy?.mockRestore();
+});
 
 async function createDreamingWorkspace(): Promise<string> {
   const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
@@ -393,9 +542,11 @@ describe("memory-core dreaming phases", () => {
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams).toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();
-    expectIncludesSubstring(mockStringMessages(logger.info), "request-scoped");
-    expectNotIncludesSubstring(mockStringMessages(logger.warn), "request-scoped");
-    expectNotIncludesSubstring(mockStringMessages(logger.warn), "narrative session cleanup failed");
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("narrative session cleanup failed"),
+    );
     expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
@@ -544,14 +695,10 @@ describe("memory-core dreaming phases", () => {
 
     const readSpy = vi.spyOn(fs, "readFile");
     try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 6);
+      });
     } finally {
       readSpy.mockRestore();
     }
@@ -560,9 +707,9 @@ describe("memory-core dreaming phases", () => {
       ([target]) => typeof target === "string" && target === dailyPath,
     ).length;
     expect(dailyReadCount).toBeLessThanOrEqual(1);
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "daily-ingestion.json")),
-    ).resolves.toBeUndefined();
+    expect(Object.keys((await readDailyIngestionStateForTest(workspaceDir)).files)).toContain(
+      "memory/2026-04-05.md",
+    );
   });
 
   it("ingests recent daily memory files even before recall traffic exists", async () => {
@@ -732,9 +879,9 @@ describe("memory-core dreaming phases", () => {
 
     expect(transcriptReadCount).toBeLessThanOrEqual(1);
 
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
-    ).resolves.toBeUndefined();
+    expect(
+      Object.keys((await readSessionIngestionStateForTest(workspaceDir)).files).length,
+    ).toBeGreaterThan(0);
     await expect(
       fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
     ).resolves.toBeUndefined();
@@ -749,9 +896,12 @@ describe("memory-core dreaming phases", () => {
     expect(ranked.map((candidate) => candidate.path)).toContain(
       "memory/.dreams/session-corpus/2026-04-05.txt",
     );
-    const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Set retention to 365 days.");
+    expect(ranked.map((candidate) => candidate.snippet)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Move backups to S3 Glacier."),
+        expect.stringContaining("Set retention to 365 days."),
+      ]),
+    );
   });
 
   it("keeps primary session transcripts out of configured subagent workspaces", async () => {
@@ -1000,33 +1150,22 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    await expectPathMissing(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-    );
+    await expect(
+      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
 
-    const sessionIngestion = JSON.parse(
-      await fs.readFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        "utf-8",
-      ),
-    ) as {
-      files: Record<
-        string,
-        {
-          lineCount: number;
-          lastContentLine: number;
-          contentHash: string;
-        }
-      >;
-    };
+    const sessionIngestion = await readSessionIngestionStateForTest(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
-    const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
-    expect(ingestionEntry.lineCount).toBe(0);
-    expect(ingestionEntry.lastContentLine).toBe(0);
-    expect(ingestionEntry.contentHash).toBe(EMPTY_SESSION_CONTENT_HASH);
+    expect(Object.values(sessionIngestion.files)).toEqual([
+      expect.objectContaining({
+        lineCount: 0,
+        lastContentLine: 0,
+        contentHash: EMPTY_SESSION_CONTENT_HASH,
+      }),
+    ]);
   });
 
-  it("skips dreaming transcripts when the session store identifies them before bootstrap lands", async () => {
+  it("skips dreaming transcripts when SQLite metadata identifies them before bootstrap lands", async () => {
     const workspaceDir = await createDreamingWorkspace();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
@@ -1037,6 +1176,7 @@ describe("memory-core dreaming phases", () => {
       transcriptPath,
       [
         JSON.stringify({
+          sessionKey: "dreaming-narrative-light-1775894400455",
           type: "message",
           message: {
             role: "user",
@@ -1055,17 +1195,6 @@ describe("memory-core dreaming phases", () => {
           },
         }),
       ].join("\n") + "\n",
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:dreaming-narrative-light-1775894400455": {
-          sessionId: "dreaming-narrative",
-          sessionFile: transcriptPath,
-          updatedAt: Date.parse("2026-04-05T18:05:00.000Z"),
-        },
-      }),
       "utf-8",
     );
     const mtime = new Date("2026-04-05T18:05:00.000Z");
@@ -1110,30 +1239,19 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    await expectPathMissing(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-    );
+    await expect(
+      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
 
-    const sessionIngestion = JSON.parse(
-      await fs.readFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        "utf-8",
-      ),
-    ) as {
-      files: Record<
-        string,
-        {
-          lineCount: number;
-          lastContentLine: number;
-          contentHash: string;
-        }
-      >;
-    };
+    const sessionIngestion = await readSessionIngestionStateForTest(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
-    const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
-    expect(ingestionEntry.lineCount).toBe(0);
-    expect(ingestionEntry.lastContentLine).toBe(0);
-    expect(ingestionEntry.contentHash).toBe(EMPTY_SESSION_CONTENT_HASH);
+    expect(Object.values(sessionIngestion.files)).toEqual([
+      expect.objectContaining({
+        lineCount: 0,
+        lastContentLine: 0,
+        contentHash: EMPTY_SESSION_CONTENT_HASH,
+      }),
+    ]);
   });
 
   it("skips isolated cron run transcripts during session ingestion", async () => {
@@ -1147,6 +1265,7 @@ describe("memory-core dreaming phases", () => {
       transcriptPath,
       [
         JSON.stringify({
+          sessionKey: "agent:main:cron:job-1:run:run-1",
           type: "message",
           message: {
             role: "user",
@@ -1164,17 +1283,6 @@ describe("memory-core dreaming phases", () => {
           },
         }),
       ].join("\n") + "\n",
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:cron:job-1:run:run-1": {
-          sessionId: "cron-run",
-          sessionFile: transcriptPath,
-          updatedAt: Date.now(),
-        },
-      }),
       "utf-8",
     );
 
@@ -1217,29 +1325,18 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    await expectPathMissing(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-    );
+    await expect(
+      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
 
-    const sessionIngestion = JSON.parse(
-      await fs.readFile(
-        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-        "utf-8",
-      ),
-    ) as {
-      files: Record<
-        string,
-        {
-          lineCount: number;
-          lastContentLine: number;
-          contentHash: string;
-        }
-      >;
-    };
-    const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
-    expect(ingestionEntry.lineCount).toBe(0);
-    expect(ingestionEntry.lastContentLine).toBe(0);
-    expect(ingestionEntry.contentHash).toBe(EMPTY_SESSION_CONTENT_HASH);
+    const sessionIngestion = await readSessionIngestionStateForTest(workspaceDir);
+    expect(Object.values(sessionIngestion.files)).toEqual([
+      expect.objectContaining({
+        lineCount: 0,
+        lastContentLine: 0,
+        contentHash: EMPTY_SESSION_CONTENT_HASH,
+      }),
+    ]);
   });
 
   it("drops generated system wrapper text without suppressing paired assistant replies", async () => {
@@ -1584,7 +1681,6 @@ describe("memory-core dreaming phases", () => {
       expect(readFileSpy.mock.calls.filter(([target]) => target === transcriptPath)).toEqual([]);
       readFileSpy.mockRestore();
     } finally {
-      vi.restoreAllMocks();
       vi.unstubAllEnvs();
     }
   });
@@ -1958,9 +2054,12 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-06T02:00:00.000Z"),
     });
-    const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Retention policy stays at 365 days.");
+    expect(ranked.map((candidate) => candidate.snippet)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Move backups to S3 Glacier."),
+        expect.stringContaining("Retention policy stays at 365 days."),
+      ]),
+    );
   });
 
   it("ingests sessions when dreaming is enabled even if memorySearch is disabled", async () => {
@@ -2034,9 +2133,10 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
     });
-    expectIncludesSubstring(
-      ranked.map((candidate) => candidate.snippet),
-      "Glacier archive migration is now complete.",
+    expect(ranked.map((candidate) => candidate.snippet)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Glacier archive migration is now complete."),
+      ]),
     );
   });
 
@@ -2151,9 +2251,12 @@ describe("memory-core dreaming phases", () => {
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
     expect(after).toHaveLength(2);
-    const snippets = after.map((candidate) => candidate.snippet);
-    expect(snippets).toContain("Reviewed travel timing and calendar placement.");
-    expectIncludesSubstring(snippets, "Emma Rees:");
+    expect(after.map((candidate) => candidate.snippet)).toEqual(
+      expect.arrayContaining([
+        "Reviewed travel timing and calendar placement.",
+        expect.stringContaining("Emma Rees:"),
+      ]),
+    );
     for (const candidate of after) {
       expect(candidate.snippet).not.toContain("Friday, April 5, 2026:");
       expect(candidate.snippet).not.toContain("Morning:");
@@ -2219,16 +2322,17 @@ describe("memory-core dreaming phases", () => {
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
     expect(after).toHaveLength(3);
-    const snippets = after.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(
-      snippets,
-      "Operations: Restarted the gateway after auth drift.; Tokens now line up again.",
+    expect(after.map((candidate) => candidate.snippet)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "Operations: Restarted the gateway after auth drift.; Tokens now line up again.",
+        ),
+        expect.stringContaining(
+          "Bex: She prefers direct plans over open-ended maybes.; Better to offer one concrete time window.",
+        ),
+        expect.stringContaining("Travel: Flight lands at 08:10."),
+      ]),
     );
-    expectIncludesSubstring(
-      snippets,
-      "Bex: She prefers direct plans over open-ended maybes.; Better to offer one concrete time window.",
-    );
-    expectIncludesSubstring(snippets, "Travel: Flight lands at 08:10.");
   });
 
   it("records light/rem signals that reinforce deep promotion ranking", async () => {
@@ -2331,13 +2435,11 @@ describe("memory-core dreaming phases", () => {
     const reinforcedCandidate = requireCandidateByKey(reinforced, baseline[0].key);
     expect(reinforcedCandidate.score).toBeGreaterThan(baselineScore);
 
-    const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
-    const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
-      entries: Record<string, { lightHits: number; remHits: number }>;
-    };
-    const baselineSignals = phaseSignalStore.entries[baseline[0].key];
-    expect(baselineSignals?.lightHits).toBe(1);
-    expect(baselineSignals?.remHits).toBe(1);
+    const phaseSignalStore = await readPhaseSignalStoreForTest(workspaceDir, nowMs);
+    expect(phaseSignalStore.entries[baseline[0].key]).toMatchObject({
+      lightHits: 1,
+      remHits: 1,
+    });
   });
 
   it("skips REM short-term candidates whose source file disappeared", async () => {
@@ -2398,30 +2500,29 @@ describe("memory-core dreaming phases", () => {
 
     await withDreamingTestClock(async () => {
       setDreamingTestTime();
-      await __testing.runPhaseIfTriggered({
-        cleanedBody: __testing.constants.REM_SLEEP_EVENT_TEXT,
-        trigger: "heartbeat",
-        workspaceDir,
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        phase: "rem",
-        eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
-        config: {
-          enabled: true,
-          lookbackDays: 7,
-          limit: 10,
-          minPatternStrength: 0,
-          timezone: "UTC",
-          storage: { mode: "inline", separateReports: false },
-        },
-      });
+      await withWorkspaceStateEnv(workspaceDir, () =>
+        __testing.runPhaseIfTriggered({
+          cleanedBody: __testing.constants.REM_SLEEP_EVENT_TEXT,
+          trigger: "heartbeat",
+          workspaceDir,
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          phase: "rem",
+          eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
+          config: {
+            enabled: true,
+            lookbackDays: 7,
+            limit: 10,
+            minPatternStrength: 0,
+            timezone: "UTC",
+            storage: { mode: "inline", separateReports: false },
+          },
+        }),
+      );
     });
 
-    const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
-    const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
-      entries: Record<string, { remHits: number }>;
-    };
-    expect(phaseSignalStore.entries[liveKey]?.remHits).toBe(1);
-    expect(phaseSignalStore.entries[staleKey]).toBeUndefined();
+    const phaseSignalStore = await readPhaseSignalStoreForTest(workspaceDir, nowMs);
+    expect(phaseSignalStore.entries[liveKey!]).toMatchObject({ remHits: 1 });
+    expect(phaseSignalStore.entries[staleKey!]).toBeUndefined();
 
     const remOutput = await fs.readFile(
       path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),

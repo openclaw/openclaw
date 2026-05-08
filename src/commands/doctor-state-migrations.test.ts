@@ -3,8 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSqliteSessionStore } from "../config/sessions/store-backend.sqlite.js";
+import { loadSqliteSessionEntries } from "../config/sessions/store-backend.sqlite.js";
 import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import {
+  createCorePluginStateKeyedStore,
+  createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+} from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   autoMigrateLegacyStateDir,
@@ -142,6 +148,9 @@ async function makeRootWithEmptyCfg() {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
+  resetPluginStateStoreForTests();
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
@@ -184,7 +193,7 @@ async function detectAndRunMigrations(params: {
 
 function readSessionsStore(params: { root: string; targetDir: string }) {
   const agentId = path.basename(path.dirname(params.targetDir));
-  return loadSqliteSessionStore({
+  return loadSqliteSessionEntries({
     agentId,
     env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
   }) as Record<string, { sessionId: string }>;
@@ -277,6 +286,290 @@ function ensureCredentialsDir(root: string) {
 }
 
 describe("doctor legacy state migrations", () => {
+  it("migrates legacy file-transfer audit JSONL into SQLite plugin state", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const auditDir = path.join(root, "audit");
+    fs.mkdirSync(auditDir, { recursive: true });
+    const sourcePath = path.join(auditDir, "file-transfer.jsonl");
+    fs.writeFileSync(
+      sourcePath,
+      `${JSON.stringify({
+        timestamp: "2026-05-01T12:00:00.000Z",
+        op: "file.fetch",
+        nodeId: "node-1",
+        requestedPath: "/tmp/input.txt",
+        canonicalPath: "/private/tmp/input.txt",
+        decision: "allowed",
+        sizeBytes: 42,
+        sha256: "abc123",
+      })}\n`,
+      "utf-8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(
+      detected.channelPlans.plans.some((plan) => plan.label === "File transfer audit log"),
+    ).toBe(true);
+
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 123,
+    });
+    const auditStore = createPluginStateKeyedStore<Record<string, unknown>>("file-transfer", {
+      namespace: "audit",
+      maxEntries: 50_000,
+    });
+
+    expect(result.changes.join("\n")).toContain(
+      "Imported 1 file-transfer audit record(s) into SQLite plugin state",
+    );
+    await expect(auditStore.entries()).resolves.toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({
+          op: "file.fetch",
+          nodeId: "node-1",
+          requestedPath: "/tmp/input.txt",
+          decision: "allowed",
+          sizeBytes: 42,
+          sha256: "abc123",
+        }),
+      }),
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("migrates legacy Crestodian audit JSONL into SQLite plugin state", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const auditDir = path.join(root, "audit");
+    fs.mkdirSync(auditDir, { recursive: true });
+    const sourcePath = path.join(auditDir, "crestodian.jsonl");
+    fs.writeFileSync(
+      sourcePath,
+      `${JSON.stringify({
+        timestamp: "2026-05-01T12:00:00.000Z",
+        operation: "config.set",
+        summary: "Set config gateway.port",
+        configPath: "/tmp/openclaw.json",
+        details: { path: "gateway.port" },
+      })}\n`,
+      "utf-8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(detected.channelPlans.plans.some((plan) => plan.label === "Crestodian audit log")).toBe(
+      true,
+    );
+
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 123,
+    });
+    const auditStore = createCorePluginStateKeyedStore<Record<string, unknown>>({
+      ownerId: "core:crestodian",
+      namespace: "audit",
+      maxEntries: 50_000,
+    });
+
+    expect(result.changes.join("\n")).toContain(
+      "Imported 1 Crestodian audit record(s) into SQLite plugin state",
+    );
+    await expect(auditStore.entries()).resolves.toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({
+          operation: "config.set",
+          summary: "Set config gateway.port",
+          details: { path: "gateway.port" },
+        }),
+      }),
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("migrates legacy Phone Control arm state into SQLite plugin state", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const stateDir = path.join(root, "plugins", "phone-control");
+    fs.mkdirSync(stateDir, { recursive: true });
+    const sourcePath = path.join(stateDir, "armed.json");
+    fs.writeFileSync(
+      sourcePath,
+      `${JSON.stringify({
+        version: 2,
+        armedAtMs: 1_774_000_000_000,
+        expiresAtMs: 1_774_000_600_000,
+        group: "writes",
+        armedCommands: ["sms.send"],
+        addedToAllow: ["sms.send"],
+        removedFromDeny: ["sms.send"],
+      })}\n`,
+      "utf-8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(
+      detected.channelPlans.plans.some((plan) => plan.label === "Phone Control arm state"),
+    ).toBe(true);
+
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 123,
+    });
+    const armStore = createPluginStateKeyedStore<Record<string, unknown>>("phone-control", {
+      namespace: "arm-state",
+      maxEntries: 4,
+    });
+
+    expect(result.changes.join("\n")).toContain(
+      "Imported Phone Control arm state into SQLite plugin state",
+    );
+    await expect(armStore.lookup("current")).resolves.toMatchObject({
+      group: "writes",
+      armedCommands: ["sms.send"],
+      addedToAllow: ["sms.send"],
+      removedFromDeny: ["sms.send"],
+    });
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("migrates legacy ClawHub skill tracking into SQLite plugin state", async () => {
+    const root = await makeTempRoot();
+    const workspaceDir = path.join(root, "workspace");
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    };
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const slug = "agentreceipt";
+    const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
+    const originPath = path.join(workspaceDir, "skills", slug, ".clawhub", "origin.json");
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.mkdirSync(path.dirname(originPath), { recursive: true });
+    fs.writeFileSync(
+      lockPath,
+      `${JSON.stringify({
+        version: 1,
+        skills: {
+          [slug]: {
+            version: "0.9.0",
+            installedAt: 123,
+          },
+        },
+      })}\n`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      originPath,
+      `${JSON.stringify({
+        version: 1,
+        registry: "https://legacy.clawhub.ai",
+        slug,
+        installedVersion: "0.9.0",
+        installedAt: 123,
+      })}\n`,
+      "utf-8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(
+      detected.channelPlans.plans.some((plan) => plan.label === "ClawHub skill install tracking"),
+    ).toBe(true);
+
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 123,
+    });
+    const installStore = createCorePluginStateKeyedStore<Record<string, unknown>>({
+      ownerId: "core:clawhub-skills",
+      namespace: "skill-installs",
+      maxEntries: 10_000,
+    });
+
+    expect(result.changes.join("\n")).toContain(
+      "Imported 1 ClawHub skill install record(s) into SQLite plugin state",
+    );
+    await expect(installStore.entries()).resolves.toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({
+          registry: "https://legacy.clawhub.ai",
+          slug,
+          installedVersion: "0.9.0",
+          workspaceDir: path.resolve(workspaceDir),
+          targetDir: path.join(workspaceDir, "skills", slug),
+        }),
+      }),
+    ]);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(fs.existsSync(originPath)).toBe(false);
+  });
+
+  it("migrates legacy Crestodian rescue pending approvals into SQLite plugin state", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const pendingDir = path.join(root, "crestodian", "rescue-pending");
+    fs.mkdirSync(pendingDir, { recursive: true });
+    const sourcePath = path.join(pendingDir, "abc123.json");
+    fs.writeFileSync(
+      sourcePath,
+      `${JSON.stringify({
+        id: "pending-1",
+        createdAt: "2026-05-01T12:00:00.000Z",
+        expiresAt: "2026-05-01T12:10:00.000Z",
+        operation: { kind: "gateway-restart" },
+        auditDetails: { rescue: true, channel: "whatsapp" },
+      })}\n`,
+      "utf-8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(
+      detected.channelPlans.plans.some(
+        (plan) => plan.label === "Crestodian rescue pending approvals",
+      ),
+    ).toBe(true);
+
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 123,
+    });
+    const pendingStore = createCorePluginStateKeyedStore<Record<string, unknown>>({
+      ownerId: "core:crestodian",
+      namespace: "rescue-pending",
+      maxEntries: 10_000,
+    });
+
+    expect(result.changes.join("\n")).toContain(
+      "Imported 1 Crestodian rescue pending approval(s) into SQLite plugin state",
+    );
+    await expect(pendingStore.lookup("abc123")).resolves.toMatchObject({
+      id: "pending-1",
+      operation: { kind: "gateway-restart" },
+      auditDetails: { rescue: true, channel: "whatsapp" },
+    });
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
   it("migrates legacy sessions into agents/<id>/sessions", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {};

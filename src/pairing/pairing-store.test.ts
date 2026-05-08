@@ -98,11 +98,6 @@ async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
   return await withEnvAsync({ OPENCLAW_STATE_DIR: dir }, async () => await fn(dir));
 }
 
-function writeJsonFixture(filePath: string, value: unknown) {
-  fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-  fsSync.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
 function resolveAllowFromFilePath(stateDir: string, channel: string, accountId?: string) {
   const suffix = accountId ? `-${accountId}` : "";
   return path.join(resolveOAuthDir(process.env, stateDir), `${channel}${suffix}-allowFrom.json`);

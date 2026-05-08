@@ -3,10 +3,7 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import {
-  purgeAgentSessionStoreEntries,
-  resolveSessionTranscriptsDirForAgent,
-} from "../config/sessions.js";
+import { purgeAgentSessionRows, resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -147,8 +144,8 @@ export async function agentsDeleteCommand(
     logConfigUpdated(runtime);
   }
 
-  // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
-  await purgeAgentSessionStoreEntries(cfg, agentId);
+  // Purge SQLite session rows for this agent so orphaned sessions cannot be targeted (#65524).
+  await purgeAgentSessionRows(cfg, agentId);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).

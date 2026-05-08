@@ -85,7 +85,7 @@ export function buildAssistantMessageWithZeroUsage(params: {
 // providers do not include in their wire payloads.
 //
 // This constant is the single source of truth used by replay normalization and
-// session-file repair as well, so a session repaired offline reads identically
+// transcript-state repair as well, so a session repaired offline reads identically
 // to a live stream-error turn (and the repair pass remains idempotent).
 export const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
 

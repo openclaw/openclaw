@@ -69,7 +69,7 @@ src/agents/
 ├── transcript/
 │   ├── session-transcript-contract.ts # OpenClaw-owned transcript/session types
 │   ├── session-manager.ts         # OpenClaw-owned SQLite-backed SessionManager
-│   └── transcript-file-state.ts   # PI-compatible transcript state adapter
+│   └── transcript-state.ts        # SQLite-backed transcript state adapter
 ├── pi-embedded-subscribe.ts       # Session event subscription/dispatch
 ├── pi-embedded-subscribe.types.ts # SubscribeEmbeddedPiSessionParams
 ├── pi-embedded-subscribe.handlers.ts # Event handler factory

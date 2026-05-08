@@ -3,15 +3,14 @@ import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-repl
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ChatType } from "../channels/chat-type.js";
-import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { recordInboundSession } from "../channels/session.js";
-import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -37,6 +36,7 @@ import {
 } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { recordChannelMessageReplyDispatch } from "../plugin-sdk/channel-message.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import {
@@ -124,7 +124,7 @@ async function deliverRestartSentinelNotice(params: {
   }).catch(() => null);
   for (let attempt = 1; attempt <= OUTBOUND_MAX_ATTEMPTS; attempt += 1) {
     try {
-      const send = await sendDurableMessageBatch({
+      const results = await deliverOutboundPayloads({
         cfg: params.cfg,
         channel: params.channel,
         to: params.to,
@@ -137,10 +137,6 @@ async function deliverRestartSentinelNotice(params: {
         bestEffort: false,
         skipQueue: true,
       });
-      if (send.status === "failed" || send.status === "partial_failed") {
-        throw send.error;
-      }
-      const results = send.status === "sent" ? send.results : [];
       if (results.length > 0) {
         if (queueId) {
           await ackDelivery(queueId).catch(() => {});
@@ -251,7 +247,7 @@ async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
 }) {
-  const { cfg, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
+  const { cfg, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
@@ -334,73 +330,56 @@ async function deliverQueuedSessionDelivery(params: {
       forceChatType: true,
     },
   );
-  await dispatchAssembledChannelTurn({
+  await recordChannelMessageReplyDispatch({
     cfg,
     channel: route.channel,
     accountId: route.accountId,
     agentId,
     routeSessionKey: canonicalKey,
-    storePath,
     ctxPayload,
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      preparePayload: (payload) => {
-        if (isRestartContinuationBusyPayload(payload)) {
-          throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
-        }
-        return resolveRestartContinuationOutboundPayload({
-          payload,
-          messageId,
-          replyToId: route.replyToId,
-        });
-      },
-      durable: (_payload, info) =>
-        info.kind === "final"
-          ? {
-              to: route.to,
-              replyToId: route.replyToId,
-              threadId: route.threadId,
-              deps: params.deps,
-            }
-          : false,
-      deliver: async (payload) => {
-        const send = await sendDurableMessageBatch({
-          cfg,
-          channel: route.channel,
-          to: route.to,
-          accountId: route.accountId,
-          replyToId: route.replyToId,
-          threadId: route.threadId,
-          payloads: [payload],
-          session: buildOutboundSessionContext({
-            cfg,
-            sessionKey: canonicalKey,
-          }),
-          deps: params.deps,
-          bestEffort: false,
-        });
-        if (send.status === "failed" || send.status === "partial_failed") {
-          throw send.error;
-        }
-        const results = send.status === "sent" ? send.results : [];
-        if (results.length === 0) {
-          throw new Error("restart continuation delivery returned no results");
-        }
-      },
-      onError: (err, info) => {
-        dispatchError ??= err;
-        log.warn(`restart continuation dispatch failed during ${info.kind}: ${String(err)}`, {
-          sessionKey: canonicalKey,
-        });
-      },
+    durable: {
+      to: route.to,
+      replyToId: route.replyToId,
+      threadId: route.threadId,
+      deps: params.deps,
     },
-    record: {
-      onRecordError: (err) => {
-        log.warn(`restart continuation failed to record inbound session metadata: ${String(err)}`, {
+    deliver: async (payload) => {
+      if (isRestartContinuationBusyPayload(payload)) {
+        throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
+      }
+      const outboundPayload = resolveRestartContinuationOutboundPayload({
+        payload,
+        messageId,
+        replyToId: route.replyToId,
+      });
+      const results = await deliverOutboundPayloads({
+        cfg,
+        channel: route.channel,
+        to: route.to,
+        accountId: route.accountId,
+        replyToId: route.replyToId,
+        threadId: route.threadId,
+        payloads: [outboundPayload],
+        session: buildOutboundSessionContext({
+          cfg,
           sessionKey: canonicalKey,
-        });
-      },
+        }),
+        deps: params.deps,
+        bestEffort: false,
+      });
+      if (results.length === 0) {
+        throw new Error("restart continuation delivery returned no results");
+      }
+    },
+    onRecordError: (err) => {
+      log.warn(`restart continuation failed to record inbound session metadata: ${String(err)}`, {
+        sessionKey: canonicalKey,
+      });
+    },
+    onDispatchError: (err) => {
+      dispatchError ??= err;
     },
   });
   if (dispatchError) {

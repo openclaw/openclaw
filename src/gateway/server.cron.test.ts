@@ -5,6 +5,8 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { saveCronStore } from "../cron/store.js";
+import type { CronStoreFile } from "../cron/types.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
@@ -57,7 +59,7 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
 
 installGatewayTestHooks({ scope: "suite" });
 const CRON_WAIT_TIMEOUT_MS = 10_000;
-const EMPTY_CRON_STORE_CONTENT = JSON.stringify({ version: 1, jobs: [] });
+const EMPTY_CRON_STORE: CronStoreFile = { version: 1, jobs: [] };
 let cronSuiteTempRootPromise: Promise<string> | null = null;
 let cronSuiteCaseId = 0;
 
@@ -150,10 +152,10 @@ async function setupCronTestRun(params: {
   testState.cronStorePath = storePath;
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
-  await fs.writeFile(
-    testState.cronStorePath,
-    params.jobs ? JSON.stringify({ version: 1, jobs: params.jobs }) : EMPTY_CRON_STORE_CONTENT,
-  );
+  await saveCronStore(testState.cronStorePath, {
+    version: 1,
+    jobs: (params.jobs ?? EMPTY_CRON_STORE.jobs) as CronStoreFile["jobs"],
+  });
   return { prevSkipCron, dir };
 }
 
@@ -1223,7 +1225,7 @@ describe("gateway server cron", () => {
 
     try {
       const runRes = await rpcReq(ws, "cron.run", { id: "future-job", mode: "due" }, 1_000);
-      expect(runRes.ok).toBe(true);
+      expect(runRes.ok, JSON.stringify(runRes)).toBe(true);
       expect(runRes.payload).toEqual({ ok: true, ran: false, reason: "not-due" });
       expect(cronIsolatedRun).not.toHaveBeenCalled();
     } finally {

@@ -96,9 +96,10 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
 }));
 
 vi.mock("../../config/sessions.js", () => ({
+  deleteSessionEntry: vi.fn(),
+  getSessionEntry: vi.fn(() => undefined),
   resolveGroupSessionKey: vi.fn(() => null),
-  resolveSessionTranscriptPath: vi.fn(),
-  updateSessionStore: vi.fn(),
+  upsertSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../globals.js", () => ({

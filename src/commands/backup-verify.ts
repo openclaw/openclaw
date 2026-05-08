@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
@@ -29,6 +32,11 @@ type BackupManifest = {
     workspaceDirs?: string[];
   };
   assets: BackupManifestAsset[];
+  databaseSnapshots?: Array<{
+    sourcePath: string;
+    archivePath: string;
+    integrity?: string;
+  }>;
   skipped?: Array<{
     kind?: string;
     sourcePath?: string;
@@ -162,6 +170,25 @@ function parseManifest(raw: string): BackupManifest {
         }
       : undefined,
     assets,
+    databaseSnapshots: Array.isArray(parsed.databaseSnapshots)
+      ? parsed.databaseSnapshots.flatMap((snapshot) => {
+          if (!isRecord(snapshot)) {
+            return [];
+          }
+          const sourcePath = readStringValue(snapshot.sourcePath);
+          const archivePath = readStringValue(snapshot.archivePath);
+          if (!sourcePath || !archivePath) {
+            return [];
+          }
+          return [
+            {
+              sourcePath,
+              archivePath,
+              integrity: readStringValue(snapshot.integrity),
+            },
+          ];
+        })
+      : undefined,
     skipped: Array.isArray(parsed.skipped) ? parsed.skipped : undefined,
   };
 }
@@ -246,6 +273,63 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
   }
+
+  for (const snapshot of manifest.databaseSnapshots ?? []) {
+    const snapshotArchivePath = normalizeArchivePath(
+      snapshot.archivePath,
+      "Backup manifest database snapshot path",
+    );
+    if (!isArchivePathWithin(snapshotArchivePath, payloadRoot)) {
+      throw new Error(
+        `Manifest database snapshot path is outside payload root: ${snapshot.archivePath}`,
+      );
+    }
+    if (!normalizedEntrySet.has(snapshotArchivePath)) {
+      throw new Error(`Archive is missing database snapshot: ${snapshotArchivePath}`);
+    }
+  }
+}
+
+async function verifyDatabaseSnapshots(params: {
+  archivePath: string;
+  manifest: BackupManifest;
+}): Promise<void> {
+  const snapshots = params.manifest.databaseSnapshots ?? [];
+  if (snapshots.length === 0) {
+    return;
+  }
+  const snapshotPaths = new Set(
+    snapshots.map((snapshot) =>
+      normalizeArchivePath(snapshot.archivePath, "Backup manifest database snapshot path"),
+    ),
+  );
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-verify-"));
+  try {
+    await tar.x({
+      file: params.archivePath,
+      gzip: true,
+      cwd: tempDir,
+      filter: (entryPath) =>
+        snapshotPaths.has(normalizeArchivePath(entryPath, "Archive database snapshot entry")),
+    });
+    const sqlite = requireNodeSqlite();
+    for (const snapshotPath of snapshotPaths) {
+      const extractedPath = path.join(tempDir, ...snapshotPath.split("/"));
+      const db = new sqlite.DatabaseSync(extractedPath, { readOnly: true });
+      try {
+        const row = db.prepare("PRAGMA integrity_check").get() as
+          | { integrity_check?: string }
+          | undefined;
+        if (row?.integrity_check !== "ok") {
+          throw new Error(`SQLite integrity check failed for backup snapshot: ${snapshotPath}`);
+        }
+      } finally {
+        db.close();
+      }
+    }
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 function formatResult(result: BackupVerifyResult): string {
@@ -304,6 +388,7 @@ export async function backupVerifyCommand(
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
   const manifest = parseManifest(manifestRaw);
   verifyManifestAgainstEntries(manifest, normalizedEntrySet);
+  await verifyDatabaseSnapshots({ archivePath, manifest });
 
   const result: BackupVerifyResult = {
     ok: true,

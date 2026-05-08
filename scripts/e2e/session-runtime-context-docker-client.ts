@@ -119,7 +119,7 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
   );
 }
 
-async function seedBrokenSession(stateDir: string): Promise<string> {
+async function seedBrokenLegacySessionForDoctorMigration(stateDir: string): Promise<string> {
   const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const sessionFile = path.join(sessionsDir, "broken.jsonl");
   await fs.mkdir(sessionsDir, { recursive: true });
@@ -170,6 +170,8 @@ async function seedBrokenSession(stateDir: string): Promise<string> {
     `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     "utf-8",
   );
+  // This is intentionally a legacy input: the scenario proves doctor imports
+  // session indexes and transcript JSONL into SQLite, then removes the sources.
   await fs.writeFile(
     path.join(sessionsDir, "sessions.json"),
     JSON.stringify(
@@ -192,7 +194,7 @@ async function seedBrokenSession(stateDir: string): Promise<string> {
 async function verifyDoctorRepair(root: string) {
   const stateDir = path.join(root, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const sessionFile = await seedBrokenSession(stateDir);
+  const sessionFile = await seedBrokenLegacySessionForDoctorMigration(stateDir);
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false } }, null, 2));
 
@@ -223,7 +225,18 @@ async function verifyDoctorRepair(root: string) {
     result.status === 0,
     `doctor --fix failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
-  const entries = await readJsonl(sessionFile);
+  await fs.access(sessionFile).then(
+    () => {
+      throw new Error("doctor left legacy transcript JSONL after SQLite import");
+    },
+    () => undefined,
+  );
+  const { loadSqliteSessionTranscriptEvents } =
+    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as typeof import("../../src/config/sessions/transcript-store.sqlite.js");
+  const entries = loadSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "broken-session",
+  }).map((entry) => entry.event as TranscriptEntry);
   const ids = entries.map((entry) => (entry as { id?: string }).id).filter(Boolean);
   assert(
     JSON.stringify(ids) ===
@@ -236,10 +249,6 @@ async function verifyDoctorRepair(root: string) {
     ),
     "doctor repair left runtime context in active transcript",
   );
-  const backups = (await fs.readdir(path.dirname(sessionFile))).filter((name) =>
-    name.includes(".pre-doctor-branch-repair-"),
-  );
-  assert(backups.length === 1, `expected one doctor backup, got ${backups.length}`);
 }
 
 async function main() {

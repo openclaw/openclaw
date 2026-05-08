@@ -5,17 +5,12 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { AgentMessage } from "../agent-core-contract.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
 import type { TextContent } from "../pi-ai-contract.js";
-import {
-  acquireSessionWriteLock,
-  type SessionWriteLockAcquireTimeoutConfig,
-  resolveSessionWriteLockAcquireTimeoutMs,
-} from "../session-write-lock.js";
 import { SessionManager } from "../transcript/session-manager-contract.js";
 import {
   persistTranscriptStateMutation,
-  readTranscriptFileState,
-  type TranscriptFileState,
-} from "../transcript/transcript-file-state.js";
+  readTranscriptState,
+  type TranscriptState,
+} from "../transcript/transcript-state.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import {
@@ -316,7 +311,7 @@ export function truncateToolResultMessage(
  * Returns a new array with truncated messages.
  *
  * This is used as a pre-emptive guard before sending messages to the LLM,
- * without modifying the session file.
+ * without modifying the persisted SQLite transcript.
  */
 export function truncateOversizedToolResultsInMessages(
   messages: AgentMessage[],
@@ -680,13 +675,13 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
 }
 
 async function truncateOversizedToolResultsInTranscriptState(params: {
-  state: TranscriptFileState;
+  state: TranscriptState;
   sessionFile: string;
   contextWindowTokens: number;
   maxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: unknown;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { state, contextWindowTokens } = params;
   const maxChars = Math.max(
@@ -769,17 +764,12 @@ export async function truncateOversizedToolResultsInSession(params: {
   maxCharsOverride?: number;
   sessionId?: string;
   sessionKey?: string;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: unknown;
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionFile, contextWindowTokens } = params;
-  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
 
   try {
-    sessionLock = await acquireSessionWriteLock({
-      sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-    });
-    const state = await readTranscriptFileState(sessionFile);
+    const state = await readTranscriptState(sessionFile);
     return await truncateOversizedToolResultsInTranscriptState({
       state,
       contextWindowTokens,
@@ -792,8 +782,6 @@ export async function truncateOversizedToolResultsInSession(params: {
     const errMsg = formatErrorMessage(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
     return { truncated: false, truncatedCount: 0, reason: errMsg };
-  } finally {
-    await sessionLock?.release();
   }
 }
 

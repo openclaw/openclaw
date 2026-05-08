@@ -1,10 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { tryReadJson, writeJson } from "../infra/json-files.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   executeCrestodianOperation,
@@ -14,15 +10,13 @@ import {
   type CrestodianCommandDeps,
   type CrestodianOperation,
 } from "./operations.js";
+import {
+  createCrestodianRescuePendingStore,
+  isRescuePendingOperation,
+  resolveCrestodianRescuePendingKey,
+  type RescuePendingOperation,
+} from "./rescue-pending-state.js";
 import { resolveCrestodianRescuePolicy } from "./rescue-policy.js";
-
-type RescuePendingOperation = {
-  id: string;
-  createdAt: string;
-  expiresAt: string;
-  operation: CrestodianOperation;
-  auditDetails: Record<string, unknown>;
-};
 
 export type CrestodianRescueMessageInput = {
   cfg: OpenClawConfig;
@@ -36,6 +30,7 @@ export type CrestodianRescueMessageInput = {
 
 const CRESTODIAN_COMMAND = "/crestodian";
 const APPROVAL_RE = /^(yes|y|apply|approve|approved|do it)$/i;
+const pendingStore = createCrestodianRescuePendingStore();
 
 function createCaptureRuntime(): { runtime: RuntimeEnv; read: () => string } {
   const lines: string[] = [];
@@ -63,45 +58,24 @@ export function extractCrestodianRescueMessage(commandBody: string): string | nu
   return normalized.slice(CRESTODIAN_COMMAND.length).trim();
 }
 
-function resolvePendingDir(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "crestodian", "rescue-pending");
-}
-
-function resolvePendingPath(input: CrestodianRescueMessageInput): string {
-  const key = JSON.stringify({
+function resolvePendingKey(input: CrestodianRescueMessageInput): string {
+  return resolveCrestodianRescuePendingKey({
     channel: input.command.channelId ?? input.command.channel,
     from: input.command.from,
     senderId: input.command.senderId,
   });
-  const digest = createHash("sha256").update(key).digest("hex").slice(0, 32);
-  return path.join(resolvePendingDir(input.env), `${digest}.json`);
 }
 
-async function readPending(
-  pendingPath: string,
-  now = new Date(),
-): Promise<RescuePendingOperation | null> {
-  try {
-    const parsed = await tryReadJson<RescuePendingOperation>(pendingPath);
-    if (!parsed) {
-      return null;
-    }
-    if (Date.parse(parsed.expiresAt) <= now.getTime()) {
-      await fs.rm(pendingPath, { force: true });
-      return null;
-    }
-    return parsed;
-  } catch {
+async function readPending(key: string, now = new Date()): Promise<RescuePendingOperation | null> {
+  const parsed = await pendingStore.lookup(key);
+  if (!isRescuePendingOperation(parsed)) {
     return null;
   }
-}
-
-async function writePending(pendingPath: string, pending: RescuePendingOperation): Promise<void> {
-  await writeJson(pendingPath, pending, {
-    dirMode: 0o700,
-    mode: 0o600,
-    trailingNewline: true,
-  });
+  if (Date.parse(parsed.expiresAt) <= now.getTime()) {
+    await pendingStore.delete(key);
+    return null;
+  }
+  return parsed;
 }
 
 function buildAuditDetails(input: CrestodianRescueMessageInput): Record<string, unknown> {
@@ -154,15 +128,15 @@ export async function runCrestodianRescueMessage(
     return policy.message;
   }
 
-  const pendingPath = resolvePendingPath(input);
+  const pendingKey = resolvePendingKey(input);
   if (APPROVAL_RE.test(rescueMessage)) {
-    const pending = await readPending(pendingPath);
+    const pending = await readPending(pendingKey);
     if (!pending) {
       return "No pending Crestodian rescue change is waiting for approval.";
     }
     const unsupported = formatUnsupportedRemoteOperation(pending.operation);
     if (unsupported) {
-      await fs.rm(pendingPath, { force: true });
+      await pendingStore.delete(pendingKey);
       return unsupported;
     }
     const capture = createCaptureRuntime();
@@ -171,7 +145,7 @@ export async function runCrestodianRescueMessage(
       auditDetails: pending.auditDetails,
       deps: input.deps,
     });
-    await fs.rm(pendingPath, { force: true });
+    await pendingStore.delete(pendingKey);
     return capture.read() || "Crestodian rescue change applied.";
   }
 
@@ -183,12 +157,15 @@ export async function runCrestodianRescueMessage(
   if (isPersistentCrestodianOperation(operation)) {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + policy.pendingTtlMinutes * 60_000);
-    await writePending(pendingPath, {
+    const pending = {
       id: randomUUID(),
       createdAt: now.toISOString(),
       expiresAt: expiresAt.toISOString(),
       operation,
       auditDetails: buildAuditDetails(input),
+    } satisfies RescuePendingOperation;
+    await pendingStore.register(pendingKey, pending, {
+      ttlMs: Math.max(1, expiresAt.getTime() - now.getTime()),
     });
     return formatPersistentPlan(operation);
   }

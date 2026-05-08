@@ -11,7 +11,6 @@ import {
   exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents,
 } from "../../config/sessions/transcript-store.sqlite.js";
-import { pathExists } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -165,9 +164,12 @@ async function readSessionDataFromTranscript(params: {
   entries: PiSessionEntry[];
   leafId: string | null;
 }> {
-  const raw = hasScopedSqliteTranscriptEvents(params)
-    ? exportSqliteSessionTranscriptJsonl(params)
-    : await fsp.readFile(params.sessionFile, "utf-8");
+  if (!hasScopedSqliteTranscriptEvents(params)) {
+    throw new Error(
+      `Transcript is not in SQLite: ${params.sessionFile}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
+    );
+  }
+  const raw = exportSqliteSessionTranscriptJsonl(params);
   const fileEntries = parseSessionEntries(raw);
   migrateSessionEntries(fileEntries);
   const header =
@@ -192,11 +194,10 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   }
   const { agentId, entry, sessionFile } = sessionTarget;
 
-  if (
-    !(await pathExists(sessionFile)) &&
-    !hasScopedSqliteTranscriptEvents({ agentId, sessionId: entry.sessionId })
-  ) {
-    return { text: `❌ Session file not found: ${sessionFile}` };
+  if (!hasScopedSqliteTranscriptEvents({ agentId, sessionId: entry.sessionId })) {
+    return {
+      text: `❌ Session transcript has not been migrated into SQLite. Run \`openclaw doctor --fix\` and try again.`,
+    };
   }
 
   // 2. Load session entries

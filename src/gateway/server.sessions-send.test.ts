@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock } from "vitest";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -51,7 +52,6 @@ async function emitLifecycleAssistantReply(params: {
   const sessionId = commandParams.sessionId ?? params.defaultSessionId;
   const runId = commandParams.runId ?? sessionId;
   const sessionFile = resolveSessionTranscriptPath(sessionId);
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
 
   const startedAt = Date.now();
   emitAgentEvent({
@@ -66,7 +66,20 @@ async function emitLifecycleAssistantReply(params: {
     content: [{ type: "text", text }],
     ...(params.includeTimestamp ? { timestamp: Date.now() } : {}),
   };
-  await fs.appendFile(sessionFile, `${JSON.stringify({ message })}\n`, "utf8");
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId,
+    transcriptPath: sessionFile,
+    events: [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: `${runId}-assistant`,
+        parentId: null,
+        message,
+      },
+    ],
+  });
 
   emitAgentEvent({
     runId,

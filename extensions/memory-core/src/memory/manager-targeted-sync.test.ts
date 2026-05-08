@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  clearMemorySyncedSessionFiles,
+  clearMemorySyncedSessionTranscripts,
   runMemoryTargetedSessionSync,
 } from "./manager-targeted-sync.js";
 
@@ -9,9 +9,9 @@ describe("memory targeted session sync", () => {
     const secondSessionPath = "/tmp/targeted-dirty-second.jsonl";
     const sessionsDirtyFiles = new Set(["/tmp/targeted-dirty-first.jsonl", secondSessionPath]);
 
-    const sessionsDirty = clearMemorySyncedSessionFiles({
+    const sessionsDirty = clearMemorySyncedSessionTranscripts({
       sessionsDirtyFiles,
-      targetSessionFiles: ["/tmp/targeted-dirty-first.jsonl"],
+      targetSessionTranscripts: ["/tmp/targeted-dirty-first.jsonl"],
     });
 
     expect(sessionsDirtyFiles.has(secondSessionPath)).toBe(true);
@@ -25,12 +25,12 @@ describe("memory targeted session sync", () => {
 
     await runMemoryTargetedSessionSync({
       hasSessionSource: true,
-      targetSessionFiles: new Set(["/tmp/targeted-fallback.jsonl"]),
+      targetSessionTranscripts: new Set(["/tmp/targeted-fallback.jsonl"]),
       reason: "post-compaction",
       progress: undefined,
       useUnsafeReindex: false,
       sessionsDirtyFiles: new Set(),
-      syncSessionFiles: async () => {
+      syncSessionTranscripts: async () => {
         throw new Error("embedding backend failed");
       },
       shouldFallbackOnError: () => true,
@@ -54,12 +54,12 @@ describe("memory targeted session sync", () => {
 
     await runMemoryTargetedSessionSync({
       hasSessionSource: true,
-      targetSessionFiles: new Set(["/tmp/targeted-fallback.jsonl"]),
+      targetSessionTranscripts: new Set(["/tmp/targeted-fallback.jsonl"]),
       reason: "post-compaction",
       progress: undefined,
       useUnsafeReindex: true,
       sessionsDirtyFiles: new Set(),
-      syncSessionFiles: async () => {
+      syncSessionTranscripts: async () => {
         throw new Error("embedding backend failed");
       },
       shouldFallbackOnError: () => true,

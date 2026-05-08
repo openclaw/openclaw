@@ -170,7 +170,6 @@ export async function handleInlineActions(params: {
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
-  storePath?: string;
   sessionScope: Parameters<typeof buildStatusReply>[0]["sessionScope"];
   workspaceDir: string;
   isGroup: boolean;
@@ -212,7 +211,6 @@ export async function handleInlineActions(params: {
     previousSessionEntry,
     sessionStore,
     sessionKey,
-    storePath,
     sessionScope,
     workspaceDir,
     isGroup,
@@ -391,7 +389,6 @@ export async function handleInlineActions(params: {
         sessionEntry: targetSessionEntry,
         sessionStore,
         sessionKey,
-        storePath,
       });
     }
   }
@@ -426,7 +423,6 @@ export async function handleInlineActions(params: {
       sessionKey,
       parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       sessionScope,
-      storePath,
       provider,
       model,
       contextTokens,
@@ -466,7 +462,6 @@ export async function handleInlineActions(params: {
       previousSessionEntry,
       sessionStore,
       sessionKey,
-      storePath,
       sessionScope,
       workspaceDir,
       opts,

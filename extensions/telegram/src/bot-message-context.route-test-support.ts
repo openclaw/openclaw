@@ -32,7 +32,6 @@ export const telegramRouteTestSessionRuntime: NonNullable<
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
     route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
-  resolveStorePath: () => "/tmp/openclaw/session-store.json",
 };
 
 export async function loadTelegramMessageContextRouteHarness() {

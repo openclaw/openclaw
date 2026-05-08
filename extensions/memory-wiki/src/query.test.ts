@@ -11,12 +11,12 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const {
   getActiveMemorySearchManagerMock,
-  loadCombinedSessionStoreForGatewayMock,
+  loadCombinedSessionEntriesForGatewayMock,
   resolveDefaultAgentIdMock,
   resolveSessionAgentIdMock,
 } = vi.hoisted(() => ({
   getActiveMemorySearchManagerMock: vi.fn(),
-  loadCombinedSessionStoreForGatewayMock: vi.fn(),
+  loadCombinedSessionEntriesForGatewayMock: vi.fn(),
   resolveDefaultAgentIdMock: vi.fn(() => "main"),
   resolveSessionAgentIdMock: vi.fn(({ sessionKey }: { sessionKey?: string }) =>
     sessionKey === "agent:secondary:thread" ? "secondary" : "main",
@@ -37,7 +37,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: loadCombinedSessionStoreForGatewayMock,
+    loadCombinedSessionEntriesForGateway: loadCombinedSessionEntriesForGatewayMock,
   };
 });
 
@@ -69,8 +69,8 @@ function expectFields(value: unknown, expected: Record<string, unknown>): Record
 beforeEach(() => {
   getActiveMemorySearchManagerMock.mockReset();
   getActiveMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "unavailable" });
-  loadCombinedSessionStoreForGatewayMock.mockReset();
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath: "(test)", store: {} });
+  loadCombinedSessionEntriesForGatewayMock.mockReset();
+  loadCombinedSessionEntriesForGatewayMock.mockReturnValue({ databasePath: "(test)", entries: {} });
   resolveDefaultAgentIdMock.mockClear();
   resolveSessionAgentIdMock.mockClear();
 });
@@ -118,9 +118,9 @@ function createSessionVisibilityAppConfig(): OpenClawConfig {
 }
 
 function mockSessionTranscriptStore() {
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-    storePath: "(test)",
-    store: {
+  loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
+    databasePath: "(test)",
+    entries: {
       "agent:main:child-session": {
         sessionId: "child-session",
         updatedAt: 1,

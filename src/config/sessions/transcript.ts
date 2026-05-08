@@ -1,21 +1,22 @@
-import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
-  resolveDefaultSessionStorePath,
-  resolveAgentIdFromSessionStorePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
+import { getSessionEntry, normalizeSessionRowKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
@@ -109,18 +110,16 @@ export async function resolveSessionTranscriptFile(params: {
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
   agentId: string;
   threadId?: string | number;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry | undefined }> {
   const sessionPathOpts = resolveSessionFilePathOptions({
     agentId: params.agentId,
-    storePath: params.storePath,
   });
   let sessionFile = resolveSessionFilePath(params.sessionId, params.sessionEntry, sessionPathOpts);
   let sessionEntry = params.sessionEntry;
 
-  if (params.sessionStore && params.storePath) {
+  if (params.sessionStore) {
     const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
     const fallbackSessionFile = !sessionEntry?.sessionFile
       ? resolveSessionTranscriptPath(
@@ -133,7 +132,6 @@ export async function resolveSessionTranscriptFile(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionStore: params.sessionStore,
-      storePath: params.storePath,
       sessionEntry,
       agentId: sessionPathOpts?.agentId,
       sessionsDir: sessionPathOpts?.sessionsDir,
@@ -186,8 +184,6 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
-  /** Optional override for store path (mostly for tests). */
-  storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
@@ -207,7 +203,6 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   return appendExactAssistantMessageToSessionTranscript({
     agentId: params.agentId,
     sessionKey,
-    storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
     updateMode: params.updateMode,
     config: params.config,
@@ -242,7 +237,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   message: SessionTranscriptAssistantMessage;
   idempotencyKey?: string;
-  storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
@@ -254,27 +248,24 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: "message role must be assistant" };
   }
 
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
   const agentId = normalizeAgentId(
-    params.agentId ?? resolveAgentIdFromSessionStorePath(storePath) ?? DEFAULT_AGENT_ID,
+    params.agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? DEFAULT_AGENT_ID,
   );
-  const store = loadSessionStore(storePath);
-  const normalizedKey = normalizeStoreSessionKey(sessionKey);
-  const entry = (store[normalizedKey] ?? store[sessionKey]) as SessionEntry | undefined;
+  const normalizedKey = normalizeSessionRowKey(sessionKey);
+  const entry = getSessionEntry({ agentId, sessionKey: normalizedKey });
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
+  const store: Record<string, SessionEntry> = { [normalizedKey]: entry };
 
   let sessionFile: string;
   try {
     const resolvedSessionFile = await resolveAndPersistSessionFile({
       sessionId: entry.sessionId,
-      sessionKey,
+      sessionKey: normalizedKey,
       sessionStore: store,
-      storePath,
       sessionEntry: entry,
       agentId,
-      sessionsDir: path.dirname(storePath),
     });
     sessionFile = resolvedSessionFile.sessionFile;
   } catch (err) {
@@ -291,16 +282,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     agentId,
     sessionId: entry.sessionId,
   };
-  const existingMessageId = explicitIdempotencyKey
-    ? await transcriptHasIdempotencyKey(sessionFile, explicitIdempotencyKey, transcriptScope)
-    : undefined;
-  if (existingMessageId) {
-    return {
-      ok: true,
-      sessionFile,
-      messageId: existingMessageId === true ? (explicitIdempotencyKey ?? "") : existingMessageId,
-    };
-  }
 
   const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
     ? await findLatestEquivalentAssistantMessageId(
@@ -337,44 +318,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       break;
   }
   return { ok: true, sessionFile, messageId };
-}
-
-async function transcriptHasIdempotencyKey(
-  transcriptPath: string,
-  idempotencyKey: string,
-  scope?: TranscriptQueryScope,
-): Promise<string | true | undefined> {
-  const scopedEvents = loadScopedSqliteTranscriptEvents(scope, transcriptPath);
-  if (scopedEvents) {
-    return findIdempotencyKeyInTranscriptEvents(scopedEvents, idempotencyKey);
-  }
-  return undefined;
-}
-
-function findIdempotencyKeyInTranscriptEvents(
-  events: unknown[],
-  idempotencyKey: string,
-): string | true | undefined {
-  for (const event of events) {
-    if (!event || typeof event !== "object" || Array.isArray(event)) {
-      continue;
-    }
-    const parsed = event as {
-      id?: unknown;
-      message?: { idempotencyKey?: unknown };
-    };
-    if (
-      parsed.message?.idempotencyKey === idempotencyKey &&
-      typeof parsed.id === "string" &&
-      parsed.id
-    ) {
-      return parsed.id;
-    }
-    if (parsed.message?.idempotencyKey === idempotencyKey) {
-      return true;
-    }
-  }
-  return undefined;
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {

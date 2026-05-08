@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionStore } from "../config/sessions.js";
+import { getSessionEntry } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
@@ -33,8 +33,7 @@ import {
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesAsync,
-  resolveFreshestSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionDatabaseTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
@@ -135,9 +134,16 @@ export async function handleSessionHistoryHttpRequest(
   }
   const { cfg } = authResult;
 
-  const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
-  const store = loadSessionStore(target.storePath);
-  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  const target = resolveGatewaySessionDatabaseTarget({ cfg, key: sessionKey });
+  const entry = target.storeKeys
+    .map((candidate) =>
+      getSessionEntry({
+        agentId: target.agentId,
+        sessionKey: candidate,
+      }),
+    )
+    .filter((candidate) => candidate?.sessionId)
+    .toSorted((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,
@@ -156,22 +162,17 @@ export async function handleSessionHistoryHttpRequest(
       : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
-      ? await readRecentSessionMessagesWithStatsAsync(
-          entry.sessionId,
-          target.storePath,
-          entry.sessionFile,
-          {
-            ...resolveSessionHistoryTailReadOptions(limit),
-            agentId: target.agentId,
-          },
-        )
+      ? await readRecentSessionMessagesWithStatsAsync(entry.sessionId, entry.sessionFile, {
+          ...resolveSessionHistoryTailReadOptions(limit),
+          agentId: target.agentId,
+        })
       : undefined;
   // Cursor reads still need an arbitrary historical window. The common first
   // page path is bounded above so `limit=1` cannot materialize huge transcripts.
   const rawSnapshot =
     boundedSnapshot?.messages ??
     (entry?.sessionId
-      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile, {
+      ? await readSessionMessagesAsync(entry.sessionId, entry.sessionFile, {
           agentId: target.agentId,
           mode: "full",
           reason: "session history cursor pagination",
@@ -197,12 +198,7 @@ export async function handleSessionHistoryHttpRequest(
 
   const transcriptCandidates = entry?.sessionId
     ? new Set(
-        resolveSessionTranscriptCandidates(
-          entry.sessionId,
-          target.storePath,
-          entry.sessionFile,
-          target.agentId,
-        )
+        resolveSessionTranscriptCandidates(entry.sessionId, entry.sessionFile, target.agentId)
           .map((candidate) => canonicalizePath(candidate))
           .filter((candidate): candidate is string => typeof candidate === "string"),
       )
@@ -213,7 +209,6 @@ export async function handleSessionHistoryHttpRequest(
     target: {
       agentId: target.agentId,
       sessionId: entry.sessionId,
-      storePath: target.storePath,
       sessionFile: entry.sessionFile,
     },
     rawMessages: rawSnapshot,

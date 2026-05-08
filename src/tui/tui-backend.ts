@@ -23,7 +23,7 @@ export type TuiEvent = {
 
 export type TuiSessionList = {
   ts: number;
-  path: string;
+  databasePath: string;
   count: number;
   totalCount?: number;
   limitApplied?: number;

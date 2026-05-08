@@ -15,7 +15,7 @@ export {
 export { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 export {
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionEntriesForGateway,
   loadSessionEntry,
   readSessionMessagesAsync,
   resolveSessionModelRef,

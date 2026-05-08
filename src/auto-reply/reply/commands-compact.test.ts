@@ -139,7 +139,7 @@ describe("handleCompactCommand", () => {
         ...buildCompactParams("/compact", {
           commands: { text: true },
           channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: "/tmp/openclaw-session-store.json" },
+          session: {},
         } as OpenClawConfig),
         ctx: {
           Provider: "whatsapp",
@@ -200,7 +200,11 @@ describe("handleCompactCommand", () => {
 
     await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", cfg),
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: {},
+        } as OpenClawConfig),
         agentId: "main",
         sessionKey: "agent:target:whatsapp:direct:12345",
         sessionEntry: {

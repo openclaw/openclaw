@@ -2,6 +2,10 @@ import os from "node:os";
 import path from "node:path";
 import { isMainThread, threadId } from "node:worker_threads";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  resolveOpenClawStateSqliteDir,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 
 export function resolveTaskStateDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.OPENCLAW_STATE_DIR?.trim();
@@ -22,9 +26,13 @@ export function resolveTaskStateDir(env: NodeJS.ProcessEnv = process.env): strin
 }
 
 export function resolveTaskRegistryDir(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveTaskStateDir(env), "tasks");
+  return resolveOpenClawStateSqliteDir(env);
 }
 
 export function resolveTaskRegistrySqlitePath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveTaskRegistryDir(env), "runs.sqlite");
+  return resolveOpenClawStateSqlitePath(env);
+}
+
+export function resolveLegacyTaskRegistrySqlitePath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveTaskStateDir(env), "tasks", "runs.sqlite");
 }

@@ -119,7 +119,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
 }): void {
   const emptyAcpEntry = {
     cfg: {} as never,
-    storePath: "",
+    agentId: "main",
     sessionKey: "",
     storeSessionKey: "",
     entry: undefined,
@@ -131,8 +131,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     listSessionBindingsBySession: () => params.sessionBindings ?? [],
     closeAcpSession: params.closeAcpSession,
     unbindSessionBindings: params.unbindSessionBindings,
-    loadSessionStore: () => ({}),
-    resolveStorePath: () => "",
+    getSessionEntry: () => undefined,
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
     isCronJobActive: () => false,
     getAgentRunContext: () => undefined,
@@ -227,7 +226,7 @@ function createAcpSessionStoreEntry(params: {
   } as const;
   return {
     cfg: {} as never,
-    storePath: "/tmp/openclaw-test-sessions.json",
+    agentId: "main",
     sessionKey: params.sessionKey,
     storeSessionKey: params.sessionKey,
     entry: {
@@ -2307,14 +2306,13 @@ describe("task-registry", () => {
         listAcpSessionEntries: async () => [],
         readAcpSessionEntry: () => ({
           cfg: {} as never,
-          storePath: "",
+          agentId: "main",
           sessionKey: "",
           storeSessionKey: "",
           entry: undefined,
           storeReadFailed: false,
         }),
-        loadSessionStore: () => ({}),
-        resolveStorePath: () => "",
+        getSessionEntry: () => undefined,
         parseAgentSessionKey: () => null,
         isCronJobActive: () => false,
         getAgentRunContext: () => undefined,

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AgentRuntimeCacheStore } from "./cache/agent-cache-store.js";
 import type { AgentFilesystem } from "./filesystem/agent-filesystem.js";
 
 export type AgentFilesystemMode = "disk" | "vfs-only" | "vfs-scratch";
@@ -54,6 +55,7 @@ export type AgentRunDeliveryPolicy = {
 
 export type AgentRuntimeContext = {
   filesystem: AgentFilesystem;
+  cache?: AgentRuntimeCacheStore;
   emit: (event: AgentRunEvent) => void | Promise<void>;
   signal?: AbortSignal;
   control?: AgentRuntimeControl;

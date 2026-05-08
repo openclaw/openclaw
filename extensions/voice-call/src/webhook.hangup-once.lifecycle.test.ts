@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
-import { createTestStorePath, FakeProvider } from "./manager.test-harness.js";
+import { createTestStoreKey, FakeProvider } from "./manager.test-harness.js";
 import type { WebhookContext, WebhookParseOptions } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 
@@ -52,7 +52,7 @@ async function postWebhookForm(server: VoiceCallWebhookServer, baseUrl: string, 
 
 async function runDuplicateInboundReplayLifecycleTest(provider: FakeProvider) {
   const config = createConfig();
-  const manager = new CallManager(config, createTestStorePath());
+  const manager = new CallManager(config, createTestStoreKey());
   await manager.initialize(provider, "https://example.com/voice/webhook");
   const server = new VoiceCallWebhookServer(config, manager, provider);
 

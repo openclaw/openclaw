@@ -5,7 +5,7 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { getSessionEntry, upsertSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import {
   validatePluginsUiDescriptorsParams,
@@ -84,6 +84,24 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
     expect(actual[key]).toEqual(value);
   }
   return actual;
+}
+
+const MAIN_AGENT_ID = "main";
+const MAIN_SESSION_KEY = "agent:main:main";
+
+function seedMainSession(entry: SessionEntry): void {
+  upsertSessionEntry({
+    agentId: MAIN_AGENT_ID,
+    sessionKey: MAIN_SESSION_KEY,
+    entry,
+  });
+}
+
+function readMainSession(): SessionEntry | undefined {
+  return getSessionEntry({
+    agentId: MAIN_AGENT_ID,
+    sessionKey: MAIN_SESSION_KEY,
+  });
 }
 
 describe("host-hook fixture plugin contract", () => {
@@ -702,7 +720,6 @@ describe("host-hook fixture plugin contract", () => {
 
     const row = buildGatewaySessionRow({
       cfg: config,
-      storePath: "/tmp/sessions.json",
       store: {},
       key: "agent:main:main",
       entry: {
@@ -769,7 +786,6 @@ describe("host-hook fixture plugin contract", () => {
 
     const row = buildGatewaySessionRow({
       cfg: config,
-      storePath: "/tmp/sessions.json",
       store: {},
       key: "agent:main:main",
       entry,
@@ -1017,7 +1033,6 @@ describe("host-hook fixture plugin contract", () => {
     ]);
     const row = buildGatewaySessionRow({
       cfg: config,
-      storePath: "/tmp/sessions.json",
       store: {},
       key: "agent:main:main",
       entry,
@@ -1052,25 +1067,19 @@ describe("host-hook fixture plugin contract", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-patch-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
+    const tempConfig = {};
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginExtensions: {
-                "patch-fixture": { workflow: { state: "waiting" } },
-              },
-            };
-            return undefined;
+          seedMainSession({
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            pluginExtensions: {
+              "patch-fixture": { workflow: { state: "waiting" } },
+            },
           });
 
           await expect(
@@ -1084,10 +1093,9 @@ describe("host-hook fixture plugin contract", () => {
             ok: false,
             error: "plugin session extension value is required unless unset is true",
           });
-          expect(
-            loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions?.["patch-fixture"]
-              ?.workflow,
-          ).toEqual({ state: "waiting" });
+          expect(readMainSession()?.pluginExtensions?.["patch-fixture"]?.workflow).toEqual({
+            state: "waiting",
+          });
 
           await expect(
             patchPluginSessionExtension({
@@ -1102,10 +1110,9 @@ describe("host-hook fixture plugin contract", () => {
             ok: false,
             error: "plugin session extension cannot specify both unset and value",
           });
-          expect(
-            loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions?.["patch-fixture"]
-              ?.workflow,
-          ).toEqual({ state: "waiting" });
+          expect(readMainSession()?.pluginExtensions?.["patch-fixture"]?.workflow).toEqual({
+            state: "waiting",
+          });
 
           await expect(
             patchPluginSessionExtension({
@@ -1134,7 +1141,7 @@ describe("host-hook fixture plugin contract", () => {
             key: "agent:main:main",
             value: undefined,
           });
-          expect(loadSessionStore(storePath)["agent:main:main"]?.pluginExtensions).toBeUndefined();
+          expect(readMainSession()?.pluginExtensions).toBeUndefined();
         },
       });
     } finally {
@@ -1268,22 +1275,16 @@ describe("host-hook fixture plugin contract", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-injection-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
+    const tempConfig = {};
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-            };
-            return undefined;
+          seedMainSession({
+            sessionId: "session-1",
+            updatedAt: Date.now(),
           });
           const now = Date.now();
 
@@ -1316,10 +1317,7 @@ describe("host-hook fixture plugin contract", () => {
             id: first.id,
             sessionKey: "agent:main:main",
           });
-          const stored = loadSessionStore(storePath);
-          expect(
-            stored["agent:main:main"]?.pluginNextTurnInjections?.["approval-fixture"],
-          ).toHaveLength(1);
+          expect(readMainSession()?.pluginNextTurnInjections?.["approval-fixture"]).toHaveLength(1);
         },
       });
     } finally {
@@ -1355,9 +1353,7 @@ describe("host-hook fixture plugin contract", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-stale-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
     const tempConfig = {
-      session: { store: storePath },
       plugins: {
         entries: {
           "policy-blocked-injector": {
@@ -1372,41 +1368,38 @@ describe("host-hook fixture plugin contract", () => {
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginNextTurnInjections: {
-                "active-injector": [
-                  {
-                    id: "active",
-                    pluginId: "active-injector",
-                    text: "active prompt contribution",
-                    placement: "append_context",
-                    createdAt: 1,
-                  },
-                ],
-                "disabled-injector": [
-                  {
-                    id: "stale",
-                    pluginId: "disabled-injector",
-                    text: "stale prompt contribution",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-                "policy-blocked-injector": [
-                  {
-                    id: "policy-blocked",
-                    pluginId: "policy-blocked-injector",
-                    text: "policy blocked prompt contribution",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-              },
-            };
-            return undefined;
+          seedMainSession({
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            pluginNextTurnInjections: {
+              "active-injector": [
+                {
+                  id: "active",
+                  pluginId: "active-injector",
+                  text: "active prompt contribution",
+                  placement: "append_context",
+                  createdAt: 1,
+                },
+              ],
+              "disabled-injector": [
+                {
+                  id: "stale",
+                  pluginId: "disabled-injector",
+                  text: "stale prompt contribution",
+                  placement: "prepend_context",
+                  createdAt: 1,
+                },
+              ],
+              "policy-blocked-injector": [
+                {
+                  id: "policy-blocked",
+                  pluginId: "policy-blocked-injector",
+                  text: "policy blocked prompt contribution",
+                  placement: "prepend_context",
+                  createdAt: 1,
+                },
+              ],
+            },
           });
 
           const drained = await drainPluginNextTurnInjections({
@@ -1420,8 +1413,7 @@ describe("host-hook fixture plugin contract", () => {
             pluginId: "active-injector",
             text: "active prompt contribution",
           });
-          const stored = loadSessionStore(storePath);
-          expect(stored["agent:main:main"]?.pluginNextTurnInjections).toBeUndefined();
+          expect(readMainSession()?.pluginNextTurnInjections).toBeUndefined();
         },
       });
     } finally {
@@ -1452,49 +1444,43 @@ describe("host-hook fixture plugin contract", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-order-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
+    const tempConfig = {};
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginNextTurnInjections: {
-                "injector-a": [
-                  {
-                    id: "a1",
-                    pluginId: "injector-a",
-                    text: "first",
-                    placement: "append_context",
-                    createdAt: 1,
-                  },
-                  {
-                    id: "a2",
-                    pluginId: "injector-a",
-                    text: "third",
-                    placement: "append_context",
-                    createdAt: 3,
-                  },
-                ],
-                "injector-b": [
-                  {
-                    id: "b1",
-                    pluginId: "injector-b",
-                    text: "second",
-                    placement: "append_context",
-                    createdAt: 2,
-                  },
-                ],
-              },
-            };
-            return undefined;
+          seedMainSession({
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            pluginNextTurnInjections: {
+              "injector-a": [
+                {
+                  id: "a1",
+                  pluginId: "injector-a",
+                  text: "first",
+                  placement: "append_context",
+                  createdAt: 1,
+                },
+                {
+                  id: "a2",
+                  pluginId: "injector-a",
+                  text: "third",
+                  placement: "append_context",
+                  createdAt: 3,
+                },
+              ],
+              "injector-b": [
+                {
+                  id: "b1",
+                  pluginId: "injector-b",
+                  text: "second",
+                  placement: "append_context",
+                  createdAt: 2,
+                },
+              ],
+            },
           });
 
           const drained = await drainPluginNextTurnInjections({
@@ -2030,9 +2016,7 @@ describe("host-hook fixture plugin contract", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-state-"),
     );
-    const tempConfig = {
-      session: { store: path.join(stateDir, "sessions.json") },
-    };
+    const tempConfig = {};
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -2399,62 +2383,30 @@ describe("host-hook fixture plugin contract", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-store-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
+    const tempConfig = {};
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginExtensions: {
-                "cleanup-fixture": { workflow: { state: "waiting" } },
-                "other-plugin": { workflow: { state: "keep" } },
-              },
-              pluginNextTurnInjections: {
-                "cleanup-fixture": [
-                  {
-                    id: "resume",
-                    pluginId: "cleanup-fixture",
-                    text: "resume",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-                "other-plugin": [
-                  {
-                    id: "keep",
-                    pluginId: "other-plugin",
-                    text: "keep",
-                    placement: "append_context",
-                    createdAt: 1,
-                  },
-                ],
-              },
-            };
-            return undefined;
-          });
-
-          const cleanupResult = await runPluginHostCleanup({
-            cfg: tempConfig,
-            registry: registry.registry,
-            pluginId: "cleanup-fixture",
-            reason: "disable",
-          });
-          expect(cleanupResult.failures).toEqual([]);
-
-          const stored = loadSessionStore(storePath);
-          expectRecordFields(stored["agent:main:main"], {
+          seedMainSession({
+            sessionId: "session-1",
+            updatedAt: Date.now(),
             pluginExtensions: {
+              "cleanup-fixture": { workflow: { state: "waiting" } },
               "other-plugin": { workflow: { state: "keep" } },
             },
             pluginNextTurnInjections: {
+              "cleanup-fixture": [
+                {
+                  id: "resume",
+                  pluginId: "cleanup-fixture",
+                  text: "resume",
+                  placement: "prepend_context",
+                  createdAt: 1,
+                },
+              ],
               "other-plugin": [
                 {
                   id: "keep",
@@ -2466,6 +2418,33 @@ describe("host-hook fixture plugin contract", () => {
               ],
             },
           });
+
+          const cleanupResult = await runPluginHostCleanup({
+            cfg: tempConfig,
+            registry: registry.registry,
+            pluginId: "cleanup-fixture",
+            reason: "disable",
+          });
+          expect(cleanupResult.failures).toEqual([]);
+
+          expect(readMainSession()).toEqual(
+            expect.objectContaining({
+              pluginExtensions: {
+                "other-plugin": { workflow: { state: "keep" } },
+              },
+              pluginNextTurnInjections: {
+                "other-plugin": [
+                  {
+                    id: "keep",
+                    pluginId: "other-plugin",
+                    text: "keep",
+                    placement: "append_context",
+                    createdAt: 1,
+                  },
+                ],
+              },
+            }),
+          );
         },
       });
     } finally {
@@ -2496,9 +2475,7 @@ describe("host-hook fixture plugin contract", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-run-context-"),
     );
-    const tempConfig = {
-      session: { store: path.join(stateDir, "sessions.json") },
-    };
+    const tempConfig = {};
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -2556,36 +2533,30 @@ describe("host-hook fixture plugin contract", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-restart-state-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
+    const tempConfig = {};
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginExtensions: {
-                "restart-state-fixture": { workflow: { state: "waiting" } },
-              },
-              pluginNextTurnInjections: {
-                "restart-state-fixture": [
-                  {
-                    id: "resume",
-                    pluginId: "restart-state-fixture",
-                    text: "resume",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-              },
-            };
-            return undefined;
+          seedMainSession({
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            pluginExtensions: {
+              "restart-state-fixture": { workflow: { state: "waiting" } },
+            },
+            pluginNextTurnInjections: {
+              "restart-state-fixture": [
+                {
+                  id: "resume",
+                  pluginId: "restart-state-fixture",
+                  text: "resume",
+                  placement: "prepend_context",
+                  createdAt: 1,
+                },
+              ],
+            },
           });
 
           const cleanupResult = await runPluginHostCleanup({
@@ -2596,11 +2567,11 @@ describe("host-hook fixture plugin contract", () => {
           });
           expect(cleanupResult.failures).toEqual([]);
 
-          const stored = loadSessionStore(storePath);
-          expect(stored["agent:main:main"]?.pluginExtensions).toEqual({
+          const stored = readMainSession();
+          expect(stored?.pluginExtensions).toEqual({
             "restart-state-fixture": { workflow: { state: "waiting" } },
           });
-          expect(stored["agent:main:main"]?.pluginNextTurnInjections).toEqual({
+          expect(stored?.pluginNextTurnInjections).toEqual({
             "restart-state-fixture": [
               {
                 id: "resume",
@@ -2635,33 +2606,27 @@ describe("host-hook fixture plugin contract", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-injection-only-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = {
-      session: { store: storePath },
-    };
+    const tempConfig = {};
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
-            store["agent:main:main"] = {
-              sessionId: "session-1",
-              updatedAt: Date.now(),
-              pluginNextTurnInjections: {
-                "injection-only-fixture": [
-                  {
-                    id: "resume",
-                    pluginId: "injection-only-fixture",
-                    text: "resume",
-                    placement: "prepend_context",
-                    createdAt: 1,
-                  },
-                ],
-              },
-            };
-            return undefined;
+          seedMainSession({
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            pluginNextTurnInjections: {
+              "injection-only-fixture": [
+                {
+                  id: "resume",
+                  pluginId: "injection-only-fixture",
+                  text: "resume",
+                  placement: "prepend_context",
+                  createdAt: 1,
+                },
+              ],
+            },
           });
 
           const cleanupResult = await cleanupReplacedPluginHostRegistry({
@@ -2671,8 +2636,7 @@ describe("host-hook fixture plugin contract", () => {
           });
           expect(cleanupResult.failures).toEqual([]);
 
-          const stored = loadSessionStore(storePath);
-          expect(stored["agent:main:main"]?.pluginNextTurnInjections).toBeUndefined();
+          expect(readMainSession()?.pluginNextTurnInjections).toBeUndefined();
         },
       });
     } finally {

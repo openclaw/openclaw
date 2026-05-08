@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
@@ -258,11 +259,11 @@ describe("gateway server models + voicewake", () => {
         expect(after.ok).toBe(true);
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
-        const onDisk = JSON.parse(
-          await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
-        ) as { triggers?: unknown; updatedAtMs?: unknown };
-        expect(onDisk.triggers).toEqual(["hi", "there"]);
-        expect(typeof onDisk.updatedAtMs).toBe("number");
+        const persisted = readOpenClawStateKvJson("voicewake", "triggers", {
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw") },
+        }) as { triggers?: unknown; updatedAtMs?: unknown } | undefined;
+        expect(persisted?.triggers).toEqual(["hi", "there"]);
+        expect(typeof persisted?.updatedAtMs).toBe("number");
       });
     },
   );
@@ -358,13 +359,10 @@ describe("gateway server models + voicewake", () => {
         { trigger: "robot wake", target: { agentId: "main" } },
       ]);
 
-      const onDisk = JSON.parse(
-        await fs.readFile(
-          path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"),
-          "utf8",
-        ),
-      ) as { routes?: unknown };
-      expect(onDisk.routes).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
+      const persisted = readOpenClawStateKvJson("voicewake", "routing", {
+        env: { ...process.env, OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw") },
+      }) as { routes?: unknown } | undefined;
+      expect(persisted?.routes).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
 
       const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
       expect(invalid.ok).toBe(false);

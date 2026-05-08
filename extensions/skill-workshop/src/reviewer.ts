@@ -243,18 +243,24 @@ export async function reviewTranscriptForProposal(params: {
     messages: params.messages,
   });
   const sessionId = `skill-workshop-review-${randomUUID()}`;
-  const stateDir = params.api.runtime.state.resolveStateDir();
   const fallbackModel = resolveReviewerFallbackModel({
     api: params.api,
     agentId: params.ctx.agentId,
   });
+  const sessionFile = params.api.runtime.agent.session.resolveSessionFilePath(
+    sessionId,
+    undefined,
+    {
+      agentId: params.ctx.agentId,
+    },
+  );
   const result = await params.api.runtime.agent.runEmbeddedPiAgent({
     sessionId,
     sessionKey: params.ctx.sessionKey,
     agentId: params.ctx.agentId,
     messageProvider: params.ctx.messageProvider,
     messageChannel: params.ctx.channelId,
-    sessionFile: path.join(stateDir, "skill-workshop", `${sessionId}.json`),
+    sessionFile,
     workspaceDir: params.ctx.workspaceDir,
     agentDir: params.api.runtime.agent.resolveAgentDir(params.api.config, params.ctx.agentId),
     config: params.api.config,

@@ -27,8 +27,6 @@ vi.mock("../cli/deps.js", () => ({
 
 vi.mock("../config/sessions.js", () => ({
   resolveAgentMainSessionKey: () => "agent:main:main",
-  resolveStorePath: () => "/tmp/openclaw-sessions.json",
-  updateSessionStore: vi.fn(),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -74,20 +72,19 @@ vi.mock("../gateway/server-methods/chat.js", () => ({
 vi.mock("../gateway/session-utils.js", () => ({
   listAgentsForGateway: () => [],
   listSessionsFromStoreAsync: async () => ({ sessions: [] }),
-  loadCombinedSessionStoreForGateway: () => ({
-    storePath: "/tmp/openclaw-sessions.json",
-    store: {},
+  loadCombinedSessionEntriesForGateway: () => ({
+    databasePath: "/tmp/openclaw-agent.sqlite",
+    entries: {},
   }),
   loadSessionEntry: (sessionKey: string) => ({
     cfg: {},
     canonicalKey: sessionKey,
     entry: {},
   }),
-  migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
   readSessionMessagesAsync: async () => [],
-  resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
+  resolveGatewaySessionDatabaseTarget: ({ key }: { key: string }) => ({
     canonicalKey: key,
-    storePath: "/tmp/openclaw-sessions.json",
+    databasePath: "/tmp/openclaw-agent.sqlite",
   }),
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
 }));

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { CronService } from "./service.js";
 import {
   createNoopLogger,
@@ -14,7 +15,7 @@ const noopLogger = createNoopLogger();
 installCronTestHooks({ logger: noopLogger });
 
 async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-load-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-row-store-"));
   return {
     dir,
     storePath: path.join(dir, "cron", "jobs.json"),
@@ -23,8 +24,16 @@ async function makeStorePath() {
 
 describe("CronService store load", () => {
   let tempDir: string | null = null;
+  let originalOpenClawStateDir: string | undefined;
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    if (originalOpenClawStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+    }
+    originalOpenClawStateDir = undefined;
     if (!tempDir) {
       return;
     }
@@ -35,6 +44,8 @@ describe("CronService store load", () => {
   it("skips invalid main jobs with agentTurn payloads loaded from disk", async () => {
     const { dir, storePath } = await makeStorePath();
     tempDir = dir;
+    originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(dir, "state");
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
 

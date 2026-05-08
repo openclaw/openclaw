@@ -58,34 +58,4 @@ enum SessionActions {
         alert.runModal()
     }
 
-    @MainActor
-    static func openSessionLogInCode(sessionId: String, storePath: String?) {
-        let candidates: [URL] = {
-            var urls: [URL] = []
-            if let storePath, !storePath.isEmpty {
-                let dir = URL(fileURLWithPath: storePath).deletingLastPathComponent()
-                urls.append(dir.appendingPathComponent("\(sessionId).jsonl"))
-            }
-            urls.append(OpenClawPaths.stateDirURL.appendingPathComponent("sessions/\(sessionId).jsonl"))
-            return urls
-        }()
-
-        let existing = candidates.first(where: { FileManager().fileExists(atPath: $0.path) })
-        guard let url = existing else {
-            let alert = NSAlert()
-            alert.messageText = "Session log not found"
-            alert.informativeText = sessionId
-            alert.runModal()
-            return
-        }
-
-        let proc = Process()
-        proc.launchPath = "/usr/bin/env"
-        proc.arguments = ["code", url.path]
-        if (try? proc.run()) != nil {
-            return
-        }
-
-        NSWorkspace.shared.activateFileViewerSelecting([url])
-    }
 }

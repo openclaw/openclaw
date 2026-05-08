@@ -5,7 +5,12 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions.js";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  type SessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions.js";
 import {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
@@ -35,10 +40,9 @@ import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
 import {
   listAgentsForGateway,
   listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionEntriesForGateway,
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionDatabaseTarget,
   resolveSessionModelRef,
   readSessionMessagesAsync,
 } from "../gateway/session-utils.js";
@@ -196,21 +200,20 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async loadHistory(opts: { sessionKey: string; limit?: number }) {
-    const { cfg, storePath, entry } = loadSessionEntry(opts.sessionKey);
+    const { cfg, entry } = loadSessionEntry(opts.sessionKey);
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey: opts.sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-    const localMessages =
-      sessionId && storePath
-        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            agentId: sessionAgentId,
-            mode: "recent",
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-          })
-        : [];
+    const localMessages = sessionId
+      ? await readSessionMessagesAsync(sessionId, entry?.sessionFile, {
+          agentId: sessionAgentId,
+          mode: "recent",
+          maxMessages: max,
+          maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+        })
+      : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
@@ -255,10 +258,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     const cfg = getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    const { databasePath, entries: store } = loadCombinedSessionEntriesForGateway(cfg);
     return (await listSessionsFromStoreAsync({
       cfg,
-      storePath,
+      databasePath,
       store,
       opts: opts ?? {},
     })) as TuiSessionList;
@@ -272,24 +275,35 @@ export class EmbeddedTuiBackend implements TuiBackend {
     opts: Parameters<TuiBackend["patchSession"]>[0],
   ): Promise<SessionsPatchResult> {
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: opts.key });
-    const applied = await updateSessionStore(target.storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key: opts.key,
-        store,
-      });
-      return await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        patch: opts,
-        loadGatewayModelCatalog,
-      });
+    const target = resolveGatewaySessionDatabaseTarget({ cfg, key: opts.key });
+    const store = Object.fromEntries(
+      listSessionEntries({ agentId: target.agentId }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
+    ) as Record<string, SessionEntry>;
+    const freshest = target.storeKeys
+      .map((storeKey) => getSessionEntry({ agentId: target.agentId, sessionKey: storeKey }))
+      .filter((entry): entry is SessionEntry => Boolean(entry))
+      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+    if (freshest) {
+      store[target.canonicalKey] = freshest;
+    }
+    const applied = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: target.canonicalKey,
+      patch: opts,
+      loadGatewayModelCatalog,
     });
     if (!applied.ok) {
       throw new Error(applied.error.message);
     }
+    upsertSessionEntry({
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+      entry: applied.entry,
+    });
 
     const agentId = resolveSessionAgentId({
       sessionKey: target.canonicalKey ?? opts.key,
@@ -298,7 +312,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
     return {
       ok: true as const,
-      path: target.storePath,
+      databasePath: target.databasePath,
       key: target.canonicalKey ?? opts.key,
       entry: applied.entry,
       resolved: {

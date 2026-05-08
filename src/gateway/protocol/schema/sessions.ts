@@ -40,43 +40,26 @@ export const SessionsListParamsSchema = Type.Object(
   {
     /**
      * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
-     * to keep large session stores from monopolizing the event loop.
+     * to keep large session row sets from monopolizing the event loop.
      */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
     /**
-     * Limit returned agent-scoped rows to agents currently present in config.
-     * Broad disk discovery remains the default for recovery/ACP consumers.
-     */
-    configuredAgentsOnly: Type.Optional(Type.Boolean()),
-    /**
-     * Read first 8KB of each session transcript to derive title from first user message.
-     * Performs a file read per session - use `limit` to bound result set on large stores.
+     * Read the first transcript rows to derive a title from the first user message.
+     * Use `limit` to bound result set on large stores.
      */
     includeDerivedTitles: Type.Optional(Type.Boolean()),
     /**
-     * Read last 16KB of each session transcript to extract most recent message preview.
-     * Performs a file read per session - use `limit` to bound result set on large stores.
+     * Read the latest transcript rows to extract the most recent message preview.
+     * Use `limit` to bound result set on large stores.
      */
     includeLastMessage: Type.Optional(Type.Boolean()),
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const SessionsCleanupParamsSchema = Type.Object(
-  {
-    agent: Type.Optional(NonEmptyString),
-    allAgents: Type.Optional(Type.Boolean()),
-    enforce: Type.Optional(Type.Boolean()),
-    activeKey: Type.Optional(NonEmptyString),
-    fixMissing: Type.Optional(Type.Boolean()),
-    fixDmScope: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

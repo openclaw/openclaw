@@ -108,7 +108,6 @@ export function handleCompactionEnd(ctx: EmbeddedPiSubscribeContext, evt: Compac
     void reconcileSessionStoreCompactionCountAfterSuccess({
       sessionKey: ctx.params.sessionKey,
       agentId: ctx.params.agentId,
-      configStore: ctx.params.config?.session?.store,
       observedCompactionCount,
     }).catch((err) => {
       ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
@@ -169,7 +168,6 @@ export function handleCompactionEnd(ctx: EmbeddedPiSubscribeContext, evt: Compac
 export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
-  configStore?: string;
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {

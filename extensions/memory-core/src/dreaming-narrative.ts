@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
@@ -11,14 +10,7 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { pathExists, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import {
-  loadSessionStore,
-  resolveStorePath,
-  updateSessionStore,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -97,8 +89,6 @@ const NARRATIVE_SYSTEM_PROMPT = [
 // worst case at one minute, well below the multi-minute stall the original
 // comment warned against.
 const NARRATIVE_TIMEOUT_MS = 60_000;
-const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
-const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
@@ -695,128 +685,6 @@ export async function appendNarrativeEntry(params: {
 
 // ── Orchestrator ───────────────────────────────────────────────────────
 
-function normalizeComparablePath(pathname: string): string {
-  return process.platform === "win32" ? pathname.toLowerCase() : pathname;
-}
-
-async function normalizeSessionFileForComparison(params: {
-  sessionsDir: string;
-  sessionFile: string;
-}): Promise<string | null> {
-  const trimmed = params.sessionFile.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(params.sessionsDir, trimmed);
-  try {
-    return normalizeComparablePath(await fs.realpath(resolved));
-  } catch {
-    return normalizeComparablePath(path.resolve(resolved));
-  }
-}
-
-function isDreamingSessionStoreKey(sessionKey: string): boolean {
-  const firstSeparator = sessionKey.indexOf(":");
-  if (firstSeparator < 0) {
-    return sessionKey.startsWith(DREAMING_SESSION_KEY_PREFIX);
-  }
-  const secondSeparator = sessionKey.indexOf(":", firstSeparator + 1);
-  const sessionSegment = secondSeparator < 0 ? sessionKey : sessionKey.slice(secondSeparator + 1);
-  return sessionSegment.startsWith(DREAMING_SESSION_KEY_PREFIX);
-}
-
-async function normalizeSessionEntryPathForComparison(params: {
-  sessionsDir: string;
-  entry: { sessionFile?: string; sessionId?: string } | undefined;
-}): Promise<string | null> {
-  const sessionFile = typeof params.entry?.sessionFile === "string" ? params.entry.sessionFile : "";
-  if (sessionFile) {
-    return normalizeSessionFileForComparison({
-      sessionsDir: params.sessionsDir,
-      sessionFile,
-    });
-  }
-  const sessionId =
-    typeof params.entry?.sessionId === "string" ? params.entry.sessionId.trim() : "";
-  if (!SAFE_SESSION_ID_RE.test(sessionId)) {
-    return null;
-  }
-  return normalizeSessionFileForComparison({
-    sessionsDir: params.sessionsDir,
-    sessionFile: `${sessionId}.jsonl`,
-  });
-}
-
-async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
-  const cfg = getRuntimeConfig();
-  const agentsDir = path.join(resolveStateDir(), "agents");
-  let agentEntries: Dirent[] = [];
-  try {
-    agentEntries = await fs.readdir(agentsDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  let prunedEntries = 0;
-  for (const agentEntry of agentEntries) {
-    if (!agentEntry.isDirectory()) {
-      continue;
-    }
-
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: agentEntry.name });
-    const sessionsDir = path.dirname(storePath);
-    let store: Record<string, { sessionFile?: string; sessionId?: string } | undefined>;
-    try {
-      store = loadSessionStore(storePath) as Record<
-        string,
-        { sessionFile?: string; sessionId?: string } | undefined
-      >;
-    } catch {
-      continue;
-    }
-
-    let needsStoreUpdate = false;
-    for (const [key, entry] of Object.entries(store)) {
-      const normalizedSessionFile = await normalizeSessionEntryPathForComparison({
-        sessionsDir,
-        entry,
-      });
-      if (!isDreamingSessionStoreKey(key)) {
-        continue;
-      }
-      if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
-        needsStoreUpdate = true;
-      }
-    }
-
-    if (needsStoreUpdate) {
-      prunedEntries += await updateSessionStore(storePath, async (lockedStore) => {
-        let prunedForAgent = 0;
-        for (const [key, entry] of Object.entries(lockedStore)) {
-          const normalizedSessionFile = await normalizeSessionEntryPathForComparison({
-            sessionsDir,
-            entry,
-          });
-          if (!isDreamingSessionStoreKey(key)) {
-            continue;
-          }
-          if (!normalizedSessionFile || !(await pathExists(normalizedSessionFile))) {
-            delete lockedStore[key];
-            prunedForAgent += 1;
-          }
-        }
-        return prunedForAgent;
-      });
-    }
-  }
-
-  if (prunedEntries > 0) {
-    logger.info(
-      `memory-core: dreaming cleanup scrubbed ${prunedEntries} stale session entr${prunedEntries === 1 ? "y" : "ies"}.`,
-    );
-  }
-}
-
 export async function generateAndAppendDreamNarrative(params: {
   subagent: SubagentSurface;
   workspaceDir: string;
@@ -956,12 +824,6 @@ export async function generateAndAppendDreamNarrative(params: {
         );
       }
     }
-
-    await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
-      params.logger.warn(
-        `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${formatErrorMessage(scrubErr)}`,
-      );
-    });
   }
 }
 

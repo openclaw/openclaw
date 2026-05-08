@@ -1,14 +1,7 @@
-import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-} from "../../gateway/session-store-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
-import { getRuntimeConfig } from "../io.js";
-import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveStorePath } from "./paths.js";
-import { loadSessionStore } from "./store.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
+import { getSessionEntry } from "./store.js";
+export { parseSessionThreadInfo } from "./thread-info.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 export { parseSessionThreadInfo };
@@ -45,12 +38,11 @@ export function extractDeliveryInfo(
     | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
     | undefined;
   try {
-    const cfg = options?.cfg ?? getRuntimeConfig();
-    const lookup = loadDeliverySessionEntry({ cfg, sessionKey, baseSessionKey });
-    let entry = lookup.entry;
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    let entry = getSessionEntry({ agentId, sessionKey });
     let storedDeliveryContext = deliveryContextFromSession(entry);
     if (!hasRoutableDeliveryContext(storedDeliveryContext) && baseSessionKey !== sessionKey) {
-      entry = lookup.baseEntry;
+      entry = getSessionEntry({ agentId, sessionKey: baseSessionKey });
       storedDeliveryContext = deliveryContextFromSession(entry);
     }
     if (hasRoutableDeliveryContext(storedDeliveryContext)) {

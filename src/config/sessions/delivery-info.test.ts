@@ -8,25 +8,8 @@ const storeState = vi.hoisted(() => ({
   stores: {} as Record<string, Record<string, SessionEntry>>,
 }));
 
-vi.mock("../io.js", () => ({
-  getRuntimeConfig: () => ({}),
-}));
-
-vi.mock("./paths.js", () => ({
-  resolveStorePath: (_store?: string, opts?: { agentId?: string }) =>
-    opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
-}));
-
 vi.mock("./store.js", () => ({
-  loadSessionStore: (storePath: string) => storeState.stores[storePath] ?? storeState.store,
-}));
-
-vi.mock("./targets.js", () => ({
-  resolveAllAgentSessionStoreTargetsSync: () => [
-    { agentId: "main", storePath: "/tmp/sessions.json" },
-    { agentId: "shadow", storePath: "/tmp/shadow-sessions.json" },
-    { agentId: "worker", storePath: "/tmp/worker-sessions.json" },
-  ],
+  getSessionEntry: ({ sessionKey }: { sessionKey: string }) => storeState.store[sessionKey],
 }));
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;

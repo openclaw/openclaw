@@ -363,12 +363,16 @@ Explicit tool parameters override these defaults.
 
 ## Artifact lifecycle and storage
 
-- Artifacts are stored under the temp subfolder: `$TMPDIR/openclaw-diffs`.
+- Viewer HTML and viewer metadata are stored in SQLite plugin blob state under
+  the `diffs` / `artifacts` namespace.
+- Rendered PNG/PDF outputs are materialized under the temp subfolder
+  `$TMPDIR/openclaw-diffs` because message delivery still needs a real file
+  path.
 - Viewer artifact metadata contains:
   - random artifact ID (20 hex chars)
   - random token (48 hex chars)
   - `createdAt` and `expiresAt`
-  - stored `viewer.html` path
+  - SQLite-backed viewer HTML reference
 - Default artifact TTL is 30 minutes when not specified.
 - Maximum accepted viewer TTL is 6 hours.
 - Cleanup runs opportunistically after artifact creation.

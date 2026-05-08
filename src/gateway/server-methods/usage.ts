@@ -47,7 +47,7 @@ import {
 } from "../protocol/index.js";
 import {
   listAgentsForGateway,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionEntriesForGateway,
   loadSessionEntry,
 } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -121,16 +121,16 @@ function resolveSessionUsageFileOrRespond(
   sessionId: string;
   sessionFile: string;
 } | null {
-  const { entry, storePath } = loadSessionEntry(key);
+  const { entry, agentId: loadedAgentId } = loadSessionEntry(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
   const parsed = parseAgentSessionKey(key);
-  const agentId = parsed?.agentId;
+  const agentId = parsed?.agentId ?? loadedAgentId;
   const rawSessionId = parsed?.rest ?? key;
   const sessionId = entry?.sessionId ?? rawSessionId;
   let sessionFile: string;
   try {
-    const pathOpts = resolveSessionFilePathOptions({ storePath, agentId });
+    const pathOpts = resolveSessionFilePathOptions({ agentId });
     sessionFile = resolveSessionFilePath(sessionId, entry, pathOpts);
   } catch {
     respond(
@@ -853,8 +853,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
-    // Load session store for named sessions
-    const { storePath, store } = loadCombinedSessionStoreForGateway(config);
+    // Load SQLite session rows for named sessions.
+    const { entries: store } = loadCombinedSessionEntriesForGateway(config);
     const now = Date.now();
 
     const mergedEntries: MergedEntry[] = [];
@@ -875,20 +875,21 @@ export const usageHandlers: GatewayRequestHandlers = {
       const storeByIdMatch = storeBySessionId.get(keyRest) ?? null;
       const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? specificKey;
       const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
+      const storeAgentId = parseAgentSessionKey(resolvedStoreKey)?.agentId;
+      const agentId = agentIdFromKey ?? storeAgentId;
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
       // Resolve the session file path
       let sessionFile: string | undefined;
       try {
         const pathOpts = resolveSessionFilePathOptions({
-          storePath: storePath !== "(multiple)" ? storePath : undefined,
-          agentId: agentIdFromKey,
+          agentId,
         });
         sessionFile = resolveExistingUsageSessionFile({
           sessionId,
           sessionEntry: storeEntry,
           sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
-          agentId: agentIdFromKey,
+          agentId,
         });
       } catch {
         respond(
@@ -901,7 +902,7 @@ export const usageHandlers: GatewayRequestHandlers = {
 
       if (sessionFile) {
         const transcriptUpdatedAt = readSessionTranscriptUpdatedAt({
-          agentId: agentIdFromKey,
+          agentId,
           sessionId,
           sessionFile,
         });

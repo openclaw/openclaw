@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -127,7 +126,7 @@ function resolveSafeCliSessionFile(params: {
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-}): { sessionFile: string; sessionsDir: string } {
+}): { sessionFile: string } {
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -135,17 +134,13 @@ function resolveSafeCliSessionFile(params: {
   });
   const pathOptions = resolveSessionFilePathOptions({
     agentId: sessionAgentId ?? defaultAgentId,
-    storePath: params.config?.session?.store,
   });
   const sessionFile = resolveSessionFilePath(
     params.sessionId,
     { sessionFile: params.sessionFile },
     pathOptions,
   );
-  return {
-    sessionFile,
-    sessionsDir: pathOptions?.sessionsDir ?? path.dirname(sessionFile),
-  };
+  return { sessionFile };
 }
 
 async function loadCliSessionEntries(params: {

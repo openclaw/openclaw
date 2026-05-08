@@ -5,14 +5,11 @@ import {
   type NormalizedUsage,
 } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import {
-  type SessionSystemPromptReport,
-  type SessionEntry,
-  updateSessionStoreEntry,
-} from "../../config/sessions.js";
+import { type SessionSystemPromptReport, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { writeSessionEntryRow } from "./session-row-patch.js";
 
 function applyCliSessionIdToSessionPatch(
   params: {
@@ -69,7 +66,6 @@ function estimateSessionRunCostUsd(params: {
 }
 
 export async function persistSessionUsageUpdate(params: {
-  storePath?: string;
   sessionKey?: string;
   cfg?: OpenClawConfig;
   usage?: NormalizedUsage;
@@ -90,8 +86,8 @@ export async function persistSessionUsageUpdate(params: {
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
   logLabel?: string;
 }): Promise<void> {
-  const { storePath, sessionKey } = params;
-  if (!storePath || !sessionKey) {
+  const { sessionKey } = params;
+  if (!sessionKey) {
     return;
   }
 
@@ -107,8 +103,7 @@ export async function persistSessionUsageUpdate(params: {
 
   if (hasUsage || hasFreshContextSnapshot) {
     try {
-      await updateSessionStoreEntry({
-        storePath,
+      await writeSessionEntryRow({
         sessionKey,
         update: async (entry) => {
           const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
@@ -169,8 +164,7 @@ export async function persistSessionUsageUpdate(params: {
 
   if (params.modelUsed || params.contextTokensUsed) {
     try {
-      await updateSessionStoreEntry({
-        storePath,
+      await writeSessionEntryRow({
         sessionKey,
         update: async (entry) => {
           const patch: Partial<SessionEntry> = {

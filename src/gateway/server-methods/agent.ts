@@ -42,7 +42,7 @@ import {
   resolveSessionResetPolicy,
   resolveSessionResetType,
   type SessionEntry,
-  updateSessionStore,
+  upsertSessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -122,7 +122,6 @@ import {
   canonicalizeSpawnedByForAgent,
   loadGatewaySessionRow,
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -960,7 +959,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (requestedSessionKey) {
-      const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
+      const {
+        cfg,
+        entry,
+        canonicalKey,
+        agentId: sessionAgentId,
+      } = loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
       const now = Date.now();
       const resetPolicy = resolveSessionResetPolicy({
@@ -976,7 +980,6 @@ export const agentHandlers: GatewayRequestHandlers = {
             updatedAt: entry.updatedAt,
             ...resolveSessionLifecycleTimestamps({
               entry,
-              storePath,
               agentId: resolveAgentIdFromSessionKey(canonicalKey),
             }),
             now,
@@ -1084,7 +1087,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           : (entry?.sessionStartedAt ??
             resolveSessionLifecycleTimestamps({
               entry,
-              storePath,
               agentId: resolveAgentIdFromSessionKey(canonicalKey),
             }).sessionStartedAt),
         lastInteractionAt: touchInteraction ? now : entry?.lastInteractionAt,
@@ -1141,19 +1143,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedSessionKey = canonicalSessionKey;
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-      if (storePath) {
-        const persisted = await updateSessionStore(storePath, (store) => {
-          const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-            cfg,
-            key: requestedSessionKey,
-            store,
-          });
-          const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
-          store[primaryKey] = merged;
-          return merged;
-        });
-        sessionEntry = persisted;
-      }
+      const persisted = mergeSessionEntry(entry, nextEntryPatch);
+      upsertSessionEntry({
+        agentId: sessionAgentId,
+        sessionKey: canonicalSessionKey,
+        entry: persisted,
+      });
+      sessionEntry = persisted;
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
         context.addChatRun(idem, {
           sessionKey: canonicalSessionKey,

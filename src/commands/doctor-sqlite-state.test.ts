@@ -7,6 +7,17 @@ import { loadDeviceAuthStore } from "../infra/device-auth-store.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { loadApnsRegistration } from "../infra/push-apns.js";
 import { listWebPushSubscriptions } from "../infra/push-web.js";
+import { readMediaBuffer } from "../media/store.js";
+import {
+  MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
+  MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
+  MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
+  MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
+  MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+  MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
+  readDreamingWorkspaceMap,
+  readDreamingWorkspaceValue,
+} from "../memory-host-sdk/dreaming-state-store.js";
 import { listChannelPairingRequests, readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -204,6 +215,9 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           })}\n`,
           "utf8",
         );
+        const legacyMediaDir = path.join(stateDir, "media", "inbound");
+        await fs.mkdir(legacyMediaDir, { recursive: true });
+        await fs.writeFile(path.join(legacyMediaDir, "legacy-media.txt"), "legacy media", "utf8");
         await fs.mkdir(path.join(stateDir, "subagents"), { recursive: true });
         await fs.writeFile(
           path.join(stateDir, "subagents", "runs.json"),
@@ -236,6 +250,24 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           })}\n`,
           "utf8",
         );
+        await fs.mkdir(path.join(stateDir, "settings"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "settings", "voicewake.json"),
+          `${JSON.stringify({
+            triggers: ["  wake ", ""],
+            updatedAtMs: 11,
+          })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "settings", "voicewake-routing.json"),
+          `${JSON.stringify({
+            defaultTarget: { mode: "current" },
+            routes: [{ trigger: "  Robot   Wake ", target: { agentId: "main" } }],
+            updatedAtMs: 12,
+          })}\n`,
+          "utf8",
+        );
         const agentDir = path.join(stateDir, "agents", "main", "agent");
         await fs.mkdir(agentDir, { recursive: true });
         const authStatePath = path.join(agentDir, "auth-state.json");
@@ -262,6 +294,44 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
             },
+          })}\n`,
+          "utf8",
+        );
+        await fs.mkdir(path.join(stateDir, "plugins"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "plugins", "installs.json"),
+          `${JSON.stringify({
+            version: 1,
+            warning: "DO NOT EDIT.",
+            hostContractVersion: "2026.4.25",
+            compatRegistryVersion: "compat-v1",
+            migrationVersion: 1,
+            policyHash: "policy-v1",
+            generatedAtMs: 1777118400000,
+            installRecords: {
+              "legacy-plugin": {
+                source: "npm",
+                spec: "legacy-plugin@1.0.0",
+              },
+            },
+            plugins: [
+              {
+                pluginId: "legacy-plugin",
+                manifestPath: "/plugins/legacy/openclaw.plugin.json",
+                manifestHash: "manifest-hash",
+                rootDir: "/plugins/legacy",
+                origin: "global",
+                enabled: true,
+                startup: {
+                  sidecar: false,
+                  memory: false,
+                  deferConfiguredChannelFullLoadUntilAfterListen: false,
+                  agentHarnesses: [],
+                },
+                compat: [],
+              },
+            ],
+            diagnostics: [],
           })}\n`,
           "utf8",
         );
@@ -331,6 +401,13 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(
           fs.stat(path.join(mediaRecordsDir, "11111111-1111-4111-8111-111111111111.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(readMediaBuffer("legacy-media.txt", "inbound")).resolves.toMatchObject({
+          id: "legacy-media.txt",
+          size: "legacy media".length,
+        });
+        await expect(fs.stat(path.join(legacyMediaDir, "legacy-media.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
         expect(readOpenClawStateKvJson("subagent_runs", "run-legacy", { env })).toMatchObject({
           childSessionKey: "agent:main:subagent:legacy",
         });
@@ -343,6 +420,18 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         });
         await expect(
           fs.stat(path.join(stateDir, "tui", "last-session.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(readOpenClawStateKvJson("voicewake", "triggers", { env })).toMatchObject({
+          triggers: ["wake"],
+        });
+        await expect(
+          fs.stat(path.join(stateDir, "settings", "voicewake.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(readOpenClawStateKvJson("voicewake", "routing", { env })).toMatchObject({
+          routes: [{ trigger: "robot wake", target: { agentId: "main" } }],
+        });
+        await expect(
+          fs.stat(path.join(stateDir, "settings", "voicewake-routing.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
         expect(readOpenClawStateKvJson("auth-profile-state", authStatePath, { env })).toMatchObject(
           {
@@ -365,6 +454,184 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(
           fs.stat(path.join(stateDir, "cache", "openrouter-models.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(readOpenClawStateKvJson("installed_plugin_index", "current", { env })).toMatchObject(
+          {
+            installRecords: {
+              "legacy-plugin": {
+                source: "npm",
+                spec: "legacy-plugin@1.0.0",
+              },
+            },
+            plugins: [expect.objectContaining({ pluginId: "legacy-plugin" })],
+          },
+        );
+        await expect(
+          fs.stat(path.join(stateDir, "plugins", "installs.json")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      });
+    });
+  });
+
+  it("imports memory-core dreaming checkpoint files from configured workspaces", async () => {
+    await withTempDir("openclaw-doctor-memory-core-state-", async (rootDir) => {
+      const stateDir = path.join(rootDir, "state");
+      const workspaceDir = path.join(rootDir, "workspace");
+      const dreamsDir = path.join(workspaceDir, "memory", ".dreams");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST_FAST: "1" };
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      };
+      await withEnvAsync(env, async () => {
+        await fs.mkdir(dreamsDir, { recursive: true });
+        await fs.writeFile(
+          path.join(dreamsDir, "daily-ingestion.json"),
+          `${JSON.stringify({
+            version: 1,
+            updatedAt: "2026-04-05T10:00:00.000Z",
+            files: {
+              "memory/2026-04-05.md": {
+                mtimeMs: 1,
+                size: 2,
+                contentHash: "daily-hash",
+              },
+            },
+          })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(dreamsDir, "session-ingestion.json"),
+          `${JSON.stringify({
+            version: 3,
+            updatedAt: "2026-04-05T11:00:00.000Z",
+            files: {
+              "main:sessions/main/dreaming-main.jsonl": {
+                mtimeMs: 3,
+                size: 4,
+                contentHash: "session-hash",
+                lineCount: 1,
+                lastContentLine: 1,
+              },
+            },
+            seenMessages: {
+              "main:sessions/main/dreaming-main.jsonl": ["message-hash"],
+            },
+          })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(dreamsDir, "short-term-recall.json"),
+          `${JSON.stringify({
+            version: 1,
+            updatedAt: "2026-04-05T12:00:00.000Z",
+            entries: {
+              recall_key: {
+                key: "recall_key",
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet: "Move backups to S3 Glacier.",
+                recallCount: 1,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 0.91,
+                maxScore: 0.91,
+                firstRecalledAt: "2026-04-05T12:00:00.000Z",
+                lastRecalledAt: "2026-04-05T12:00:00.000Z",
+                queryHashes: ["query-hash"],
+                recallDays: ["2026-04-05"],
+                conceptTags: ["backup"],
+              },
+            },
+          })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(dreamsDir, "phase-signals.json"),
+          `${JSON.stringify({
+            version: 1,
+            updatedAt: "2026-04-05T13:00:00.000Z",
+            entries: {
+              recall_key: {
+                key: "recall_key",
+                lightHits: 1,
+                remHits: 1,
+                lastLightAt: "2026-04-05T12:30:00.000Z",
+                lastRemAt: "2026-04-05T13:00:00.000Z",
+              },
+            },
+          })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(path.join(dreamsDir, "short-term-promotion.lock"), "999999:0\n", "utf8");
+
+        await maybeRepairLegacyRuntimeStateFiles({
+          prompter: { shouldRepair: true },
+          env,
+          cfg,
+        });
+
+        expect(noteMock).toHaveBeenCalledWith(
+          expect.stringContaining("memory-core dreaming checkpoint row"),
+          "Doctor changes",
+        );
+        await expect(fs.stat(path.join(dreamsDir, "daily-ingestion.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.stat(path.join(dreamsDir, "session-ingestion.json"))).rejects.toMatchObject(
+          { code: "ENOENT" },
+        );
+        await expect(fs.stat(path.join(dreamsDir, "short-term-recall.json"))).rejects.toMatchObject(
+          { code: "ENOENT" },
+        );
+        await expect(fs.stat(path.join(dreamsDir, "phase-signals.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(
+          fs.stat(path.join(dreamsDir, "short-term-promotion.lock")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+
+        await expect(
+          readDreamingWorkspaceMap(MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE, workspaceDir),
+        ).resolves.toMatchObject({
+          "memory/2026-04-05.md": { contentHash: "daily-hash" },
+        });
+        await expect(
+          readDreamingWorkspaceMap(MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE, workspaceDir),
+        ).resolves.toMatchObject({
+          "main:sessions/main/dreaming-main.jsonl": { contentHash: "session-hash" },
+        });
+        await expect(
+          readDreamingWorkspaceMap(MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE, workspaceDir),
+        ).resolves.toEqual({
+          "main:sessions/main/dreaming-main.jsonl": ["message-hash"],
+        });
+        await expect(
+          readDreamingWorkspaceMap(MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE, workspaceDir),
+        ).resolves.toMatchObject({
+          recall_key: { snippet: "Move backups to S3 Glacier." },
+        });
+        await expect(
+          readDreamingWorkspaceMap(MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE, workspaceDir),
+        ).resolves.toMatchObject({
+          recall_key: { lightHits: 1, remHits: 1 },
+        });
+        await expect(
+          readDreamingWorkspaceValue(MEMORY_CORE_SHORT_TERM_META_NAMESPACE, workspaceDir, "recall"),
+        ).resolves.toEqual({ updatedAt: "2026-04-05T12:00:00.000Z" });
+        await expect(
+          readDreamingWorkspaceValue(
+            MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
+            workspaceDir,
+            "phase-signals",
+          ),
+        ).resolves.toEqual({ updatedAt: "2026-04-05T13:00:00.000Z" });
       });
     });
   });

@@ -31,7 +31,6 @@ type SessionHistorySnapshot = {
 type SessionHistoryTranscriptTarget = {
   agentId?: string;
   sessionId: string;
-  storePath?: string;
   sessionFile?: string;
 };
 
@@ -274,7 +273,6 @@ export class SessionHistorySseState {
     if (this.cursor === undefined && typeof this.limit === "number") {
       const snapshot = await readRecentSessionMessagesWithStatsAsync(
         this.target.sessionId,
-        this.target.storePath,
         this.target.sessionFile,
         {
           ...resolveSessionHistoryTailReadOptions(this.limit),
@@ -288,16 +286,11 @@ export class SessionHistorySseState {
       };
     }
     return {
-      rawMessages: await readSessionMessagesAsync(
-        this.target.sessionId,
-        this.target.storePath,
-        this.target.sessionFile,
-        {
-          agentId: this.target.agentId,
-          mode: "full",
-          reason: "session history cursor pagination",
-        },
-      ),
+      rawMessages: await readSessionMessagesAsync(this.target.sessionId, this.target.sessionFile, {
+        agentId: this.target.agentId,
+        mode: "full",
+        reason: "session history cursor pagination",
+      }),
     };
   }
 }

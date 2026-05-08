@@ -77,7 +77,7 @@ export async function legacyPairingStateFilesExist(params: {
   return pendingExists || pairedExists;
 }
 
-export async function importLegacyPairingStateFilesToSqlite<TPending, TPaired>(params: {
+export async function importLegacyPairingStateFilesToSqlite(params: {
   baseDir?: string;
   subdir: string;
 }): Promise<{
@@ -90,8 +90,8 @@ export async function importLegacyPairingStateFilesToSqlite<TPending, TPaired>(p
     readJsonIfExists<unknown>(pendingPath),
     readJsonIfExists<unknown>(pairedPath),
   ]);
-  const pendingRecord = coercePairingStateRecord<TPending>(pending);
-  const pairedRecord = coercePairingStateRecord<TPaired>(paired);
+  const pendingRecord = coercePairingStateRecord<unknown>(pending);
+  const pairedRecord = coercePairingStateRecord<unknown>(paired);
   let files = 0;
   if (pending !== undefined) {
     writePairingStateRecord({

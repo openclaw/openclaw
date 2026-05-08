@@ -21,6 +21,12 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import {
+  deletePersistedInstalledPluginIndexSync,
+  readPersistedInstalledPluginIndexSync,
+  writePersistedInstalledPluginIndexSync,
+} from "../plugins/installed-plugin-index-store.js";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index-types.js";
+import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
@@ -133,6 +139,15 @@ type ShippedPluginInstallConfigWriteMigration =
   | {
       migrated: true;
       filePath: string;
+      stateDir: string;
+      previousIndex:
+        | {
+            existed: false;
+          }
+        | {
+            existed: true;
+            value: InstalledPluginIndex;
+          };
       previousFile:
         | {
             existed: false;
@@ -1436,6 +1451,14 @@ export function createConfigIO(
       return { migrated: false };
     }
 
+    const previousIndexValue = readPersistedInstalledPluginIndexSync({
+      env: deps.env,
+      stateDir,
+    });
+    const previousIndex =
+      previousIndexValue === null
+        ? ({ existed: false } as const)
+        : ({ existed: true, value: previousIndexValue } as const);
     const previousFile = deps.fs.existsSync(filePath)
       ? ({
           existed: true,
@@ -1457,6 +1480,8 @@ export function createConfigIO(
       return {
         migrated: true,
         filePath,
+        stateDir,
+        previousIndex,
         previousFile,
       };
     } catch (err) {
@@ -1480,15 +1505,26 @@ export function createConfigIO(
         encoding: "utf-8",
         mode: 0o600,
       });
-      return;
-    }
-    try {
-      deps.fs.unlinkSync(migration.filePath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        throw err;
+    } else {
+      try {
+        deps.fs.unlinkSync(migration.filePath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          throw err;
+        }
       }
     }
+    if (migration.previousIndex.existed) {
+      writePersistedInstalledPluginIndexSync(migration.previousIndex.value, {
+        env: deps.env,
+        stateDir: migration.stateDir,
+      });
+      return;
+    }
+    deletePersistedInstalledPluginIndexSync({
+      env: deps.env,
+      stateDir: migration.stateDir,
+    });
   }
 
   function loadConfig(): OpenClawConfig {

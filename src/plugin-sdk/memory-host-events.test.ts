@@ -15,8 +15,8 @@ function createDedupe(root: string, overrides?: { ttlMs?: number }) {
   return createPersistentDedupe({
     ttlMs: overrides?.ttlMs ?? 24 * 60 * 60 * 1000,
     memoryMaxSize: 100,
-    fileMaxEntries: 1000,
-    resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
+    maxEntries: 1000,
+    resolveScopeKey: (namespace) => `${root}:${namespace}`,
   });
 }
 
@@ -86,28 +86,27 @@ describe("createPersistentDedupe", () => {
     expect(raceSecond).toBe(false);
   });
 
-  it("falls back to memory-only behavior on disk errors", async () => {
+  it("deduplicates through SQLite-backed storage", async () => {
     const dedupe = createPersistentDedupe({
       ttlMs: 10_000,
       memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath: () => path.join("/dev/null", "dedupe.json"),
+      maxEntries: 1000,
+      resolveScopeKey: () => "memory-host-events:test",
     });
 
-    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(true);
-    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(false);
+    expect(await dedupe.checkAndRecord("sqlite-backed", { namespace: "x" })).toBe(true);
+    expect(await dedupe.checkAndRecord("sqlite-backed", { namespace: "x" })).toBe(false);
   });
 
-  it("warms empty namespaces and skips expired disk entries", async () => {
+  it("warms empty namespaces and skips expired SQLite entries", async () => {
     const root = await createTempDir("openclaw-dedupe-");
     const emptyReader = createDedupe(root, { ttlMs: 10_000 });
     expect(await emptyReader.warmup("nonexistent")).toBe(0);
 
     const oldNow = Date.now() - 2000;
-    await fs.writeFile(
-      path.join(root, "acct.json"),
-      JSON.stringify({ "old-msg": oldNow, "new-msg": Date.now() }),
-    );
+    const writer = createDedupe(root, { ttlMs: 1000 });
+    expect(await writer.checkAndRecord("old-msg", { namespace: "acct", now: oldNow })).toBe(true);
+    expect(await writer.checkAndRecord("new-msg", { namespace: "acct" })).toBe(true);
 
     const reader = createDedupe(root, { ttlMs: 1000 });
     expect(await reader.warmup("acct")).toBe(1);
@@ -171,8 +170,8 @@ describe("createClaimableDedupe", () => {
     const writer = createClaimableDedupe({
       ttlMs: 10_000,
       memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
+      maxEntries: 1000,
+      resolveScopeKey: (namespace) => `${root}:${namespace}`,
     });
 
     await expect(writer.claim("m1", { namespace: "acct" })).resolves.toEqual({ kind: "claimed" });
@@ -181,8 +180,8 @@ describe("createClaimableDedupe", () => {
     const reader = createClaimableDedupe({
       ttlMs: 10_000,
       memoryMaxSize: 100,
-      fileMaxEntries: 1000,
-      resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
+      maxEntries: 1000,
+      resolveScopeKey: (namespace) => `${root}:${namespace}`,
     });
 
     expect(await reader.hasRecent("m1", { namespace: "acct" })).toBe(true);

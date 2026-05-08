@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -5,7 +6,12 @@ import {
   isValidAgentId,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import {
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 
 type VoiceWakeRouteTarget =
   | { mode: "current"; agentId?: undefined; sessionKey?: undefined }
@@ -26,6 +32,8 @@ export type VoiceWakeRoutingConfig = {
 
 const MAX_VOICEWAKE_ROUTES = 32;
 const MAX_VOICEWAKE_TRIGGER_LENGTH = 64;
+const VOICEWAKE_ROUTING_SCOPE = "voicewake";
+const VOICEWAKE_ROUTING_CONFIG_KEY = "routing";
 
 const DEFAULT_ROUTING: VoiceWakeRoutingConfig = {
   version: 1,
@@ -34,7 +42,11 @@ const DEFAULT_ROUTING: VoiceWakeRoutingConfig = {
   updatedAtMs: 0,
 };
 
-function resolvePath(baseDir?: string) {
+function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
+  return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
+}
+
+function resolveLegacyPath(baseDir?: string) {
   const root = baseDir ?? resolveStateDir();
   return path.join(root, "settings", "voicewake-routing.json");
 }
@@ -259,13 +271,14 @@ export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutin
   };
 }
 
-const withLock = createAsyncLock();
-
 export async function loadVoiceWakeRoutingConfig(
   baseDir?: string,
 ): Promise<VoiceWakeRoutingConfig> {
-  const filePath = resolvePath(baseDir);
-  const existing = await tryReadJson<unknown>(filePath);
+  const existing = readOpenClawStateKvJson(
+    VOICEWAKE_ROUTING_SCOPE,
+    VOICEWAKE_ROUTING_CONFIG_KEY,
+    sqliteOptionsForBaseDir(baseDir),
+  );
   if (!existing) {
     return { ...DEFAULT_ROUTING };
   }
@@ -277,15 +290,54 @@ export async function setVoiceWakeRoutingConfig(
   baseDir?: string,
 ): Promise<VoiceWakeRoutingConfig> {
   const normalized = normalizeVoiceWakeRoutingConfig(config);
-  const filePath = resolvePath(baseDir);
-  return await withLock(async () => {
-    const next: VoiceWakeRoutingConfig = {
-      ...normalized,
-      updatedAtMs: Date.now(),
-    };
-    await writeJson(filePath, next);
-    return next;
-  });
+  const next: VoiceWakeRoutingConfig = {
+    ...normalized,
+    updatedAtMs: Date.now(),
+  };
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    VOICEWAKE_ROUTING_SCOPE,
+    VOICEWAKE_ROUTING_CONFIG_KEY,
+    next as unknown as OpenClawStateJsonValue,
+    sqliteOptionsForBaseDir(baseDir),
+  );
+  return next;
+}
+
+export async function legacyVoiceWakeRoutingConfigFileExists(baseDir?: string): Promise<boolean> {
+  try {
+    await fs.access(resolveLegacyPath(baseDir));
+    return true;
+  } catch (error) {
+    if ((error as { code?: unknown })?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export async function importLegacyVoiceWakeRoutingConfigFileToSqlite(baseDir?: string): Promise<{
+  imported: boolean;
+  routes: number;
+}> {
+  const filePath = resolveLegacyPath(baseDir);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+  } catch (error) {
+    if ((error as { code?: unknown })?.code === "ENOENT") {
+      return { imported: false, routes: 0 };
+    }
+    throw error;
+  }
+  const normalized = normalizeVoiceWakeRoutingConfig(raw);
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    VOICEWAKE_ROUTING_SCOPE,
+    VOICEWAKE_ROUTING_CONFIG_KEY,
+    normalized as unknown as OpenClawStateJsonValue,
+    sqliteOptionsForBaseDir(baseDir),
+  );
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
+  return { imported: true, routes: normalized.routes.length };
 }
 
 type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sessionKey: string };

@@ -2226,7 +2226,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       heartbeatSeconds: 0,
       defaultAgentId: "main",
       agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      sessions: { databasePath: "/tmp/openclaw-agent.sqlite", count: 0, recent: [] },
     };
     const fresh = {
       ...cached,
@@ -2310,7 +2310,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       heartbeatSeconds: 0,
       defaultAgentId: "main",
       agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      sessions: { databasePath: "/tmp/openclaw-agent.sqlite", count: 0, recent: [] },
       eventLoop,
     };
     const respond = vi.fn();
@@ -2427,7 +2427,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       heartbeatSeconds: 0,
       defaultAgentId: "main",
       agents: [],
-      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      sessions: { databasePath: "/tmp/openclaw-agent.sqlite", count: 0, recent: [] },
     };
     const fresh = {
       ...cached,

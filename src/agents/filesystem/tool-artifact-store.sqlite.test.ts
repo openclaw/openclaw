@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createSqliteToolArtifactStore,
@@ -12,22 +13,22 @@ import {
   writeSqliteToolArtifact,
 } from "./tool-artifact-store.sqlite.js";
 
-function createTempDbPath(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tool-artifacts-"));
-  return path.join(root, "state", "openclaw.sqlite");
+function createTempStateDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tool-artifacts-"));
 }
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("SQLite tool artifact store", () => {
   it("stores artifacts by agent and run", () => {
-    const dbPath = createTempDbPath();
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
 
     expect(
       writeSqliteToolArtifact({
-        path: dbPath,
+        env,
         agentId: "Main",
         runId: "run-1",
         artifactId: "summary",
@@ -46,7 +47,7 @@ describe("SQLite tool artifact store", () => {
       createdAt: 1000,
     });
     writeSqliteToolArtifact({
-      path: dbPath,
+      env,
       agentId: "ops",
       runId: "run-1",
       artifactId: "summary",
@@ -54,7 +55,7 @@ describe("SQLite tool artifact store", () => {
       blob: "ops",
     });
 
-    expect(listSqliteToolArtifacts({ path: dbPath, agentId: "main", runId: "run-1" })).toEqual([
+    expect(listSqliteToolArtifacts({ env, agentId: "main", runId: "run-1" })).toEqual([
       {
         agentId: "main",
         runId: "run-1",
@@ -67,7 +68,7 @@ describe("SQLite tool artifact store", () => {
     ]);
     expect(
       readSqliteToolArtifact({
-        path: dbPath,
+        env,
         agentId: "main",
         runId: "run-1",
         artifactId: "summary",
@@ -85,10 +86,10 @@ describe("SQLite tool artifact store", () => {
   });
 
   it("exports and deletes run artifacts", () => {
-    const dbPath = createTempDbPath();
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
 
     writeSqliteToolArtifact({
-      path: dbPath,
+      env,
       agentId: "main",
       runId: "run-1",
       artifactId: "a",
@@ -98,7 +99,7 @@ describe("SQLite tool artifact store", () => {
       now: () => 2000,
     });
     writeSqliteToolArtifact({
-      path: dbPath,
+      env,
       agentId: "main",
       runId: "run-1",
       artifactId: "b",
@@ -106,7 +107,7 @@ describe("SQLite tool artifact store", () => {
       now: () => 1000,
     });
 
-    expect(exportSqliteToolArtifacts({ path: dbPath, agentId: "main", runId: "run-1" })).toEqual([
+    expect(exportSqliteToolArtifacts({ env, agentId: "main", runId: "run-1" })).toEqual([
       {
         agentId: "main",
         runId: "run-1",
@@ -127,14 +128,14 @@ describe("SQLite tool artifact store", () => {
         blobBase64: "AQID",
       },
     ]);
-    expect(deleteSqliteToolArtifacts({ path: dbPath, agentId: "main", runId: "run-1" })).toBe(2);
-    expect(listSqliteToolArtifacts({ path: dbPath, agentId: "main", runId: "run-1" })).toEqual([]);
+    expect(deleteSqliteToolArtifacts({ env, agentId: "main", runId: "run-1" })).toBe(2);
+    expect(listSqliteToolArtifacts({ env, agentId: "main", runId: "run-1" })).toEqual([]);
   });
 
   it("exposes an AgentFilesystem artifact store adapter", () => {
-    const dbPath = createTempDbPath();
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const artifacts = createSqliteToolArtifactStore({
-      path: dbPath,
+      env,
       agentId: "main",
       runId: "run-2",
     });
