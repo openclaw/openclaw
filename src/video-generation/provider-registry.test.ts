@@ -30,6 +30,15 @@ async function loadProviderRegistry() {
   return await import("./provider-registry.js");
 }
 
+function requireVideoProvider(id: string): VideoGenerationProviderPlugin {
+  const provider = getVideoGenerationProvider(id);
+  expect(provider).toBeDefined();
+  if (!provider) {
+    throw new Error(`expected video generation provider ${id}`);
+  }
+  return provider;
+}
+
 describe("video-generation provider registry", () => {
   beforeEach(async () => {
     resolvePluginCapabilityProvidersMock.mockReset();
@@ -50,7 +59,7 @@ describe("video-generation provider registry", () => {
 
     const provider = getVideoGenerationProvider("custom-video");
 
-    expect(provider?.id).toBe("custom-video");
+    expect(provider).toMatchObject({ id: "custom-video" });
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "videoGenerationProviders",
       cfg: undefined,
@@ -66,6 +75,6 @@ describe("video-generation provider registry", () => {
     expect(listVideoGenerationProviders().map((provider) => provider.id)).toEqual(["safe-video"]);
     expect(getVideoGenerationProvider("__proto__")).toBeUndefined();
     expect(getVideoGenerationProvider("constructor")).toBeUndefined();
-    expect(getVideoGenerationProvider("safe-alias")?.id).toBe("safe-video");
+    expect(requireVideoProvider("safe-alias")).toMatchObject({ id: "safe-video" });
   });
 });
