@@ -5,7 +5,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
@@ -28,14 +27,6 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
-  const raw = await fs.readFile(filePath, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as TranscriptEntry);
-}
-
 function messageText(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -52,10 +43,8 @@ function messageText(content: unknown): string {
     .join("");
 }
 
-async function verifyRuntimeContextTranscriptShape(root: string) {
-  const sessionFile = path.join(root, ".openclaw", "agents", "main", "sessions", "runtime.jsonl");
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  const sessionManager = SessionManager.open(sessionFile);
+async function verifyRuntimeContextTranscriptShape() {
+  const entries: TranscriptEntry[] = [];
   const effectivePrompt = [
     "visible ask",
     "",
@@ -79,27 +68,29 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
     session: {
       sendCustomMessage: async (message, options) => {
         assert(options?.deliverAs === "nextTurn", "runtime context was not queued for next turn");
-        sessionManager.appendCustomMessageEntry(
-          message.customType,
-          message.content,
-          message.display,
-          message.details,
-        );
+        entries.push({
+          type: "custom_message",
+          customType: message.customType,
+          content: message.content,
+          display: message.display,
+        });
       },
     },
   });
-  sessionManager.appendMessage({
-    role: "user",
-    content: promptSubmission.prompt,
-    timestamp: Date.now(),
+  entries.push({
+    type: "message",
+    message: {
+      role: "user",
+      content: promptSubmission.prompt,
+    },
   });
-  sessionManager.appendMessage({
-    role: "assistant",
-    content: "done",
-    timestamp: Date.now() + 1,
+  entries.push({
+    type: "message",
+    message: {
+      role: "assistant",
+      content: "done",
+    },
   });
-
-  const entries = await readJsonl(sessionFile);
   const customEntry = entries.find((entry) => entry.type === "custom_message");
   assert(customEntry, "hidden runtime custom message was not persisted");
   assert(customEntry.customType === "openclaw.runtime-context", "unexpected custom message type");
@@ -257,7 +248,7 @@ async function main() {
   process.env.OPENCLAW_STATE_DIR = path.join(root, ".openclaw");
   process.env.OPENCLAW_CONFIG_PATH = path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json");
   try {
-    await verifyRuntimeContextTranscriptShape(root);
+    await verifyRuntimeContextTranscriptShape();
     await verifyDoctorRepair(root);
     console.log("session runtime context Docker E2E passed");
   } finally {
