@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { upsertSessionEntry } from "../../config/sessions/store.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
@@ -14,14 +17,26 @@ const hookRunnerMocks = vi.hoisted(() => ({
 
 let incrementCompactionCount: typeof import("./session-updates.js").incrementCompactionCount;
 const tempDirs: string[] = [];
+let previousStateDir: string | undefined;
+let previousStateDirCaptured = false;
 
 async function createFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-updates-"));
   tempDirs.push(root);
-  const storePath = path.join(root, "sessions.json");
+  if (!previousStateDirCaptured) {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    previousStateDirCaptured = true;
+  }
+  process.env.OPENCLAW_STATE_DIR = root;
   const sessionKey = "agent:main:forum:direct:compaction";
-  const transcriptPath = path.join(root, "s1.jsonl");
-  await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf-8");
+  const transcriptPath = path.join(root, "transcripts", "s1.jsonl");
+  await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "s1",
+    transcriptPath,
+    events: [{ type: "message" }],
+  });
   const entry = {
     sessionId: "s1",
     sessionFile: transcriptPath,
@@ -31,8 +46,8 @@ async function createFixture() {
   const sessionStore: Record<string, SessionEntry> = {
     [sessionKey]: entry,
   };
-  await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-  return { storePath, sessionKey, sessionStore, entry, transcriptPath };
+  upsertSessionEntry({ agentId: "main", sessionKey, entry });
+  return { sessionKey, sessionStore, entry, transcriptPath };
 }
 
 describe("session-updates lifecycle hooks", () => {
@@ -59,21 +74,28 @@ describe("session-updates lifecycle hooks", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    closeOpenClawAgentDatabasesForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    previousStateDir = undefined;
+    previousStateDirCaptured = false;
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
 
   it("emits compaction lifecycle hooks when newSessionId replaces the session", async () => {
-    const { storePath, sessionKey, sessionStore, entry, transcriptPath } = await createFixture();
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const { sessionKey, sessionStore, entry, transcriptPath } = await createFixture();
+    const cfg = { session: {} } as OpenClawConfig;
 
     await incrementCompactionCount({
       cfg,
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
       newSessionId: "s2",
     });
 
