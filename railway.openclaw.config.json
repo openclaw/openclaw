@@ -1,0 +1,98 @@
+{
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai-codex/gpt-5.4",
+        "fallbacks": [
+          "openrouter/openai/gpt-4.1",
+          "openrouter/google/gemini-2.5-flash"
+        ]
+      },
+      "heartbeat": {
+        "every": "2h",
+        "model": "openrouter/google/gemini-2.5-flash",
+        "lightContext": true,
+        "isolatedSession": true,
+        "activeHours": {
+          "start": "08:00",
+          "end": "20:00",
+          "timezone": "America/New_York"
+        }
+      },
+      "subagents": {
+        "model": {
+          "primary": "openrouter/google/gemini-2.5-flash"
+        }
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "name": "Personal",
+        "workspace": "/data/workspace",
+        "tools": {
+          "alsoAllow": ["lobster"]
+        },
+        "groupChat": {
+          "mentionPatterns": [
+            "(?:^|\\s)bot,\\s+"
+          ]
+        }
+      },
+      {
+        "id": "lite",
+        "name": "Quick",
+        "model": {
+          "primary": "openrouter/google/gemini-2.5-flash"
+        }
+      },
+      {
+        "id": "discord-jester",
+        "name": "Grumbleghast",
+        "workspace": "/data/workspaces/discord-jester",
+        "skills": [],
+        "tools": {
+          "deny": [
+            "group:openclaw"
+          ]
+        }
+      }
+    ]
+  },
+  "bindings": [],
+  "channels": {
+    "claw-messenger": {
+      "enabled": true,
+      "apiKey": "${OPENCLAW_CLAW_MESSENGER_API_KEY}",
+      "websocketUrl": "${OPENCLAW_CLAW_MESSENGER_SERVER_URL}",
+      "messageHistoryLimit": 30
+    },
+    "discord": {
+      "guilds": {
+        "*": { "requireMention": true }
+      }
+    },
+    "qqbot": { "enabled": false },
+    "matrix": { "enabled": false },
+    "slack": { "enabled": false }
+  },
+  "messages": {
+    "groupChat": {
+      "visibleReplies": "automatic"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "claw-messenger": { "enabled": true },
+      "lobster": { "enabled": true },
+      "qqbot": { "enabled": false },
+      "qwen": { "enabled": false },
+      "matrix": { "enabled": false },
+      "slack": { "enabled": false }
+    }
+  }
+}

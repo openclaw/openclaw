@@ -160,7 +160,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates procps hostname curl git lsof openssl python3 tini && \
+      bubblewrap ca-certificates procps hostname curl git gh lsof openssl python3 tini && \
     update-ca-certificates
 
 RUN chown node:node /app
@@ -171,6 +171,9 @@ COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/patches ./patches
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=runtime-assets --chown=node:node /app/railway.openclaw.config.json ./
+COPY --from=runtime-assets --chown=node:node /app/scripts/railway-bootstrap-config.mjs ./scripts/railway-bootstrap-config.mjs
+COPY --from=runtime-assets --chown=node:node /app/deploy/railway/workspaces/discord-jester ./deploy/railway/workspaces/discord-jester
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
@@ -216,6 +219,21 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
       chown -R node:node /home/node/.cache/ms-playwright; \
+    fi
+
+# Bake in external CLIs required by the Railway bootstrap skills.
+ARG OPENCLAW_INSTALL_GOG="1"
+ARG OPENCLAW_GOG_VERSION="v0.15.0"
+RUN if [ -n "$OPENCLAW_INSTALL_GOG" ]; then \
+      set -eux; \
+      case "$(dpkg --print-architecture)" in \
+        amd64) gog_arch=amd64 ;; \
+        arm64) gog_arch=arm64 ;; \
+        *) echo "Unsupported architecture for gog: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+      esac; \
+      curl -fsSL "https://github.com/openclaw/gogcli/releases/download/${OPENCLAW_GOG_VERSION}/gogcli_linux_${gog_arch}.tar.gz" \
+        | tar -xz -C /usr/local/bin gog && \
+      chmod 755 /usr/local/bin/gog; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.
@@ -288,4 +306,4 @@ USER node
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["tini", "-s", "--"]
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+CMD ["sh", "-c", "node scripts/railway-bootstrap-config.mjs && node openclaw.mjs gateway --allow-unconfigured --bind lan --port ${PORT:-18789}"]

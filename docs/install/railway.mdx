@@ -42,6 +42,8 @@ Then open:
 - Persistent storage via Railway Volume (`/data`) so `openclaw.json`,
   per-agent `auth-profiles.json`, channel/provider state, sessions, and
   workspace survive redeploys
+- Runtime bootstrap that seeds the Railway config template and installs the
+  managed plugins/skills used by that template into the persisted state/workspace
 
 ## Required Railway settings
 
@@ -65,6 +67,37 @@ Set these variables on the service:
 - `OPENCLAW_GATEWAY_TOKEN` (required; treat as an admin secret)
 - `OPENCLAW_STATE_DIR=/data/.openclaw` (recommended)
 - `OPENCLAW_WORKSPACE_DIR=/data/workspace` (recommended)
+- `XDG_CONFIG_HOME=/data/.config` (recommended if you use `gog`; keeps Google auth state on the volume)
+
+### Personal assistant template variables
+
+If you are using the Railway bootstrap template in this repo, these are the
+main extra variables to set:
+
+- `OPENCLAW_DEFAULT_MODEL_PROFILE=codex-plan`
+- `OPENCLAW_DEFAULT_MODEL_PRIMARY=openai-codex/gpt-5.4`
+- `OPENCLAW_DEFAULT_MODEL_FALLBACKS=openrouter/openai/gpt-4.1,openrouter/google/gemini-2.5-flash`
+- `OPENCLAW_DEFAULT_HEARTBEAT_MODEL=openrouter/google/gemini-2.5-flash`
+- `OPENCLAW_RAILWAY_BOOTSTRAP_INSTALLS=true`
+- `OPENCLAW_CLAW_MESSENGER_API_KEY=cm_...`
+- `OPENCLAW_CLAW_MESSENGER_SERVER_URL=wss://relay.clawmessenger.com`
+- `TELEGRAM_BOT_TOKEN=...` if Telegram is one of your group-chat channels
+- `MEM0_API_KEY=m0-...` if you want the Mem0 plugin enabled automatically
+- `GITHUB_TOKEN=ghp_...` for the `github` skill / `gh` CLI
+- `GOG_KEYRING_BACKEND=file`
+- `GOG_KEYRING_PASSWORD=...`
+- `GOG_ACCOUNT=bot@yourdomain.com`
+
+The bootstrap installs these OpenClaw-managed packages at first start if they
+are not already present:
+
+- Plugins: `@emotion-machine/claw-messenger`, `clawhub:@mem0/openclaw-mem0`, `clawhub:@openclaw/lobster`
+- Skills in the main workspace: `gog`, `web-search`, `github`, `weather`
+
+`GOG_KEYRING_B64` is not a standard `gog` environment variable. For Railway,
+prefer persisting `XDG_CONFIG_HOME=/data/.config` and migrating the real
+`gogcli` config/keyring files onto the volume instead of relying on a custom
+base64 env var.
 
 ## Connect a channel
 
