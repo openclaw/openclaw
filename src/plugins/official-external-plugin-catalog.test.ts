@@ -45,11 +45,13 @@ describe("official external plugin catalog", () => {
   });
 
   it("keeps Matrix and Mattermost out of the external catalog until cutover", () => {
-    const ids = new Set(
-      listOfficialExternalPluginCatalogEntries()
-        .map((entry) => resolveOfficialExternalPluginId(entry))
-        .filter(Boolean),
-    );
+    const ids = new Set<string>();
+    for (const entry of listOfficialExternalPluginCatalogEntries()) {
+      const pluginId = resolveOfficialExternalPluginId(entry);
+      if (pluginId) {
+        ids.add(pluginId);
+      }
+    }
 
     expect(ids.has("matrix")).toBe(false);
     expect(ids.has("mattermost")).toBe(false);
