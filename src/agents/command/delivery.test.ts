@@ -239,6 +239,35 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expectTextPayload(normalized[0], "[openai-codex/gpt-5.4] Ready.");
   });
 
+  it("preserves direct-delivery text without reply prefixes or silent-token filtering", () => {
+    const normalized = normalizeAgentCommandReplyPayloads({
+      cfg: {
+        messages: {
+          responsePrefix: "[{modelFull}]",
+        },
+      } as OpenClawConfig,
+      opts: {
+        message: "NO_REPLY",
+        directDeliveryText: "NO_REPLY",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      deliveryChannel: "slack",
+      payloads: [{ text: "NO_REPLY" }],
+      result: createResult({
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId: "session-1",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+          },
+        },
+      }),
+    });
+
+    expect(normalized).toEqual([{ text: "NO_REPLY" }]);
+  });
+
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
     const runtime = {
       log: vi.fn(),
@@ -317,6 +346,44 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       succeeded: true,
       reason: "no_visible_result",
     });
+  });
+
+  it("marks direct-delivery outbound sends to preserve exact silent-token text", async () => {
+    deliverOutboundPayloadsMock.mockClear();
+    createReplyMediaPathNormalizerMock.mockReturnValue(async (payload: ReplyPayload) => payload);
+    deliverOutboundPayloadsMock.mockResolvedValue([]);
+
+    await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "NO_REPLY",
+        deliver: true,
+        directDeliveryText: "NO_REPLY",
+        replyChannel: "slack",
+        replyTo: "#general",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "NO_REPLY" }],
+      result: createResult(),
+    });
+
+    const [firstCallArg] = deliverOutboundPayloadsMock.mock.calls[0] ?? [];
+    expect(firstCallArg).toEqual(
+      expect.objectContaining({
+        preserveSilentText: true,
+        payloads: [expect.objectContaining({ text: "NO_REPLY" })],
+      }),
+    );
   });
 
   it("does not report success when best-effort delivery records an error", async () => {

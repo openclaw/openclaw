@@ -203,6 +203,21 @@ function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
   return skillsRemoteRuntimeLoader.load();
 }
 
+function shouldDirectDeliverOriginalMessage(opts: AgentCommandOpts, isRawModelRun: boolean) {
+  return (
+    opts.deliver === true && !isRawModelRun && !opts.internalEvents?.length && !opts.images?.length
+  );
+}
+
+function createDirectDeliveryResult(text: string): AgentAttemptResult {
+  return {
+    payloads: [{ text }],
+    meta: {
+      durationMs: 0,
+    },
+  } as AgentAttemptResult;
+}
+
 async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDeps> {
   if (deps) {
     return deps;
@@ -283,6 +298,7 @@ async function prepareAgentCommandExecution(
   runtime: RuntimeEnv,
 ) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
+  const isDirectDelivery = shouldDirectDeliverOriginalMessage(opts, isRawModelRun);
   const message = opts.message ?? "";
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
@@ -396,21 +412,26 @@ async function prepareAgentCommandExecution(
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const workspace = await ensureAgentWorkspace({
-    dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
-    skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-  });
-  const workspaceDir = workspace.dir;
+  const workspaceDir = isDirectDelivery
+    ? workspaceDirRaw
+    : (
+        await ensureAgentWorkspace({
+          dir: workspaceDirRaw,
+          ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+        })
+      ).dir;
   const runId = opts.runId?.trim() || sessionId;
-  const { getAcpSessionManager } = await loadAcpManagerRuntime();
-  const acpManager = getAcpSessionManager();
-  const acpResolution = sessionKey
-    ? acpManager.resolveSession({
-        cfg,
-        sessionKey,
-      })
-    : null;
+  const acpManager = isDirectDelivery
+    ? null
+    : (await loadAcpManagerRuntime()).getAcpSessionManager();
+  const acpResolution =
+    sessionKey && acpManager
+      ? acpManager.resolveSession({
+          cfg,
+          sessionKey,
+        })
+      : null;
   const body =
     !isRawModelRun && acpResolution?.kind === "ready"
       ? resolveAcpPromptBody(message, opts.internalEvents)
@@ -497,11 +518,31 @@ async function agentCommandInternal(
       }
     }
 
+    if (shouldDirectDeliverOriginalMessage(opts, isRawModelRun)) {
+      const directDeliveryText = normalizeOptionalString(opts.directDeliveryText) ?? opts.message;
+      const result = createDirectDeliveryResult(directDeliveryText);
+      const { deliverAgentCommandResult } = await loadDeliveryRuntime();
+
+      return await deliverAgentCommandResult({
+        cfg,
+        deps: resolvedDeps,
+        runtime,
+        opts: {
+          ...opts,
+          directDeliveryText,
+        },
+        outboundSession,
+        sessionEntry,
+        result,
+        payloads: result.payloads,
+      });
+    }
+
     if (!isRawModelRun && acpResolution?.kind === "stale") {
       throw acpResolution.error;
     }
 
-    if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
+    if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey && acpManager) {
       const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
       const startedAt = Date.now();
       registerAgentRunContext(runId, {

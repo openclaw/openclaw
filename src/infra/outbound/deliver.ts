@@ -643,6 +643,8 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** Preserve exact silent-token text for user-authored direct sends. */
+  preserveSilentText?: boolean;
 };
 
 type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParams & {
@@ -1334,6 +1336,7 @@ async function deliverOutboundPayloadsCore(
     surface: channel,
     conversationType: params.session?.conversationType,
     extractMarkdownImages: directiveOptions.extractMarkdownImages,
+    preserveSilentText: params.preserveSilentText,
   });
   const accountId = params.accountId;
   const deps = params.deps;

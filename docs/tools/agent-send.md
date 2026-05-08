@@ -1,14 +1,14 @@
 ---
-summary: "Run agent turns from the CLI and optionally deliver replies to channels"
+summary: "Run agent turns from the CLI or send direct notifications through agent routing"
 read_when:
   - You want to trigger agent runs from scripts or the command line
-  - You need to deliver agent replies to a chat channel programmatically
+  - You need to send notifications to a chat channel programmatically
 title: "Agent send"
 ---
 
 `openclaw agent` runs a single agent turn from the command line without needing
-an inbound chat message. Use it for scripted workflows, testing, and
-programmatic delivery.
+an inbound chat message. With `--deliver`, it sends the provided message
+directly to the selected channel/target.
 
 ## Quick start
 
@@ -36,13 +36,13 @@ programmatic delivery.
 
   </Step>
 
-  <Step title="Deliver the reply to a channel">
+  <Step title="Send a direct notification to a channel">
     ```bash
-    # Deliver to WhatsApp (default channel)
+    # Send to WhatsApp (default channel)
     openclaw agent --to +15555550123 --message "Report ready" --deliver
 
-    # Deliver to Slack
-    openclaw agent --agent ops --message "Generate report" \
+    # Send to Slack
+    openclaw agent --agent ops --message "Deploy finished" \
       --deliver --reply-channel slack --reply-to "#reports"
     ```
 
@@ -58,7 +58,7 @@ programmatic delivery.
 | `--agent \<id\>`              | Target a configured agent (uses its `main` session)         |
 | `--session-id \<id\>`         | Reuse an existing session by id                             |
 | `--local`                     | Force local embedded runtime (skip Gateway)                 |
-| `--deliver`                   | Send the reply to a chat channel                            |
+| `--deliver`                   | Send `--message` directly to a chat channel                 |
 | `--channel \<name\>`          | Delivery channel (whatsapp, telegram, discord, slack, etc.) |
 | `--reply-to \<target\>`       | Delivery target override                                    |
 | `--reply-channel \<name\>`    | Delivery channel override                                   |
@@ -76,6 +76,8 @@ programmatic delivery.
 - Session selection: `--to` derives the session key (group/channel targets
   preserve isolation; direct chats collapse to `main`).
 - Thinking and verbose flags persist into the session store.
+- `--deliver` bypasses the agent turn for normal CLI text. Internal runtime
+  events still run the agent so OpenClaw can compose a final reply.
 - Output: plain text by default, or `--json` for structured payload + metadata.
 - With `--json --deliver`, the JSON includes delivery status for sent,
   suppressed, partial, and failed sends. See
@@ -90,7 +92,7 @@ openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json
 # Turn with thinking level
 openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
 
-# Deliver to a different channel than the session
+# Send to a different channel than the session
 openclaw agent --agent ops --message "Alert" --deliver --reply-channel telegram --reply-to "@admin"
 ```
 

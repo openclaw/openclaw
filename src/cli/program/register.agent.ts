@@ -46,7 +46,7 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
       "Run the embedded agent locally (requires model provider API keys in your shell)",
       false,
     )
-    .option("--deliver", "Send the agent's reply back to the selected channel", false)
+    .option("--deliver", "Send --message directly to the selected channel", false)
     .option("--json", "Output result as JSON", false)
     .option(
       "--timeout <seconds>",
@@ -68,10 +68,13 @@ ${formatHelpExamples([
     'openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json',
     "Enable verbose logging and JSON output.",
   ],
-  ['openclaw agent --to +15555550123 --message "Summon reply" --deliver', "Deliver reply."],
   [
-    'openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
-    "Send reply to a different channel/target.",
+    'openclaw agent --to +15555550123 --message "Service is back" --deliver',
+    "Send a notification.",
+  ],
+  [
+    'openclaw agent --agent ops --message "Deploy finished" --deliver --reply-channel slack --reply-to "#reports"',
+    "Send a notification to a different channel/target.",
   ],
 ])}
 

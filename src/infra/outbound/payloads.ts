@@ -69,6 +69,8 @@ type OutboundPayloadPlanContext = {
    */
   hasPendingSpawnedChildren?: boolean;
   extractMarkdownImages?: boolean;
+  /** Treat exact silent tokens as ordinary text for user-authored direct sends. */
+  preserveSilentText?: boolean;
 };
 
 export type OutboundPayloadMirror = {
@@ -137,7 +139,7 @@ type IndexedPreparedOutboundPayloadPlanEntry = PreparedOutboundPayloadPlanEntry 
 
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
-  context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
+  context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages" | "preserveSilentText"> = {},
 ): PreparedOutboundPayloadPlanEntry | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
@@ -151,11 +153,15 @@ function createOutboundPayloadPlanEntry(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
   );
-  const parsedText = parsed.text ?? "";
+  const preserveSilentText = context.preserveSilentText === true;
+  const parsedText =
+    preserveSilentText && parsed.isSilent && mergedMedia.length === 0
+      ? (payload.text ?? "")
+      : (parsed.text ?? "");
   if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
     return null;
   }
-  const isSilent = parsed.isSilent && mergedMedia.length === 0;
+  const isSilent = !preserveSilentText && parsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
@@ -204,6 +210,7 @@ export function createOutboundPayloadPlan(
   for (const [sourceIndex, payload] of payloads.entries()) {
     const entry = createOutboundPayloadPlanEntry(payload, {
       extractMarkdownImages: context.extractMarkdownImages,
+      preserveSilentText: context.preserveSilentText,
     });
     if (!entry) {
       continue;

@@ -220,6 +220,31 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(reply.text.trim()).not.toBe("NO_REPLY");
   });
 
+  it("preserves bare silent text for direct user-authored sends", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+        },
+      },
+    };
+
+    const projected = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+        cfg,
+        sessionKey: "agent:main:telegram:direct:123",
+        surface: "telegram",
+        preserveSilentText: true,
+      }),
+    );
+
+    expect(projected).toEqual([expect.objectContaining({ text: "NO_REPLY" })]);
+  });
+
   it("drops bare silent replies for groups when policy allows silence", () => {
     const cfg: OpenClawConfig = {
       agents: {

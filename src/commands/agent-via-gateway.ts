@@ -185,7 +185,7 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
 
   const response: GatewayAgentResponse = await withProgress(
     {
-      label: "Waiting for agent reply…",
+      label: opts.deliver ? "Sending message…" : "Waiting for agent reply…",
       indeterminate: true,
       enabled: opts.json !== true,
     },

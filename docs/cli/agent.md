@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for `openclaw agent` (send one agent turn via the Gateway)"
+summary: "CLI reference for `openclaw agent` (send one agent turn or direct notification via the Gateway)"
 read_when:
-  - You want to run one agent turn from scripts (optionally deliver reply)
+  - You want to run one agent turn from scripts
+  - You want to send a direct notification through agent routing
 title: "Agent"
 ---
 
@@ -34,7 +35,7 @@ Related:
 - `--reply-channel <channel>`: delivery channel override
 - `--reply-account <id>`: delivery account override
 - `--local`: run the embedded agent directly (after plugin registry preload)
-- `--deliver`: send the reply back to the selected channel/target
+- `--deliver`: send `--message` directly to the selected channel/target instead of running an agent turn
 - `--timeout <seconds>`: override agent timeout (default 600 or config value)
 - `--json`: output JSON
 
@@ -46,7 +47,7 @@ openclaw agent --agent ops --message "Summarize logs"
 openclaw agent --agent ops --model openai/gpt-5.4 --message "Summarize logs"
 openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
 openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json
-openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
+openclaw agent --agent ops --message "Deploy finished" --deliver --reply-channel slack --reply-to "#reports"
 openclaw agent --agent ops --message "Run locally" --local
 ```
 
@@ -56,7 +57,8 @@ openclaw agent --agent ops --message "Run locally" --local
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
 - `--local` and embedded fallback runs are treated as one-shot runs. Bundled MCP loopback resources and warm Claude stdio sessions opened for that local process are retired after the reply, so scripted invocations do not keep local child processes alive.
 - Gateway-backed runs leave Gateway-owned MCP loopback resources under the running Gateway process; older clients may still send the historical cleanup flag, but the Gateway accepts it as a compatibility no-op.
-- `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not session routing.
+- `--deliver` is a direct notification path for user-authored CLI text. Runtime internal-event deliveries still run the agent so OpenClaw can compose the final user-facing reply.
+- `--channel`, `--reply-channel`, and `--reply-account` affect delivery, not session routing.
 - `--json` keeps stdout reserved for the JSON response. Gateway, plugin, and embedded-fallback diagnostics are routed to stderr so scripts can parse stdout directly.
 - Embedded fallback JSON includes `meta.transport: "embedded"` and `meta.fallbackFrom: "gateway"` so scripts can distinguish fallback runs from Gateway runs.
 - If the Gateway accepts an agent run but the CLI times out waiting for the final reply, embedded fallback uses a fresh explicit `gateway-fallback-*` session/run id and reports `meta.fallbackReason: "gateway_timeout"` plus the fallback session fields. This avoids racing the Gateway-owned transcript lock or silently replacing the original routed conversation session.

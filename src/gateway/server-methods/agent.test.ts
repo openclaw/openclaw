@@ -1309,6 +1309,42 @@ describe("gateway agent handler", () => {
 
     const callArgs = await waitForAgentCommandCall();
     expect(callArgs.bestEffortDeliver).toBe(false);
+    expect(callArgs.directDeliveryText).toBe("strict delivery");
+  });
+
+  it("keeps internal-event delivery on the agent-composed path", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "child completed",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        replyChannel: "telegram",
+        to: "123",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:main:subagent:child",
+            announceType: "completion",
+            taskLabel: "child task",
+            status: "ok",
+            statusLabel: "done",
+            result: "child result",
+            replyInstruction: "Reply to the user with the result.",
+          },
+        ],
+        idempotencyKey: "test-internal-event-delivery",
+      },
+      { reqId: "internal-event-delivery" },
+    );
+
+    const callArgs = await waitForAgentCommandCall();
+    expect(callArgs.directDeliveryText).toBeUndefined();
+    expect(callArgs.internalEvents).toHaveLength(1);
   });
 
   it("rejects strict delivery with a missing target before dispatching the agent", async () => {

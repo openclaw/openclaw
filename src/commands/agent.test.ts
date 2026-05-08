@@ -534,6 +534,19 @@ describe("agentCommand", () => {
           channel: "telegram",
           messageChannel: "telegram",
           deliver: true,
+          internalEvents: [
+            {
+              type: "task_completion",
+              source: "subagent",
+              childSessionKey: "agent:main:subagent:child",
+              announceType: "completion",
+              taskLabel: "child task",
+              status: "ok",
+              statusLabel: "done",
+              result: "child result",
+              replyInstruction: "Reply to the user with the result.",
+            },
+          ],
           senderIsOwner: false,
           allowModelOverride: false,
         },
@@ -548,7 +561,39 @@ describe("agentCommand", () => {
       const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
         .calls[0]?.[0];
       expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
-      expect(persistArgs?.body).toBe("call a tool then answer");
+      expect(persistArgs?.body).toContain("call a tool then answer");
+      expect(persistArgs?.body).toContain("OpenClaw runtime context (internal)");
+    });
+  });
+
+  it("delivers --deliver notifications directly without running the agent", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const sendMessageTelegram = vi.fn(async () => undefined);
+
+      await agentCommandFromIngress(
+        {
+          message: "NO_REPLY",
+          agentId: "main",
+          to: "+1222",
+          channel: "telegram",
+          messageChannel: "telegram",
+          deliver: true,
+          senderIsOwner: false,
+          allowModelOverride: false,
+        },
+        runtime,
+        { sendMessageTelegram },
+      );
+
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(sendMessageTelegram).toHaveBeenCalledWith(
+        "+1222",
+        "NO_REPLY",
+        expect.objectContaining({ verbose: false }),
+      );
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).not.toHaveBeenCalled();
     });
   });
 

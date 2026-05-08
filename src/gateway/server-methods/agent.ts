@@ -662,6 +662,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
     let message = (request.message ?? "").trim();
+    const originalDirectDeliveryMessage = message;
     if (!isRawModelRun) {
       message = annotateInterSessionPromptText(message, inputProvenance);
     }
@@ -1310,6 +1311,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         : resolvedChannel);
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
+    const directDeliveryText =
+      deliver && !isRawModelRun && !request.internalEvents?.length && images.length === 0
+        ? originalDirectDeliveryMessage
+        : undefined;
 
     // Register before the accepted ack so an immediate chat.abort/sessions.abort
     // cannot race the active-run entry. Agent RPC runs use the agent timeout;
@@ -1458,6 +1463,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             sessionKey: resolvedSessionKey,
             thinking: request.thinking,
             deliver,
+            directDeliveryText,
             deliveryTargetMode,
             channel: resolvedChannel,
             accountId: resolvedAccountId,

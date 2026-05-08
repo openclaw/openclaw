@@ -25,6 +25,7 @@ import {
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isNestedAgentLane } from "../lanes.js";
 import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
@@ -274,6 +275,9 @@ export function normalizeAgentCommandReplyPayloads(params: {
   if (payloads.length === 0) {
     return [];
   }
+  if (normalizeOptionalString(params.opts.directDeliveryText)) {
+    return payloads as ReplyPayload[];
+  }
   const channel =
     params.deliveryChannel && !isInternalMessageChannel(params.deliveryChannel)
       ? (normalizeChannelId(params.deliveryChannel) ?? params.deliveryChannel)
@@ -342,6 +346,7 @@ export async function deliverAgentCommandResult(params: {
   payloads: RunResult["payloads"];
 }): Promise<AgentCommandDeliveryResult> {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
+  const directDelivery = normalizeOptionalString(opts.directDeliveryText) !== undefined;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
@@ -483,7 +488,9 @@ export async function deliverAgentCommandResult(params: {
           accountId: resolvedAccountId,
         })
       : normalizedReplyPayloads;
-  const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
+  const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads, {
+    preserveSilentText: directDelivery,
+  });
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
   const emitJsonEnvelope = (status?: AgentCommandDeliveryStatus) => {
@@ -551,6 +558,7 @@ export async function deliverAgentCommandResult(params: {
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
         durability: bestEffortDeliver ? "best_effort" : "required",
+        preserveSilentText: directDelivery,
         onError: logDeliveryError,
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
