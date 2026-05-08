@@ -70,19 +70,15 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const opsWorkspace = path.join(home, "ops-workspace");
       mockEmbeddedOk();
 
-      const cfg = makeCfg(
-        home,
-        path.join(home, ".openclaw", "agents", "{agentId}", "sessions", "sessions.json"),
-        {
-          agents: {
-            defaults: { workspace: path.join(home, "default-workspace") },
-            list: [
-              { id: "main", default: true },
-              { id: "ops", workspace: opsWorkspace },
-            ],
-          },
+      const cfg = makeCfg(home, {
+        agents: {
+          defaults: { workspace: path.join(home, "default-workspace") },
+          list: [
+            { id: "main", default: true },
+            { id: "ops", workspace: opsWorkspace },
+          ],
         },
-      );
+      });
 
       const res = await runCronIsolatedAgentTurn({
         cfg,

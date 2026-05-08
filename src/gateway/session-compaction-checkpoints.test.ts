@@ -4,11 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AssistantMessage } from "../agents/pi-ai-contract.js";
 import { SessionManager } from "../agents/transcript/session-transcript-contract.js";
-import { loadSessionStore, saveSessionStore } from "../config/sessions.js";
+import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
 import {
   exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents,
+  hasSqliteSessionTranscriptSnapshot,
   loadSqliteSessionTranscriptEvents,
+  recordSqliteSessionTranscriptSnapshot,
   replaceSqliteSessionTranscriptEvents,
 } from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -76,6 +78,13 @@ describe("session-compaction-checkpoints", () => {
       expect(snapshot?.leafId).toBe(leafId);
       expect(snapshot?.sessionFile).not.toBe(sessionFile);
       expect(snapshot?.sessionFile).toContain(".checkpoint.");
+      expect(
+        hasSqliteSessionTranscriptSnapshot({
+          agentId: DEFAULT_AGENT_ID,
+          sessionId: session.getSessionId(),
+          snapshotId: snapshot!.sessionId,
+        }),
+      ).toBe(true);
       const snapshotBefore = exportSqliteSessionTranscriptJsonl({
         agentId: DEFAULT_AGENT_ID,
         sessionId: snapshot!.sessionId,
@@ -267,7 +276,6 @@ describe("session-compaction-checkpoints", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-trim-"));
     tempDirs.push(dir);
 
-    const storePath = path.join(dir, ".openclaw", "agents", "main", "sessions", "sessions.json");
     const sessionId = "sess";
     const sessionKey = "agent:main:main";
     const now = Date.now();
@@ -285,6 +293,13 @@ describe("session-compaction-checkpoints", () => {
           },
         ],
       });
+      recordSqliteSessionTranscriptSnapshot({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId,
+        snapshotId: checkpointSessionId,
+        reason: "pre-compaction",
+        eventCount: 1,
+      });
       return {
         checkpointId: `old-${index}`,
         sessionKey,
@@ -298,8 +313,10 @@ describe("session-compaction-checkpoints", () => {
         postCompaction: { sessionId },
       };
     });
-    await saveSessionStore(storePath, {
-      [sessionKey]: {
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: {
         sessionId,
         updatedAt: now,
         compactionCheckpoints: existingCheckpoints,
@@ -321,7 +338,7 @@ describe("session-compaction-checkpoints", () => {
 
     const stored = await persistSessionCompactionCheckpoint({
       cfg: {
-        session: { store: storePath },
+        session: {},
         agents: { list: [{ id: "main", default: true }] },
       } as OpenClawConfig,
       sessionKey,
@@ -342,9 +359,23 @@ describe("session-compaction-checkpoints", () => {
       }),
     ).toBe(false);
     expect(
+      hasSqliteSessionTranscriptSnapshot({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId,
+        snapshotId: existingCheckpoints[0].preCompaction.sessionId,
+      }),
+    ).toBe(false);
+    expect(
       hasSqliteSessionTranscriptEvents({
         agentId: DEFAULT_AGENT_ID,
         sessionId: existingCheckpoints[1].preCompaction.sessionId,
+      }),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionTranscriptSnapshot({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId,
+        snapshotId: existingCheckpoints[1].preCompaction.sessionId,
       }),
     ).toBe(false);
     expect(
@@ -354,18 +385,21 @@ describe("session-compaction-checkpoints", () => {
       }),
     ).toBe(true);
     expect(
+      hasSqliteSessionTranscriptSnapshot({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId,
+        snapshotId: existingCheckpoints[2].preCompaction.sessionId,
+      }),
+    ).toBe(true);
+    expect(
       hasSqliteSessionTranscriptEvents({
         agentId: DEFAULT_AGENT_ID,
         sessionId: "current-snapshot",
       }),
     ).toBe(true);
 
-    const nextStore = loadSessionStore(storePath) as Record<
-      string,
-      { compactionCheckpoints?: unknown[] }
-    >;
-    expect(
-      Object.values(nextStore).find((entry) => entry.compactionCheckpoints)?.compactionCheckpoints,
-    ).toHaveLength(25);
+    expect(getSessionEntry({ agentId: "main", sessionKey })?.compactionCheckpoints).toHaveLength(
+      25,
+    );
   });
 });
