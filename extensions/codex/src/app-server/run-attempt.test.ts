@@ -1749,16 +1749,20 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    let harness!: ReturnType<typeof createStartedThreadHarness>;
-    harness = createStartedThreadHarness(async (method) => {
+    const harnessRef: { current?: ReturnType<typeof createStartedThreadHarness> } = {};
+    const harness = createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
-        await harness.notify(rateLimitsUpdated(resetsAt));
+        if (!harnessRef.current) {
+          throw new Error("Expected Codex app-server harness to be initialized");
+        }
+        await harnessRef.current.notify(rateLimitsUpdated(resetsAt));
         throw Object.assign(new Error("You've reached your usage limit."), {
           data: { codexErrorInfo: "usageLimitExceeded" },
         });
       }
       return undefined;
     });
+    harnessRef.current = harness;
 
     const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
       (error: unknown) => error,
