@@ -676,6 +676,33 @@ openclaw channels status --probe --channel imessage
     Confirm Full Disk Access + Automation are granted for the process context that runs OpenClaw/`imsg`.
 
   </Accordion>
+
+  <Accordion title="SSH wrapper sends fail with AppleEvents -1743 (Automation lands on sshd-keygen-wrapper)">
+    When OpenClaw runs `imsg` via an SSH wrapper, macOS can assign the Automation permission for Messages.app to `/usr/libexec/sshd-keygen-wrapper` instead of `imsg`. In this state, inbound reads and probes work, but outbound sends fail with:
+
+    ```
+    appleScriptFailure("execution error: Not authorized to send Apple events to Messages. (-1743)")
+    ```
+
+    The TCC record looks like:
+
+    ```
+    kTCCServiceAppleEvents | /usr/libexec/sshd-keygen-wrapper | auth_value=0 | com.apple.MobileSMS
+    ```
+
+    The System Settings → Privacy & Security → Automation UI may show `sshd-keygen-wrapper` but does not provide a toggle to grant it Messages access. `tccutil reset AppleEvents` and re-running from an interactive SSH terminal typically do not clear this.
+
+    **Resolution options:**
+
+    1. **Run the gateway and `imsg` in the bot user's local process context.** Use the local Mac fast path (`cliPath` points directly to `imsg`, no SSH wrapper). This ensures the Automation prompt fires in the correct process context and is recorded against `imsg` rather than the SSH server.
+
+    2. **Use a launchd service in the bot user's session** (`launchctl bootout user/…` / `launchctl bootstrap user/…`) so `imsg` runs under that user's GUI session with its TCC grants intact.
+
+    3. **Reconfigure to a single-user setup** if the two-user remote-SSH topology cannot be made to work with TCC. OpenClaw supports iMessage exclusively through `imsg`; there is no alternative channel for iMessage delivery.
+
+    This edge case does not affect single-user setups where the gateway process context directly calls `imsg`.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Configuration reference pointers
