@@ -148,7 +148,7 @@ htmlEscapeRenderer.image = (token: { href?: string | null; text?: string | null 
   }
   // Render safe remote http/https image URLs; DOMPurify will sanitize the src.
   if (SAFE_REMOTE_IMAGE_RE.test(href)) {
-    return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}">`;
+    return `<img src="${escapeHtml(href)}" alt="${escapeHtml(label)}" referrerpolicy="no-referrer">`;
   }
   // All other schemes (javascript:, data:application/..., etc.) are flattened
   // to alt text to prevent unsafe content from reaching the DOM.

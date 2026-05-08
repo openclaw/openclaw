@@ -35,12 +35,14 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("<img");
     expect(html).toContain("https://example.com/image.png");
     expect(html).toContain('alt="Alt text"');
+    expect(html).toContain('referrerpolicy="no-referrer"');
   });
 
   it("renders remote http images inline (#40945)", () => {
     const html = toSanitizedMarkdownHtml("![Photo](http://example.com/photo.jpg)");
     expect(html).toContain("<img");
     expect(html).toContain("http://example.com/photo.jpg");
+    expect(html).toContain('referrerpolicy="no-referrer"');
   });
 
   it("preserves base64 data URI images (#15437)", () => {
@@ -66,6 +68,7 @@ describe("toSanitizedMarkdownHtml", () => {
     const html = toSanitizedMarkdownHtml("![](https://example.com/image.png)");
     expect(html).toContain("<img");
     expect(html).toContain('alt="image"');
+    expect(html).toContain('referrerpolicy="no-referrer"');
   });
 
   it("renders GFM markdown tables (#20410)", () => {
