@@ -215,8 +215,8 @@ describe("config cli integration", () => {
       const afterDryRun = fs.readFileSync(configPath, "utf8");
       expect(afterDryRun).toBe(before);
       expect(runtime.errors).toEqual([]);
-      expect(runtime.logs.some((line) => line.includes("Dry run successful: 2 update(s)"))).toBe(
-        true,
+      expect(runtime.logs).toEqual(
+        expect.arrayContaining([expect.stringContaining("Dry run successful: 2 update(s)")]),
       );
 
       await runConfigSet({
