@@ -2,15 +2,14 @@ import "./isolated-agent.mocks.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
   makeJob,
+  seedCronSessionRows,
   withTempCronHome,
-  writeSessionStoreEntries,
 } from "./isolated-agent.test-harness.js";
 
 function lastEmbeddedLane(): string | undefined {
@@ -20,7 +19,7 @@ function lastEmbeddedLane(): string | undefined {
 }
 
 async function runLaneCase(home: string, lane?: string) {
-  const storePath = await writeSessionStoreEntries(home, {
+  await seedCronSessionRows(home, {
     "agent:main:main": {
       sessionId: "main-session",
       updatedAt: Date.now(),
@@ -31,7 +30,7 @@ async function runLaneCase(home: string, lane?: string) {
   mockAgentPayloads([{ text: "ok" }]);
 
   await runCronIsolatedAgentTurn({
-    cfg: makeCfg(home, storePath),
+    cfg: makeCfg(home),
     deps: createCliDeps(),
     job: { ...makeJob({ kind: "agentTurn", message: "do it" }), delivery: { mode: "none" } },
     message: "do it",
@@ -75,7 +74,6 @@ describe("runCronIsolatedAgentTurn lane selection", () => {
     vi.doUnmock("../agents/model-selection.js");
     vi.doUnmock("../agents/subagent-announce.js");
     vi.doUnmock("../gateway/call.js");
-    clearSessionStoreCacheForTest();
     resetAgentRunContextForTest();
     clearAllBootstrapSnapshots();
     vi.restoreAllMocks();

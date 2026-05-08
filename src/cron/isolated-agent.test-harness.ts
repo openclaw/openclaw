@@ -30,7 +30,7 @@ export async function seedMainRouteSession(
   home: string,
   session: { lastProvider: string; lastTo: string; lastChannel?: string },
 ): Promise<void> {
-  await seedSessionRows(home, {
+  await seedCronSessionRows(home, {
     "agent:main:main": {
       sessionId: "main-session",
       updatedAt: Date.now(),
@@ -39,7 +39,7 @@ export async function seedMainRouteSession(
   });
 }
 
-export async function seedSessionRows(
+export async function seedCronSessionRows(
   home: string,
   entries: Record<string, Record<string, unknown>>,
   agentId = "main",

@@ -1,12 +1,14 @@
-import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { upsertSessionEntry } from "../config/sessions/store.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import {
   doesApprovalRequestMatchChannelAccount,
@@ -61,15 +63,48 @@ const baseRequest: ExecApprovalRequest = {
   expiresAtMs: 6000,
 };
 
-function writeStoreFile(
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+});
+
+function seedSessionRowsForFixturePath(
   storePath: string,
   entries: Record<string, Partial<SessionEntry>>,
 ): OpenClawConfig {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(entries), "utf-8");
-  return {
-    session: { store: storePath },
-  } as OpenClawConfig;
+  vi.stubEnv("OPENCLAW_STATE_DIR", resolveStateRootFromStorePath(storePath));
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    upsertSessionEntry({
+      agentId: resolveTestAgentIdForSession({ storePath, sessionKey }),
+      sessionKey,
+      entry: {
+        sessionId: entry.sessionId ?? sessionKey.replace(/:/g, "_"),
+        updatedAt: entry.updatedAt ?? Date.now(),
+        ...entry,
+      },
+    });
+  }
+  return {} as OpenClawConfig;
+}
+
+function resolveStateRootFromStorePath(storePath: string): string {
+  const parts = path.resolve(storePath).split(path.sep);
+  const agentsIndex = parts.lastIndexOf("agents");
+  if (agentsIndex > 0) {
+    return path.join(path.sep, ...parts.slice(0, agentsIndex));
+  }
+  return path.dirname(storePath);
+}
+
+function resolveTestAgentIdForSession(params: { storePath: string; sessionKey: string }): string {
+  const parsedAgentId = params.sessionKey.match(/^agent:([^:]+):/u)?.[1];
+  if (parsedAgentId) {
+    return parsedAgentId;
+  }
+  return path.basename(path.dirname(params.storePath)) === "sessions"
+    ? path.basename(path.dirname(path.dirname(params.storePath)))
+    : path.basename(path.dirname(params.storePath));
 }
 
 function expectResolvedSessionTarget(
@@ -136,8 +171,8 @@ describe("exec approval session target", () => {
 
   it("returns null for blank session keys, missing entries, and unresolved targets", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const cfg = writeStoreFile(storePath, {
+      const storePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
+      const cfg = seedSessionRowsForFixturePath(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -159,8 +194,8 @@ describe("exec approval session target", () => {
 
   it("prefers turn-source routing over stale session delivery state", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const cfg = writeStoreFile(storePath, {
+      const storePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
+      const cfg = seedSessionRowsForFixturePath(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -236,8 +271,10 @@ describe("exec approval session target", () => {
     "$name",
     ({ relativeStoreDir, entries, request, expected }) => {
       withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-        const cfg = writeStoreFile(path.join(tmpDir, relativeStoreDir, "sessions.json"), entries);
-        cfg.session = { store: path.join(tmpDir, "{agentId}", "sessions.json") };
+        const cfg = seedSessionRowsForFixturePath(
+          path.join(tmpDir, relativeStoreDir, "sessions.json"),
+          entries,
+        );
         expect(expectResolvedSessionTarget(cfg, request)).toEqual(expected);
       });
     },
@@ -245,8 +282,8 @@ describe("exec approval session target", () => {
 
   it("preserves string thread ids from the session store", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const cfg = writeStoreFile(storePath, {
+      const storePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
+      const cfg = seedSessionRowsForFixturePath(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -348,8 +385,8 @@ describe("exec approval session target", () => {
 
   it("falls back to the stored session binding when turn source uses another channel", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const cfg = writeStoreFile(storePath, {
+      const storePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
+      const cfg = seedSessionRowsForFixturePath(storePath, {
         "agent:main:matrix:channel:!ops:example.org": {
           sessionId: "main",
           updatedAt: 1,
@@ -378,8 +415,8 @@ describe("exec approval session target", () => {
 
   it("falls back to the session-bound account when no turn-source account is present", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const cfg = writeStoreFile(storePath, {
+      const storePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
+      const cfg = seedSessionRowsForFixturePath(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -405,8 +442,8 @@ describe("exec approval session target", () => {
 
   it("prefers explicit turn-source accounts over stale session account bindings", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const cfg = writeStoreFile(storePath, {
+      const storePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
+      const cfg = seedSessionRowsForFixturePath(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -434,8 +471,8 @@ describe("exec approval session target", () => {
 
   it("reconciles plugin-request turn source and session origin targets through the shared helper", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const cfg = writeStoreFile(storePath, {
+      const storePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
+      const cfg = seedSessionRowsForFixturePath(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -455,8 +492,8 @@ describe("exec approval session target", () => {
 
   it("returns null when explicit turn source conflicts with the session-bound origin target", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const cfg = writeStoreFile(storePath, {
+      const storePath = path.join(tmpDir, "agents", "main", "sessions", "sessions.json");
+      const cfg = seedSessionRowsForFixturePath(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,

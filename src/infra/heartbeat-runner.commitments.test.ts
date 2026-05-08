@@ -12,7 +12,7 @@ import {
   startHeartbeatRunner,
 } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import { seedHeartbeatSession, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 import { requestHeartbeat, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 installHeartbeatRunnerTestRuntime();
@@ -82,7 +82,7 @@ describe("runHeartbeatOnce commitments", () => {
     legacyRawSourceText?: boolean;
     visibleReplies?: "automatic" | "message_tool";
   }) {
-    return await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    return await withTempHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
       const sessionKey = "agent:main:telegram:user-155462274";
       const cfg: OpenClawConfig = {
@@ -97,10 +97,10 @@ describe("runHeartbeatOnce commitments", () => {
         },
         ...(params?.visibleReplies ? { messages: { visibleReplies: params.visibleReplies } } : {}),
         channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
         commitments: { enabled: true },
       };
-      await seedSessionStore(storePath, sessionKey, {
+      await seedHeartbeatSession(agentId, sessionKey, {
         lastChannel: "telegram",
         lastProvider: "telegram",
         lastTo: "stale-target",
@@ -170,7 +170,7 @@ describe("runHeartbeatOnce commitments", () => {
 
   it("keeps due heartbeat tasks tool-capable when commitments are also due", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
-      async ({ tmpDir, storePath, replySpy }) => {
+      async ({ tmpDir, agentId, replySpy }) => {
         vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
         const sessionKey = "agent:main:telegram:user-155462274";
         const cfg: OpenClawConfig = {
@@ -184,7 +184,7 @@ describe("runHeartbeatOnce commitments", () => {
             },
           },
           channels: { telegram: { allowFrom: ["*"] } },
-          session: { store: storePath },
+          session: {},
           commitments: { enabled: true },
         };
         await fs.writeFile(
@@ -196,7 +196,7 @@ describe("runHeartbeatOnce commitments", () => {
 `,
           "utf-8",
         );
-        await seedSessionStore(storePath, sessionKey, {
+        await seedHeartbeatSession(agentId, sessionKey, {
           lastChannel: "telegram",
           lastProvider: "telegram",
           lastTo: "stale-target",
@@ -257,7 +257,7 @@ describe("runHeartbeatOnce commitments", () => {
 
   it("does not deliver due commitments when heartbeat target is none", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
-      async ({ tmpDir, storePath, replySpy }) => {
+      async ({ tmpDir, agentId, replySpy }) => {
         vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
         const sessionKey = "agent:main:telegram:user-155462274";
         const cfg: OpenClawConfig = {
@@ -271,10 +271,10 @@ describe("runHeartbeatOnce commitments", () => {
             },
           },
           channels: { telegram: { allowFrom: ["*"] } },
-          session: { store: storePath },
+          session: {},
           commitments: { enabled: true },
         };
-        await seedSessionStore(storePath, sessionKey, {
+        await seedHeartbeatSession(agentId, sessionKey, {
           lastChannel: "telegram",
           lastProvider: "telegram",
           lastTo: "155462274",
@@ -336,7 +336,7 @@ describe("runHeartbeatOnce commitments", () => {
     vi.useFakeTimers();
     vi.setSystemTime(nowMs);
 
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
       const dueSessionKey = "agent:main:telegram:user-155462274";
       const cfg: OpenClawConfig = {
@@ -349,7 +349,7 @@ describe("runHeartbeatOnce commitments", () => {
             },
           },
         },
-        session: { store: storePath },
+        session: {},
         commitments: { enabled: true },
       };
       await saveCommitmentStore(undefined, {
