@@ -38,12 +38,19 @@ export type VoiceRealtimeAgentTurnParams = {
   userId: string;
 };
 
+export type VoiceRealtimeSpeakerTurn = {
+  close: () => void;
+  sendInputAudio: (discordPcm48kStereo: Buffer) => void;
+};
+
 export type VoiceRealtimeSession = {
+  beginSpeakerTurn: (
+    context: VoiceRealtimeSpeakerContext,
+    userId: string,
+  ) => VoiceRealtimeSpeakerTurn;
   close: () => void;
   connect: () => Promise<void>;
   handleBargeIn: () => void;
-  sendInputAudio: (discordPcm48kStereo: Buffer) => void;
-  setSpeakerContext: (context: VoiceRealtimeSpeakerContext, userId: string) => void;
 };
 
 export type VoiceSessionEntry = {

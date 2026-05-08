@@ -633,17 +633,18 @@ describe("DiscordVoiceManager", () => {
     const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
       | {
           realtime?: {
-            setSpeakerContext: (
+            beginSpeakerTurn: (
               context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
               userId: string,
-            ) => void;
+            ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
           };
         }
       | undefined;
-    entry?.realtime?.setSpeakerContext(
+    const ownerTurn = entry?.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
     expect(resolveConfiguredRealtimeVoiceProviderMock).toHaveBeenCalledWith(
       expect.objectContaining({
         configuredProviderId: "openai",
@@ -707,6 +708,55 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("keeps talk-buffer realtime transcripts on the audio turn speaker context", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "non-owner answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "talk-buffer",
+        realtime: { provider: "openai", debounceMs: 1 },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      | {
+          realtime?: {
+            beginSpeakerTurn: (
+              context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+              userId: string,
+            ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+          };
+        }
+      | undefined;
+    const nonOwnerTurn = entry?.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: false, speakerLabel: "Guest" },
+      "u-guest",
+    );
+    nonOwnerTurn?.sendInputAudio(Buffer.alloc(8));
+    const ownerTurn = entry?.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    bridgeParams?.onTranscript?.("user", "non-owner question", true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderIsOwner: false,
+      }),
+      expect.anything(),
+    );
+  });
+
   it("starts Discord realtime voice in bidi mode with the consult tool", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "consult answer" }] });
     const manager = createManager({
@@ -729,17 +779,18 @@ describe("DiscordVoiceManager", () => {
     const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
       | {
           realtime?: {
-            setSpeakerContext: (
+            beginSpeakerTurn: (
               context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
               userId: string,
-            ) => void;
+            ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
           };
         }
       | undefined;
-    entry?.realtime?.setSpeakerContext(
+    const ownerTurn = entry?.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
     );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
 
     const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
       | {
@@ -785,6 +836,77 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         senderIsOwner: true,
+        toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("keeps bidi realtime consults on the audio turn speaker context", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "guest consult answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        realtime: {
+          provider: "openai",
+          toolPolicy: "safe-read-only",
+          consultPolicy: "always",
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      | {
+          realtime?: {
+            beginSpeakerTurn: (
+              context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+              userId: string,
+            ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+          };
+        }
+      | undefined;
+    const nonOwnerTurn = entry?.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: false, speakerLabel: "Guest" },
+      "u-guest",
+    );
+    nonOwnerTurn?.sendInputAudio(Buffer.alloc(8));
+    const ownerTurn = entry?.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => void;
+        }
+      | undefined;
+    bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-guest",
+        callId: "call-guest",
+        name: "openclaw_agent_consult",
+        args: { question: "guest question" },
+      },
+      realtimeSessionMock,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderIsOwner: false,
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       }),
       expect.anything(),

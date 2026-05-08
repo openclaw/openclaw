@@ -31,18 +31,26 @@ import {
   type VoiceRealtimeAgentTurnParams,
   type VoiceRealtimeSession,
   type VoiceRealtimeSpeakerContext,
+  type VoiceRealtimeSpeakerTurn,
   type VoiceSessionEntry,
 } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_REALTIME_TALKBACK_DEBOUNCE_MS = 350;
 const DISCORD_REALTIME_FALLBACK_TEXT = "I hit an error while checking that. Please try again.";
+const DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT = 32;
 
 export type DiscordVoiceMode = "stt-tts" | "talk-buffer" | "bidi";
 
 type DiscordRealtimeSpeakerContext = VoiceRealtimeSpeakerContext & { userId: string };
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
+
+type PendingSpeakerTurn = {
+  context: DiscordRealtimeSpeakerContext;
+  hasAudio: boolean;
+  closed: boolean;
+};
 
 export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {
   const mode = voice?.mode;
@@ -67,7 +75,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private stopped = false;
   private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
   private consultToolsAllow: string[] | undefined;
-  private speakerContext: DiscordRealtimeSpeakerContext | undefined;
+  private readonly pendingSpeakerTurns: PendingSpeakerTurn[] = [];
 
   constructor(
     private readonly params: {
@@ -85,16 +93,20 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       logPrefix: "[discord] realtime agent",
       responseStyle: "Brief, natural spoken answer for a Discord voice channel.",
       fallbackText: DISCORD_REALTIME_FALLBACK_TEXT,
-      consult: async ({ question, responseStyle }) => ({
-        text: await this.runAgentTurn({
-          message: formatVoiceIngressPrompt(
-            [question, responseStyle ? `Spoken style: ${responseStyle}` : undefined]
-              .filter(Boolean)
-              .join("\n\n"),
-            this.speakerContext?.speakerLabel ?? "Discord voice speaker",
-          ),
-        }),
-      }),
+      consult: async ({ question, responseStyle, metadata }) => {
+        const context = isDiscordRealtimeSpeakerContext(metadata) ? metadata : undefined;
+        return {
+          text: await this.runAgentTurn({
+            context,
+            message: formatVoiceIngressPrompt(
+              [question, responseStyle ? `Spoken style: ${responseStyle}` : undefined]
+                .filter(Boolean)
+                .join("\n\n"),
+              context?.speakerLabel ?? "Discord voice speaker",
+            ),
+          }),
+        };
+      },
       deliver: (text) => this.bridge?.sendUserMessage(buildDiscordSpeakExactUserMessage(text)),
     });
   }
@@ -138,7 +150,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         if (!isFinal || role !== "user" || this.params.mode !== "talk-buffer") {
           return;
         }
-        this.talkback.enqueue(text);
+        this.talkback.enqueue(text, this.consumePendingSpeakerContext());
       },
       onToolCall: (event, session) => this.handleToolCall(event, session),
       onEvent: (event) => {
@@ -158,19 +170,35 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   close(): void {
     this.stopped = true;
     this.talkback.close();
+    this.pendingSpeakerTurns.length = 0;
     this.clearOutputAudio();
     this.bridge?.close();
     this.bridge = null;
   }
 
-  setSpeakerContext(context: VoiceRealtimeSpeakerContext, userId: string): void {
-    this.speakerContext = { ...context, userId };
+  beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
+    const turn: PendingSpeakerTurn = {
+      context: { ...context, userId },
+      hasAudio: false,
+      closed: false,
+    };
+    this.pendingSpeakerTurns.push(turn);
+    this.prunePendingSpeakerTurns();
+    return {
+      sendInputAudio: (discordPcm48kStereo) =>
+        this.sendInputAudioForTurn(turn, discordPcm48kStereo),
+      close: () => {
+        turn.closed = true;
+        this.prunePendingSpeakerTurns();
+      },
+    };
   }
 
-  sendInputAudio(discordPcm48kStereo: Buffer): void {
+  private sendInputAudioForTurn(turn: PendingSpeakerTurn, discordPcm48kStereo: Buffer): void {
     if (!this.bridge || this.stopped) {
       return;
     }
+    turn.hasAudio = true;
     const realtimePcm = convertDiscordPcm48kStereoToRealtimePcm24kMono(discordPcm48kStereo);
     if (realtimePcm.length > 0) {
       this.bridge.sendAudio(realtimePcm);
@@ -246,7 +274,15 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         willContinue: true,
       });
     }
-    void this.runAgentTurn({ message: buildRealtimeVoiceAgentConsultChatMessage(event.args) })
+    const context = this.consumePendingSpeakerContext();
+    if (!context) {
+      session.submitToolResult(callId, { error: "No Discord speaker context available" });
+      return;
+    }
+    void this.runAgentTurn({
+      context,
+      message: buildRealtimeVoiceAgentConsultChatMessage(event.args),
+    })
       .then((text) => {
         session.submitToolResult(callId, { text });
       })
@@ -255,8 +291,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       });
   }
 
-  private async runAgentTurn(params: { message: string }): Promise<string> {
-    const context = this.speakerContext;
+  private async runAgentTurn(params: {
+    context?: DiscordRealtimeSpeakerContext;
+    message: string;
+  }): Promise<string> {
+    const context = params.context;
     if (!context) {
       return "";
     }
@@ -267,6 +306,40 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       userId: context.userId,
     });
   }
+
+  private consumePendingSpeakerContext(): DiscordRealtimeSpeakerContext | undefined {
+    this.prunePendingSpeakerTurns();
+    const index = this.pendingSpeakerTurns.findIndex((turn) => turn.hasAudio);
+    if (index < 0) {
+      return undefined;
+    }
+    const [turn] = this.pendingSpeakerTurns.splice(index, 1);
+    this.prunePendingSpeakerTurns();
+    return turn?.context;
+  }
+
+  private prunePendingSpeakerTurns(): void {
+    for (let index = this.pendingSpeakerTurns.length - 1; index >= 0; index -= 1) {
+      const turn = this.pendingSpeakerTurns[index];
+      if (turn?.closed && !turn.hasAudio) {
+        this.pendingSpeakerTurns.splice(index, 1);
+      }
+    }
+    while (this.pendingSpeakerTurns.length > DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT) {
+      const completedIndex = this.pendingSpeakerTurns.findIndex((turn) => turn.closed);
+      this.pendingSpeakerTurns.splice(completedIndex >= 0 ? completedIndex : 0, 1);
+    }
+  }
+}
+
+function isDiscordRealtimeSpeakerContext(value: unknown): value is DiscordRealtimeSpeakerContext {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as { userId?: unknown }).userId === "string" &&
+    typeof (value as { senderIsOwner?: unknown }).senderIsOwner === "boolean" &&
+    typeof (value as { speakerLabel?: unknown }).speakerLabel === "string"
+  );
 }
 
 function buildProviderConfigs(

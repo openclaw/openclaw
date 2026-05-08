@@ -593,8 +593,12 @@ export class DiscordVoiceManager {
 
     try {
       if (realtime && realtimeIngress) {
-        realtime.setSpeakerContext(realtimeIngress, userId);
-        await this.processRealtimeAudioCapture({ entry, stream });
+        const turn = realtime.beginSpeakerTurn(realtimeIngress, userId);
+        try {
+          await this.processRealtimeAudioCapture({ stream, turn });
+        } finally {
+          turn.close();
+        }
         return;
       }
       const pcm = await decodeOpusStream(stream, {
@@ -628,16 +632,12 @@ export class DiscordVoiceManager {
   }
 
   private async processRealtimeAudioCapture(params: {
-    entry: VoiceSessionEntry;
     stream: import("node:stream").Readable;
+    turn: import("./session.js").VoiceRealtimeSpeakerTurn;
   }): Promise<void> {
-    const { entry, stream } = params;
-    const realtime = entry.realtime;
-    if (!realtime) {
-      return;
-    }
+    const { stream, turn } = params;
     await decodeOpusStreamChunks(stream, {
-      onChunk: (pcm) => realtime.sendInputAudio(pcm),
+      onChunk: (pcm) => turn.sendInputAudio(pcm),
       onVerbose: logVoiceVerbose,
       onWarn: (message) => logger.warn(message),
     });
