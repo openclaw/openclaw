@@ -156,7 +156,7 @@ describe("config io write", () => {
       });
 
       await expect(io.readConfigFileSnapshot()).resolves.toMatchObject({ exists: true });
-      expect(() => io.loadConfig()).not.toThrow();
+      expect(io.loadConfig()).toMatchObject({ gateway: { mode: "local" } });
 
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining(
