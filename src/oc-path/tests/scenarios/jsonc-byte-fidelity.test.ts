@@ -156,7 +156,7 @@ describe("wave-15 jsonc byte-fidelity", () => {
     const root = assertParseable(raw);
     if (root.kind === "array") {
       expect(root.items).toHaveLength(7);
-      expect(root.items.filter((item) => item.kind !== "number")).toEqual([]);
+      expect(root.items.every((item) => item.kind === "number")).toBe(true);
     }
   });
 
