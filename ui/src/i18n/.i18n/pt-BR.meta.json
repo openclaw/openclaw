@@ -1,19 +1,11 @@
 {
-  "fallbackKeys": [
-    "usage.presets.last1y",
-    "usage.presets.last90d",
-    "usage.scope.family",
-    "usage.scope.familyHint",
-    "usage.scope.familyIncluded",
-    "usage.scope.instance",
-    "usage.scope.instanceHint"
-  ],
-  "generatedAt": "2026-05-08T03:32:05.951Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-05-08T03:40:44.939Z",
   "locale": "pt-BR",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "b4c8279f087e4a589dd3a6e59c9e06f2686df58f904a678c5a773a0df05fe563",
   "totalKeys": 1025,
-  "translatedKeys": 1018,
+  "translatedKeys": 1025,
   "workflow": 1
 }
