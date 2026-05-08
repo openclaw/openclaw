@@ -79,7 +79,15 @@ export function createWebSendApi(params: {
         ? { text, mentionedJids: [] }
         : await resolveMentions(jid, text);
       if (mediaBuffer && mediaType) {
-        if (mediaType.startsWith("image/")) {
+        if (sendOptions?.asDocument === true) {
+          const fileName = sendOptions?.fileName?.trim() || "file";
+          payload = {
+            document: mediaBuffer,
+            fileName,
+            caption: text || undefined,
+            mimetype: mediaType,
+          };
+        } else if (mediaType.startsWith("image/")) {
           payload = {
             image: mediaBuffer,
             caption: resolvedPayloadText.text || undefined,

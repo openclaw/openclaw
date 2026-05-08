@@ -451,6 +451,45 @@ describe("web outbound", () => {
     });
   });
 
+  it("forces document branch when forceDocument is true with image media", async () => {
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+      fileName: "promo.jpg",
+    });
+    await sendMessageWhatsApp("+1555", "look", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/pic.jpg",
+      forceDocument: true,
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "look", buf, "image/jpeg", {
+      asDocument: true,
+      fileName: "promo.jpg",
+    });
+  });
+
+  it("falls back to a default filename when forceDocument media has no fileName", async () => {
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/png",
+      kind: "image",
+    });
+    await sendMessageWhatsApp("+1555", "promo", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/pic.png",
+      forceDocument: true,
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "promo", buf, "image/png", {
+      asDocument: true,
+      fileName: "file",
+    });
+  });
+
   it("uses account-aware WhatsApp media caps for outbound uploads", async () => {
     hoisted.controllerListeners.set("work", {
       sendComposingTo,

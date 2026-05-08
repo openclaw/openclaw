@@ -70,6 +70,7 @@ export async function sendMessageWhatsApp(
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
     audioAsVoice?: boolean;
+    forceDocument?: boolean;
     accountId?: string;
     quotedMessageKey?: {
       id: string;
@@ -131,7 +132,7 @@ export async function sendMessageWhatsApp(
       const caption = text || undefined;
       mediaBuffer = media.buffer;
       mediaType = media.mimetype;
-      if (media.kind === "audio" && caption) {
+      if (media.kind === "audio" && caption && !options.forceDocument) {
         visibleTextAfterVoice = caption;
         text = "";
       } else if (media.kind === "document") {
@@ -139,6 +140,9 @@ export async function sendMessageWhatsApp(
         documentFileName = media.fileName;
       } else {
         text = caption ?? "";
+      }
+      if (options.forceDocument) {
+        documentFileName ??= media.fileName ?? "file";
       }
     }
     outboundLog.info(`Sending message -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""}`);
@@ -149,9 +153,14 @@ export async function sendMessageWhatsApp(
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName || options.quotedMessageKey
+      options.gifPlayback ||
+      options.forceDocument ||
+      accountId ||
+      documentFileName ||
+      options.quotedMessageKey
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
+            ...(options.forceDocument ? { asDocument: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
             ...(options.quotedMessageKey ? { quotedMessageKey: options.quotedMessageKey } : {}),
             accountId,

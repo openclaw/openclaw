@@ -123,6 +123,23 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("sends as document when sendOptions.asDocument is true regardless of MIME", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "promo", payload, "image/png", {
+      asDocument: true,
+      fileName: "promo.png",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "promo.png",
+        caption: "promo",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
   it("sends plain text messages", async () => {
     const res = await api.sendMessage("+1555", "hello");
     expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", { text: "hello" });
