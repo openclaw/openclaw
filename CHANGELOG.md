@@ -163,6 +163,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Nostr/setup: keep setup-only status checks on the lightweight surface so Onboard does not import `nostr-tools` while Nostr is unconfigured. Fixes #72182. Thanks @SnowSky1.
 - Gateway/watch: leave `OPENCLAW_TRACE_SYNC_IO` disabled by default in `pnpm gateway:watch:raw` so watch mode avoids noisy Node sync-I/O stack traces unless explicitly requested.
 - Codex app-server: close stdio stdin before force-killing the managed app-server, matching Codex single-client shutdown behavior and avoiding unsettled CLI exits after successful runs.
 - CLI/Codex: dispose registered agent harnesses during short-lived CLI shutdown so successful Codex-backed `agent --local` runs do not leave app-server child processes alive.
