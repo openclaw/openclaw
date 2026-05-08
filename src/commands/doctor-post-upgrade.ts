@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listBuiltRuntimeEntryCandidates } from "../plugins/package-entrypoints.js";
 import type { PostUpgradeFinding, PostUpgradeReport } from "./doctor-post-upgrade.types.js";
 
 type InstalledPluginRecord = {
@@ -47,7 +46,9 @@ export async function runPostUpgradeProbes(params: {
   const installs = JSON.parse(installsRaw) as InstallsJson;
 
   for (const record of installs.plugins) {
-    if (!record.enabled) continue;
+    if (!record.enabled) {
+      continue;
+    }
     const pkgRelPath = record.packageJson?.path ?? "package.json";
     let pkg: { openclaw?: { extensions?: string[]; runtimeExtensions?: string[] } };
     try {
