@@ -113,7 +113,9 @@ async function createHarness(
   const promptPromise = promptAgent(agent, SESSION_ID);
 
   await vi.waitFor(() => {
-    expect(runId).toBeDefined();
+    if (!runId) {
+      throw new Error("expected ACP permission relay run id");
+    }
   });
 
   return {

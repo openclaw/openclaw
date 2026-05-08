@@ -88,7 +88,6 @@ function expectInspectSuccess(
 function expectIcaclsResetCommand(
   result: ReturnType<typeof createIcaclsResetCommand>,
 ): NonNullable<ReturnType<typeof createIcaclsResetCommand>> {
-  expect(result).toBeDefined();
   if (!result) {
     throw new Error("Expected icacls reset command");
   }

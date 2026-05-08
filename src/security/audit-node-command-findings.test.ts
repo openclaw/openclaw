@@ -27,7 +27,6 @@ function requireFinding(
   label: string,
 ) {
   const finding = findings.find((entry) => entry.checkId === checkId);
-  expect(finding, label).toBeDefined();
   if (!finding) {
     throw new Error(`Expected ${checkId} finding for ${label}`);
   }
