@@ -330,9 +330,7 @@ export function resolveSessionFilePath(
     if (parsed?.sessionId === sessionId) {
       return candidate!;
     }
-    if (!candidate) {
-      return createSqliteSessionTranscriptLocator({ agentId: opts?.agentId, sessionId });
-    }
+    return createSqliteSessionTranscriptLocator({ agentId: opts?.agentId, sessionId });
   }
   const sessionsDir = resolveSessionsDir(opts);
   if (candidate) {

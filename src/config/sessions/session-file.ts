@@ -1,6 +1,5 @@
-import path from "node:path";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { isSqliteSessionTranscriptLocator, resolveSessionFilePath } from "./paths.js";
+import { resolveSessionFilePath } from "./paths.js";
 import { getSessionEntry, upsertSessionEntry } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -33,21 +32,10 @@ export async function resolveAndPersistSessionFile(params: {
     : !baseEntry.sessionFile && fallbackSessionFile
       ? { ...baseEntry, sessionFile: fallbackSessionFile }
       : baseEntry;
-  const entrySessionFile = entryForResolve.sessionFile?.trim();
-  const hasSqliteLocator =
-    !params.sessionsDir &&
-    (isSqliteSessionTranscriptLocator(entrySessionFile) ||
-      isSqliteSessionTranscriptLocator(fallbackSessionFile));
-  const sessionFile = hasSqliteLocator
-    ? resolveSessionFilePath(sessionId, entryForResolve, { agentId: params.agentId })
-    : !params.sessionsDir && entrySessionFile && path.isAbsolute(entrySessionFile)
-      ? path.resolve(entrySessionFile)
-      : fallbackSessionFile && !params.sessionsDir
-        ? path.resolve(fallbackSessionFile)
-        : resolveSessionFilePath(sessionId, entryForResolve, {
-            agentId: params.agentId,
-            sessionsDir: params.sessionsDir,
-          });
+  const sessionFile = resolveSessionFilePath(sessionId, entryForResolve, {
+    agentId: params.agentId,
+    sessionsDir: params.sessionsDir,
+  });
   const persistedEntry: SessionEntry = {
     ...baseEntry,
     sessionId,
