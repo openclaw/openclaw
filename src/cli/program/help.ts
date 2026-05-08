@@ -9,6 +9,7 @@ import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
 import type { ProgramContext } from "./context.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
+import { formatCliParseErrorOutput } from "./error-output.js";
 import { getSubCliCommandsWithSubcommands } from "./subcli-descriptors.js";
 
 const CLI_NAME = resolveCliName();
@@ -106,7 +107,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     writeErr: (str) => {
       process.stderr.write(formatHelpOutput(str));
     },
-    outputError: (str, write) => write(theme.error(str)),
+    outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
   });
 
   if (
