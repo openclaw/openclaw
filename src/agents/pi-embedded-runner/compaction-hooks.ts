@@ -81,6 +81,8 @@ function syncPostCompactionSessionMemory(params: {
 
 export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
+  agentId?: string;
+  sessionId?: string;
   sessionKey?: string;
   sessionFile: string;
 }): Promise<void> {
@@ -88,7 +90,12 @@ export async function runPostCompactionSideEffects(params: {
   if (!sessionFile) {
     return;
   }
-  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
+  emitSessionTranscriptUpdate({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    sessionFile,
+    sessionKey: params.sessionKey,
+  });
   await syncPostCompactionSessionMemory({
     config: params.config,
     sessionKey: params.sessionKey,

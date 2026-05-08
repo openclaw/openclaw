@@ -474,12 +474,12 @@ function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
 }
 
-function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string): string {
+function resolveSafeTranscriptDir(baseTranscriptDir: string, transcriptDir: string): string {
   const normalized = transcriptDir.trim();
   if (!normalized || normalized.includes(":") || path.isAbsolute(normalized)) {
-    return path.resolve(baseSessionsDir, DEFAULT_TRANSCRIPT_DIR);
+    return path.resolve(baseTranscriptDir, DEFAULT_TRANSCRIPT_DIR);
   }
-  const resolvedBase = path.resolve(baseSessionsDir);
+  const resolvedBase = path.resolve(baseTranscriptDir);
   const candidate = path.resolve(resolvedBase, normalized);
   if (!isPathInside(resolvedBase, candidate)) {
     return path.resolve(resolvedBase, DEFAULT_TRANSCRIPT_DIR);

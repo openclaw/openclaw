@@ -8,6 +8,7 @@ export {
   loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
   readSessionTranscriptDeltaStats,
+  resolveSessionTranscriptScope,
   sessionPathForTranscript,
   type BuildSessionTranscriptEntryOptions,
   type SessionTranscriptEntry,

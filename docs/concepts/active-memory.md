@@ -641,21 +641,21 @@ inspection, turn persistence on explicitly:
 }
 ```
 
-When enabled, active memory stores transcripts in a separate directory under the
-target agent's sessions folder, not in the main user conversation transcript
-path.
+When enabled, active memory records the blocking sub-agent transcript in the
+agent SQLite database and registers a plugin-owned transcript locator under the
+state directory, not in the main user conversation transcript path.
 
-The default layout is conceptually:
+The default locator namespace is conceptually:
 
 ```text
-agents/<agent>/sessions/active-memory/<blocking-memory-sub-agent-session-id>.jsonl
+plugins/active-memory/transcripts/agents/<agent>/active-memory/<blocking-memory-sub-agent-session-id>.jsonl
 ```
 
 You can change the relative subdirectory with `config.transcriptDir`.
 
 Use this carefully:
 
-- blocking memory sub-agent transcripts can accumulate quickly on busy sessions
+- blocking memory sub-agent transcript rows can accumulate quickly on busy sessions
 - `full` query mode can duplicate a lot of conversation context
 - these transcripts contain hidden prompt context and recalled memories
 

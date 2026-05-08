@@ -1789,6 +1789,8 @@ export async function runEmbeddedPiAgent(
                 if (contextEngine.info.ownsCompaction === true) {
                   await runPostCompactionSideEffects({
                     config: params.config,
+                    agentId: sessionAgentId,
+                    sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
                     sessionFile: activeSessionFile,
                   });
