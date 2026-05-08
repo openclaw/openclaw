@@ -1923,7 +1923,7 @@ function countGlobalAgentOwnedSqliteRows(params: {
     const kysely = getNodeSqliteKysely<LegacyGlobalAgentOwnedMigrationDatabase>(db);
     const row = executeCompiledSqliteQuerySync<SqliteCountRow>(
       db,
-      sql`SELECT COUNT(*) AS count FROM ${sql.id(params.table)}`.compile(kysely),
+      sql`SELECT COUNT(*) AS count FROM ${sql.table(params.table)}`.compile(kysely),
     ).rows[0];
     return typeof row?.count === "bigint" ? Number(row.count) : row?.count;
   } catch {
