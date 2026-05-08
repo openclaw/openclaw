@@ -701,11 +701,11 @@ export const zh_TW: TranslationMap = {
       all: "全部",
     },
     scope: {
-      instance: "Current instance",
-      instanceHint: "Show only the active session id for each logical session.",
-      family: "Historical lineage",
-      familyHint: "Roll up known rotated transcript-backed session ids.",
-      familyIncluded: "Historical lineage includes {count} session instances.",
+      instance: "目前執行個體",
+      instanceHint: "僅顯示每個邏輯工作階段的有效工作階段 ID。",
+      family: "歷史沿革",
+      familyHint: "彙總已知輪替且有逐字稿支援的工作階段 ID。",
+      familyIncluded: "歷史沿革包含 {count} 個工作階段執行個體。",
     },
     filters: {
       title: "篩選條件",
