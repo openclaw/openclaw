@@ -141,6 +141,9 @@ export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
+export const createPreMigrationBackup = vi
+  .fn()
+  .mockResolvedValue("/tmp/openclaw-backup.tgz") as unknown as MockFn;
 export const runChannelPluginStartupMaintenance = vi
   .fn()
   .mockResolvedValue(undefined) as unknown as MockFn;
@@ -462,6 +465,10 @@ vi.mock("./doctor-state-migrations.js", () => ({
   runLegacyStateMigrations,
 }));
 
+vi.mock("../commands/migrate/apply.js", () => ({
+  createPreMigrationBackup,
+}));
+
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
   runChannelPluginStartupMaintenance,
 }));
@@ -506,6 +513,7 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
 
   detectLegacyStateMigrations.mockClear();
   runLegacyStateMigrations.mockClear();
+  createPreMigrationBackup.mockClear();
   detectLegacyStateMigrations.mockResolvedValueOnce(
     createLegacyStateMigrationDetectionResult({
       hasLegacySessions: true,
@@ -524,6 +532,7 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
     runtime,
     detectLegacyStateMigrations,
     runLegacyStateMigrations,
+    createPreMigrationBackup,
   };
 }
 

@@ -33,7 +33,6 @@ import {
   CRESTODIAN_RESCUE_PENDING_OWNER_ID,
   isRescuePendingOperation,
 } from "../crestodian/rescue-pending-state.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -110,9 +109,7 @@ type MigrationLogger = {
   warn: (message: string) => void;
 };
 
-let autoMigrateChecked = false;
 let autoMigrateStateDirChecked = false;
-let cachedLegacySessionSurfaces: LegacySessionSurface[] | null = null;
 
 type LegacySessionSurface = {
   isLegacyGroupSessionKey?: (key: string) => boolean;
@@ -170,6 +167,7 @@ function legacyMigrationSourceKey(source: MigrationSourceReport): string {
         source.targetTable ?? "",
         source.sha256 ?? "",
         String(source.sizeBytes ?? ""),
+        String(source.mtimeMs ?? ""),
         String(source.recordCount ?? ""),
       ].join("\0"),
       "utf8",
@@ -313,8 +311,7 @@ function getLegacySessionSurfaces(): LegacySessionSurface[] {
   // Legacy migrations run on cold doctor/startup paths. Prefer the narrower
   // setup plugin surface here so session-key cleanup does not materialize full
   // bundled channel runtimes.
-  cachedLegacySessionSurfaces ??= [...listBundledChannelLegacySessionSurfaces()];
-  return cachedLegacySessionSurfaces;
+  return [...listBundledChannelLegacySessionSurfaces()];
 }
 
 function isSurfaceGroupKey(key: string): boolean {
@@ -1989,15 +1986,6 @@ function collectLegacyMigrationSources(detected: LegacyStateDetection): Migratio
   );
 }
 
-export function resetAutoMigrateLegacyStateForTest() {
-  autoMigrateChecked = false;
-  cachedLegacySessionSurfaces = null;
-}
-
-export function resetAutoMigrateLegacyAgentDirForTest() {
-  resetAutoMigrateLegacyStateForTest();
-}
-
 export function resetAutoMigrateLegacyStateDirForTest() {
   autoMigrateStateDirChecked = false;
 }
@@ -2968,106 +2956,4 @@ export async function runLegacyStateMigrations(params: {
     });
     throw error;
   }
-}
-
-export async function autoMigrateLegacyAgentDir(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-  now?: () => number;
-}): Promise<{
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-}> {
-  return await autoMigrateLegacyState(params);
-}
-
-export async function autoMigrateLegacyState(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-  now?: () => number;
-}): Promise<{
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-}> {
-  if (autoMigrateChecked) {
-    return { migrated: false, skipped: true, changes: [], warnings: [] };
-  }
-  autoMigrateChecked = true;
-
-  const env = params.env ?? process.env;
-  const stateDirResult = await autoMigrateLegacyStateDir({
-    env,
-    homedir: params.homedir,
-    log: params.log,
-  });
-
-  const logMigrationResults = (changes: string[], warnings: string[]) => {
-    const logger = params.log ?? createSubsystemLogger("state-migrations");
-    if (changes.length > 0) {
-      logger.info(
-        `Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`,
-      );
-    }
-    if (warnings.length > 0) {
-      logger.warn(
-        `Legacy state migration warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
-      );
-    }
-  };
-
-  if (
-    normalizeEnvPathOverride(env.OPENCLAW_AGENT_DIR) ||
-    normalizeEnvPathOverride(env.PI_CODING_AGENT_DIR)
-  ) {
-    const changes = [...stateDirResult.changes];
-    const warnings = [...stateDirResult.warnings];
-    logMigrationResults(changes, warnings);
-    return {
-      migrated: stateDirResult.migrated,
-      skipped: true,
-      changes,
-      warnings,
-    };
-  }
-
-  const detected = await detectLegacyStateMigrations({
-    cfg: params.cfg,
-    env,
-    homedir: params.homedir,
-    includeSessions: false,
-    includeChannelPlans: false,
-  });
-  if (!detected.agentDir.hasLegacy) {
-    const changes = [...stateDirResult.changes];
-    const warnings = [...stateDirResult.warnings];
-    logMigrationResults(changes, warnings);
-    return {
-      migrated: stateDirResult.migrated,
-      skipped: false,
-      changes,
-      warnings,
-    };
-  }
-
-  const now = params.now ?? (() => Date.now());
-  const agentDir = await migrateLegacyAgentDir(detected, now);
-  const changes = [...stateDirResult.changes, ...agentDir.changes];
-  const warnings = [...stateDirResult.warnings, ...agentDir.warnings];
-
-  logMigrationResults(changes, warnings);
-
-  return {
-    migrated: changes.length > 0,
-    skipped: false,
-    changes,
-    warnings,
-  };
 }

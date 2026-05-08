@@ -224,6 +224,7 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
+  const { createPreMigrationBackup } = await import("../commands/migrate/apply.js");
   const { note } = await import("../terminal/note.js");
   const legacyState = await detectLegacyStateMigrations({ cfg: ctx.cfg });
   if (legacyState.preview.length === 0) {
@@ -240,8 +241,13 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (!migrate) {
     return;
   }
+  const backupPath = await createPreMigrationBackup({});
+  if (backupPath) {
+    note(backupPath, "Backup");
+  }
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
+    backupPath,
   });
   if (migrated.changes.length > 0) {
     note(migrated.changes.join("\n"), "Doctor changes");

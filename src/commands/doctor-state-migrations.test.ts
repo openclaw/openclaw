@@ -14,10 +14,8 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyState,
   detectLegacyStateMigrations,
   resetAutoMigrateLegacyStateDirForTest,
-  resetAutoMigrateLegacyStateForTest,
   runLegacyStateMigrations,
 } from "./doctor-state-migrations.js";
 
@@ -145,7 +143,6 @@ afterEach(async () => {
   resetPluginStateStoreForTests();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
   await Promise.all(
     tempRoots.map((root) => fs.promises.rm(root, { recursive: true, force: true })),
@@ -234,21 +231,6 @@ async function runStateDirMigration(root: string, env = {} as NodeJS.ProcessEnv)
 async function runFreshStateDirMigration(root: string, env = {} as NodeJS.ProcessEnv) {
   resetAutoMigrateLegacyStateDirForTest();
   return runStateDirMigration(root, env);
-}
-
-async function runAutoMigrateLegacyStateWithLog(params: {
-  root: string;
-  cfg: OpenClawConfig;
-  now?: () => number;
-}) {
-  const log = { info: vi.fn(), warn: vi.fn() };
-  const result = await autoMigrateLegacyState({
-    cfg: params.cfg,
-    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
-    log,
-    now: params.now,
-  });
-  return { result, log };
 }
 
 function expectTargetAlreadyExistsWarning(result: StateDirMigrationResult, targetDir: string) {
@@ -730,46 +712,6 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(path.join(backupDir, "foo.txt"))).toBe(true);
   });
 
-  it("auto-migrates legacy agent dir on startup", async () => {
-    const { root, cfg } = await makeRootWithEmptyCfg();
-    writeLegacyAgentFiles(root, { "auth.json": "{}" });
-
-    const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
-
-    const targetAgentDir = path.join(root, "agents", "main", "agent");
-    expect(fs.existsSync(path.join(targetAgentDir, "auth.json"))).toBe(true);
-    expect(result.migrated).toBe(true);
-    expect(log.info).toHaveBeenCalled();
-  });
-
-  it("leaves legacy sessions for doctor on startup", async () => {
-    const { root, cfg } = await makeRootWithEmptyCfg();
-    const legacySessionsDir = writeLegacySessionsFixture({
-      root,
-      sessions: {
-        "+1555": { sessionId: "a", updatedAt: 10 },
-      },
-      transcripts: {
-        "a.jsonl": "a",
-      },
-    });
-
-    const { result, log } = await runAutoMigrateLegacyStateWithLog({
-      root,
-      cfg,
-      now: () => 123,
-    });
-
-    expect(result.migrated).toBe(false);
-    expect(log.info).not.toHaveBeenCalled();
-
-    const targetDir = path.join(root, "agents", "main", "sessions");
-    expect(fs.existsSync(path.join(targetDir, "a.jsonl"))).toBe(false);
-    expect(fs.existsSync(path.join(legacySessionsDir, "a.jsonl"))).toBe(true);
-    expect(fs.existsSync(path.join(legacySessionsDir, "sessions.json"))).toBe(true);
-    expect(Object.keys(readSessionsStore({ root, targetDir }))).toHaveLength(0);
-  });
-
   it("migrates legacy WhatsApp auth files without touching oauth.json", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const oauthDir = ensureCredentialsDir(root);
@@ -894,21 +836,6 @@ describe("doctor legacy state migrations", () => {
     });
     expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("legacy");
     expect(store["agent:main:slack:channel:C123"]).toBeUndefined();
-  });
-
-  it("leaves target sessions with legacy keys for doctor on startup", async () => {
-    const { root, cfg } = await makeRootWithEmptyCfg();
-    const targetDir = path.join(root, "agents", "main", "sessions");
-    writeJson5(path.join(targetDir, "sessions.json"), {
-      main: { sessionId: "legacy", updatedAt: 10 },
-    });
-
-    const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
-
-    expect(result.migrated).toBe(false);
-    expect(log.info).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(true);
-    expect(Object.keys(readSessionsStore({ root, targetDir }))).toHaveLength(0);
   });
 
   it("does nothing when no legacy state dir exists", async () => {
