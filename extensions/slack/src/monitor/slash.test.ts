@@ -1226,7 +1226,8 @@ describe("slack slash command session metadata", () => {
     };
     expect(call.ctx?.OriginatingChannel).toBe("slack");
     expect(call.ctx?.GroupSpace).toBe("T1");
-    expect(call.sessionKey).toEqual(expect.any(String));
+    expect(call.sessionKey).toBeTypeOf("string");
+    expect(call.sessionKey).not.toBe("");
   });
 
   it("awaits session metadata persistence before dispatch", async () => {
