@@ -712,6 +712,16 @@ export const de: TranslationMap = {
       today: "Heute",
       last7d: "7d",
       last30d: "30d",
+      last90d: "90 T",
+      last1y: "1 J",
+      all: "Alle",
+    },
+    scope: {
+      instance: "Aktuelle Instanz",
+      instanceHint: "Nur die aktive Sitzungs-ID für jede logische Sitzung anzeigen.",
+      family: "Historische Abstammung",
+      familyHint: "Bekannte rotierte, transkriptbasierte Sitzungs-IDs zusammenfassen.",
+      familyIncluded: "Die historische Abstammung umfasst {count} Sitzungsinstanzen.",
     },
     filters: {
       title: "Filter",

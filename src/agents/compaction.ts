@@ -40,6 +40,22 @@ const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
   "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
   "including UUIDs, hashes, IDs, hostnames, IPs, ports, URLs, and file names.";
 
+const HANDOFF_INSTRUCTIONS = [
+  "Generate a concise recovery briefing for a new LLM taking over this session.",
+  "The previous model hit a quota limit and you are providing the context for a smooth handoff.",
+  "",
+  "LEADER HIERARCHY REINFORCEMENT:",
+  "- Explicitly state that the new model is the LEADER (Orchestrator).",
+  "- Identify any active autonomous units (like AutoClaw) as SUBORDINATES.",
+  "- Instruct the new model to NOT perform the subordinate's task, but to supervise and provide strategic commands.",
+  "",
+  "MUST CAPTURE:",
+  "- Current high-level goal and project path.",
+  "- Status of the latest tool executions (especially AutoClaw/Subagents).",
+  "- Critical files currently being modified.",
+  "- Pending items and next intended steps.",
+].join("\n");
+
 export type CompactionSummarizationInstructions = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   identifierInstructions?: string;
@@ -177,7 +193,12 @@ export function splitMessagesByTokenShare(
       const stopReason = (message as { stopReason?: unknown }).stopReason;
       const keepsPending =
         stopReason !== "aborted" && stopReason !== "error" && toolCalls.length > 0;
-      pendingToolCallIds = keepsPending ? new Set(toolCalls.map((t) => t.id)) : new Set();
+      pendingToolCallIds = new Set();
+      if (keepsPending) {
+        for (const toolCall of toolCalls) {
+          pendingToolCallIds.add(toolCall.id);
+        }
+      }
       pendingChunkStartIndex = keepsPending ? current.length - 1 : null;
     } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
       const resultId = extractToolResultId(message);
@@ -314,22 +335,13 @@ async function summarizeChunks(params: {
     params.customInstructions,
     params.summarizationInstructions,
   );
-
-  // Clamp reserveTokens to the model's maxTokens output cap.
-  // generateSummary() uses Math.floor(0.8 * reserveTokens) as max_tokens for the API call.
-  // With large context windows (1M tokens), reserveTokensFloor can be 300K+, producing
-  // max_tokens of 240K+ which exceeds model output limits (e.g. 128K for Anthropic).
-  // By clamping reserveTokens here, we ensure the downstream max_tokens stays within bounds.
-  const modelMaxTokens = params.model.maxTokens ?? 128_000;
-  const clampedReserveTokens = Math.min(params.reserveTokens, Math.floor(modelMaxTokens / 0.8));
-
   for (const chunk of chunks) {
     summary = await retryAsync(
       () =>
         generateSummary(
           chunk,
           params.model,
-          clampedReserveTokens,
+          params.reserveTokens,
           params.apiKey,
           params.headers,
           params.signal,
@@ -522,6 +534,7 @@ export function pruneHistoryForContextShare(params: {
   maxContextTokens: number;
   maxHistoryShare?: number;
   parts?: number;
+  mode?: "share" | "handoff";
 }): {
   messages: AgentMessage[];
   droppedMessagesList: AgentMessage[];
@@ -531,7 +544,9 @@ export function pruneHistoryForContextShare(params: {
   keptTokens: number;
   budgetTokens: number;
 } {
-  const maxHistoryShare = params.maxHistoryShare ?? 0.5;
+  const isHandoff = params.mode === "handoff";
+  const defaultShare = isHandoff ? 0.2 : 0.5; // Stricter budget for handoff snapshots
+  const maxHistoryShare = params.maxHistoryShare ?? defaultShare;
   const budgetTokens = Math.max(1, Math.floor(params.maxContextTokens * maxHistoryShare));
   let keptMessages = params.messages;
   const allDroppedMessages: AgentMessage[] = [];
@@ -579,6 +594,36 @@ export function pruneHistoryForContextShare(params: {
     keptTokens: estimateMessagesTokens(keptMessages),
     budgetTokens,
   };
+}
+
+/**
+ * Generates a concise handoff summary for model transitions, enforcing a 4000 token limit.
+ */
+export async function summarizeForHandoff(params: {
+  messages: AgentMessage[];
+  model: NonNullable<ExtensionContext["model"]>;
+  apiKey: string;
+  headers?: Record<string, string>;
+  signal: AbortSignal;
+  maxChunkTokens: number;
+  contextWindow: number;
+  customInstructions?: string;
+  summarizationInstructions?: CompactionSummarizationInstructions;
+}): Promise<string> {
+  const custom = params.customInstructions?.trim();
+  const handoffInstructions = custom
+    ? `${HANDOFF_INSTRUCTIONS}\n\n${custom}`
+    : HANDOFF_INSTRUCTIONS;
+
+  // Use a hard cap of 4000 tokens for the handoff summary as per plan
+  const handoffMaxTokens = 4000;
+
+  return summarizeWithFallback({
+    ...params,
+    reserveTokens: SUMMARIZATION_OVERHEAD_TOKENS,
+    maxChunkTokens: Math.min(params.maxChunkTokens, handoffMaxTokens),
+    customInstructions: handoffInstructions,
+  });
 }
 
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {

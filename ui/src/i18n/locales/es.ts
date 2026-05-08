@@ -709,6 +709,16 @@ export const es: TranslationMap = {
       today: "Hoy",
       last7d: "7d",
       last30d: "30d",
+      last90d: "90 d",
+      last1y: "1 a",
+      all: "Todas",
+    },
+    scope: {
+      instance: "Instancia actual",
+      instanceHint: "Mostrar solo el id de sesión activo para cada sesión lógica.",
+      family: "Linaje histórico",
+      familyHint: "Agrupar los id de sesión conocidos rotados respaldados por transcripciones.",
+      familyIncluded: "El linaje histórico incluye {count} instancias de sesión.",
     },
     filters: {
       title: "Filtros",

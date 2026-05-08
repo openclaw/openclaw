@@ -711,6 +711,16 @@ export const tr: TranslationMap = {
       today: "Bugün",
       last7d: "7g",
       last30d: "30g",
+      last90d: "90g",
+      last1y: "1y",
+      all: "Tümü",
+    },
+    scope: {
+      instance: "Geçerli örnek",
+      instanceHint: "Her mantıksal oturum için yalnızca etkin oturum kimliğini göster.",
+      family: "Geçmiş soy hattı",
+      familyHint: "Bilinen döndürülmüş transkript destekli oturum kimliklerini birleştir.",
+      familyIncluded: "Geçmiş soy hattı {count} oturum örneği içerir.",
     },
     filters: {
       title: "Filtreler",

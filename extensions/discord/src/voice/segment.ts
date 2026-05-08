@@ -1,4 +1,5 @@
 import path from "node:path";
+import { Readable } from "node:stream";
 import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -20,7 +21,16 @@ import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
 const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
+const VOICE_TRANSCRIPT_LOG_PREVIEW_CHARS = 500;
 const logger = createSubsystemLogger("discord/voice");
+
+function formatVoiceTranscriptLogPreview(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= VOICE_TRANSCRIPT_LOG_PREVIEW_CHARS) {
+    return oneLine;
+  }
+  return `${oneLine.slice(0, VOICE_TRANSCRIPT_LOG_PREVIEW_CHARS)}...`;
+}
 
 export async function processDiscordVoiceSegment(params: {
   entry: VoiceSessionEntry;
@@ -81,6 +91,9 @@ export async function processDiscordVoiceSegment(params: {
   logVoiceVerbose(
     `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
   );
+  logVoiceVerbose(
+    `transcript from ${speaker.label} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceTranscriptLogPreview(transcript)}`,
+  );
 
   const prompt = formatVoiceIngressPrompt(transcript, speaker.label);
   const extraSystemPrompt = buildDiscordGroupSystemPrompt(access.channelConfig);
@@ -139,18 +152,33 @@ export async function processDiscordVoiceSegment(params: {
   );
 
   params.enqueuePlayback(entry, async () => {
-    logVoiceVerbose(
-      `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(voiceReplyAudio.audioPath)}`,
-    );
     const voiceSdk = loadDiscordVoiceSdk();
-    const resource = voiceSdk.createAudioResource(voiceReplyAudio.audioPath);
-    entry.player.play(resource);
-    await voiceSdk
-      .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
-      .catch(() => undefined);
-    await voiceSdk
-      .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
-      .catch(() => undefined);
-    logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
+    const releaseAudioStream =
+      voiceReplyAudio.mode === "stream" ? voiceReplyAudio.release : undefined;
+    try {
+      if (voiceReplyAudio.mode === "stream") {
+        logVoiceVerbose(`playback start: guild ${entry.guildId} channel ${entry.channelId} stream`);
+        const nodeStream = Readable.fromWeb(
+          voiceReplyAudio.audioStream as import("node:stream/web").ReadableStream<Uint8Array>,
+        );
+        const resource = voiceSdk.createAudioResource(nodeStream);
+        entry.player.play(resource);
+      } else {
+        logVoiceVerbose(
+          `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(voiceReplyAudio.audioPath)}`,
+        );
+        const resource = voiceSdk.createAudioResource(voiceReplyAudio.audioPath);
+        entry.player.play(resource);
+      }
+      await voiceSdk
+        .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
+        .catch(() => undefined);
+      await voiceSdk
+        .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
+        .catch(() => undefined);
+      logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
+    } finally {
+      await releaseAudioStream?.();
+    }
   });
 }

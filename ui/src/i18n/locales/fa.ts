@@ -707,6 +707,16 @@ export const fa: TranslationMap = {
       today: "امروز",
       last7d: "۷روز",
       last30d: "۳۰روز",
+      last90d: "90d",
+      last1y: "1y",
+      all: "همه",
+    },
+    scope: {
+      instance: "نمونهٔ فعلی",
+      instanceHint: "برای هر نشست منطقی، فقط شناسهٔ نشست فعال را نشان دهید.",
+      family: "تبارچهٔ تاریخی",
+      familyHint: "شناسه‌های نشست شناخته‌شده و چرخش‌یافتهٔ مبتنی بر رونوشت را تجمیع کنید.",
+      familyIncluded: "تبارچهٔ تاریخی شامل {count} نمونهٔ نشست است.",
     },
     filters: {
       title: "فیلترها",

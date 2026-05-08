@@ -5,6 +5,7 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
+import { VERSION } from "../version.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { StatusSummary } from "./status.types.js";
 
@@ -25,6 +26,22 @@ function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
 }
 
+function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
+  const gatewayVersion = status?.runtimeVersion?.trim();
+  if (!gatewayVersion || gatewayVersion === VERSION) {
+    return;
+  }
+  note(
+    [
+      `CLI version: ${VERSION}`,
+      `Gateway version: ${gatewayVersion}`,
+      "The CLI and running gateway are different versions. This can happen when PATH points at a stale global wrapper while the service runs a newer install.",
+      'Fix: run `openclaw gateway status --deep`; check `command -v openclaw`, `readlink -f "$(command -v openclaw)"`, and `openclaw --version`; reinstall the gateway service from the intended binary if needed.',
+    ].join("\n"),
+    "Gateway version skew",
+  );
+}
+
 export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
@@ -43,6 +60,7 @@ export async function checkGatewayHealth(params: {
       config: params.cfg,
     });
     healthOk = true;
+    noteCliGatewayVersionSkew(status);
   } catch (err) {
     const message = String(err);
     if (message.includes("gateway closed")) {

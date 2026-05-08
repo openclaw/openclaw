@@ -696,6 +696,16 @@ export const th: TranslationMap = {
       today: "วันนี้",
       last7d: "7 วัน",
       last30d: "30 วัน",
+      last90d: "90d",
+      last1y: "1y",
+      all: "ทั้งหมด",
+    },
+    scope: {
+      instance: "อินสแตนซ์ปัจจุบัน",
+      instanceHint: "แสดงเฉพาะ ID เซสชันที่ใช้งานอยู่สำหรับแต่ละเซสชันเชิงตรรกะ",
+      family: "ลำดับสายประวัติ",
+      familyHint: "รวม ID เซสชันที่ทราบซึ่งอิงตามทรานสคริปต์และถูกหมุนเวียน",
+      familyIncluded: "ลำดับสายประวัติมีอินสแตนซ์เซสชัน {count} รายการ",
     },
     filters: {
       title: "ตัวกรอง",

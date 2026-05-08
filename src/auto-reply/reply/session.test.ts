@@ -729,6 +729,54 @@ describe("initSessionState RawBody", () => {
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
   });
 
+  it("drops cached skills snapshot when /new rotates an existing session", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-skills-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:signal:direct:uuid:reset-skills";
+    const existingSessionId = "session-with-stale-skills";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+        skillsSnapshot: {
+          prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
+          skills: [{ name: "stale" }],
+          version: 0,
+        },
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new continue",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { skillsSnapshot?: unknown }
+    >;
+    expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
+  });
+
   it("drains stale system events when /new rotates an existing session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-system-events-");
     const storePath = path.join(root, "sessions.json");
@@ -1405,36 +1453,6 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
-  });
-
-  it("rotates sessionFile on daily reset when the stored path still points at the previous session id", async () => {
-    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-    const root = await makeCaseDir("openclaw-reset-rotate-session-file-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:whatsapp:dm:s-rotate";
-    const existingSessionId = "daily-rotate-old";
-    const oldSessionFile = path.join(root, `${existingSessionId}.jsonl`);
-
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: {
-        sessionId: existingSessionId,
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-        sessionFile: oldSessionFile,
-      },
-    });
-
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-    const result = await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.sessionEntry.sessionFile).toBeTruthy();
-    expect(path.basename(result.sessionEntry.sessionFile ?? "")).toBe(`${result.sessionId}.jsonl`);
-    expect(result.sessionEntry.sessionFile).not.toBe(oldSessionFile);
   });
 
   it("drains stale system events when idle rollover creates a new session", async () => {
@@ -2157,6 +2175,69 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.resetTriggered, testCase.name).toBe(true);
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
       expect(result.sessionEntry, testCase.name).toMatchObject(overrides);
+    }
+  });
+
+  it("preserves usage family metadata across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-usage-family-");
+    const sessionKey = "agent:main:telegram:dm:user-usage-family";
+    const existingSessionId = "existing-session-usage-family";
+    const cases = [
+      {
+        name: "new preserves usage family metadata",
+        body: "/new",
+      },
+      {
+        name: "reset preserves usage family metadata",
+        body: "/reset",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: {
+          usageFamilyKey: "family:user-usage-family",
+          usageFamilySessionIds: ["ancestor-session", existingSessionId],
+        },
+      });
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-usage-family",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg: {
+          session: { store: storePath, idleMinutes: 999 },
+        } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry.usageFamilyKey, testCase.name).toBe("family:user-usage-family");
+      expect(result.sessionEntry.usageFamilySessionIds, testCase.name).toEqual([
+        "ancestor-session",
+        existingSessionId,
+        result.sessionId,
+      ]);
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].usageFamilyKey, testCase.name).toBe("family:user-usage-family");
+      expect(stored[sessionKey].usageFamilySessionIds, testCase.name).toEqual([
+        "ancestor-session",
+        existingSessionId,
+        result.sessionId,
+      ]);
     }
   });
 

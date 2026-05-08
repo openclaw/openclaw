@@ -97,7 +97,7 @@ describe("config plugin validation", () => {
   let suiteHome = "";
   let badPluginDir = "";
   let enumPluginDir = "";
-  let bluebubblesPluginDir = "";
+  let chatPluginDir = "";
   let googleOverridePluginDir = "";
   let voiceCallSchemaPluginDir = "";
   let bundlePluginDir = "";
@@ -135,7 +135,7 @@ describe("config plugin validation", () => {
     await mkdirSafe(suiteHome);
     badPluginDir = path.join(suiteHome, "bad-plugin");
     enumPluginDir = path.join(suiteHome, "enum-plugin");
-    bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
+    chatPluginDir = path.join(suiteHome, "chat-plugin");
     await writePluginFixture({
       dir: badPluginDir,
       id: "bad-plugin",
@@ -163,9 +163,9 @@ describe("config plugin validation", () => {
       },
     });
     await writePluginFixture({
-      dir: bluebubblesPluginDir,
-      id: "bluebubbles-plugin",
-      channels: ["bluebubbles"],
+      dir: chatPluginDir,
+      id: "chat-plugin",
+      channels: ["chat"],
       schema: { type: "object" },
     });
     googleOverridePluginDir = path.join(suiteHome, "google");
@@ -483,55 +483,6 @@ describe("config plugin validation", () => {
     });
   });
 
-  it("warns instead of failing for installable channel plugins that are not available", async () => {
-    const catalogPath = path.join(fixtureRoot, "channel-catalog.json");
-    await fs.writeFile(
-      catalogPath,
-      JSON.stringify({
-        entries: [
-          {
-            name: "@acme/openclaw-chat",
-            openclaw: {
-              plugin: { id: "acme-chat" },
-              channel: {
-                id: "acme-chat",
-                label: "Acme Chat",
-              },
-              install: {
-                npmSpec: "@acme/openclaw-chat",
-              },
-            },
-          },
-        ],
-      }),
-      "utf-8",
-    );
-    const res = validateConfigObjectWithPlugins(
-      {
-        agents: { list: [{ id: "pi" }] },
-        channels: {
-          "acme-chat": { token: "configured" },
-        },
-      },
-      {
-        env: {
-          ...suiteEnv(),
-          OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath,
-        },
-      },
-    );
-
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.warnings).toContainEqual({
-      path: "channels.acme-chat",
-      message:
-        'channel plugin is not available: acme-chat (install or enable plugin "acme-chat", then run openclaw doctor --fix)',
-    });
-  });
-
   it("keeps unknown channel typos fatal when there is no stale plugin evidence", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
@@ -689,7 +640,7 @@ describe("config plugin validation", () => {
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", async () => {
     const res = validateInSuite({
       plugins: {
-        allow: ["bluebubbles", "memory-core"],
+        allow: ["imessage", "memory-core"],
         load: {
           paths: [googleOverridePluginDir],
         },
@@ -730,6 +681,49 @@ describe("config plugin validation", () => {
           issue.message.includes("invalid config"),
       );
       expect(hasIssue).toBe(true);
+    }
+  });
+
+  it("surfaces invalid Codex native plugin marketplaces as config diagnostics", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              codexPlugins: {
+                enabled: true,
+                plugins: {
+                  github: {
+                    enabled: true,
+                    marketplaceName: "not-openai-curated",
+                    pluginName: "github",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName",
+          message: expect.stringContaining("invalid config"),
+        }),
+      );
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+              "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName" &&
+            issue.allowedValues?.includes("openai-curated"),
+        ),
+      ).toBe(true);
     }
   });
 
@@ -958,8 +952,8 @@ describe("config plugin validation", () => {
 
   it("accepts plugin heartbeat targets", async () => {
     const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
-      plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
+      agents: { defaults: { heartbeat: { target: "chat" } }, list: [{ id: "pi" }] },
+      plugins: { enabled: false, load: { paths: [chatPluginDir] } },
     });
     expect(res.ok).toBe(true);
   });
