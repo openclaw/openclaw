@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -52,7 +53,7 @@ function setupState(prefix = "openclaw-session-utils-sqlite-") {
 }
 
 function transcriptPath(sessionId: string, agentId = "main"): string {
-  return path.join(stateDir, "transcript-fixtures", agentId, `${sessionId}.jsonl`);
+  return createSqliteSessionTranscriptLocator({ agentId, sessionId });
 }
 
 function seedTranscript(params: {
