@@ -274,7 +274,6 @@ describe("attachGatewayWsConnectionHandler", () => {
       clients: new Set(),
       preauthConnectionBudget: { release: vi.fn() } as never,
       port: 19001,
-      canvasHostEnabled: false,
       resolvedAuth: createResolvedAuth("token"),
       gatewayMethods: [],
       events: [],
