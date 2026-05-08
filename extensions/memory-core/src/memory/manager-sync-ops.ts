@@ -9,7 +9,6 @@ import {
   createSubsystemLogger,
   onSessionTranscriptUpdate,
   resolveAgentDir,
-  resolveSessionTranscriptsDirForAgent,
   resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -591,13 +590,7 @@ export abstract class MemoryManagerSyncOps {
       return false;
     }
     const scope = resolveSessionTranscriptScope(sessionTranscript);
-    if (scope) {
-      return scope.agentId === this.agentId;
-    }
-    const sessionsDir = resolveSessionTranscriptsDirForAgent(this.agentId);
-    const resolvedFile = path.resolve(sessionTranscript);
-    const resolvedDir = path.resolve(sessionsDir);
-    return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
+    return scope?.agentId === this.agentId;
   }
 
   private normalizeTargetSessionTranscripts(sessionTranscripts?: string[]): Set<string> | null {
