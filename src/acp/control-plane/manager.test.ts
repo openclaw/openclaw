@@ -2433,9 +2433,10 @@ describe("AcpSessionManager", () => {
       }),
     );
     expect(options.runtimeMode).toBe("plan");
-    expect(extractRuntimeOptionsFromUpserts().some((entry) => entry?.runtimeMode === "plan")).toBe(
-      true,
+    const persistedRuntimeModes = extractRuntimeOptionsFromUpserts().map(
+      (entry) => entry?.runtimeMode,
     );
+    expect(persistedRuntimeModes).toContain("plan");
   });
 
   it("reapplies persisted controls on next turn after runtime option updates", async () => {
