@@ -58,7 +58,6 @@ vi.mock("../gateway/call.js", () => ({
 
 function requireFirstRuntimeLog(): string {
   const [message] = runtime.log.mock.calls[0] ?? [];
-  expect(message).toBeDefined();
   if (message === undefined) {
     throw new Error("expected health command log output");
   }
