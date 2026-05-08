@@ -94,13 +94,7 @@ export async function replayRecentUserAssistantMessages(params: {
 }
 
 function resolveAgentIdFromSessionPath(sessionFile: string): string {
-  const resolved = path.resolve(sessionFile);
-  const sessionsDir = path.dirname(resolved);
-  const agentDir = path.dirname(sessionsDir);
-  const agentsDir = path.dirname(agentDir);
-  if (path.basename(sessionsDir) === "sessions" && path.basename(agentsDir) === "agents") {
-    return path.basename(agentDir);
-  }
+  void sessionFile;
   return DEFAULT_AGENT_ID;
 }
 

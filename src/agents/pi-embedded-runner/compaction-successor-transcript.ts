@@ -123,13 +123,7 @@ export async function rotateTranscriptFileAfterCompaction(params: {
 }
 
 function resolveAgentIdFromTranscriptPath(transcriptPath: string): string {
-  const resolved = path.resolve(transcriptPath);
-  const sessionsDir = path.dirname(resolved);
-  const agentDir = path.dirname(sessionsDir);
-  const agentsDir = path.dirname(agentDir);
-  if (path.basename(sessionsDir) === "sessions" && path.basename(agentsDir) === "agents") {
-    return normalizeAgentId(path.basename(agentDir));
-  }
+  void transcriptPath;
   return DEFAULT_AGENT_ID;
 }
 
