@@ -25,6 +25,7 @@ const setSlackThreadStatusMock = vi.fn(async () => {});
 const setSlackThreadTitleMock = vi.fn(async () => {});
 let dispatchInboundMessageImpl: (params: {
   replyOptions?: {
+    suppressDefaultToolProgressMessages?: boolean;
     onAssistantMessageStart?: () => Promise<void> | void;
     onModelSelected?: (modelCtx: unknown) => void;
     onItemEvent?: (payload: {
@@ -498,6 +499,30 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
       }),
     );
     expect(startSlackPlanMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses default plaintext tool progress when native progress-plan streaming is active", async () => {
+    dispatchInboundMessageImpl = async (params) => {
+      expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.dispatcher.deliver({ text: "final answer" }, { kind: "final" });
+      return {
+        queuedFinal: false,
+        counts: { final: 1 },
+      };
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        channel: "C123",
+        threadTs: "thread-1",
+        replyToMode: "all",
+        isDirectMessage: false,
+        replyTarget: "channel:C123",
+      }),
+    );
+
+    expect(startSlackChunkStreamMock).toHaveBeenCalled();
   });
 
   it("prefers human-readable tool task cards once concrete tool events arrive", async () => {
