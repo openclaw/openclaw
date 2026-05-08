@@ -287,11 +287,35 @@ describe("Codex app-server config", () => {
     );
   });
 
-  it("ignores remote-only sandbox requirements when resolving local stdio defaults", () => {
+  it("applies the first matching remote sandbox requirements before resolving local stdio defaults", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {},
+      hostName: "BUILD-01.EXAMPLE.COM.",
       requirementsToml: `[[remote_sandbox_config]]
-hostname = "managed.example.com"
+hostname_patterns = ["build-*.example.com"]
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+
+[[remote_sandbox_config]]
+hostname_patterns = ["build-01.example.com"]
+allowed_sandbox_modes = ["read-only", "danger-full-access"]
+`,
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("ignores non-matching remote-only sandbox requirements when resolving local stdio defaults", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      hostName: "laptop.example.com",
+      requirementsToml: `[[remote_sandbox_config]]
+hostname_patterns = ["build-*.example.com"]
 allowed_sandbox_modes = ["read-only", "workspace-write"]
 `,
     });

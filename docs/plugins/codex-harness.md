@@ -489,6 +489,8 @@ stdio Codex app-server installs where Codex's system requirements file
 disallows the implicit YOLO approval, reviewer, or sandbox value, OpenClaw
 treats the implicit default as guardian instead and selects allowed guardian
 permissions so it does not send an override that Codex app-server will reject.
+Hostname-matching `[[remote_sandbox_config]]` entries in the same requirements
+file are honored for the sandbox default decision.
 
 To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
 "guardian"`:

@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { hostname as readHostName } from "node:os";
 import { z } from "openclaw/plugin-sdk/zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
@@ -318,6 +319,7 @@ export function resolveCodexAppServerRuntimeOptions(
     requirementsPath?: string;
     readRequirementsFile?: (path: string) => string | undefined;
     platform?: NodeJS.Platform;
+    hostName?: string;
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
@@ -347,6 +349,7 @@ export function resolveCodexAppServerRuntimeOptions(
         requirementsPath: params.requirementsPath,
         readRequirementsFile: params.readRequirementsFile,
         platform: params.platform,
+        hostName: params.hostName,
       });
   const policyMode = explicitPolicyMode ?? defaultPolicy?.mode ?? "yolo";
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
@@ -534,6 +537,7 @@ function resolveDefaultCodexAppServerPolicy(params: {
   requirementsPath?: string;
   readRequirementsFile?: (path: string) => string | undefined;
   platform?: NodeJS.Platform;
+  hostName?: string;
 }): CodexAppServerDefaultPolicy {
   if (params.transport !== "stdio") {
     return { mode: "yolo" };
@@ -542,7 +546,10 @@ function resolveDefaultCodexAppServerPolicy(params: {
   if (content === undefined) {
     return { mode: "yolo" };
   }
-  const allowedSandboxModes = parseAllowedSandboxModesFromCodexRequirements(content);
+  const allowedSandboxModes = parseAllowedSandboxModesFromCodexRequirements(
+    content,
+    readNonEmptyString(params.hostName) ?? readHostName(),
+  );
   const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
   const allowedApprovalsReviewers = parseAllowedApprovalsReviewersFromCodexRequirements(content);
   const yoloSandboxAllowed =
@@ -595,15 +602,17 @@ function resolveCodexRequirementsPath(env: NodeJS.ProcessEnv, platform: NodeJS.P
 
 function parseAllowedSandboxModesFromCodexRequirements(
   content: string,
+  hostName: string,
 ): Set<CodexAppServerSandboxMode> | undefined {
-  const values = parseTopLevelRequirementsStringArray(content, "allowed_sandbox_modes");
-  if (values === undefined) {
-    return undefined;
+  const remoteSandboxModes = parseMatchingRemoteSandboxModesFromCodexRequirements(
+    content,
+    hostName,
+  );
+  if (remoteSandboxModes !== undefined) {
+    return remoteSandboxModes;
   }
-  const normalizedModes = values
-    .map((entry) => normalizeRequirementsSandboxMode(entry))
-    .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined);
-  return normalizedModes.length > 0 ? new Set(normalizedModes) : undefined;
+  const values = parseTopLevelRequirementsStringArray(content, "allowed_sandbox_modes");
+  return parseRequirementsSandboxModes(values);
 }
 
 function parseAllowedApprovalPoliciesFromCodexRequirements(
@@ -632,9 +641,45 @@ function parseAllowedApprovalsReviewersFromCodexRequirements(
   return normalizedReviewers.length > 0 ? new Set(normalizedReviewers) : undefined;
 }
 
+function parseMatchingRemoteSandboxModesFromCodexRequirements(
+  content: string,
+  hostName: string,
+): Set<CodexAppServerSandboxMode> | undefined {
+  const normalizedHostName = normalizeRequirementsHostName(hostName);
+  if (normalizedHostName === undefined) {
+    return undefined;
+  }
+  for (const section of parseTomlArrayTableSections(content, "remote_sandbox_config")) {
+    const patterns = parseRequirementsStringArray(section, "hostname_patterns");
+    if (!patterns || !requirementsHostNameMatchesAnyPattern(normalizedHostName, patterns)) {
+      continue;
+    }
+    return parseRequirementsSandboxModes(
+      parseRequirementsStringArray(section, "allowed_sandbox_modes"),
+    );
+  }
+  return undefined;
+}
+
+function parseRequirementsSandboxModes(
+  values: string[] | undefined,
+): Set<CodexAppServerSandboxMode> | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+  const normalizedModes = values
+    .map((entry) => normalizeRequirementsSandboxMode(entry))
+    .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined);
+  return normalizedModes.length > 0 ? new Set(normalizedModes) : undefined;
+}
+
 function parseTopLevelRequirementsStringArray(content: string, key: string): string[] | undefined {
   const topLevelContent = stripTomlLineComments(content).slice(0, firstTomlTableOffset(content));
-  const match = topLevelContent.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
+  return parseRequirementsStringArray(topLevelContent, key);
+}
+
+function parseRequirementsStringArray(content: string, key: string): string[] | undefined {
+  const match = content.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
   if (!match) {
     return undefined;
   }
@@ -644,6 +689,24 @@ function parseTopLevelRequirementsStringArray(content: string, key: string): str
     return undefined;
   }
   return stringMatches.map((entry) => entry[1] ?? entry[2] ?? "");
+}
+
+function parseTomlArrayTableSections(content: string, table: string): string[] {
+  const strippedContent = stripTomlLineComments(content);
+  const escapedTable = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const headerPattern = new RegExp(`^\\s*\\[\\[\\s*${escapedTable}\\s*\\]\\]\\s*$`, "gm");
+  const sections: string[] = [];
+  for (
+    let match = headerPattern.exec(strippedContent);
+    match;
+    match = headerPattern.exec(strippedContent)
+  ) {
+    const sectionStart = headerPattern.lastIndex;
+    const rest = strippedContent.slice(sectionStart);
+    const nextTableOffset = rest.search(/^\s*\[/m);
+    sections.push(nextTableOffset === -1 ? rest : rest.slice(0, nextTableOffset));
+  }
+  return sections;
 }
 
 function firstTomlTableOffset(content: string): number {
@@ -703,6 +766,33 @@ function normalizeRequirementsSandboxMode(value: string): CodexAppServerSandboxM
     return "danger-full-access";
   }
   return undefined;
+}
+
+function normalizeRequirementsHostName(value: string): string | undefined {
+  const normalized = value.trim().replace(/\.+$/g, "").toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function requirementsHostNameMatchesAnyPattern(hostName: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => {
+    const normalizedPattern = normalizeRequirementsHostName(pattern);
+    return normalizedPattern !== undefined && globPatternMatches(hostName, normalizedPattern);
+  });
+}
+
+function globPatternMatches(value: string, pattern: string): boolean {
+  let regex = "^";
+  for (const char of pattern) {
+    if (char === "*") {
+      regex += ".*";
+    } else if (char === "?") {
+      regex += ".";
+    } else {
+      regex += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  regex += "$";
+  return new RegExp(regex).test(value);
 }
 
 function normalizeRequirementsApprovalPolicy(
