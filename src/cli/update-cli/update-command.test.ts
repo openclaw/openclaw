@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildGatewayInstallEntrypointCandidates as resolveGatewayInstallEntrypointCandidates,
   resolveGatewayInstallEntrypoint,
 } from "../../daemon/gateway-entrypoint.js";
 import {
   collectMissingPluginInstallPayloads,
+  hardenLaunchdAfterUpdateRestart,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
   resolvePostCoreUpdateChildStdio,
@@ -458,6 +459,76 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   });
 });
 
+describe("hardenLaunchdAfterUpdateRestart", () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  });
+
+  it("returns no warnings on non-darwin platforms without invoking helpers", async () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const cleanupStaleJobs = vi.fn();
+    const ensureGatewayEnabled = vi.fn();
+
+    const result = await hardenLaunchdAfterUpdateRestart({
+      env: { OPENCLAW_PROFILE: "default" },
+      deps: { cleanupStaleJobs, ensureGatewayEnabled },
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(cleanupStaleJobs).not.toHaveBeenCalled();
+    expect(ensureGatewayEnabled).not.toHaveBeenCalled();
+  });
+
+  it("runs cleanup and ensure-enabled on darwin and aggregates their warnings", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const cleanupStaleJobs = vi.fn(async () => ({
+      attempted: true,
+      bootedOutLabels: ["com.example.openclaw.update.20260507-233128"],
+      ignoredLabels: [],
+      warnings: ["cleanup warning"],
+    }));
+    const ensureGatewayEnabled = vi.fn(async () => ({
+      attempted: true,
+      enabled: false,
+      warnings: ["enable warning"],
+    }));
+
+    const result = await hardenLaunchdAfterUpdateRestart({
+      env: { OPENCLAW_PROFILE: "default" },
+      deps: { cleanupStaleJobs, ensureGatewayEnabled },
+    });
+
+    expect(cleanupStaleJobs).toHaveBeenCalledTimes(1);
+    expect(ensureGatewayEnabled).toHaveBeenCalledTimes(1);
+    expect(result.warnings).toEqual(["cleanup warning", "enable warning"]);
+  });
+
+  it("captures helper rejections as warnings instead of throwing", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const cleanupStaleJobs = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const ensureGatewayEnabled = vi.fn(async () => ({
+      attempted: true,
+      enabled: true,
+      warnings: [] as string[],
+    }));
+
+    const result = await hardenLaunchdAfterUpdateRestart({
+      env: { OPENCLAW_PROFILE: "default" },
+      deps: { cleanupStaleJobs, ensureGatewayEnabled },
+    });
+
+    expect(result.warnings.some((w) => w.includes("Stale launchd update cleanup failed"))).toBe(
+      true,
+    );
+    // ensure-enabled still runs even though cleanup threw
+    expect(ensureGatewayEnabled).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
   it("does not report recovered update health until the gateway passes the post-recovery wait", async () => {
     const service = {} as never;
@@ -482,6 +553,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
     }));
     const waitForHealthy = vi.fn(async () => healthy);
+    const hardenLaunchd = vi.fn(async () => ({ warnings: [] as string[] }));
 
     await expect(
       recoverLaunchAgentAndRecheckGatewayHealth({
@@ -490,7 +562,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         port: 18790,
         expectedVersion: "2026.5.3",
         env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
-        deps: { recoverLaunchAgent, waitForHealthy },
+        deps: { recoverLaunchAgent, waitForHealthy, hardenLaunchd },
       }),
     ).resolves.toEqual({
       health: healthy,
@@ -500,6 +572,12 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         message:
           "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
       },
+      launchdHardeningWarnings: [],
+    });
+
+    expect(hardenLaunchd).toHaveBeenCalledTimes(1);
+    expect(hardenLaunchd).toHaveBeenCalledWith({
+      env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
     });
 
     expect(waitForHealthy).toHaveBeenCalledWith({
@@ -530,6 +608,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
     }));
     const waitForHealthy = vi.fn(async () => stillUnhealthy);
+    const hardenLaunchd = vi.fn(async () => ({ warnings: [] as string[] }));
 
     await expect(
       recoverLaunchAgentAndRecheckGatewayHealth({
@@ -537,12 +616,103 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         service,
         port: 18790,
         expectedVersion: "2026.5.3",
-        deps: { recoverLaunchAgent, waitForHealthy },
+        deps: { recoverLaunchAgent, waitForHealthy, hardenLaunchd },
       }),
     ).resolves.toMatchObject({
       health: { healthy: false, waitOutcome: "timeout" },
       launchAgentRecovery: { attempted: true, recovered: true },
     });
+  });
+
+  it("propagates launchd hardening warnings without aborting the recovery flow", async () => {
+    const service = {} as never;
+    const unhealthy = {
+      runtime: { status: "stopped" },
+      portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
+      healthy: false,
+      staleGatewayPids: [],
+      waitOutcome: "stopped-free",
+    } as never;
+    const healthy = {
+      runtime: { status: "running", pid: 4242 },
+      portUsage: { port: 18790, status: "busy", listeners: [{ pid: 4242 }], hints: [] },
+      healthy: true,
+      staleGatewayPids: [],
+      gatewayVersion: "2026.5.3",
+      waitOutcome: "healthy",
+    } as never;
+    const recoverLaunchAgent = vi.fn(async () => ({
+      attempted: true as const,
+      recovered: true as const,
+      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+    }));
+    const waitForHealthy = vi.fn(async () => healthy);
+    const hardenLaunchd = vi.fn(async () => ({
+      warnings: [
+        "launchctl bootout gui/501/com.example.openclaw.update.20260507-233128 failed: Operation not permitted",
+      ],
+    }));
+
+    const outcome = await recoverLaunchAgentAndRecheckGatewayHealth({
+      health: unhealthy,
+      service,
+      port: 18790,
+      expectedVersion: "2026.5.3",
+      env: { OPENCLAW_PROFILE: "default" },
+      deps: { recoverLaunchAgent, waitForHealthy, hardenLaunchd },
+    });
+
+    expect(outcome.health).toBe(healthy);
+    expect(outcome.launchAgentRecovery?.recovered).toBe(true);
+    expect(outcome.launchdHardeningWarnings).toEqual([
+      "launchctl bootout gui/501/com.example.openclaw.update.20260507-233128 failed: Operation not permitted",
+    ]);
+    expect(recoverLaunchAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs hardening before LaunchAgent recovery so disabled state is cleared first", async () => {
+    const service = {} as never;
+    const unhealthy = {
+      runtime: { status: "stopped" },
+      portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
+      healthy: false,
+      staleGatewayPids: [],
+      waitOutcome: "stopped-free",
+    } as never;
+    const healthy = {
+      runtime: { status: "running", pid: 4242 },
+      portUsage: { port: 18790, status: "busy", listeners: [{ pid: 4242 }], hints: [] },
+      healthy: true,
+      staleGatewayPids: [],
+      gatewayVersion: "2026.5.3",
+      waitOutcome: "healthy",
+    } as never;
+    const callOrder: string[] = [];
+    const hardenLaunchd = vi.fn(async () => {
+      callOrder.push("hardenLaunchd");
+      return { warnings: [] as string[] };
+    });
+    const recoverLaunchAgent = vi.fn(async () => {
+      callOrder.push("recoverLaunchAgent");
+      return {
+        attempted: true as const,
+        recovered: true as const,
+        message:
+          "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+      };
+    });
+    const waitForHealthy = vi.fn(async () => healthy);
+
+    await recoverLaunchAgentAndRecheckGatewayHealth({
+      health: unhealthy,
+      service,
+      port: 18790,
+      expectedVersion: "2026.5.3",
+      env: { OPENCLAW_PROFILE: "default" },
+      deps: { recoverLaunchAgent, waitForHealthy, hardenLaunchd },
+    });
+
+    expect(callOrder).toEqual(["hardenLaunchd", "recoverLaunchAgent"]);
   });
 });
 

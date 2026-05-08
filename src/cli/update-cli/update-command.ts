@@ -21,6 +21,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import {
+  cleanupStaleLaunchdUpdateJobs,
+  ensureGatewayLaunchAgentEnabled,
+} from "../../daemon/launchd-stale-update.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
   readGatewayServiceState,
@@ -382,9 +386,48 @@ export async function recoverInstalledLaunchAgentAfterUpdate(params: {
   };
 }
 
+type LaunchdUpdateHardeningDeps = {
+  cleanupStaleJobs?: typeof cleanupStaleLaunchdUpdateJobs;
+  ensureGatewayEnabled?: typeof ensureGatewayLaunchAgentEnabled;
+};
+
+export async function hardenLaunchdAfterUpdateRestart(params: {
+  env?: Record<string, string | undefined>;
+  deps?: LaunchdUpdateHardeningDeps;
+}): Promise<{ warnings: string[] }> {
+  if (process.platform !== "darwin") {
+    return { warnings: [] };
+  }
+  const cleanup = params.deps?.cleanupStaleJobs ?? cleanupStaleLaunchdUpdateJobs;
+  const ensure = params.deps?.ensureGatewayEnabled ?? ensureGatewayLaunchAgentEnabled;
+  const warnings: string[] = [];
+  // Stale `.openclaw.update.*` LaunchAgents from previous update handoffs can
+  // respawn and clobber the canonical gateway. Clean them up before recovery
+  // so subsequent bootstrap/kickstart can succeed without contention.
+  const cleanupResult = await cleanup({ env: params.env }).catch((err: unknown): null => {
+    warnings.push(`Stale launchd update cleanup failed: ${String(err)}`);
+    return null;
+  });
+  if (cleanupResult) {
+    warnings.push(...cleanupResult.warnings);
+  }
+  // The transient update job may have left the canonical gateway service
+  // disabled; re-enable so the recovery bootstrap is not blocked by a
+  // persisted "disabled" state.
+  const enableResult = await ensure({ env: params.env }).catch((err: unknown): null => {
+    warnings.push(`Gateway LaunchAgent enable failed: ${String(err)}`);
+    return null;
+  });
+  if (enableResult) {
+    warnings.push(...enableResult.warnings);
+  }
+  return { warnings };
+}
+
 type PostUpdateGatewayHealthRecoveryDeps = {
   recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
   waitForHealthy?: typeof waitForGatewayHealthyRestart;
+  hardenLaunchd?: typeof hardenLaunchdAfterUpdateRestart;
 };
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
@@ -397,10 +440,20 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
 }): Promise<{
   health: GatewayRestartSnapshot;
   launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
+  launchdHardeningWarnings: string[];
 }> {
   if (params.health.healthy) {
-    return { health: params.health, launchAgentRecovery: null };
+    return {
+      health: params.health,
+      launchAgentRecovery: null,
+      launchdHardeningWarnings: [],
+    };
   }
+
+  const harden = params.deps?.hardenLaunchd ?? hardenLaunchdAfterUpdateRestart;
+  const hardening = await harden({ env: params.env }).catch((err: unknown) => ({
+    warnings: [`Launchd update hardening failed: ${String(err)}`],
+  }));
 
   const recoverLaunchAgent =
     params.deps?.recoverLaunchAgent ?? recoverInstalledLaunchAgentAfterUpdate;
@@ -409,7 +462,11 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     env: params.env,
   });
   if (!launchAgentRecovery.recovered) {
-    return { health: params.health, launchAgentRecovery };
+    return {
+      health: params.health,
+      launchAgentRecovery,
+      launchdHardeningWarnings: hardening.warnings,
+    };
   }
 
   const waitForHealthy = params.deps?.waitForHealthy ?? waitForGatewayHealthyRestart;
@@ -419,7 +476,11 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     expectedVersion: params.expectedVersion,
     env: params.env,
   });
-  return { health, launchAgentRecovery };
+  return {
+    health,
+    launchAgentRecovery,
+    launchdHardeningWarnings: hardening.warnings,
+  };
 }
 
 function formatPostUpdateGatewayRecoveryInstructions(result: UpdateRunResult): string[] {
@@ -1455,6 +1516,15 @@ async function maybeRestartService(params: {
     });
     health = recoveryVerification.health;
     const launchAgentRecovery = recoveryVerification.launchAgentRecovery;
+    if (recoveryVerification.launchdHardeningWarnings.length > 0) {
+      for (const warning of recoveryVerification.launchdHardeningWarnings) {
+        if (params.opts.json) {
+          defaultRuntime.error(warning);
+        } else {
+          defaultRuntime.log(theme.warn(warning));
+        }
+      }
+    }
     if (launchAgentRecovery?.attempted) {
       if (!params.opts.json) {
         defaultRuntime.log(
@@ -1516,6 +1586,31 @@ async function maybeRestartService(params: {
       const isPackageUpdate = isPackageManagerUpdateMode(params.result.mode);
       let restarted = false;
       let restartInitiated = false;
+
+      // Bootout any stale `.openclaw.update.*` LaunchAgents that lingered from a
+      // previous update handoff. They keep respawning and can clobber the
+      // canonical gateway as soon as we restart it. Safe across non-darwin
+      // platforms (the helper short-circuits).
+      const preRestartCleanup = await cleanupStaleLaunchdUpdateJobs({
+        env: params.serviceEnv ?? process.env,
+      }).catch((err: unknown) => {
+        const warning = `Pre-restart launchd cleanup failed: ${String(err)}`;
+        if (params.opts.json) {
+          defaultRuntime.error(warning);
+        } else {
+          defaultRuntime.log(theme.warn(warning));
+        }
+        return null;
+      });
+      if (preRestartCleanup) {
+        for (const warning of preRestartCleanup.warnings) {
+          if (params.opts.json) {
+            defaultRuntime.error(warning);
+          } else {
+            defaultRuntime.log(theme.warn(warning));
+          }
+        }
+      }
       if (params.refreshServiceEnv) {
         try {
           await refreshGatewayServiceEnv({
