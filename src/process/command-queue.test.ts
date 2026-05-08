@@ -100,7 +100,7 @@ describe("command queue", () => {
 
   it("resetAllLanes is safe when no lanes have been created", () => {
     expect(getActiveTaskCount()).toBe(0);
-    expect(() => resetAllLanes()).not.toThrow();
+    resetAllLanes();
     expect(getActiveTaskCount()).toBe(0);
   });
 
@@ -165,8 +165,8 @@ describe("command queue", () => {
       releaseFirst();
       await Promise.all([first, second]);
 
-      expect(waited).not.toBeNull();
-      expect(waited as unknown as number).toBeGreaterThanOrEqual(5);
+      expect(typeof waited).toBe("number");
+      expect(waited).toBeGreaterThanOrEqual(5);
       expect(queuedAhead).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -567,7 +567,7 @@ describe("command queue", () => {
       // resetAllLanes calls notifyActiveTaskWaiters → Array.from(state.activeTaskWaiters).
       // Without the migration this would throw:
       //   TypeError: undefined is not iterable
-      expect(() => resetAllLanes()).not.toThrow();
+      resetAllLanes();
 
       // waitForActiveTasks also accesses activeTaskWaiters.
       await expect(waitForActiveTasks(0)).resolves.toEqual({ drained: true });

@@ -278,21 +278,24 @@ describe("irc setup", () => {
     const applyAccountConfig = ircSetupAdapter.applyAccountConfig;
     expect(validateInput).toBeTypeOf("function");
     expect(applyAccountConfig).toBeTypeOf("function");
+    if (!validateInput) {
+      throw new Error("Expected IRC setup validateInput");
+    }
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "", nick: "openclaw" },
       } as never),
     ).toBe("IRC requires host.");
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "irc.libera.chat", nick: "" },
       } as never),
     ).toBe("IRC requires nick.");
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "irc.libera.chat", nick: "openclaw" },
       } as never),
     ).toBeNull();
@@ -420,10 +423,12 @@ describe("irc setup", () => {
       prompter,
       accountId: "work",
     });
-    expect(updated).toBeDefined();
+    if (!updated) {
+      throw new Error("expected IRC allowFrom setup to return updated config");
+    }
 
-    expect(updated?.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
-    expect(updated?.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
+    expect(updated.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
+    expect(updated.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
   });
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {

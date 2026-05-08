@@ -998,9 +998,11 @@ describe("openai transport stream", () => {
     };
 
     expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
-    expect(params.input?.some((item) => item.role === "system" || item.role === "developer")).toBe(
-      false,
-    );
+    expect(Array.isArray(params.input)).toBe(true);
+    expect(params.input?.map((item) => item.role)).toEqual(["user"]);
+    expect(
+      params.input?.filter((item) => item.role === "system" || item.role === "developer"),
+    ).toEqual([]);
     expect(params.prompt_cache_key).toBe("session-123");
     expect(params.store).toBe(false);
     expect(params).not.toHaveProperty("metadata");
@@ -1299,7 +1301,7 @@ describe("openai transport stream", () => {
       }>;
     };
 
-    expect(params.input?.some((item) => item.type === "reasoning")).toBe(true);
+    expect(params.input?.filter((item) => item.type === "reasoning")).toHaveLength(1);
     const assistantMessage = params.input?.find(
       (item) => item.type === "message" && item.role === "assistant",
     );
@@ -2223,7 +2225,14 @@ describe("openai transport stream", () => {
       } as never,
     ) as { reasoning_effort?: unknown; tools?: unknown };
 
-    expect(params.tools).toBeDefined();
+    expect(params.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        function: expect.objectContaining({
+          name: "lookup_weather",
+        }),
+      }),
+    ]);
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
@@ -3185,8 +3194,10 @@ describe("openai transport stream", () => {
     };
 
     const functionCall = params.input?.find((item) => item.type === "function_call");
-    expect(functionCall).toBeDefined();
-    expect(functionCall?.arguments).toBe("not valid json");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      arguments: "not valid json",
+    });
   });
 
   it("defaults tool_choice to auto for proxy-like openai-completions endpoints", () => {
@@ -3377,9 +3388,9 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
-    expect(output.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
-      false,
-    );
+    expect(
+      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
+    ).toEqual([]);
   });
 
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {

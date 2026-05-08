@@ -131,6 +131,44 @@ describe("config io write prepare", () => {
     expect(persisted.agents?.list).toEqual([{ id: "main" }, { id: "ops" }]);
   });
 
+  it("preserves authored Google model params under normalized config keys", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3-pro-preview" },
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "Gemini",
+              params: { thinking: { level: "high" } },
+            },
+          },
+        },
+      },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: {
+        agents: {
+          defaults: {
+            model: { primary: "google/gemini-3.1-pro-preview" },
+            models: {
+              "google/gemini-3.1-pro-preview": {},
+            },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
+    expect(persisted.agents?.defaults?.models).not.toHaveProperty("google/gemini-3-pro-preview");
+    expect(persisted.agents?.defaults?.models?.["google/gemini-3.1-pro-preview"]).toEqual({
+      params: { thinking: { level: "high" } },
+    });
+  });
+
   it("allows explicit unsets to remove authored agent provider params", () => {
     const sourceConfig: OpenClawConfig = {
       agents: {
@@ -482,9 +520,10 @@ describe("config io write prepare", () => {
       auth: { mode: "token" },
     });
     const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
-    expect(channels?.imessage).toBeDefined();
+    expect(channels?.imessage).toMatchObject({
+      cliPath: "/usr/local/bin/imsg",
+    });
     expect(channels?.imessage).not.toHaveProperty("runtimeOnlyDefault");
-    expect(channels?.imessage?.cliPath).toBe("/usr/local/bin/imsg");
   });
 
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {

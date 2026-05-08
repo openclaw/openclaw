@@ -236,7 +236,7 @@ describe("parseSessionKey", () => {
     });
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown parse patterns", () => {
     expect(parseSessionKey("something-unknown")).toEqual({
       prefix: "",
       fallbackName: "something-unknown",
@@ -319,7 +319,7 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("discord:123:456")).toBe("Discord Session");
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown display-name patterns", () => {
     expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
   });
 
@@ -654,6 +654,7 @@ describe("handleChatManualRefresh", () => {
     const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
     Object.defineProperty(globalThis, "requestAnimationFrame", {
       configurable: true,
+      writable: true,
       value: vi.fn((callback: FrameRequestCallback) => {
         animationFrame.callback = callback;
         return 1;
@@ -698,10 +699,15 @@ describe("handleChatManualRefresh", () => {
       expect(state.chatManualRefreshInFlight).toBe(false);
       expect(state.chatNewMessagesBelow).toBe(false);
     } finally {
-      Object.defineProperty(globalThis, "requestAnimationFrame", {
-        configurable: true,
-        value: previousRequestAnimationFrame,
-      });
+      if (previousRequestAnimationFrame === undefined) {
+        Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+      } else {
+        Object.defineProperty(globalThis, "requestAnimationFrame", {
+          configurable: true,
+          writable: true,
+          value: previousRequestAnimationFrame,
+        });
+      }
     }
   });
 });
@@ -938,7 +944,7 @@ describe("switchChatSession", () => {
     ).toHaveBeenCalledWith("agent:main:test-b", "Review Session");
   });
 
-  it("restores queued messages when switching back to their session", async () => {
+  it("restores queued messages when switching back to their session", () => {
     const settings = createSettings();
     const state = {
       sessionKey: "main",

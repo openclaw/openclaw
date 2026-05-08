@@ -253,6 +253,13 @@ async function resolveStream(
   return stream instanceof Promise ? await stream : stream;
 }
 
+function requireValue<T>(value: T | null | undefined, message: string): T {
+  if (value == null) {
+    throw new Error(message);
+  }
+  return value;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Fixtures
 // ─────────────────────────────────────────────────────────────────────────────
@@ -666,9 +673,11 @@ describe("convertMessagesToInputItems", () => {
       typeof convertMessagesToInputItems
     >[0]);
     // Should produce a text message and a function_call item
-    const textItem = items.find((i) => i.type === "message");
+    const textItem = requireValue(
+      items.find((i) => i.type === "message"),
+      "assistant text item missing",
+    );
     const fcItem = items.find((i) => i.type === "function_call");
-    expect(textItem).toBeDefined();
     expect(fcItem).toMatchObject({
       type: "function_call",
       call_id: "call_1",
@@ -998,9 +1007,9 @@ describe("convertMessagesToInputItems", () => {
     const fcItem = items.find((i) => i.type === "function_call");
     const outputItem = items.find((i) => i.type === "function_call_output");
 
-    expect(userItem).toBeDefined();
-    expect(fcItem).toBeDefined();
-    expect(outputItem).toBeDefined();
+    expect(userItem).toMatchObject({ type: "message", role: "user" });
+    expect(fcItem).toMatchObject({ type: "function_call", call_id: "call_1" });
+    expect(outputItem).toMatchObject({ type: "function_call_output", call_id: "call_1" });
   });
 
   it("handles assistant messages with only tool calls (no text)", () => {
@@ -1197,13 +1206,17 @@ describe("buildAssistantMessageFromResponse", () => {
   it("extracts tool call from function_call output item", () => {
     const response = makeResponseObject("resp_2", undefined, "exec");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
-    const tc = msg.content.find((c) => c.type === "toolCall") as {
-      type: string;
-      id: string;
-      name: string;
-      arguments: Record<string, unknown>;
-    };
-    expect(tc).toBeDefined();
+    const tc = requireValue(
+      msg.content.find((c) => c.type === "toolCall") as
+        | {
+            type: string;
+            id: string;
+            name: string;
+            arguments: Record<string, unknown>;
+          }
+        | undefined,
+      "tool call missing",
+    );
     expect(tc.name).toBe("exec");
     expect(tc.id).toBe("call_abc|item_2");
     expect(tc.arguments).toEqual({ arg: "value" });
@@ -1229,13 +1242,17 @@ describe("buildAssistantMessageFromResponse", () => {
     };
 
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
-    const tc = msg.content.find((c) => c.type === "toolCall") as {
-      type: string;
-      name: string;
-      arguments: unknown;
-    };
+    const tc = requireValue(
+      msg.content.find((c) => c.type === "toolCall") as
+        | {
+            type: string;
+            name: string;
+            arguments: unknown;
+          }
+        | undefined,
+      "tool call missing",
+    );
 
-    expect(tc).toBeDefined();
     expect(tc.name).toBe("exec");
     expect(tc.arguments).toBe("not valid json");
   });
@@ -1249,8 +1266,7 @@ describe("buildAssistantMessageFromResponse", () => {
   it("includes both text and tool calls when both present", () => {
     const response = makeResponseObject("resp_4", "Running...", "exec");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
-    expect(msg.content.some((c) => c.type === "text")).toBe(true);
-    expect(msg.content.some((c) => c.type === "toolCall")).toBe(true);
+    expect(msg.content.map((c) => c.type)).toEqual(["text", "toolCall"]);
     expect(msg.stopReason).toBe("toolUse");
   });
 
@@ -1442,7 +1458,7 @@ describe("buildAssistantMessageFromResponse", () => {
     };
 
     expect(msg.phase).toBeUndefined();
-    expect(msg.content.some((part) => part.type === "text")).toBe(false);
+    expect(msg.content.filter((part) => part.type === "text")).toEqual([]);
     expect(msg.content).toMatchObject([{ type: "toolCall", name: "exec" }]);
     expect(msg.stopReason).toBe("toolUse");
   });
@@ -2130,8 +2146,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
           message: { content: Array<{ text: string }> };
         }
       | undefined;
-    expect(doneEvent).toBeDefined();
-    expect(doneEvent?.message.content[0]?.text).toBe("Hello back!");
+    expect(requireValue(doneEvent, "done event missing").message.content[0]?.text).toBe(
+      "Hello back!",
+    );
   });
 
   it("suppresses commentary-only text on completed WebSocket responses", async () => {
@@ -2165,7 +2182,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
         }
       | undefined;
     expect(doneEvent?.message.phase).toBeUndefined();
-    expect(doneEvent?.message.content?.some((part) => part.type === "text")).toBe(false);
+    expect(doneEvent?.message.content?.filter((part) => part.type === "text")).toEqual([]);
     expect(doneEvent?.message.stopReason).toBe("toolUse");
   });
 
@@ -2676,7 +2693,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
       expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
 
       // The failed manager is closed before the replacement session manager is installed.
-      expect(MockManager.instances.some((instance) => instance.closeCallCount >= 1)).toBe(true);
+      expect(
+        MockManager.instances.filter((instance) => instance.closeCallCount >= 1).length,
+      ).toBeGreaterThanOrEqual(1);
     } finally {
       MockManager.globalConnectShouldFail = false;
     }
@@ -2733,7 +2752,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
     expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
     expect(events.filter((event) => event.type === "start")).toHaveLength(1);
-    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.filter((event) => event.type === "error")).toEqual([]);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
   });
@@ -2767,7 +2786,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
     expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
     expect(events.filter((event) => event.type === "start")).toHaveLength(1);
-    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.filter((event) => event.type === "error")).toEqual([]);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
   });
@@ -2833,8 +2852,9 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const secondPayload = secondManager.sentEvents[0] as { metadata?: Record<string, string> };
     expect(firstPayload.metadata?.openclaw_session_id).toBe("sess-turn-metadata-retry");
     expect(firstPayload.metadata?.openclaw_transport).toBe("websocket");
-    expect(firstPayload.metadata?.openclaw_turn_id).toBeTruthy();
-    expect(secondPayload.metadata?.openclaw_turn_id).toBe(firstPayload.metadata?.openclaw_turn_id);
+    const turnId = requireValue(firstPayload.metadata?.openclaw_turn_id, "turn id missing");
+    expect(turnId).not.toBe("");
+    expect(secondPayload.metadata?.openclaw_turn_id).toBe(turnId);
     expect(firstPayload.metadata?.openclaw_turn_attempt).toBe("1");
     expect(secondPayload.metadata?.openclaw_turn_attempt).toBe("2");
   });
@@ -3007,8 +3027,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent2.previous_response_id).toBe("resp_turn1");
     // Input should only contain tool results, not the full history
     const inputTypes = (sent2.input ?? []).map((i) => i.type);
-    expect(inputTypes.every((t) => t === "function_call_output")).toBe(true);
-    expect(inputTypes).toHaveLength(1);
+    expect(inputTypes).toEqual(["function_call_output"]);
   });
 
   it("sends only a follow-up user message when the full context is a strict extension", async () => {
@@ -4073,7 +4092,7 @@ describe("releaseWsSession / hasWsSession", () => {
   });
 
   it("releaseWsSession is a no-op for unknown sessions", () => {
-    expect(() => releaseWsSession("nonexistent-session")).not.toThrow();
+    expect(releaseWsSession("nonexistent-session")).toBeUndefined();
   });
 
   it("recreates the cached manager when request overrides change for the same session", async () => {

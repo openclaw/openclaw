@@ -25,9 +25,10 @@ describe("qianfan provider plugin", () => {
     expect(provider.docsPath).toBe("/providers/qianfan");
     expect(provider.envVars).toEqual(["QIANFAN_API_KEY"]);
     expect(provider.auth).toHaveLength(1);
-    expect(resolved).not.toBeNull();
-    expect(resolved?.provider.id).toBe("qianfan");
-    expect(resolved?.method.id).toBe("api-key");
+    expect(resolved).toMatchObject({
+      provider: { id: "qianfan" },
+      method: { id: "api-key" },
+    });
   });
 
   it("builds the static Qianfan model catalog", async () => {

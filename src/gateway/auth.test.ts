@@ -249,7 +249,7 @@ describe("gateway auth", () => {
     });
   });
 
-  it("does not throw when req is missing socket", async () => {
+  it("authorizes matching token auth when req is missing socket", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: false },
       connectAuth: { token: "secret" },
@@ -550,12 +550,12 @@ describe("gateway auth", () => {
     });
 
     expect(auth.password).toBe("env-password");
-    expect(() =>
+    expect(
       assertGatewayAuthConfigured(auth, {
         mode: "password",
         password: rawPasswordRef,
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("throws generic error when password mode has no password at all", () => {

@@ -102,9 +102,11 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     });
 
     expect(runtimeContext.workspaceDir).toBe("/tmp/workspace");
-    expect(typeof runtimeContext.rewriteTranscriptEntries).toBe("function");
+    if (!runtimeContext.rewriteTranscriptEntries) {
+      throw new Error("expected transcript rewrite helper");
+    }
 
-    const result = await runtimeContext.rewriteTranscriptEntries?.({
+    const result = await runtimeContext.rewriteTranscriptEntries({
       replacements: [
         { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
       ],
@@ -199,7 +201,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
           { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
         ],
       });
-      expect(rewritePromise).toBeDefined();
+      expect(rewritePromise?.then).toBeTypeOf("function");
 
       await flushAsyncWork();
       expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
@@ -319,7 +321,19 @@ describe("runContextEngineMaintenance", () => {
     )?.runtimeContext as
       | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
       | undefined;
-    expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
+    if (!runtimeContext?.rewriteTranscriptEntries) {
+      throw new Error("expected maintain runtime context rewrite helper");
+    }
+    const rewriteResult = await runtimeContext.rewriteTranscriptEntries({
+      replacements: [
+        { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
+      ],
+    });
+    expect(rewriteResult).toEqual({
+      changed: true,
+      bytesFreed: 123,
+      rewrittenEntries: 2,
+    });
   });
 
   it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
@@ -584,7 +598,7 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(completedTasks).toHaveLength(2);
-        expect(completedTasks.every((task) => task.status === "succeeded")).toBe(true);
+        expect(completedTasks.filter((task) => task.status !== "succeeded")).toEqual([]);
 
         await foregroundTurn;
       } finally {
@@ -658,7 +672,7 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(2);
-        expect(tasks.every((task) => task.status === "succeeded")).toBe(true);
+        expect(tasks.filter((task) => task.status !== "succeeded")).toEqual([]);
       } finally {
         vi.useRealTimers();
       }
@@ -726,7 +740,9 @@ describe("runContextEngineMaintenance", () => {
           status: "cancelled",
           notifyPolicy: "silent",
         });
-        expect(tasks.some((task) => task.runId?.startsWith("turn-maint:"))).toBe(true);
+        expect(tasks.map((task) => task.runId)).toContainEqual(
+          expect.stringMatching(/^turn-maint:/),
+        );
       } finally {
         vi.useRealTimers();
       }

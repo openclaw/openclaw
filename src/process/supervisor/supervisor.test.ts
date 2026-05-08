@@ -200,7 +200,7 @@ describe("process supervisor", () => {
     const firstExit = await firstRun.wait();
     const secondExit = await secondRun.wait();
     expect(first.killMock).toHaveBeenCalledWith("SIGKILL");
-    expect(firstExit.reason === "manual-cancel" || firstExit.reason === "signal").toBe(true);
+    expect(["manual-cancel", "signal"]).toContain(firstExit.reason);
     expect(secondExit.reason).toBe("exit");
     expect(secondExit.stdout).toBe("new");
   });

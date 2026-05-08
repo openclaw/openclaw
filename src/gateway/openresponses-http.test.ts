@@ -109,8 +109,10 @@ async function postResponses(port: number, body: unknown, headers?: Record<strin
   return res;
 }
 
-function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
-  const events: Array<{ event?: string; data: string }> = [];
+type SseEvent = { event?: string; data: string };
+
+function parseSseEvents(text: string): SseEvent[] {
+  const events: SseEvent[] = [];
   const lines = text.split("\n");
   let currentEvent: string | undefined;
   let currentData: string[] = [];
@@ -128,6 +130,25 @@ function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
   }
 
   return events;
+}
+
+function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
+  const event = events.find((candidate) => candidate.event === eventName);
+  if (!event) {
+    throw new Error(`expected SSE event ${eventName}`);
+  }
+  return event;
+}
+
+function parseSseData(event: SseEvent): unknown {
+  return JSON.parse(event.data);
+}
+
+function requireSessionKey(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label} sessionKey`);
+  }
+  return value;
 }
 
 async function ensureResponseConsumed(res: Response) {
@@ -698,7 +719,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(eventTypes).toContain("response.output_text.done");
       expect(eventTypes).toContain("response.content_part.done");
       expect(eventTypes).toContain("response.completed");
-      expect(deltaEvents.some((e) => e.data === "[DONE]")).toBe(true);
+      expect(deltaEvents.map((event) => event.data)).toContain("[DONE]");
 
       const deltas = deltaEvents
         .filter((e) => e.event === "response.output_text.delta")
@@ -810,7 +831,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       | undefined;
     expect(streamingOpts?.senderIsOwner).toBe(true);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
-    expect(streamingEvents.some((event) => event.event === "response.completed")).toBe(true);
+    expect(streamingEvents.map((event) => event.event)).toContain("response.completed");
   });
 
   it("treats shared-secret bearer callers as owner operators", async () => {
@@ -912,16 +933,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     const events = parseSseEvents(text);
-    const outputTextDone = events.find((event) => event.event === "response.output_text.done");
-    expect(outputTextDone).toBeTruthy();
-    expect((JSON.parse(outputTextDone?.data ?? "{}") as { text?: string }).text).toBe(
-      "Let me check that.",
-    );
+    const outputTextDone = findSseEvent(events, "response.output_text.done");
+    expect((parseSseData(outputTextDone) as { text?: string }).text).toBe("Let me check that.");
 
-    const completed = events.find((event) => event.event === "response.completed");
-    expect(completed).toBeTruthy();
+    const completed = findSseEvent(events, "response.completed");
     const response = (
-      JSON.parse(completed?.data ?? "{}") as {
+      parseSseData(completed) as {
         response?: { status?: string; output?: Array<Record<string, unknown>> };
       }
     ).response;
@@ -933,7 +950,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ?.text as string | undefined) ?? "",
     ).toBe("Let me check that.");
     expect(response?.output?.[1]?.name).toBe("get_weather");
-    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+    expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 
   it("returns every client tool call when an agent invokes multiple tools in one turn (#52288)", async () => {
@@ -1060,10 +1077,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       .filter((evt) => evt.item.type === "function_call");
     expect(doneFunctionCalls.map((evt) => evt.output_index)).toEqual([1, 2, 3]);
 
-    const completed = events.find((event) => event.event === "response.completed");
-    expect(completed).toBeTruthy();
+    const completed = findSseEvent(events, "response.completed");
     const response = (
-      JSON.parse(completed?.data ?? "{}") as {
+      parseSseData(completed) as {
         response?: { status?: string; output?: Array<Record<string, unknown>> };
       }
     ).response;
@@ -1079,7 +1095,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       "activate_graph",
       "get_status",
     ]);
-    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+    expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 
   it("reuses the prior session when previous_response_id is provided", async () => {
@@ -1111,7 +1127,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       | { sessionKey?: string }
       | undefined;
     expect(firstJson.id).toMatch(/^resp_/);
-    expect(firstOpts?.sessionKey).toBeTruthy();
+    const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
 
     agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "It is sunny." }],
@@ -1127,7 +1143,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
       | { sessionKey?: string }
       | undefined;
-    expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
+    expect(secondOpts?.sessionKey).toBe(firstSessionKey);
     await ensureResponseConsumed(secondResponse);
   });
 

@@ -96,6 +96,21 @@ let mockedReplyOptionEvents: Array<
   | { kind: "partial"; text: string }
 > = [];
 
+function requireCapturedTyping() {
+  if (!capturedTyping) {
+    throw new Error("expected Slack typing callback");
+  }
+  return capturedTyping;
+}
+
+function requireCapturedItemEventHandler() {
+  const handler = capturedReplyOptions?.onItemEvent;
+  if (!handler) {
+    throw new Error("expected Slack reply item event handler");
+  }
+  return handler;
+}
+
 const noop = () => {};
 const noopAsync = async () => {};
 
@@ -725,11 +740,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(capturedTyping).toBeDefined();
+    const typing = requireCapturedTyping();
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
 
-    await capturedTyping?.start();
-    await capturedTyping?.stop?.();
+    await typing.start();
+    await typing.stop?.();
 
     expect(setSlackThreadStatus).toHaveBeenCalledWith({
       channelId: "C123",
@@ -889,7 +904,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expect(capturedReplyOptions?.onItemEvent).toBeDefined();
+    await requireCapturedItemEventHandler()({ progressText: "hidden progress" });
   });
 
   it("does not create a blank Slack progress draft when label and lines are disabled", async () => {
@@ -928,7 +943,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expect(capturedReplyOptions?.onItemEvent).toBeDefined();
+    await requireCapturedItemEventHandler()({ progressText: "hidden partial progress" });
   });
 
   it("starts native streams in the first-reply thread for top-level channel messages", async () => {
@@ -956,7 +971,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   it("suppresses reasoning payloads before Slack native streaming delivery", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [
-      { kind: "block", payload: { text: "Reasoning:\n_hidden_", isReasoning: true } },
+      { kind: "block", payload: { text: "hidden", isReasoning: true } },
       { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
     ];
 

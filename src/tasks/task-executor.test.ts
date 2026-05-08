@@ -101,6 +101,25 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
   });
 }
 
+function expectParentFlowId(task: { parentFlowId?: string }): string {
+  expect(task.parentFlowId).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+  );
+  if (task.parentFlowId === undefined) {
+    throw new Error("Expected task parent flow id");
+  }
+  return task.parentFlowId;
+}
+
+function requireCreatedFlowTask(
+  result: ReturnType<typeof runTaskInFlow>,
+): NonNullable<ReturnType<typeof runTaskInFlow>["task"]> {
+  if (!result.task) {
+    throw new Error("Expected TaskFlow child task to be created");
+  }
+  return result.task;
+}
+
 function createRunningAcpChildTaskRun(
   overrides: Partial<Parameters<typeof createRunningTaskRun>[0]> = {},
 ) {
@@ -289,9 +308,9 @@ describe("task-executor", () => {
         deliveryStatus: "pending",
       });
 
-      expect(created.parentFlowId).toEqual(expect.any(String));
-      expect(getTaskFlowById(created.parentFlowId!)).toMatchObject({
-        flowId: created.parentFlowId,
+      const parentFlowId = expectParentFlowId(created);
+      expect(getTaskFlowById(parentFlowId)).toMatchObject({
+        flowId: parentFlowId,
         ownerKey: "agent:main:main",
         status: "running",
         goal: "Write summary",
@@ -305,8 +324,8 @@ describe("task-executor", () => {
         terminalSummary: "Done.",
       });
 
-      expect(getTaskFlowById(created.parentFlowId!)).toMatchObject({
-        flowId: created.parentFlowId,
+      expect(getTaskFlowById(parentFlowId)).toMatchObject({
+        flowId: parentFlowId,
         status: "succeeded",
         endedAt: 40,
         goal: "Write summary",
@@ -364,8 +383,9 @@ describe("task-executor", () => {
         terminalOutcome: "blocked",
         terminalSummary: "Writable session required.",
       });
-      expect(getTaskFlowById(created.parentFlowId!)).toMatchObject({
-        flowId: created.parentFlowId,
+      const parentFlowId = expectParentFlowId(created);
+      expect(getTaskFlowById(parentFlowId)).toMatchObject({
+        flowId: parentFlowId,
         status: "blocked",
         blockedTaskId: created.taskId,
         blockedSummary: "Writable session required.",
@@ -373,7 +393,7 @@ describe("task-executor", () => {
       });
 
       const retried = retryBlockedFlowAsQueuedTaskRun({
-        flowId: created.parentFlowId!,
+        flowId: parentFlowId,
         runId: "run-executor-retry",
         childSessionKey: "agent:codex:acp:retry-child",
       });
@@ -385,17 +405,17 @@ describe("task-executor", () => {
           taskId: created.taskId,
         }),
         task: expect.objectContaining({
-          parentFlowId: created.parentFlowId,
+          parentFlowId,
           parentTaskId: created.taskId,
           status: "queued",
           runId: "run-executor-retry",
         }),
       });
-      expect(getTaskFlowById(created.parentFlowId!)).toMatchObject({
-        flowId: created.parentFlowId,
+      expect(getTaskFlowById(parentFlowId)).toMatchObject({
+        flowId: parentFlowId,
         status: "queued",
       });
-      expect(findLatestTaskForFlowId(created.parentFlowId!)).toMatchObject({
+      expect(findLatestTaskForFlowId(parentFlowId)).toMatchObject({
         runId: "run-executor-retry",
       });
       expect(findTaskByRunId("run-executor-blocked")).toMatchObject({
@@ -486,7 +506,8 @@ describe("task-executor", () => {
           runId: "run-flow-child",
         }),
       });
-      expect(getTaskById(created.task!.taskId)).toMatchObject({
+      const createdTask = requireCreatedFlowTask(created);
+      expect(getTaskById(createdTask.taskId)).toMatchObject({
         parentFlowId: flow.flowId,
         ownerKey: "agent:main:main",
         childSessionKey: "agent:codex:acp:child",
@@ -537,7 +558,7 @@ describe("task-executor", () => {
         controllerId: "tests/managed-flow",
         goal: "Long running batch",
       });
-      const child = runTaskInFlow({
+      const created = runTaskInFlow({
         flowId: flow.flowId,
         runtime: "acp",
         childSessionKey: "agent:codex:acp:child",
@@ -546,7 +567,8 @@ describe("task-executor", () => {
         status: "running",
         startedAt: 10,
         lastEventAt: 10,
-      }).task!;
+      });
+      const child = requireCreatedFlowTask(created);
 
       const cancelled = await cancelFlowById({
         cfg: {} as never,

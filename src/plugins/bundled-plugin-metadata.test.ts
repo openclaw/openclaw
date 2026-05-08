@@ -328,6 +328,13 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps iMessage message-tool discovery on a narrow public surface", () => {
+    const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
+    expectArtifactPresence(imessage?.publicSurfaceArtifacts, {
+      contains: ["message-tool-api.js"],
+    });
+  });
+
   it("keeps Slack's narrow runtime-setter sidecar on the bundled public surface", () => {
     // Regression for #69317: the bundled channel entry now points its
     // runtime.specifier at runtime-setter-api.js to avoid loading the full
@@ -448,6 +455,7 @@ describe("bundled plugin metadata", () => {
   it("keeps config schemas on all bundled plugin manifests", () => {
     for (const entry of listRepoBundledPluginMetadata()) {
       expect(entry.manifest.configSchema).toEqual(expect.any(Object));
+      expect(Array.isArray(entry.manifest.configSchema)).toBe(false);
     }
   });
 

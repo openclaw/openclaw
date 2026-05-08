@@ -34,9 +34,9 @@ async function waitForNativeHookRelayBridgeRecord(
   let record: Record<string, unknown> | undefined;
   await vi.waitFor(() => {
     record = __testing.getNativeHookRelayBridgeRecordForTests(relayId);
-    expect(record).toBeDefined();
+    expect(record).toMatchObject({ relayId });
   });
-  return record!;
+  return record as Record<string, unknown>;
 }
 
 describe("native hook relay registry", () => {
@@ -384,7 +384,7 @@ describe("native hook relay registry", () => {
 
     const invocations = __testing.getNativeHookRelayInvocationsForTests();
     expect(invocations).toHaveLength(200);
-    expect(invocations.some((invocation) => invocation.toolUseId === "call-0")).toBe(false);
+    expect(invocations.map((invocation) => invocation.toolUseId)).not.toContain("call-0");
     expect(invocations.at(-1)).toEqual(expect.objectContaining({ toolUseId: "call-209" }));
   });
 

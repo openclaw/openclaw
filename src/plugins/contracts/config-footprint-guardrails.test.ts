@@ -53,7 +53,8 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  expect(value && typeof value === "object" && !Array.isArray(value)).toBe(true);
+  expect(value).toEqual(expect.any(Object));
+  expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
 }
 
@@ -120,8 +121,10 @@ describe("config footprint guardrails", () => {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
         (entry) => entry.pluginId === pluginId,
       );
-      expect(metadata, `${pluginId} metadata missing`).toBeDefined();
-      const paths = new Set(collectSchemaPaths(metadata?.schema));
+      if (metadata === undefined) {
+        throw new Error(`${pluginId} metadata missing`);
+      }
+      const paths = new Set(collectSchemaPaths(metadata.schema));
       expect(paths.has("allowPrivateNetwork"), `${pluginId} leaked flat allowPrivateNetwork`).toBe(
         false,
       );

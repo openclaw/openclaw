@@ -311,6 +311,7 @@ gh workflow run package-acceptance.yml --ref main \
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
   - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
   - Supports `--credential-source convex` for shared pooled credentials. Use env mode by default, or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` to opt into pooled leases.
+  - Defaults cover canary, mention gating, command addressing, `/status`, bot-to-bot mentioned replies, and core native command replies. `mock-openai` defaults also cover deterministic reply-chain and Telegram final-message streaming regressions. Use `--list-scenarios` for optional probes such as `session_status`.
   - Exits non-zero when any scenario fails. Use `--allow-failures` when you
     want artifacts without a failing exit code.
   - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
@@ -322,8 +323,9 @@ Live transport lanes share one standard contract so new transports do not drift;
 ### Shared Telegram credentials via Convex (v1)
 
 When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`) is enabled for
-`openclaw qa telegram`, QA lab acquires an exclusive lease from a Convex-backed pool, heartbeats
-that lease while the lane is running, and releases the lease on shutdown.
+live transport QA, QA lab acquires an exclusive lease from a Convex-backed pool, heartbeats that
+lease while the lane is running, and releases the lease on shutdown. The section name predates
+Discord, Slack, and WhatsApp support; the lease contract is shared across kinds.
 
 Reference Convex project scaffold:
 
@@ -396,6 +398,16 @@ Payload shape for Telegram kind:
 - `{ groupId: string, driverToken: string, sutToken: string }`
 - `groupId` must be a numeric Telegram chat id string.
 - `admin/add` validates this shape for `kind: "telegram"` and rejects malformed payloads.
+
+Broker-validated multi-channel payloads:
+
+- Discord: `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string, voiceChannelId?: string }`
+- WhatsApp: `{ driverPhoneE164: string, sutPhoneE164: string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string, groupJid?: string }`
+
+Slack lanes can also lease from the pool, but Slack payload validation currently
+lives in the Slack QA runner rather than the broker. Use
+`{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }`
+for Slack rows.
 
 ### Adding a channel to QA
 

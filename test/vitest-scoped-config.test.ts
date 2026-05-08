@@ -81,6 +81,10 @@ function bundledExcludePatternCouldMatchFile(pattern: string, file: string): boo
   return false;
 }
 
+function matchingExcludePatterns(patterns: string[], file: string): string[] {
+  return patterns.filter((pattern) => path.matchesGlob(file, pattern));
+}
+
 describe("resolveVitestIsolation", () => {
   it("aliases private QA plugin SDK subpaths for source tests only", () => {
     expect(sharedVitestConfig.resolve.alias).toEqual(
@@ -632,16 +636,12 @@ describe("scoped vitest configs", () => {
 
   it("keeps acpx tests out of the shared extensions lane", () => {
     const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
-    expect(
-      extensionExcludes.some((pattern) => path.matchesGlob("acpx/src/runtime.test.ts", pattern)),
-    ).toBe(true);
+    expect(matchingExcludePatterns(extensionExcludes, "acpx/src/runtime.test.ts")).not.toEqual([]);
   });
 
   it("keeps diffs tests out of the shared extensions lane", () => {
     const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
-    expect(
-      extensionExcludes.some((pattern) => path.matchesGlob("diffs/src/render.test.ts", pattern)),
-    ).toBe(true);
+    expect(matchingExcludePatterns(extensionExcludes, "diffs/src/render.test.ts")).not.toEqual([]);
   });
 
   it("keeps broad dedicated extension groups out of the shared extensions lane", () => {
@@ -656,7 +656,7 @@ describe("scoped vitest configs", () => {
       "firecrawl/src/index.test.ts",
       "qa-lab/src/index.test.ts",
     ]) {
-      expect(extensionExcludes.some((pattern) => path.matchesGlob(file, pattern))).toBe(true);
+      expect(matchingExcludePatterns(extensionExcludes, file)).not.toEqual([]);
     }
   });
 

@@ -821,7 +821,6 @@ describe("startGatewayPostAttachRuntime", () => {
       config: params.gatewayPluginConfigAtStart,
       workspaceDir: "/tmp/openclaw-workspace",
     });
-    expect(typeof ctx.getCron).toBe("function");
     const getCron = ctx.getCron;
     if (!getCron) {
       throw new Error("gateway_start context did not expose getCron");
@@ -917,6 +916,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     broadcast: vi.fn(),
     tailscaleMode: "off",
     resetOnExit: false,
+    preserveFunnel: false,
     controlUiBasePath: "/",
     logTailscale: {
       info: vi.fn(),

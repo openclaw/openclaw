@@ -16,6 +16,8 @@ import {
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
 
+type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
+
 let sharedTempRoot = "";
 let sharedTempId = 0;
 
@@ -36,6 +38,13 @@ function setupTempDirLifecycle(prefix: string): () => string {
     fsSync.mkdirSync(tmpDir, { recursive: true });
   });
   return () => tmpDir;
+}
+
+function expectFileEntry(entry: Awaited<ReturnType<typeof buildFileEntry>>): FileEntry {
+  if (!entry) {
+    throw new Error("Expected file entry to be built");
+  }
+  return entry;
 }
 
 const multimodal: MemoryMultimodalSettings = {
@@ -108,15 +117,15 @@ describe("memory host SDK package internals", () => {
     const imagePath = path.join(tmpDir, "diagram.png");
     fsSync.writeFileSync(imagePath, Buffer.from("png"));
 
-    const entry = await buildFileEntry(imagePath, tmpDir, multimodal);
-    const built = await buildMultimodalChunkForIndexing(entry!);
+    const entry = expectFileEntry(await buildFileEntry(imagePath, tmpDir, multimodal));
+    const built = await buildMultimodalChunkForIndexing(entry);
     expect(built?.chunk.embeddingInput?.parts).toEqual([
       { type: "text", text: "Image file: diagram.png" },
       expect.objectContaining({ type: "inline-data", mimeType: "image/png" }),
     ]);
 
-    fsSync.writeFileSync(imagePath, Buffer.alloc(entry!.size + 32, 1));
-    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
+    fsSync.writeFileSync(imagePath, Buffer.alloc(entry.size + 32, 1));
+    await expect(buildMultimodalChunkForIndexing(entry)).resolves.toBeNull();
   });
 
   it("chunks mixed text and preserves surrogate pairs", () => {

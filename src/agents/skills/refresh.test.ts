@@ -55,7 +55,7 @@ describe("ensureSkillsWatcher", () => {
     await refreshModule.resetSkillsRefreshForTest();
   });
 
-  it("watches skill roots and filters non-skill churn", async () => {
+  it("watches skill roots and filters non-skill churn", () => {
     refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
 
     expect(watchMock).toHaveBeenCalledTimes(1);
@@ -75,7 +75,8 @@ describe("ensureSkillsWatcher", () => {
         posix(path.join(os.homedir(), ".agents", "skills")),
       ]),
     );
-    expect(targets.every((target) => !target.includes("*"))).toBe(true);
+    const wildcardTargets = targets.filter((target) => target.includes("*"));
+    expect(wildcardTargets).toEqual([]);
     const ignored = refreshModule.shouldIgnoreSkillsWatchPath;
 
     // Node/JS paths

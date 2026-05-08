@@ -784,21 +784,27 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
     expect(manifestKeys).toEqual([...CODEX_APP_SERVER_CONFIG_KEYS].toSorted());
     for (const key of CODEX_APP_SERVER_CONFIG_KEYS) {
-      expect(manifest.uiHints[`appServer.${key}`]).toBeTruthy();
+      expect(manifest.uiHints[`appServer.${key}`]).toMatchObject({
+        label: expect.any(String),
+      });
     }
     const computerUseManifestKeys = Object.keys(
       manifest.configSchema.properties.computerUse.properties,
     ).toSorted();
     expect(computerUseManifestKeys).toEqual([...CODEX_COMPUTER_USE_CONFIG_KEYS].toSorted());
     for (const key of CODEX_COMPUTER_USE_CONFIG_KEYS) {
-      expect(manifest.uiHints[`computerUse.${key}`]).toBeTruthy();
+      expect(manifest.uiHints[`computerUse.${key}`]).toMatchObject({
+        label: expect.any(String),
+      });
     }
     const codexPluginsProperties = manifest.configSchema.properties.codexPlugins;
     const codexPluginsManifestKeys = Object.keys(codexPluginsProperties.properties).toSorted();
     expect(codexPluginsManifestKeys).toEqual([...CODEX_PLUGINS_CONFIG_KEYS].toSorted());
     expect(codexPluginsProperties.additionalProperties).toBe(false);
     for (const key of CODEX_PLUGINS_CONFIG_KEYS) {
-      expect(manifest.uiHints[`codexPlugins.${key}`]).toBeTruthy();
+      expect(manifest.uiHints[`codexPlugins.${key}`]).toMatchObject({
+        label: expect.any(String),
+      });
     }
     const pluginEntryProperties = (
       codexPluginsProperties.properties.plugins as {

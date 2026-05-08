@@ -274,9 +274,10 @@ describe("scripts/docker/setup.sh", () => {
     expect(gatewayStartIdx).toBeGreaterThanOrEqual(0);
 
     const prestartLines = lines.slice(0, gatewayStartIdx);
-    expect(prestartLines.some((line) => /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line))).toBe(
-      false,
+    const prestartCliRunLines = prestartLines.filter((line) =>
+      /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line),
     );
+    expect(prestartCliRunLines).toEqual([]);
   });
 
   it("forces BuildKit for local and sandbox docker builds", async () => {
@@ -297,7 +298,10 @@ describe("scripts/docker/setup.sh", () => {
       line.startsWith("build "),
     );
     expect(buildLines.length).toBeGreaterThanOrEqual(2);
-    expect(buildLines.every((line) => line.includes("DOCKER_BUILDKIT=1"))).toBe(true);
+    const buildLinesWithoutBuildKit = buildLines.filter(
+      (line) => !line.includes("DOCKER_BUILDKIT=1"),
+    );
+    expect(buildLinesWithoutBuildKit).toEqual([]);
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {
@@ -472,7 +476,9 @@ describe("scripts/docker/setup.sh", () => {
       const forceRecreateLine = log
         .split("\n")
         .find((line) => line.includes("up -d --force-recreate openclaw-gateway"));
-      expect(forceRecreateLine).toBeDefined();
+      expect(forceRecreateLine).toEqual(
+        expect.stringContaining("up -d --force-recreate openclaw-gateway"),
+      );
       expect(forceRecreateLine).not.toContain("docker-compose.sandbox.yml");
       await expect(
         stat(join(activeSandbox.rootDir, "docker-compose.sandbox.yml")),
@@ -480,7 +486,7 @@ describe("scripts/docker/setup.sh", () => {
     });
   });
 
-  it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", async () => {
+  it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -491,7 +497,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("OPENCLAW_EXTRA_MOUNTS cannot contain control characters");
   });
 
-  it("rejects invalid OPENCLAW_EXTRA_MOUNTS mount format", async () => {
+  it("rejects invalid OPENCLAW_EXTRA_MOUNTS mount format", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -502,7 +508,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("Invalid mount format");
   });
 
-  it("rejects invalid OPENCLAW_HOME_VOLUME names", async () => {
+  it("rejects invalid OPENCLAW_HOME_VOLUME names", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -513,7 +519,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("OPENCLAW_HOME_VOLUME must match");
   });
 
-  it("rejects OPENCLAW_TZ values that are not present in zoneinfo", async () => {
+  it("rejects OPENCLAW_TZ values that are not present in zoneinfo", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {

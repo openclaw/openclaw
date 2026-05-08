@@ -14,7 +14,7 @@ describe("security audit deep probe failure", () => {
           close?: { code: number; reason: string } | null;
         };
       };
-      expectedError?: string;
+      expectedError: string;
     }> = [
       {
         name: "probe returns failed result",
@@ -50,7 +50,8 @@ describe("security audit deep probe failure", () => {
         findings.some((finding) => finding.checkId === "gateway.probe_failed"),
         testCase.name,
       ).toBe(true);
-      expect(findings[0]?.detail).toContain(testCase.expectedError!);
+      const probeFailure = findings.find((finding) => finding.checkId === "gateway.probe_failed");
+      expect(probeFailure?.detail, testCase.name).toContain(testCase.expectedError);
     }
   });
 });

@@ -84,7 +84,9 @@ describe("ensureAuthProfileStore", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     const store = ensureAuthProfileStore(agentDir);
     const profile = store.profiles[profileId];
-    expect(profile).toBeDefined();
+    if (!profile) {
+      throw new Error(`expected auth profile ${profileId}`);
+    }
     return profile;
   }
 
@@ -184,7 +186,7 @@ describe("ensureAuthProfileStore", () => {
 
       // idempotent
       const store2 = ensureAuthProfileStore(agentDir);
-      expect(store2.profiles["anthropic:default"]).toBeDefined();
+      expect(store2.profiles).toHaveProperty("anthropic:default");
       expect(fs.existsSync(legacyPath)).toBe(false);
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
@@ -333,7 +335,7 @@ describe("ensureAuthProfileStore", () => {
       const persistedAgentStore = JSON.parse(
         fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
       ) as { profiles: Record<string, unknown> };
-      expect(persistedAgentStore.profiles[staleProfileId]).toBeDefined();
+      expect(persistedAgentStore.profiles).toHaveProperty(staleProfileId);
     } finally {
       restoreAgentDirEnv({ previousStateDir, previousAgentDir, previousPiAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
@@ -545,7 +547,7 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(store.profiles[freshProfileId]).toBeDefined();
+      expect(store.profiles).toHaveProperty(freshProfileId);
       expect(store.profiles[staleProfileId]).toMatchObject({
         type: "oauth",
         provider: "openai-codex",

@@ -486,14 +486,17 @@ describe("plugin interactive handlers", () => {
     };
 
     try {
-      expect(() => clearPluginInteractiveHandlers()).not.toThrow();
+      clearPluginInteractiveHandlers();
       const hydrated = globalStore[stateKey] as {
         interactiveHandlers?: Map<string, unknown>;
         callbackDedupe?: { clear: () => void };
         inflightCallbackDedupe?: Set<string>;
       };
       expect(hydrated.interactiveHandlers).toBeInstanceOf(Map);
-      expect(hydrated.callbackDedupe?.clear).toEqual(expect.any(Function));
+      if (!hydrated.callbackDedupe) {
+        throw new Error("expected hydrated callback dedupe");
+      }
+      hydrated.callbackDedupe.clear();
       expect(hydrated.inflightCallbackDedupe).toBeInstanceOf(Set);
 
       const handler = vi.fn(async () => ({ handled: true }));
