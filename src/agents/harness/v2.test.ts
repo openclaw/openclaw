@@ -181,7 +181,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
       "harness.run.started",
       "harness.run.completed",
     ]);
-    expect(diagnostics.events.every(({ metadata }) => metadata.trusted)).toBe(true);
+    expect(diagnostics.events.filter(({ metadata }) => !metadata.trusted)).toEqual([]);
     expect(diagnostics.events[1]?.event).toMatchObject({
       type: "harness.run.completed",
       runId: "run-1",
@@ -238,7 +238,7 @@ describe("AgentHarness V2 compatibility adapter", () => {
       "harness.run.started",
       "harness.run.error",
     ]);
-    expect(diagnostics.events.every(({ metadata }) => metadata.trusted)).toBe(true);
+    expect(diagnostics.events.filter(({ metadata }) => !metadata.trusted)).toEqual([]);
     expect(diagnostics.events[1]?.event).toMatchObject({
       type: "harness.run.error",
       phase: "send",
