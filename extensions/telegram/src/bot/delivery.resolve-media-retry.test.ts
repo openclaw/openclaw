@@ -294,7 +294,7 @@ describe("resolveMedia getFile retry", () => {
   it("still retries transient errors even after encountering file too big in different call", async () => {
     const result = await expectTransientGetFileRetrySuccess();
     // Should retry transient errors.
-    expect(result).not.toBeNull();
+    expect(result?.path).toBe("/tmp/file_0.oga");
   });
 
   it("retries getFile for stickers on transient failure", async () => {
@@ -368,7 +368,7 @@ describe("resolveMedia getFile retry", () => {
       transport: callerTransport,
     });
 
-    expect(result).not.toBeNull();
+    expect(result?.path).toBe("/tmp/file_42---uuid.pdf");
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
@@ -402,7 +402,7 @@ describe("resolveMedia getFile retry", () => {
       transport: callerTransport,
     });
 
-    expect(result).not.toBeNull();
+    expect(result?.path).toBe("/tmp/file_0.webp");
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         fetchImpl: callerFetch,
