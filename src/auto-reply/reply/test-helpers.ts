@@ -1,6 +1,12 @@
 import { vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import type { FollowupRun } from "./queue.js";
 import type { TypingController } from "./typing.js";
+
+const MOCK_FOLLOWUP_SESSION_FILE = createSqliteSessionTranscriptLocator({
+  agentId: "agent",
+  sessionId: "session",
+});
 
 export function createMockTypingController(
   overrides: Partial<TypingController> = {},
@@ -34,7 +40,7 @@ export function createMockFollowupRun(
       sessionKey: "main",
       messageProvider: "whatsapp",
       agentAccountId: "primary",
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: MOCK_FOLLOWUP_SESSION_FILE,
       workspaceDir: "/tmp",
       config: {},
       skillsSnapshot: {
