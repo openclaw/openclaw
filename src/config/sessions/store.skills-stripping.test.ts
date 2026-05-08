@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveEmbeddedRunSkillEntries } from "../../agents/pi-embedded-runner/skills-runtime.js";
 import { createCanonicalFixtureSkill } from "../../agents/skills.test-helpers.js";
@@ -8,20 +7,19 @@ import {
   hydrateResolvedSkills,
   hydrateResolvedSkillsAsync,
 } from "../../agents/skills/snapshot-hydration.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import { listSessionEntries, upsertSessionEntry } from "./store.js";
 import type { SessionEntry, SessionSkillSnapshot } from "./types.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
   getRuntimeConfig: vi.fn().mockReturnValue({}),
 }));
-
-import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  saveSessionStore,
-  updateSessionStore,
-} from "./store.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-skills-strip-" });
 
@@ -56,9 +54,9 @@ function makeEntry(sessionId: string, snapshot?: SessionSkillSnapshot): SessionE
   };
 }
 
-describe("session store strips resolvedSkills from persistence", () => {
+describe("session entry persistence strips resolvedSkills", () => {
   let testDir: string;
-  let storePath: string;
+  let previousStateDir: string | undefined;
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
@@ -70,26 +68,63 @@ describe("session store strips resolvedSkills from persistence", () => {
 
   beforeEach(async () => {
     testDir = await suiteRootTracker.make("case");
-    storePath = path.join(testDir, "sessions.json");
-    clearSessionStoreCacheForTest();
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    vi.stubEnv("OPENCLAW_STATE_DIR", testDir);
   });
 
   afterEach(() => {
-    clearSessionStoreCacheForTest();
+    closeOpenClawAgentDatabasesForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
   });
 
-  it("does not write resolvedSkills to disk", async () => {
+  function readStoredEntryJson(sessionKey: string): string | undefined {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const row = database.db
+      .prepare("SELECT entry_json FROM session_entries WHERE session_key = ?")
+      .get(sessionKey) as { entry_json?: string } | undefined;
+    return row?.entry_json;
+  }
+
+  function seedRawSessionEntry(sessionKey: string, entry: SessionEntry): void {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    database.db
+      .prepare(
+        `
+          INSERT INTO session_entries (session_key, entry_json, updated_at)
+          VALUES (?, ?, ?)
+        `,
+      )
+      .run(sessionKey, JSON.stringify(entry), entry.updatedAt ?? Date.now());
+  }
+
+  function readStoredEntries(): Record<string, SessionEntry> {
+    return Object.fromEntries(
+      listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+  }
+
+  function seedSessionSkillEntries(store: Record<string, SessionEntry>): void {
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      upsertSessionEntry({ agentId: "main", sessionKey, entry });
+    }
+  }
+
+  it("does not persist resolvedSkills in SQLite", async () => {
     const store = {
       "agent:main:test:1": makeEntry("session-1", makeSnapshot(5)),
     };
 
-    await saveSessionStore(storePath, store);
+    seedSessionSkillEntries(store);
 
-    const raw = await fs.readFile(storePath, "utf-8");
+    const raw = readStoredEntryJson("agent:main:test:1") ?? "";
     expect(raw).not.toContain("resolvedSkills");
     expect(raw).not.toContain("xxxxx"); // none of the skill source bodies leaked
-    const parsed = JSON.parse(raw) as Record<string, SessionEntry>;
-    expect(parsed["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
+    const parsed = JSON.parse(raw) as SessionEntry;
+    expect(parsed.skillsSnapshot?.resolvedSkills).toBeUndefined();
   });
 
   it("preserves prompt, skills, skillFilter, and version on roundtrip", async () => {
@@ -99,8 +134,8 @@ describe("session store strips resolvedSkills from persistence", () => {
       "agent:main:test:1": makeEntry("session-1", snapshot),
     };
 
-    await saveSessionStore(storePath, store);
-    const loaded = loadSessionStore(storePath);
+    seedSessionSkillEntries(store);
+    const loaded = readStoredEntries();
 
     const persistedSnapshot = loaded["agent:main:test:1"]?.skillsSnapshot;
     expect(persistedSnapshot).toMatchObject({
@@ -112,43 +147,41 @@ describe("session store strips resolvedSkills from persistence", () => {
     expect(persistedSnapshot?.resolvedSkills).toBeUndefined();
   });
 
-  it("strips resolvedSkills from a legacy sessions.json on load", async () => {
-    // Hand-craft a pre-fix file with embedded resolvedSkills.
+  it("strips resolvedSkills from a pre-existing SQLite row on load", async () => {
     const legacy = {
       "agent:main:test:1": makeEntry("session-1", makeSnapshot(4)),
     };
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    const rawLegacy = JSON.stringify(legacy, null, 2);
-    expect(rawLegacy).toContain("resolvedSkills");
-    await fs.writeFile(storePath, rawLegacy, "utf-8");
+    seedRawSessionEntry("agent:main:test:1", legacy["agent:main:test:1"]);
 
-    const loaded = loadSessionStore(storePath);
+    const loaded = readStoredEntries();
     expect(loaded["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
     expect(loaded["agent:main:test:1"]?.skillsSnapshot?.prompt).toBe(
       legacy["agent:main:test:1"].skillsSnapshot?.prompt,
     );
 
-    // Saving the loaded record should rewrite the file in stripped form.
-    await saveSessionStore(storePath, loaded);
-    const rawAfter = await fs.readFile(storePath, "utf-8");
+    // Saving the loaded record should rewrite the row in stripped form.
+    seedSessionSkillEntries(loaded);
+    const rawAfter = readStoredEntryJson("agent:main:test:1") ?? "";
     expect(rawAfter).not.toContain("resolvedSkills");
   });
 
-  it("strips resolvedSkills written via updateSessionStore mutator", async () => {
+  it("strips resolvedSkills written via row upsert", async () => {
     // Simulate the production hot path where ensureSkillSnapshot puts a
-    // freshly-built snapshot (with resolvedSkills) into the store via mutator.
-    await updateSessionStore(storePath, (store) => {
-      store["agent:main:test:1"] = makeEntry("session-1", makeSnapshot(6));
+    // freshly-built snapshot (with resolvedSkills) into the session row.
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:test:1",
+      entry: makeEntry("session-1", makeSnapshot(6)),
     });
 
-    const raw = await fs.readFile(storePath, "utf-8");
+    const raw = readStoredEntryJson("agent:main:test:1") ?? "";
     expect(raw).not.toContain("resolvedSkills");
-    const reloaded = loadSessionStore(storePath);
+    const reloaded = readStoredEntries();
     expect(reloaded["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
     expect(reloaded["agent:main:test:1"]?.skillsSnapshot?.skills).toHaveLength(6);
   });
 
-  it("keeps the on-disk file small with many sessions and skills", async () => {
+  it("keeps the SQLite database small with many sessions and skills", async () => {
     const SESSION_COUNT = 100;
     const SKILLS_PER_SESSION = 50;
     const store: Record<string, SessionEntry> = {};
@@ -156,9 +189,10 @@ describe("session store strips resolvedSkills from persistence", () => {
       store[`agent:main:scale:${i}`] = makeEntry(`session-${i}`, makeSnapshot(SKILLS_PER_SESSION));
     }
 
-    await saveSessionStore(storePath, store);
+    seedSessionSkillEntries(store);
 
-    const stat = await fs.stat(storePath);
+    closeOpenClawAgentDatabasesForTest();
+    const stat = await fs.stat(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
     // Pre-fix: ~SESSION_COUNT * SKILLS_PER_SESSION * ~3KB ≈ 15MB.
     // Post-fix: only the lightweight `skills` array + prompt per entry.
     // Conservative budget that comfortably covers metadata growth.

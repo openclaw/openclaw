@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
-  seedSessionStore,
+  seedHeartbeatSession,
   type HeartbeatReplySpy,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -24,22 +24,22 @@ type HeartbeatConfig = NonNullable<AgentDefaultsConfig["heartbeat"]>;
 async function withHeartbeatFixture(
   run: (ctx: {
     tmpDir: string;
-    storePath: string;
+    agentId: string;
     replySpy: HeartbeatReplySpy;
     seedSession: (sessionKey: string, input: SeedSessionInput) => Promise<void>;
   }) => Promise<unknown>,
 ): Promise<unknown> {
   return withTempHeartbeatSandbox(
-    async ({ tmpDir, storePath, replySpy }) => {
+    async ({ tmpDir, agentId, replySpy }) => {
       const seedSession = async (sessionKey: string, input: SeedSessionInput) => {
-        await seedSessionStore(storePath, sessionKey, {
+        await seedHeartbeatSession(agentId, sessionKey, {
           updatedAt: input.updatedAt,
           lastChannel: input.lastChannel,
           lastProvider: input.lastChannel,
           lastTo: input.lastTo,
         });
       };
-      return run({ tmpDir, storePath, replySpy, seedSession });
+      return run({ tmpDir, agentId, replySpy, seedSession });
     },
     { prefix: "openclaw-hb-model-" },
   );
@@ -86,7 +86,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     lightContext?: boolean;
     isolatedSession?: boolean;
   }) {
-    return withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
+    return withHeartbeatFixture(async ({ tmpDir, agentId, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -103,7 +103,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
           },
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
       };
       const sessionKey = resolveMainSessionKey(cfg);
       const result = await runHeartbeatWithSeed({
@@ -121,7 +121,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     expectedOptions: Record<string, unknown>;
     heartbeat: Partial<HeartbeatConfig>;
   }): Promise<void> {
-    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, agentId, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -144,7 +144,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
           ],
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
       const result = await runHeartbeatWithSeed({
@@ -208,7 +208,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("uses isolated session key when isolatedSession is enabled", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, agentId, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -221,7 +221,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
           },
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
       };
       const sessionKey = resolveMainSessionKey(cfg);
       const result = await runHeartbeatWithSeed({
@@ -237,7 +237,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("uses main session key when isolatedSession is not set", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, agentId, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -249,7 +249,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
           },
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
       };
       const sessionKey = resolveMainSessionKey(cfg);
       const result = await runHeartbeatWithSeed({

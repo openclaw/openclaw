@@ -1,10 +1,10 @@
-import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
-  seedMainSessionStore,
+  seedMainHeartbeatSession,
+  seedHeartbeatSessionRows,
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -32,7 +32,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
   const createConfig = async (params: {
     tmpDir: string;
-    storePath: string;
+    agentId: string;
     target?: "telegram" | "none";
     isolatedSession?: boolean;
   }): Promise<{ cfg: OpenClawConfig; sessionKey: string }> => {
@@ -48,9 +48,9 @@ describe("Ghost reminder bug (issue #13317)", () => {
         },
       },
       channels: { telegram: { allowFrom: ["*"] } },
-      session: { store: params.storePath },
+      session: {},
     };
-    const sessionKey = await seedMainSessionStore(params.storePath, cfg, {
+    const sessionKey = await seedMainHeartbeatSession(params.agentId, cfg, {
       lastChannel: "telegram",
       lastProvider: "telegram",
       lastTo: "-100155462274",
@@ -61,7 +61,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
   const createLastTargetConfig = (params: {
     tmpDir: string;
-    storePath: string;
+    agentId: string;
     isolatedSession?: boolean;
   }): OpenClawConfig => ({
     agents: {
@@ -75,25 +75,22 @@ describe("Ghost reminder bug (issue #13317)", () => {
       },
     },
     channels: { telegram: { allowFrom: ["*"] } },
-    session: { store: params.storePath },
+    session: {},
   });
 
   const writeTelegramSessionStore = async (
-    storePath: string,
+    agentId: string,
     sessionKey: string,
     overrides: Record<string, unknown>,
   ): Promise<void> => {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "sid",
-          updatedAt: Date.now(),
-          lastChannel: "telegram",
-          ...overrides,
-        },
-      }),
-    );
+    await seedHeartbeatSessionRows(agentId, {
+      [sessionKey]: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        ...overrides,
+      },
+    });
   };
 
   const expectCronEventPrompt = (
@@ -153,11 +150,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
     replyCallCount: number;
   }> => {
     return withTempHeartbeatSandbox(
-      async ({ tmpDir, storePath }) => {
+      async ({ tmpDir, agentId }) => {
         const { sendTelegram, getReplySpy } = createHeartbeatDeps(params.replyText);
         const { cfg, sessionKey } = await createConfig({
           tmpDir,
-          storePath,
+          agentId,
           target: params.target,
           isolatedSession: params.isolatedSession,
         });
@@ -282,7 +279,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   });
 
   it("drains inspected cron events after a successful run so later heartbeats do not replay them", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
         chatId: "155462274",
@@ -291,7 +288,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         .fn()
         .mockResolvedValueOnce({ text: "Relay this cron update now" })
         .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
-      const { cfg, sessionKey } = await createConfig({ tmpDir, storePath });
+      const { cfg, sessionKey } = await createConfig({ tmpDir, agentId });
 
       enqueueSystemEvent("Cron: QMD maintenance completed", {
         sessionKey,
@@ -475,7 +472,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   });
 
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -487,18 +484,15 @@ describe("Ghost reminder bug (issue #13317)", () => {
           },
         },
         channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
       };
       const sessionKey = resolveMainSessionKey(cfg);
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-          },
-        }),
-      );
+      await seedHeartbeatSessionRows(agentId, {
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+        },
+      });
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -537,10 +531,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
   });
 
   it("does not reuse stale turn-source routing for isolated wake runs", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createLastTargetConfig({ tmpDir, storePath, isolatedSession: true });
+    await withTempHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
+      const cfg = createLastTargetConfig({ tmpDir, agentId, isolatedSession: true });
       const sessionKey = resolveMainSessionKey(cfg);
-      await writeTelegramSessionStore(storePath, sessionKey, { lastTo: "-100155462274" });
+      await writeTelegramSessionStore(agentId, sessionKey, { lastTo: "-100155462274" });
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -583,7 +577,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
   });
   it("keeps output-bearing exec-event delivery pinned to the original Telegram topic when session route drifts", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -595,21 +589,18 @@ describe("Ghost reminder bug (issue #13317)", () => {
           },
         },
         channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
       };
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "telegram",
-            lastTo: "telegram:-1003774691294:topic:2175",
-            lastThreadId: 2175,
-          },
-        }),
-      );
+      await seedHeartbeatSessionRows(agentId, {
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "telegram:-1003774691294:topic:2175",
+          lastThreadId: 2175,
+        },
+      });
 
       const sendTelegram = vi.fn().mockResolvedValue({
         messageId: "m1",
@@ -650,7 +641,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   });
 
   it("suppresses metadata-only successful exec completions", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -662,21 +653,18 @@ describe("Ghost reminder bug (issue #13317)", () => {
           },
         },
         channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
       };
       const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: Date.now(),
-            lastChannel: "telegram",
-            lastTo: "telegram:-1003774691294:topic:2175",
-            lastThreadId: 2175,
-          },
-        }),
-      );
+      await seedHeartbeatSessionRows(agentId, {
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "telegram:-1003774691294:topic:2175",
+          lastThreadId: 2175,
+        },
+      });
 
       const sendTelegram = vi.fn();
       const getReplySpy = vi.fn().mockResolvedValue({
@@ -716,10 +704,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
   });
 
   it("keeps Telegram topic routing for isolated scheduled heartbeats", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createLastTargetConfig({ tmpDir, storePath, isolatedSession: true });
+    await withTempHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
+      const cfg = createLastTargetConfig({ tmpDir, agentId, isolatedSession: true });
       const sessionKey = resolveMainSessionKey(cfg);
-      await writeTelegramSessionStore(storePath, sessionKey, {
+      await writeTelegramSessionStore(agentId, sessionKey, {
         lastTo: "-100155462274",
         deliveryContext: {
           channel: "telegram",

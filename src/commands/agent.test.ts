@@ -10,7 +10,13 @@ import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-cata
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { resolveLegacySessionStorePath } from "../config/sessions/paths.js";
+import {
+  deleteSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitAgentEvent,
@@ -29,6 +35,34 @@ const configIoMocks = vi.hoisted(() => ({
 const pluginRegistryMocks = vi.hoisted(() => ({
   ensurePluginRegistryLoaded: vi.fn(),
 }));
+
+function resolveAgentIdFromStorePath(storePath: string): string {
+  const sessionsDir = path.dirname(path.resolve(storePath));
+  if (path.basename(sessionsDir) !== "sessions") {
+    return "main";
+  }
+  return path.basename(path.dirname(sessionsDir)) || "main";
+}
+
+async function replaceTestSessionRows(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+): Promise<void> {
+  const agentId = resolveAgentIdFromStorePath(storePath);
+  for (const { sessionKey } of listSessionEntries({ agentId })) {
+    deleteSessionEntry({ agentId, sessionKey });
+  }
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    upsertSessionEntry({ agentId, sessionKey, entry });
+  }
+}
+
+function readTestSessionRows(storePath: string): Record<string, SessionEntry> {
+  const agentId = resolveAgentIdFromStorePath(storePath);
+  return Object.fromEntries(
+    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: configIoMocks.loadConfig,
@@ -56,9 +90,13 @@ vi.mock("../agents/auth-profiles/store.js", () => {
   };
 });
 
-vi.mock("../agents/command/session-store.runtime.js", () => {
+vi.mock("../agents/command/session-entry-updates.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/command/session-entry-updates.js")>(
+    "../agents/command/session-entry-updates.js",
+  );
   return {
-    updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
+    ...actual,
+    updateSessionEntryAfterAgentRun: vi.fn(async () => undefined),
   };
 });
 
@@ -226,14 +264,17 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
           : resolveSessionFile(params.sessionId, params.agentId, sessionsDir);
         let sessionEntry = params.sessionEntry;
         if (params.sessionStore && params.storePath && params.sessionKey) {
-          const existingEntry = params.sessionStore[params.sessionKey] ?? {};
+          const existingEntry =
+            readTestSessionRows(params.storePath)[params.sessionKey] ??
+            params.sessionStore[params.sessionKey] ??
+            {};
           sessionEntry = {
             ...existingEntry,
             sessionId: params.sessionId,
             sessionFile,
           };
           params.sessionStore[params.sessionKey] = sessionEntry;
-          fs.writeFileSync(params.storePath, JSON.stringify(params.sessionStore));
+          await replaceTestSessionRows(params.storePath, params.sessionStore as never);
         }
         return { sessionFile, sessionEntry };
       },
@@ -268,7 +309,7 @@ function mockConfig(
       },
       list: agentsList,
     },
-    session: { store: storePath, mainKey: "main" },
+    session: { mainKey: "main" },
     channels: {
       telegram: telegramOverrides ? { ...telegramOverrides } : undefined,
     },
@@ -277,12 +318,16 @@ function mockConfig(
   return cfg;
 }
 
-function writeSessionStoreSeed(
+function resolveTestSessionStorePath(agentId = "main"): string {
+  return resolveLegacySessionStorePath(undefined, { agentId });
+}
+
+async function writeSessionRowsSeed(
   storePath: string,
   sessions: Record<string, Record<string, unknown>>,
-) {
+): Promise<void> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(sessions));
+  await replaceTestSessionRows(storePath, sessions as never);
 }
 
 function createDefaultAgentResult(params?: {
@@ -308,8 +353,8 @@ function expectLastRunProviderModel(provider: string, model: string): void {
   expect(callArgs?.model).toBe(model);
 }
 
-function readSessionStore<T>(storePath: string): Record<string, T> {
-  return JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, T>;
+function readSessionRows<T>(storePath: string): Record<string, T> {
+  return readTestSessionRows(storePath) as Record<string, T>;
 }
 
 async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
@@ -323,7 +368,6 @@ function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalo
 
 beforeEach(() => {
   vi.clearAllMocks();
-  clearSessionStoreCacheForTest();
   resetAgentEventsForTest();
   resetAgentRunContextForTest();
   acpManagerTesting.resetAcpSessionManagerForTests();
@@ -415,7 +459,7 @@ describe("agentCommand", () => {
 
   it("persists local overrides", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store);
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue(
         createDefaultAgentResult({
@@ -436,10 +480,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
-        string,
-        { thinkingLevel?: string; verboseLevel?: string }
-      >;
+      const saved = readSessionRows<{ thinkingLevel?: string; verboseLevel?: string }>(store);
       const entry = Object.values(saved)[0];
       expect(entry.thinkingLevel).toBe("high");
       expect(entry.verboseLevel).toBe("on");
@@ -464,7 +505,7 @@ describe("agentCommand", () => {
 
   it("persists embedded-runner turns to the session transcript", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store);
       const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
       vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
@@ -530,7 +571,7 @@ describe("agentCommand", () => {
 
   it("passes configured fast mode to embedded runs", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store, {
         model: "openai/gpt-5.5",
         models: {
@@ -553,7 +594,7 @@ describe("agentCommand", () => {
 
   it("does not load the full model catalog for trusted explicit overrides without an allowlist", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store, { models: {} });
 
       await agentCommand(
@@ -579,7 +620,7 @@ describe("agentCommand", () => {
 
   it("uses no-tools plain prompt mode for one-shot model runs", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store, { models: {} });
 
       await agentCommand(
@@ -608,10 +649,10 @@ describe("agentCommand", () => {
 
   it("bypasses ACP sessions for one-shot model runs", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       const sessionKey = "agent:main:main";
       mockConfig(home, store, { models: {} });
-      writeSessionStoreSeed(store, {
+      await writeSessionRowsSeed(store, {
         [sessionKey]: {
           sessionId: "acp-backed-session",
           updatedAt: Date.now(),
@@ -662,8 +703,8 @@ describe("agentCommand", () => {
 
   it("passes resolved session-id resume files to embedded runs", async () => {
     await withTempHome(async (home) => {
-      const resumeStore = path.join(home, "sessions-resume.json");
-      writeSessionStoreSeed(resumeStore, {
+      const resumeStore = resolveTestSessionStorePath("main");
+      await writeSessionRowsSeed(resumeStore, {
         foo: {
           sessionId: "session-123",
           updatedAt: Date.now(),
@@ -680,14 +721,17 @@ describe("agentCommand", () => {
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
       expect(callArgs?.sessionFile).toContain(
-        `${path.dirname(resumeStore)}${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}session-123.jsonl`,
+        path.join("agents", "main", "sessions", "session-123.jsonl"),
+      );
+      expect(callArgs?.sessionFile).not.toContain(
+        `${path.sep}sessions${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}`,
       );
     });
   });
 
   it("does not duplicate agent events from embedded runs", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store);
 
       const assistantEvents: Array<{ runId: string; text?: string }> = [];
@@ -726,7 +770,7 @@ describe("agentCommand", () => {
 
   it("does not publish Codex app-server events from the core command callback", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store);
 
       const codexEvents: Array<{ runId: string; phase?: string }> = [];
@@ -764,8 +808,8 @@ describe("agentCommand", () => {
 
   it("uses default fallback list for auto session model overrides", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      writeSessionStoreSeed(store, {
+      const store = resolveTestSessionStorePath("main");
+      await writeSessionRowsSeed(store, {
         "agent:main:subagent:test": {
           sessionId: "session-subagent",
           updatedAt: Date.now(),
@@ -822,8 +866,8 @@ describe("agentCommand", () => {
 
   it("does not use fallback list for user session model overrides", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions-user-override.json");
-      writeSessionStoreSeed(store, {
+      const store = resolveTestSessionStorePath("main");
+      await writeSessionRowsSeed(store, {
         "agent:main:subagent:user-override": {
           sessionId: "session-user-override",
           updatedAt: Date.now(),
@@ -871,8 +915,8 @@ describe("agentCommand", () => {
 
   it("clears disallowed stored override fields", async () => {
     await withTempHome(async (home) => {
-      const clearStore = path.join(home, "sessions-clear-overrides.json");
-      writeSessionStoreSeed(clearStore, {
+      const clearStore = resolveTestSessionStorePath("main");
+      await writeSessionRowsSeed(clearStore, {
         "agent:main:subagent:clear-overrides": {
           sessionId: "session-clear-overrides",
           updatedAt: Date.now(),
@@ -903,7 +947,7 @@ describe("agentCommand", () => {
 
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
 
-      const cleared = readSessionStore<{
+      const cleared = readSessionRows<{
         providerOverride?: string;
         modelOverride?: string;
         authProfileOverride?: string;
@@ -927,7 +971,7 @@ describe("agentCommand", () => {
 
   it("handles one-off provider/model overrides and validates override values", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store, {
         models: {
           "anthropic/claude-opus-4-6": {},
@@ -947,14 +991,14 @@ describe("agentCommand", () => {
 
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
 
-      const saved = readSessionStore<{
+      const saved = readSessionRows<{
         providerOverride?: string;
         modelOverride?: string;
       }>(store);
       expect(saved["agent:main:subagent:run-override"]?.providerOverride).toBeUndefined();
       expect(saved["agent:main:subagent:run-override"]?.modelOverride).toBeUndefined();
 
-      writeSessionStoreSeed(store, {
+      await writeSessionRowsSeed(store, {
         "agent:main:subagent:temp-openai-run": {
           sessionId: "session-temp-openai-run",
           updatedAt: Date.now(),
@@ -985,7 +1029,7 @@ describe("agentCommand", () => {
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
       expect(getLastEmbeddedCall()?.authProfileId).toBeUndefined();
 
-      const savedAuth = readSessionStore<{
+      const savedAuth = readSessionRows<{
         authProfileOverride?: string;
         authProfileOverrideSource?: string;
         authProfileOverrideCompactionCount?: number;
@@ -1043,7 +1087,7 @@ describe("agentCommand", () => {
 
   it("passes resolved default thinking level to embedded runs", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store, {
         model: { primary: "openai/gpt-4.1-mini" },
         models: {
@@ -1069,7 +1113,7 @@ describe("agentCommand", () => {
 
   it("passes routing context to embedded runs", async () => {
     await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
+      const store = resolveTestSessionStorePath("main");
       mockConfig(home, store, undefined, undefined, [{ id: "ops" }]);
 
       await agentCommand(

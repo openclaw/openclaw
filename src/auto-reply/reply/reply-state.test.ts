@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { listSessionEntries, upsertSessionEntry } from "../../config/sessions/store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   appendHistoryEntry,
   buildHistoryContext,
@@ -26,58 +28,61 @@ import { incrementCompactionCount } from "./session-updates.js";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  vi.unstubAllEnvs();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-async function seedSessionStore(params: {
-  storePath: string;
-  sessionKey: string;
-  entry: Record<string, unknown>;
-}) {
-  await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-  await fs.writeFile(
-    params.storePath,
-    JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
-    "utf-8",
+async function seedMainAgentSessionRow(params: { sessionKey: string; entry: SessionEntry }) {
+  upsertSessionEntry({ agentId: "main", sessionKey: params.sessionKey, entry: params.entry });
+}
+
+function readStoredMainAgentSessionRows(): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
 
 async function createCompactionSessionFixture(entry: SessionEntry) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
   tempDirs.push(tmp);
-  const storePath = path.join(tmp, "sessions.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", tmp);
+  const storePath = path.join(tmp, "agents", "main", "sessions", "sessions.json");
   const sessionKey = "main";
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-  await seedSessionStore({ storePath, sessionKey, entry });
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await seedMainAgentSessionRow({ sessionKey, entry });
   return { storePath, sessionKey, sessionStore };
 }
 
 async function rotateCompactionSessionFile(params: {
   tempPrefix: string;
-  sessionFile: (tmp: string) => string;
+  sessionFile: (sessionsDir: string) => string;
   newSessionId: string;
 }) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
   tempDirs.push(tmp);
-  const storePath = path.join(tmp, "sessions.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", tmp);
+  const storePath = path.join(tmp, "agents", "main", "sessions", "sessions.json");
   const sessionKey = "main";
+  const sessionsDir = path.dirname(storePath);
+  await fs.mkdir(sessionsDir, { recursive: true });
   const entry = {
     sessionId: "s1",
-    sessionFile: params.sessionFile(tmp),
+    sessionFile: params.sessionFile(sessionsDir),
     updatedAt: Date.now(),
     compactionCount: 0,
   } as SessionEntry;
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-  await seedSessionStore({ storePath, sessionKey, entry });
+  await seedMainAgentSessionRow({ sessionKey, entry });
   await incrementCompactionCount({
     sessionEntry: entry,
     sessionStore,
     sessionKey,
-    storePath,
     newSessionId: params.newSessionId,
   });
-  const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-  const expectedDir = await fs.realpath(tmp);
+  const stored = readStoredMainAgentSessionRows();
+  const expectedDir = await fs.realpath(sessionsDir);
   return { stored, sessionKey, expectedDir };
 }
 
@@ -440,11 +445,10 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
     });
     expect(count).toBe(3);
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].compactionCount).toBe(3);
   });
 
@@ -463,11 +467,10 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
       tokensAfter: 12_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(12_000);
     // input/output cleared since we only have the total estimate
@@ -488,7 +491,6 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
       compactionTokensAfter: 12_000,
       lastCallUsage: {
         input: 90_000,
@@ -498,7 +500,7 @@ describe("incrementCompactionCount", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].totalTokens).toBe(12_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
@@ -516,7 +518,6 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
       compactionTokensAfter: Number.POSITIVE_INFINITY,
       lastCallUsage: {
         input: 90_000,
@@ -526,7 +527,7 @@ describe("incrementCompactionCount", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].totalTokens).toBe(90_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
@@ -545,11 +546,10 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
       tokensAfter: Number.POSITIVE_INFINITY,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(180_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
@@ -595,12 +595,11 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
       amount: 2,
     });
     expect(count).toBe(4);
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].compactionCount).toBe(4);
   });
 
@@ -617,11 +616,10 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
       newSessionId: "new-session-id",
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     const expectedSessionDir = await fs.realpath(path.dirname(storePath));
     expect(stored[sessionKey].sessionId).toBe("new-session-id");
     expect(stored[sessionKey].sessionFile).toBe(
@@ -643,11 +641,10 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
       newSessionId: "same-id",
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].sessionId).toBe("same-id");
     expect(stored[sessionKey].sessionFile).toBe("same-id.jsonl");
     expect(stored[sessionKey].compactionCount).toBe(1);
@@ -667,12 +664,11 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
       newSessionId: "same-id",
       newSessionFile: rotatedSessionFile,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].sessionId).toBe("same-id");
     expect(stored[sessionKey].sessionFile).toBe(rotatedSessionFile);
     expect(stored[sessionKey].compactionCount).toBe(1);
@@ -691,10 +687,9 @@ describe("incrementCompactionCount", () => {
       sessionEntry: entry,
       sessionStore,
       sessionKey,
-      storePath,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const stored = readStoredMainAgentSessionRows();
     expect(stored[sessionKey].compactionCount).toBe(1);
     // totalTokens unchanged
     expect(stored[sessionKey].totalTokens).toBe(180_000);

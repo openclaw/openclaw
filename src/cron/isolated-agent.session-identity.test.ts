@@ -1,10 +1,14 @@
 import "./isolated-agent.mocks.js";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
+import {
+  makeCfg,
+  makeJob,
+  seedMainRouteSession,
+  seedCronSessionRows,
+} from "./isolated-agent.test-harness.js";
 import {
   DEFAULT_AGENT_TURN_PAYLOAD,
   DEFAULT_MESSAGE,
@@ -127,7 +131,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
 
   it("starts a fresh session id for each cron run", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      await seedMainRouteSession(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
       const runPingTurn = () =>
         runCronTurn(home, {
@@ -135,7 +139,6 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           jobPayload: { kind: "agentTurn", message: "ping" },
           message: "ping",
           mockTexts: ["ok"],
-          storePath,
         });
 
       const first = (await runPingTurn()).res;
@@ -152,22 +155,25 @@ describe("runCronIsolatedAgentTurn session identity", () => {
 
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      const raw = await fs.readFile(storePath, "utf-8");
-      const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-      store["agent:main:cron:job-1"] = {
-        sessionId: "old",
-        updatedAt: Date.now(),
-        label: "Nightly digest",
-      };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await seedCronSessionRows(home, {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now(),
+          lastProvider: "webchat",
+          lastTo: "",
+        },
+        "agent:main:cron:job-1": {
+          sessionId: "old",
+          updatedAt: Date.now(),
+          label: "Nightly digest",
+        },
+      });
 
       await runCronTurn(home, {
         jobPayload: { kind: "agentTurn", message: "ping" },
         message: "ping",
-        storePath,
       });
-      const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
+      const entry = await readSessionEntry("main", "agent:main:cron:job-1");
 
       expect(entry?.label).toBe("Nightly digest");
     });
