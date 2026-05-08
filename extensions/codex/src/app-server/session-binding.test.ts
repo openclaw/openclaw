@@ -172,6 +172,26 @@ describe("codex app-server session binding", () => {
     expect(binding?.modelProvider).toBeUndefined();
   });
 
+  it("normalizes legacy fast service tier bindings to Codex priority", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    await fs.writeFile(
+      resolveCodexAppServerBindingPath(sessionFile),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-123",
+        sessionFile,
+        cwd: tempDir,
+        serviceTier: "fast",
+        createdAt: "2026-05-03T00:00:00.000Z",
+        updatedAt: "2026-05-03T00:00:00.000Z",
+      })}\n`,
+    );
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.serviceTier).toBe("priority");
+  });
+
   it("does not infer native Codex auth from the profile id prefix", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await writeCodexAppServerBinding(

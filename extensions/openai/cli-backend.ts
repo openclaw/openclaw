@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/cli-backend";
 
 const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
-const CODEX_CLI_NPM_PACKAGE = "@openai/codex@0.129.0-alpha.15";
+const CODEX_CLI_NPM_PACKAGE = "@openai/codex@0.129.0";
 
 export function buildOpenAICodexCliBackend(): CliBackendPlugin {
   return {
@@ -32,7 +32,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "--sandbox",
         "workspace-write",
         "-c",
-        'service_tier="fast"',
+        'service_tier="priority"',
         "--skip-git-repo-check",
       ],
       resumeArgs: [
@@ -42,7 +42,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "-c",
         'sandbox_mode="workspace-write"',
         "-c",
-        'service_tier="fast"',
+        'service_tier="priority"',
         "--skip-git-repo-check",
       ],
       output: "jsonl",
