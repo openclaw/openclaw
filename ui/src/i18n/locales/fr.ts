@@ -711,6 +711,16 @@ export const fr: TranslationMap = {
       today: "Aujourd’hui",
       last7d: "7 j",
       last30d: "30 j",
+      last90d: "90d",
+      last1y: "1y",
+      all: "Tous",
+    },
+    scope: {
+      instance: "Current instance",
+      instanceHint: "Show only the active session id for each logical session.",
+      family: "Historical lineage",
+      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyIncluded: "Historical lineage includes {count} session instances.",
     },
     filters: {
       title: "Filtres",

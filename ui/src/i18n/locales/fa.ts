@@ -707,6 +707,16 @@ export const fa: TranslationMap = {
       today: "امروز",
       last7d: "۷روز",
       last30d: "۳۰روز",
+      last90d: "90d",
+      last1y: "1y",
+      all: "همه",
+    },
+    scope: {
+      instance: "Current instance",
+      instanceHint: "Show only the active session id for each logical session.",
+      family: "Historical lineage",
+      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyIncluded: "Historical lineage includes {count} session instances.",
     },
     filters: {
       title: "فیلترها",

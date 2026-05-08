@@ -704,6 +704,16 @@ export const vi: TranslationMap = {
       today: "Hôm nay",
       last7d: "7 ngày",
       last30d: "30 ngày",
+      last90d: "90d",
+      last1y: "1y",
+      all: "Tất cả",
+    },
+    scope: {
+      instance: "Current instance",
+      instanceHint: "Show only the active session id for each logical session.",
+      family: "Historical lineage",
+      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyIncluded: "Historical lineage includes {count} session instances.",
     },
     filters: {
       title: "Bộ lọc",

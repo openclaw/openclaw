@@ -708,6 +708,16 @@ export const ja_JP: TranslationMap = {
       today: "今日",
       last7d: "7日",
       last30d: "30日",
+      last90d: "90d",
+      last1y: "1y",
+      all: "すべて",
+    },
+    scope: {
+      instance: "Current instance",
+      instanceHint: "Show only the active session id for each logical session.",
+      family: "Historical lineage",
+      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyIncluded: "Historical lineage includes {count} session instances.",
     },
     filters: {
       title: "フィルター",
