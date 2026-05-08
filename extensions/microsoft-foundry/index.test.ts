@@ -359,7 +359,7 @@ describe("microsoft-foundry plugin", () => {
       prepareRuntimeAuth(runtimeContext),
       prepareRuntimeAuth(runtimeContext),
     ]);
-    expect(failed.filter((result) => result.status !== "rejected")).toEqual([]);
+    expect(failed.every((result) => result.status === "rejected")).toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
 
     const [first, second] = await Promise.all([
