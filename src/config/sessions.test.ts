@@ -847,7 +847,7 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
   });
 
-  it("updateSessionStore uses the writer-owned mutable cache without disk read or parse", async () => {
+  it("updateSessionStore reads legacy JSON fallback stores directly before mutation", async () => {
     const mainSessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({
       prefix: "updateSessionStore-mutable-cache",
@@ -876,8 +876,8 @@ describe("sessions", () => {
         };
       });
 
-      expect(readSpy).not.toHaveBeenCalled();
-      expect(parseSpy).not.toHaveBeenCalled();
+      expect(readSpy).toHaveBeenCalled();
+      expect(parseSpy).toHaveBeenCalled();
     } finally {
       readSpy.mockRestore();
       parseSpy.mockRestore();
@@ -887,7 +887,7 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
   });
 
-  it("updateSessionStore drops a borrowed cache entry when a mutator throws", async () => {
+  it("updateSessionStore does not persist mutator changes when a mutator throws", async () => {
     const mainSessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({
       prefix: "updateSessionStore-mutable-cache-throw",
@@ -916,13 +916,7 @@ describe("sessions", () => {
       }),
     ).rejects.toThrow("boom");
 
-    const readSpy = vi.spyOn(fsSync, "readFileSync");
-    try {
-      const store = loadSessionStore(storePath);
-      expect(readSpy).toHaveBeenCalled();
-      expect(store[mainSessionKey]?.thinkingLevel).toBe("low");
-    } finally {
-      readSpy.mockRestore();
-    }
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.thinkingLevel).toBe("low");
   });
 });

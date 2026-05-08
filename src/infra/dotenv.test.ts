@@ -724,7 +724,6 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_GIT_DIR",
           "OPENCLAW_WORKSPACE_DIR",
           "OPENCLAW_MDNS_HOSTNAME",
-          "OPENCLAW_SESSION_CACHE_TTL_MS",
           "OPENCLAW_UPDATE_PACKAGE_SPEC",
           "OPENCLAW_GATEWAY_PORT",
           "OPENCLAW_GATEWAY_URL",
