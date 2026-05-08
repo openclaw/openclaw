@@ -31,6 +31,7 @@ const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
+let postAttachUpdateSentinelRefreshScheduled = false;
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -116,6 +117,10 @@ function schedulePostAttachUpdateSentinelRefresh(params: {
     ReturnType<typeof refreshLatestUpdateRestartSentinel>
   >;
 }): void {
+  if (postAttachUpdateSentinelRefreshScheduled) {
+    return;
+  }
+  postAttachUpdateSentinelRefreshScheduled = true;
   const handle = setImmediate(() => {
     void measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
       try {
@@ -128,6 +133,10 @@ function schedulePostAttachUpdateSentinelRefresh(params: {
     });
   });
   handle.unref?.();
+}
+
+function resetPostAttachUpdateSentinelRefreshForTests(): void {
+  postAttachUpdateSentinelRefreshScheduled = false;
 }
 
 function schedulePostReadySidecarTask(params: {
@@ -871,6 +880,7 @@ export const __testing = {
   prewarmConfiguredPrimaryModelWithTimeout,
   refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
+  resetPostAttachUpdateSentinelRefreshForTests,
   schedulePrimaryModelPrewarm,
   shouldSkipStartupModelPrewarm,
 };

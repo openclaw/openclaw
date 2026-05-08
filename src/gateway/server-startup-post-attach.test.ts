@@ -192,6 +192,7 @@ type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttac
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
+    __testing.resetPostAttachUpdateSentinelRefreshForTests();
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
     hoisted.startPluginServices.mockClear();
@@ -281,6 +282,24 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledTimes(1);
     });
     expect(events).toEqual(["sidecars", "returned", "sentinel"]);
+  });
+
+  it("refreshes the restart sentinel at most once per gateway process", async () => {
+    const refreshLatestUpdateRestartSentinel = vi.fn(async () => null);
+    const runtimeDeps = createPostAttachRuntimeDeps({
+      refreshLatestUpdateRestartSentinel,
+    });
+
+    await startGatewayPostAttachRuntime(createPostAttachParams(), runtimeDeps);
+
+    await vi.waitFor(() => {
+      expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledTimes(1);
+    });
+
+    await startGatewayPostAttachRuntime(createPostAttachParams(), runtimeDeps);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledTimes(1);
   });
 
   it("skips heavy restart sentinel refresh when no sentinel file exists", async () => {
