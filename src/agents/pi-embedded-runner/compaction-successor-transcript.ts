@@ -30,7 +30,7 @@ export type CompactionTranscriptRotation = {
   reason?: string;
   sessionId?: string;
   transcriptPath?: string;
-  /** Compatibility metadata for callers that still surface transcript paths. */
+  /** Compatibility metadata for callers that still surface `sessionFile`. */
   sessionFile?: string;
   compactionEntryId?: string;
   leafId?: string;
@@ -47,11 +47,11 @@ export async function rotateTranscriptAfterCompaction(params: {
   sessionFile: string;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
-  const sessionFile = params.sessionFile.trim();
-  if (!sessionFile) {
-    return { rotated: false, reason: "missing session file" };
+  const transcriptLocator = params.sessionFile.trim();
+  if (!transcriptLocator) {
+    return { rotated: false, reason: "missing transcript locator" };
   }
-  if (!isSqliteSessionTranscriptLocator(sessionFile)) {
+  if (!isSqliteSessionTranscriptLocator(transcriptLocator)) {
     return { rotated: false, reason: "transcript not in SQLite" };
   }
 
@@ -66,10 +66,10 @@ export async function rotateTranscriptAfterCompaction(params: {
   const sessionId = randomUUID();
   const sourceScope = resolveSourceTranscriptScope({
     agentId: params.agentId,
-    transcriptPath: sessionFile,
+    transcriptPath: transcriptLocator,
   });
   const successorTranscriptPath = resolveSuccessorTranscriptPath({
-    transcriptPath: sessionFile,
+    transcriptPath: transcriptLocator,
     sessionId,
     agentId: sourceScope.agentId,
   });
@@ -87,7 +87,7 @@ export async function rotateTranscriptAfterCompaction(params: {
     sessionId,
     timestamp,
     cwd: params.sessionManager.getCwd(),
-    parentSession: sessionFile,
+    parentSession: transcriptLocator,
   });
   replaceSqliteSessionTranscriptEvents({
     agentId: sourceScope.agentId,

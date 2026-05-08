@@ -875,7 +875,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       const agentId = agentIdFromKey ?? storeAgentId;
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
-      // Resolve the session file path
+      // Resolve the SQLite transcript locator.
       let sessionFile: string | undefined;
       try {
         sessionFile = resolveExistingUsageSessionFile({
