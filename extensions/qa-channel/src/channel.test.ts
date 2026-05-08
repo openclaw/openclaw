@@ -21,6 +21,14 @@ function installQaChannelTestRegistry() {
   );
 }
 
+function expectDispatchedContext(ctx: Record<string, unknown> | null): Record<string, unknown> {
+  expect(ctx).not.toBeNull();
+  if (ctx === null) {
+    throw new Error("Expected dispatched context");
+  }
+  return ctx;
+}
+
 function createMockQaRuntime(params?: {
   onDispatch?: (ctx: Record<string, unknown>) => void;
 }): PluginRuntime {
@@ -382,13 +390,13 @@ describe("qa-channel plugin", () => {
         timeoutMs: 15_000,
       });
 
-      const mediaCtx: {
+      const mediaCtx = expectDispatchedContext(dispatchedCtx) as {
         MediaPath?: string;
         MediaPaths?: string[];
         MediaType?: string;
         MediaTypes?: string[];
-      } | null = dispatchedCtx;
-      expect(mediaCtx?.MediaPath).toEqual(expect.stringContaining("red-top-blue-bottom"));
+      };
+      expect(mediaCtx.MediaPath).toEqual(expect.stringContaining("red-top-blue-bottom"));
       expect(mediaCtx.MediaType).toBe("image/png");
       expect(mediaCtx.MediaPaths).toEqual([mediaCtx.MediaPath]);
       expect(mediaCtx.MediaTypes).toEqual(["image/png"]);
