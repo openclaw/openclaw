@@ -12,12 +12,36 @@ import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp
 
 const tempDirs: string[] = [];
 
+type OfficialChannelCatalogEntry = ReturnType<
+  typeof buildOfficialChannelCatalog
+>["entries"][number];
+type OfficialChannelInstall = NonNullable<
+  NonNullable<OfficialChannelCatalogEntry["openclaw"]>["install"]
+>;
+
 function makeRepoRoot(prefix: string): string {
   return makeTempRepoRoot(tempDirs, prefix);
 }
 
 function writeJson(filePath: string, value: unknown): void {
   writeJsonFile(filePath, value);
+}
+
+function requireInstall(entry: OfficialChannelCatalogEntry | undefined): OfficialChannelInstall {
+  const install = entry?.openclaw?.install;
+  expect(install).toBeDefined();
+  if (!install) {
+    throw new Error("expected official channel install config");
+  }
+  return install;
+}
+
+function requireNpmInstallSource(source: ReturnType<typeof describePluginInstallSource>) {
+  expect(source.npm).toBeDefined();
+  if (!source.npm) {
+    throw new Error("expected npm install source");
+  }
+  return source.npm;
 }
 
 afterEach(() => {
@@ -139,9 +163,9 @@ describe("buildOfficialChannelCatalog", () => {
 
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) {
-      const installSource = describePluginInstallSource(entry.openclaw?.install ?? {});
+      const installSource = describePluginInstallSource(requireInstall(entry));
       expect(installSource.warnings).toEqual([]);
-      expect(installSource.npm?.pinState).toBe("exact-with-integrity");
+      expect(requireNpmInstallSource(installSource).pinState).toBe("exact-with-integrity");
     }
   });
 
@@ -163,8 +187,8 @@ describe("buildOfficialChannelCatalog", () => {
         }),
       }),
     );
-    const installSource = describePluginInstallSource(twitch?.openclaw?.install ?? {});
-    expect(installSource.npm?.pinState).toBe("floating-without-integrity");
+    const installSource = describePluginInstallSource(requireInstall(twitch));
+    expect(requireNpmInstallSource(installSource).pinState).toBe("floating-without-integrity");
     expect(installSource.warnings).toEqual(["npm-spec-floating", "npm-spec-missing-integrity"]);
   });
 
@@ -195,7 +219,7 @@ describe("buildOfficialChannelCatalog", () => {
       (candidate) => candidate.openclaw?.channel?.id === "storepack-chat",
     );
 
-    expect(entry?.openclaw?.install).toEqual({
+    expect(requireInstall(entry)).toEqual({
       clawhubSpec: "clawhub:@openclaw/storepack-chat",
       npmSpec: "@openclaw/storepack-chat",
       defaultChoice: "clawhub",
