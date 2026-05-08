@@ -7,6 +7,11 @@ import {
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
+import { upsertSessionEntry } from "../config/sessions.js";
+import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
@@ -58,34 +63,28 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
-  const storePath = path.join(path.dirname(sessionFile), "sessions.json");
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  fs.writeFileSync(
-    storePath,
-    JSON.stringify({
-      "agent:main:main": {
-        sessionId: "s1",
-        sessionFile,
-        updatedAt: Date.now(),
-      },
-    }),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    sessionFile,
-    `${JSON.stringify({
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "session-test",
-      timestamp: new Date(0).toISOString(),
-      cwd: dir,
-    })}\n`,
-    "utf-8",
-  );
-  for (const [index, entry] of (params?.history ?? []).entries()) {
-    fs.appendFileSync(
+  upsertSessionEntry({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    entry: {
+      sessionId: "s1",
       sessionFile,
-      `${JSON.stringify({
+      updatedAt: Date.now(),
+    },
+  });
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "s1",
+    transcriptPath: sessionFile,
+    events: [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "s1",
+        timestamp: new Date(0).toISOString(),
+        cwd: dir,
+      },
+      ...(params?.history ?? []).map((entry, index) => ({
         type: "message",
         id: `msg-${index}`,
         parentId: index > 0 ? `msg-${index - 1}` : null,
@@ -95,11 +94,10 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
           content: entry.content,
           timestamp: index + 1,
         },
-      })}\n`,
-      "utf-8",
-    );
-  }
-  return { dir, sessionFile, storePath };
+      })),
+    ],
+  });
+  return { dir, sessionFile };
 }
 
 function buildPreparedContext(params?: {
@@ -709,8 +707,23 @@ describe("runCliAgent reliability", () => {
       );
       expect(JSON.stringify(hookRunner.runAgentEnd.mock.calls)).not.toContain("secret prompt");
 
-      const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
-      const blockedLine = JSON.parse(lines[lines.length - 1]);
+      const events = loadSqliteSessionTranscriptEvents({
+        agentId: "main",
+        sessionId: "s1",
+      }).map(
+        (entry) =>
+          entry.event as {
+            message?: {
+              content?: Array<{ text?: string }>;
+              __openclaw?: Record<string, unknown>;
+            };
+          },
+      );
+      const blockedLine = events.at(-1);
+      expect(blockedLine).toBeDefined();
+      if (!blockedLine?.message?.content || !blockedLine.message.__openclaw) {
+        throw new Error("missing blocked transcript line");
+      }
       expect(blockedLine.message.content[0].text).toBe(
         "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
       );
@@ -923,19 +936,27 @@ describe("runCliAgent reliability", () => {
     const { dir, sessionFile } = createSessionFile({
       history: [{ role: "user", content: "earlier ask" }],
     });
-    fs.appendFileSync(
-      sessionFile,
-      `${JSON.stringify({
-        type: "compaction",
-        id: "compaction-1",
-        parentId: "msg-0",
-        timestamp: new Date(2).toISOString(),
-        summary: "compacted earlier ask",
-        firstKeptEntryId: "msg-0",
-        tokensBefore: 10_000,
-      })}\n`,
-      "utf-8",
-    );
+    const existingEvents = loadSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "s1",
+    }).map((entry) => entry.event);
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "s1",
+      transcriptPath: sessionFile,
+      events: [
+        ...existingEvents,
+        {
+          type: "compaction",
+          id: "compaction-1",
+          parentId: "msg-0",
+          timestamp: new Date(2).toISOString(),
+          summary: "compacted earlier ask",
+          firstKeptEntryId: "msg-0",
+          tokensBefore: 10_000,
+        },
+      ],
+    });
     const config: OpenClawConfig = {
       agents: {
         defaults: {
