@@ -791,7 +791,8 @@ describe("sessions tools", () => {
   it("sessions_send supports fire-and-forget and wait", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let _historyCallCount = 0;
+    let historyCallCount = 0;
+    let waitCallCount = 0;
     let sendCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
@@ -820,12 +821,13 @@ describe("sessions tools", () => {
         };
       }
       if (request.method === "agent.wait") {
+        waitCallCount += 1;
         const params = request.params as { runId?: string } | undefined;
         lastWaitedRunId = params?.runId;
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
-        _historyCallCount += 1;
+        historyCallCount += 1;
         const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
@@ -867,9 +869,9 @@ describe("sessions tools", () => {
       runId: "run-1",
       delivery: { status: "pending", mode: "announce" },
     });
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 3);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 3);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 3);
+    await waitForCalls(() => agentCallCount, 3);
+    await waitForCalls(() => waitCallCount, 3);
+    await waitForCalls(() => historyCallCount, 3);
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -883,9 +885,9 @@ describe("sessions tools", () => {
       delivery: { status: "pending", mode: "announce" },
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 6);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 6);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 7);
+    await waitForCalls(() => agentCallCount, 6);
+    await waitForCalls(() => waitCallCount, 6);
+    await waitForCalls(() => historyCallCount, 7);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
