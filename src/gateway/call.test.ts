@@ -139,6 +139,7 @@ const {
   callGateway,
   callGatewayCli,
   callGatewayScoped,
+  formatGatewayTransportErrorJson,
   isGatewayTransportError,
 } = await import("./call.js");
 
@@ -904,6 +905,36 @@ describe("callGateway error details", () => {
     expect(transportError.kind).toBe("closed");
     expect(transportError.code).toBe(1006);
     expect(transportError.reason).toBe("no close reason");
+  });
+
+  it("serializes typed transport errors for CLI JSON output", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      err = caught;
+    }
+
+    expect(formatGatewayTransportErrorJson(err)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    });
   });
 
   it("keeps the request alive through internally retried startup-unavailable handshakes", async () => {

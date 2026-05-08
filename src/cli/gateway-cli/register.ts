@@ -21,7 +21,12 @@ import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatHelpExamples } from "../help-format.js";
 import { withProgress } from "../progress.js";
-import { callGatewayCli, gatewayCallOpts, type GatewayRpcOpts } from "./call.js";
+import {
+  callGatewayCli,
+  formatGatewayTransportErrorJson,
+  gatewayCallOpts,
+  type GatewayRpcOpts,
+} from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import {
   dedupeBeacons,
@@ -97,8 +102,16 @@ function loadDaemonStatusGatherModule() {
   return daemonStatusGatherModuleLoader.load();
 }
 
-function runGatewayCommand(action: () => Promise<void>, label?: string) {
+function runGatewayCommand(action: () => Promise<void>, label?: string, opts?: { json?: boolean }) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
+    if (opts?.json) {
+      const payload = formatGatewayTransportErrorJson(err);
+      if (payload) {
+        defaultRuntime.writeJson(payload);
+        defaultRuntime.exit(1);
+        return;
+      }
+    }
     const message = String(err);
     defaultRuntime.error(label ? `${label}: ${message}` : message);
     defaultRuntime.exit(1);
@@ -414,20 +427,24 @@ export function registerGatewayCli(program: Command) {
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option("--params <json>", "JSON object string for params", "{}")
       .action(async (method, opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const params = JSON.parse(String(opts.params ?? "{}"));
-          const result = await callGatewayCli(method, rpcOpts, params);
-          if (rpcOpts.json) {
+        const rpcOpts = resolveGatewayRpcOptions(opts, command);
+        await runGatewayCommand(
+          async () => {
+            const params = JSON.parse(String(opts.params ?? "{}"));
+            const result = await callGatewayCli(method, rpcOpts, params);
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
+            }
+            const rich = isRich();
+            defaultRuntime.log(
+              `${colorize(rich, theme.heading, "Gateway call")}: ${colorize(rich, theme.muted, String(method))}`,
+            );
             defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          defaultRuntime.log(
-            `${colorize(rich, theme.heading, "Gateway call")}: ${colorize(rich, theme.muted, String(method))}`,
-          );
-          defaultRuntime.writeJson(result);
-        }, "Gateway call failed");
+          },
+          "Gateway call failed",
+          { json: Boolean(rpcOpts.json) },
+        );
       }),
   );
 
@@ -437,20 +454,24 @@ export function registerGatewayCli(program: Command) {
       .description("Fetch usage cost summary from session logs")
       .option("--days <days>", "Number of days to include", "30")
       .action(async (opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const days = parseDaysOption(opts.days);
-          const result = await callGatewayCli("usage.cost", rpcOpts, { days });
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          const summary = result as CostUsageSummary;
-          for (const line of await renderCostUsageSummaryAsync(summary, days, rich)) {
-            defaultRuntime.log(line);
-          }
-        }, "Gateway usage cost failed");
+        const rpcOpts = resolveGatewayRpcOptions(opts, command);
+        await runGatewayCommand(
+          async () => {
+            const days = parseDaysOption(opts.days);
+            const result = await callGatewayCli("usage.cost", rpcOpts, { days });
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
+            }
+            const rich = isRich();
+            const summary = result as CostUsageSummary;
+            for (const line of await renderCostUsageSummaryAsync(summary, days, rich)) {
+              defaultRuntime.log(line);
+            }
+          },
+          "Gateway usage cost failed",
+          { json: Boolean(rpcOpts.json) },
+        );
       }),
   );
 
@@ -459,30 +480,34 @@ export function registerGatewayCli(program: Command) {
       .command("health")
       .description("Fetch Gateway health")
       .action(async (opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
-            loadGatewayHealthModule(),
-            loadHealthStyleModule(),
-          ]);
-          const result = await callGatewayCli("health", rpcOpts);
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
-          const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
-          defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
-          defaultRuntime.log(
-            `${colorize(rich, theme.success, "OK")}${durationMs != null ? ` (${durationMs}ms)` : ""}`,
-          );
-          if (obj.channels && typeof obj.channels === "object") {
-            for (const line of formatHealthChannelLines(obj as HealthSummary)) {
-              defaultRuntime.log(styleHealthChannelLine(line, rich));
+        const rpcOpts = resolveGatewayRpcOptions(opts, command);
+        await runGatewayCommand(
+          async () => {
+            const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
+              loadGatewayHealthModule(),
+              loadHealthStyleModule(),
+            ]);
+            const result = await callGatewayCli("health", rpcOpts);
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
             }
-          }
-        });
+            const rich = isRich();
+            const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
+            const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
+            defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
+            defaultRuntime.log(
+              `${colorize(rich, theme.success, "OK")}${durationMs != null ? ` (${durationMs}ms)` : ""}`,
+            );
+            if (obj.channels && typeof obj.channels === "object") {
+              for (const line of formatHealthChannelLines(obj as HealthSummary)) {
+                defaultRuntime.log(styleHealthChannelLine(line, rich));
+              }
+            }
+          },
+          undefined,
+          { json: Boolean(rpcOpts.json) },
+        );
       }),
   );
 
@@ -500,69 +525,76 @@ export function registerGatewayCli(program: Command) {
       .option("--export", "Write a shareable support diagnostics export", false)
       .option("--output <path>", "Diagnostics export output .zip path")
       .action(async (opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const query = normalizeDiagnosticStabilityQuery(
-            {
-              limit: opts.limit,
-              sinceSeq: opts.sinceSeq,
-              type: opts.type,
-            },
-            { defaultLimit: 25 },
-          );
-          const bundleTarget = normalizeStabilityBundleTarget(opts.bundle);
-          if (opts.export) {
-            await writeSupportExportFromCli({
-              json: rpcOpts.json,
-              output: opts.output,
-              stabilityBundle: bundleTarget ?? "latest",
-              rpc: rpcOpts,
-            });
-            return;
-          }
-          if (bundleTarget) {
-            const result = await readStabilityBundleTarget(bundleTarget);
-            if (result.status !== "found") {
-              throw new Error(formatBundleError(result));
-            }
-            const snapshot = selectDiagnosticStabilitySnapshot(result.bundle.snapshot, query);
-            if (rpcOpts.json) {
-              defaultRuntime.writeJson({
-                path: result.path,
-                mtimeMs: result.mtimeMs,
-                bundle: {
-                  ...result.bundle,
-                  snapshot,
-                },
+        const rpcOpts = resolveGatewayRpcOptions(opts, command);
+        await runGatewayCommand(
+          async () => {
+            const query = normalizeDiagnosticStabilityQuery(
+              {
+                limit: opts.limit,
+                sinceSeq: opts.sinceSeq,
+                type: opts.type,
+              },
+              { defaultLimit: 25 },
+            );
+            const bundleTarget = normalizeStabilityBundleTarget(opts.bundle);
+            if (opts.export) {
+              await writeSupportExportFromCli({
+                json: rpcOpts.json,
+                output: opts.output,
+                stabilityBundle: bundleTarget ?? "latest",
+                rpc: rpcOpts,
               });
               return;
             }
+            if (bundleTarget) {
+              const result = await readStabilityBundleTarget(bundleTarget);
+              if (result.status !== "found") {
+                throw new Error(formatBundleError(result));
+              }
+              const snapshot = selectDiagnosticStabilitySnapshot(result.bundle.snapshot, query);
+              if (rpcOpts.json) {
+                defaultRuntime.writeJson({
+                  path: result.path,
+                  mtimeMs: result.mtimeMs,
+                  bundle: {
+                    ...result.bundle,
+                    snapshot,
+                  },
+                });
+                return;
+              }
+              const rich = isRich();
+              for (const line of renderStabilityBundleSummary({
+                bundle: result.bundle,
+                path: result.path,
+                rich,
+                snapshot,
+              })) {
+                defaultRuntime.log(line);
+              }
+              return;
+            }
+
+            const result = await callGatewayCli("diagnostics.stability", rpcOpts, {
+              limit: query.limit,
+              ...(query.type ? { type: query.type } : {}),
+              ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
+            });
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
+            }
             const rich = isRich();
-            for (const line of renderStabilityBundleSummary({
-              bundle: result.bundle,
-              path: result.path,
+            for (const line of renderStabilitySummary(
+              result as DiagnosticStabilitySnapshot,
               rich,
-              snapshot,
-            })) {
+            )) {
               defaultRuntime.log(line);
             }
-            return;
-          }
-
-          const result = await callGatewayCli("diagnostics.stability", rpcOpts, {
-            limit: query.limit,
-            ...(query.type ? { type: query.type } : {}),
-            ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
-          });
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          for (const line of renderStabilitySummary(result as DiagnosticStabilitySnapshot, rich)) {
-            defaultRuntime.log(line);
-          }
-        }, "Gateway stability failed");
+          },
+          "Gateway stability failed",
+          { json: Boolean(rpcOpts.json) },
+        );
       }),
   );
 
@@ -582,17 +614,21 @@ export function registerGatewayCli(program: Command) {
     .option("--no-stability-bundle", "Skip persisted stability bundle lookup")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
-      await runGatewayCommand(async () => {
-        const rpcOpts = resolveGatewayRpcOptions(opts, command);
-        await writeSupportExportFromCli({
-          json: opts.json,
-          output: opts.output,
-          logLines: opts.logLines,
-          logBytes: opts.logBytes,
-          stabilityBundle: opts.stabilityBundle === false ? false : "latest",
-          rpc: rpcOpts,
-        });
-      }, "Gateway diagnostics export failed");
+      const rpcOpts = resolveGatewayRpcOptions(opts, command);
+      await runGatewayCommand(
+        async () => {
+          await writeSupportExportFromCli({
+            json: opts.json,
+            output: opts.output,
+            logLines: opts.logLines,
+            logBytes: opts.logBytes,
+            stabilityBundle: opts.stabilityBundle === false ? false : "latest",
+            rpc: rpcOpts,
+          });
+        },
+        "Gateway diagnostics export failed",
+        { json: Boolean(opts.json) },
+      );
     });
 
   gateway

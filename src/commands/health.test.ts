@@ -52,8 +52,10 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const formatGatewayTransportErrorJsonMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJsonMock(error),
 }));
 
 function requireFirstRuntimeLog(): string {
@@ -83,6 +85,7 @@ function requireFirstGatewayRequest(): Record<string, unknown> {
 describe("healthCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    formatGatewayTransportErrorJsonMock.mockReturnValue(null);
   });
 
   it("outputs JSON from gateway", async () => {
@@ -173,6 +176,33 @@ describe("healthCommand", () => {
     expect(stripAnsi(runtime.log.mock.calls.flat().join("\n"))).toContain(
       "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
     );
+  });
+
+  it("emits JSON when gateway transport fails in JSON mode", async () => {
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+      },
+    };
+    const err = Object.assign(new Error("gateway closed"), { name: "GatewayTransportError" });
+    callGatewayMock.mockRejectedValueOnce(err);
+    formatGatewayTransportErrorJsonMock.mockReturnValueOnce(payload);
+
+    await healthCommand({ json: true, timeoutMs: 1000, config: {} }, runtime as never);
+
+    expect(formatGatewayTransportErrorJsonMock).toHaveBeenCalledWith(err);
+    const logged = runtime.log.mock.calls[0]?.[0] as string;
+    expect(JSON.parse(logged)).toEqual(payload);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("formats per-account probe timings", () => {

@@ -1,5 +1,9 @@
 import type { Command } from "commander";
-import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import {
+  buildGatewayConnectionDetails,
+  callGateway,
+  formatGatewayTransportErrorJson,
+} from "../gateway/call.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
@@ -525,7 +529,20 @@ export function registerDevicesCli(program: Command) {
       .command("list")
       .description("List pending and paired devices")
       .action(async (opts: DevicesRpcOpts) => {
-        const list = await listPairingWithFallback(opts);
+        let list: DevicePairingList;
+        try {
+          list = await listPairingWithFallback(opts);
+        } catch (error) {
+          if (opts.json) {
+            const payload = formatGatewayTransportErrorJson(error);
+            if (payload) {
+              defaultRuntime.writeJson(payload);
+              defaultRuntime.exit(1);
+              return;
+            }
+          }
+          throw error;
+        }
         const pairedByDeviceId = indexPairedDevices(list.paired);
         if (opts.json) {
           defaultRuntime.writeJson(list);

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     urlSource: "local loopback",
     message: "",
   })),
+  formatGatewayTransportErrorJson: vi.fn(),
   listDevicePairing: vi.fn(),
   approveDevicePairing: vi.fn(),
   summarizeDeviceTokens: vi.fn(),
@@ -25,6 +26,7 @@ const {
   runtime,
   callGateway,
   buildGatewayConnectionDetails,
+  formatGatewayTransportErrorJson,
   listDevicePairing,
   approveDevicePairing,
   summarizeDeviceTokens,
@@ -33,6 +35,7 @@ const {
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+  formatGatewayTransportErrorJson: mocks.formatGatewayTransportErrorJson,
 }));
 
 vi.mock("./progress.js", () => ({
@@ -683,10 +686,36 @@ describe("devices cli list", () => {
     expect(output).toContain("spoof");
     expect(output).toContain("Paired");
   });
+
+  it("emits JSON when the gateway transport fails in JSON mode", async () => {
+    const err = Object.assign(new Error("gateway closed"), { name: "GatewayTransportError" });
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "timeout",
+        message: "gateway timeout after 1000ms",
+        timeoutMs: 1000,
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+      },
+    };
+    callGateway.mockRejectedValueOnce(err);
+    formatGatewayTransportErrorJson.mockReturnValueOnce(payload);
+
+    await runDevicesCommand(["list", "--json", "--url", "ws://127.0.0.1:18789"]);
+
+    expect(formatGatewayTransportErrorJson).toHaveBeenCalledWith(err);
+    expect(runtime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  formatGatewayTransportErrorJson.mockReturnValue(null);
   runtime.exit.mockImplementation(() => {});
 });
 
