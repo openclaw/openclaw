@@ -3,11 +3,18 @@
  */
 
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { type SessionEntry, loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import {
+  type SessionEntry,
+  loadSessionStore,
+  resolveSessionFilePath,
+  resolveSessionTranscriptPathInDir,
+  updateSessionStore,
+} from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { readSessionMessages } from "../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
@@ -32,13 +39,38 @@ function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolea
   );
 }
 
-function sessionIdFromLockPath(lockPath: string): string | undefined {
-  const fileName = path.basename(lockPath);
-  if (!fileName.endsWith(".jsonl.lock")) {
+function normalizeTranscriptLockPath(lockPath: string): string | undefined {
+  const trimmed = lockPath.trim();
+  if (!path.basename(trimmed).endsWith(".jsonl.lock")) {
     return undefined;
   }
-  const sessionId = fileName.slice(0, -".jsonl.lock".length).trim();
-  return sessionId || undefined;
+  const resolved = path.resolve(trimmed);
+  try {
+    return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+  } catch {
+    return resolved;
+  }
+}
+
+function resolveEntryTranscriptLockPaths(params: {
+  entry: SessionEntry;
+  sessionsDir: string;
+}): string[] {
+  const paths = new Set<string>();
+  const push = (resolvePath: () => string) => {
+    try {
+      paths.add(path.resolve(`${resolvePath()}.lock`));
+    } catch {
+      // Keep restart recovery best-effort when session metadata is stale.
+    }
+  };
+  push(() =>
+    resolveSessionFilePath(params.entry.sessionId, params.entry, {
+      sessionsDir: params.sessionsDir,
+    }),
+  );
+  push(() => resolveSessionTranscriptPathInDir(params.entry.sessionId, params.sessionsDir));
+  return [...paths];
 }
 
 function getMessageRole(message: unknown): string | undefined {
@@ -62,17 +94,37 @@ function isResumableTailMessage(message: unknown): boolean {
   return role === "user" || role === "tool" || role === "toolResult";
 }
 
-function isMainSessionResumable(messages: unknown[]): boolean {
-  const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
-  return lastMeaningful ? isResumableTailMessage(lastMeaningful) : false;
+function isApprovalPendingToolResult(message: unknown): boolean {
+  if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
+    return false;
+  }
+  const details = (message as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return false;
+  }
+  return (details as { status?: unknown }).status === "approval-pending";
 }
 
-function buildResumeMessage(): string {
-  return (
+function resolveMainSessionResumeBlockReason(messages: unknown[]): string | null {
+  const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
+  if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
+    return "transcript tail is not resumable";
+  }
+  if (isApprovalPendingToolResult(lastMeaningful)) {
+    return "transcript tail is a stale approval-pending tool result";
+  }
+  return null;
+}
+
+function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
+  const base =
     "[System] Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. Continue from the existing " +
-    "transcript and finish the interrupted response."
-  );
+    "transcript and finish the interrupted response.";
+  if (pendingFinalDeliveryText) {
+    return `${base}\n\nNote: The interrupted final reply was captured: "${pendingFinalDeliveryText}"`;
+  }
+  return base;
 }
 
 async function markSessionFailed(params: {
@@ -91,6 +143,13 @@ async function markSessionFailed(params: {
       entry.abortedLastRun = true;
       entry.endedAt = Date.now();
       entry.updatedAt = entry.endedAt;
+      entry.pendingFinalDelivery = undefined;
+      entry.pendingFinalDeliveryText = undefined;
+      entry.pendingFinalDeliveryCreatedAt = undefined;
+      entry.pendingFinalDeliveryLastAttemptAt = undefined;
+      entry.pendingFinalDeliveryAttemptCount = undefined;
+      entry.pendingFinalDeliveryLastError = undefined;
+      entry.pendingFinalDeliveryContext = undefined;
       store[params.sessionKey] = entry;
     },
     { skipMaintenance: true },
@@ -101,12 +160,13 @@ async function markSessionFailed(params: {
 async function resumeMainSession(params: {
   storePath: string;
   sessionKey: string;
+  pendingFinalDeliveryText?: string | null;
 }): Promise<boolean> {
   try {
     await callGateway<{ runId: string }>({
       method: "agent",
       params: {
-        message: buildResumeMessage(),
+        message: buildResumeMessage(params.pendingFinalDeliveryText),
         sessionKey: params.sessionKey,
         idempotencyKey: crypto.randomUUID(),
         deliver: false,
@@ -121,13 +181,24 @@ async function resumeMainSession(params: {
         if (!entry) {
           return;
         }
+        const now = Date.now();
         entry.abortedLastRun = false;
-        entry.updatedAt = Date.now();
+        entry.updatedAt = now;
+        if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
+          entry.pendingFinalDeliveryLastAttemptAt = now;
+          entry.pendingFinalDeliveryAttemptCount =
+            (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+          entry.pendingFinalDeliveryLastError = null;
+        }
         store[params.sessionKey] = entry;
       },
       { skipMaintenance: true },
     );
-    log.info(`resumed interrupted main session: ${params.sessionKey}`);
+    log.info(
+      `resumed interrupted main session: ${params.sessionKey}${
+        params.pendingFinalDeliveryText ? " (with pending payload)" : ""
+      }`,
+    );
     return true;
   } catch (err) {
     log.warn(`failed to resume interrupted main session ${params.sessionKey}: ${String(err)}`);
@@ -140,16 +211,17 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   cleanedLocks: SessionLockInspection[];
 }): Promise<{ marked: number; skipped: number }> {
   const result = { marked: 0, skipped: 0 };
-  const interruptedSessionIds = new Set(
+  const sessionsDir = path.resolve(params.sessionsDir);
+  const interruptedLockPaths = new Set(
     params.cleanedLocks
-      .map((lock) => sessionIdFromLockPath(lock.lockPath))
-      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      .map((lock) => normalizeTranscriptLockPath(lock.lockPath))
+      .filter((lockPath): lockPath is string => Boolean(lockPath)),
   );
-  if (interruptedSessionIds.size === 0) {
+  if (interruptedLockPaths.size === 0) {
     return result;
   }
 
-  const storePath = path.join(path.resolve(params.sessionsDir), "sessions.json");
+  const storePath = path.join(sessionsDir, "sessions.json");
   await updateSessionStore(
     storePath,
     (store) => {
@@ -161,7 +233,8 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
           result.skipped++;
           continue;
         }
-        if (!interruptedSessionIds.has(entry.sessionId)) {
+        const entryLockPaths = resolveEntryTranscriptLockPaths({ entry, sessionsDir });
+        if (!entryLockPaths.some((lockPath) => interruptedLockPaths.has(lockPath))) {
           continue;
         }
         entry.abortedLastRun = true;
@@ -209,18 +282,28 @@ async function recoverStore(params: {
 
     let messages: unknown[];
     try {
-      messages = readSessionMessages(entry.sessionId, params.storePath, entry.sessionFile);
+      messages = await readSessionMessagesAsync(
+        entry.sessionId,
+        params.storePath,
+        entry.sessionFile,
+        {
+          mode: "recent",
+          maxMessages: 20,
+          maxBytes: 256 * 1024,
+        },
+      );
     } catch (err) {
       log.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
       result.failed++;
       continue;
     }
 
-    if (!isMainSessionResumable(messages)) {
+    const resumeBlockReason = resolveMainSessionResumeBlockReason(messages);
+    if (resumeBlockReason) {
       await markSessionFailed({
         storePath: params.storePath,
         sessionKey,
-        reason: "transcript tail is not resumable",
+        reason: resumeBlockReason,
       });
       result.failed++;
       continue;
@@ -229,6 +312,7 @@ async function recoverStore(params: {
     const resumed = await resumeMainSession({
       storePath: params.storePath,
       sessionKey,
+      pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
     });
     if (resumed) {
       params.resumedSessionKeys.add(sessionKey);

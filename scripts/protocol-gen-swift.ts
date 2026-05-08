@@ -15,7 +15,6 @@ type JsonSchema = {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const outPaths = [
-  path.join(repoRoot, "apps", "macos", "Sources", "OpenClawProtocol", "GatewayModels.swift"),
   path.join(
     repoRoot,
     "apps",
@@ -72,6 +71,9 @@ function camelCase(input: string) {
 
 function safeName(name: string) {
   const cc = camelCase(name.replace(/-/g, "_"));
+  if (/^\d/.test(cc)) {
+    return `_${cc}`;
+  }
   if (reserved.has(cc)) {
     return `_${cc}`;
   }
@@ -150,6 +152,16 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
     base = "AnyCodable";
   }
   return isOptional ? `${base}?` : base;
+}
+
+function emitEnum(name: string, schema: JsonSchema): string {
+  const cases = schema.enum ?? [];
+  return [
+    `public enum ${name}: String, Codable, Sendable {`,
+    ...cases.map((value) => `    case ${safeName(value)} = "${value}"`),
+    "}",
+    "",
+  ].join("\n");
 }
 
 function emitStruct(name: string, schema: JsonSchema): string {
@@ -262,7 +274,16 @@ async function generate() {
   const parts: string[] = [];
   parts.push(header);
 
-  // Value structs
+  // Named enums and value structs
+  for (const [name, schema] of definitions) {
+    if (name === "GatewayFrame") {
+      continue;
+    }
+    if (schema.type === "string" && schema.enum) {
+      parts.push(emitEnum(name, schema));
+    }
+  }
+
   for (const [name, schema] of definitions) {
     if (name === "GatewayFrame") {
       continue;

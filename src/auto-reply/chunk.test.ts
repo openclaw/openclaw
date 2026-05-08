@@ -338,7 +338,8 @@ describe("chunkMarkdownText", () => {
         const text = `${prefix}\n\n${fence}\n\n${suffix}`;
 
         const chunks = chunkMarkdownText(text, 40);
-        expect(chunks.some((chunk) => chunk.trimEnd() === fence)).toBe(true);
+        const intactFenceChunks = chunks.filter((chunk) => chunk.trimEnd() === fence);
+        expect(intactFenceChunks.length).toBeGreaterThan(0);
         expectFencesBalanced(chunks);
       },
     },
@@ -569,7 +570,7 @@ describe("resolveChunkMode", () => {
   it.each([
     { cfg: undefined, provider: "telegram", accountId: undefined, expected: "length" },
     { cfg: {}, provider: "discord", accountId: undefined, expected: "length" },
-    { cfg: undefined, provider: "bluebubbles", accountId: undefined, expected: "length" },
+    { cfg: undefined, provider: "imessage", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "__internal__", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "slack", accountId: undefined, expected: "newline" },
     { cfg: providerCfg, provider: "discord", accountId: undefined, expected: "length" },

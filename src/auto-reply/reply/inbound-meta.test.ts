@@ -57,6 +57,20 @@ function parseSenderInfoPayload(text: string): Record<string, unknown> {
   return parseUntrustedJsonBlock(text, "Sender (untrusted metadata):") as Record<string, unknown>;
 }
 
+function parseReplyPayload(text: string): Record<string, unknown> {
+  return parseUntrustedJsonBlock(
+    text,
+    "Reply target of current user message (untrusted, for context):",
+  ) as Record<string, unknown>;
+}
+
+function parseReplyChainPayload(text: string): Array<Record<string, unknown>> {
+  return parseUntrustedJsonBlock(
+    text,
+    "Reply chain of current user message (untrusted, nearest first):",
+  ) as Array<Record<string, unknown>>;
+}
+
 function parseHistoryPayload(text: string): Array<Record<string, unknown>> {
   return parseUntrustedJsonBlock(
     text,
@@ -459,6 +473,66 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["reply_to_id"]).toBe("msg-199");
+  });
+
+  it("labels reply context as the current message target", () => {
+    const text = buildInboundUserContextPrefix({
+      ReplyToSender: "Quoter",
+      ReplyToBody: "quoted body",
+    } as TemplateContext);
+
+    const reply = parseReplyPayload(text);
+    expect(reply["sender_label"]).toBe("Quoter");
+    expect(reply["body"]).toBe("quoted body");
+  });
+
+  it("renders hydrated reply chain instead of duplicate one-hop reply target", () => {
+    const text = buildInboundUserContextPrefix({
+      ReplyToSender: "Blair",
+      ReplyToBody: "The cache warmer is the piece I meant.",
+      ReplyChain: [
+        {
+          messageId: "3001",
+          sender: "Blair",
+          senderId: "700002",
+          timestamp: 1778216405000,
+          body: "The cache warmer is the piece I meant.",
+          replyToId: "3000",
+        },
+        {
+          messageId: "3000",
+          sender: "Avery",
+          senderId: "700001",
+          timestamp: 1778216400000,
+          body: "Architecture sketch for the cache warmer",
+          mediaType: "image",
+          mediaRef: "telegram:file/proof-photo-small",
+        },
+      ],
+    } as TemplateContext);
+
+    const replyChain = parseReplyChainPayload(text);
+    expect(replyChain).toEqual([
+      {
+        message_id: "3001",
+        sender: "Blair",
+        sender_id: "700002",
+        timestamp_ms: 1778216405000,
+        body: "The cache warmer is the piece I meant.",
+        reply_to_id: "3000",
+      },
+      {
+        message_id: "3000",
+        sender: "Avery",
+        sender_id: "700001",
+        timestamp_ms: 1778216400000,
+        body: "Architecture sketch for the cache warmer",
+        media_type: "image",
+        media_ref: "telegram:file/proof-photo-small",
+      },
+    ]);
+    expect(text).not.toContain("Reply target of current user message");
+    expect(parseConversationInfoPayload(text)["has_reply_context"]).toBe(true);
   });
 
   it("includes sender_id in conversation info", () => {

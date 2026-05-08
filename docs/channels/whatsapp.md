@@ -14,13 +14,27 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 - `openclaw channels login --channel whatsapp` also offers the install flow when
   the plugin is not present yet.
 - Dev channel + git checkout: defaults to the local plugin path.
-- Stable/Beta: defaults to the npm package `@openclaw/whatsapp`.
+- Stable/Beta: uses the npm package `@openclaw/whatsapp` on the current official
+  release tag.
 
 Manual install stays available:
 
 ```bash
 openclaw plugins install @openclaw/whatsapp
 ```
+
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
+
+On Windows, the WhatsApp plugin needs Git on `PATH` during npm install because
+one of its Baileys/libsignal dependencies is fetched from a git URL. Install
+Git for Windows, then restart the shell and rerun the install:
+
+```powershell
+winget install --id Git.Git -e
+```
+
+Portable Git also works if its `bin` directory is on `PATH`.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -146,11 +160,15 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 ## Runtime model
 
 - Gateway owns the WhatsApp socket and reconnect loop.
-- The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window.
+- The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window; after a transient reconnect for a recently active session, that application-silence check uses the normal message timeout for the first recovery window.
+- Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query timeouts.
 - Outbound sends require an active WhatsApp listener for the target account.
+- Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens in text and media captions when the token matches current WhatsApp participant metadata, including LID-backed groups.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
+- The reconnect watchdog follows WhatsApp Web transport activity, not only inbound app-message volume: quiet linked-device sessions stay up while transport frames continue, but a transport stall forces reconnect well before the later remote disconnect path.
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
+- WhatsApp Channels/Newsletters can be explicit outbound targets with their native `@newsletter` JID. Outbound newsletter sends use channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM session semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
 - When `messages.removeAckAfterReply` is enabled, OpenClaw clears the WhatsApp ack reaction after a visible reply is delivered.
 
@@ -207,11 +225,14 @@ content and identifiers.
 
     `allowFrom` accepts E.164-style numbers (normalized internally).
 
+    `allowFrom` is a DM sender access-control list. It does not gate explicit outbound sends to WhatsApp group JIDs or `@newsletter` channel JIDs.
+
     Multi-account override: `channels.whatsapp.accounts.<id>.dmPolicy` (and `allowFrom`) take precedence over channel-level defaults for that account.
 
     Runtime behavior details:
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
+    - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit cron or heartbeat recipients
     - if no allowlist is configured, the linked self number is allowed by default
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
 
@@ -286,6 +307,10 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     ```
 
     Reply metadata fields are also populated when available (`ReplyToId`, `ReplyToBody`, `ReplyToSender`, sender JID/E.164).
+    When the quoted reply target is downloadable media, OpenClaw saves it through
+    the normal inbound media store and exposes it as `MediaPath`/`MediaType` so
+    the agent can inspect the referenced image instead of only seeing
+    `<media:image>`.
 
   </Accordion>
 
@@ -365,6 +390,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - default chunk limit: `channels.whatsapp.textChunkLimit = 4000`
     - `channels.whatsapp.chunkMode = "length" | "newline"`
     - `newline` mode prefers paragraph boundaries (blank lines), then falls back to length-safe chunking
+
   </Accordion>
 
   <Accordion title="Outbound media behavior">
@@ -377,6 +403,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - animated GIF playback is supported via `gifPlayback: true` on video sends
     - captions are applied to the first media item when sending multi-media reply payloads, except PTT voice notes send the audio first and visible text separately because WhatsApp clients do not render voice-note captions consistently
     - media source can be HTTP(S), `file://`, or local paths
+
   </Accordion>
 
   <Accordion title="Media size limits and fallback behavior">
@@ -385,6 +412,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - per-account overrides use `channels.whatsapp.accounts.<accountId>.mediaMaxMb`
     - images are auto-optimized (resize/quality sweep) to fit limits
     - on media send failure, first-item fallback sends text warning instead of dropping the response silently
+
   </Accordion>
 </AccordionGroup>
 
@@ -469,16 +497,20 @@ Behavior notes:
     - account ids come from `channels.whatsapp.accounts`
     - default account selection: `default` if present, otherwise first configured account id (sorted)
     - account ids are normalized internally for lookup
+
   </Accordion>
 
   <Accordion title="Credential paths and legacy compatibility">
     - current auth path: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
     - backup file: `creds.json.bak`
     - legacy default auth in `~/.openclaw/credentials/` is still recognized/migrated for default-account flows
+
   </Accordion>
 
   <Accordion title="Logout behavior">
     `openclaw channels logout --channel whatsapp [--account <id>]` clears WhatsApp auth state for that account.
+
+    When a Gateway is reachable, logout first stops the live WhatsApp listener for the selected account so the linked session does not keep receiving messages until the next restart. `openclaw channels remove --channel whatsapp` also stops the live listener before disabling or deleting account config.
 
     In legacy auth directories, `oauth.json` is preserved while Baileys auth files are removed.
 
@@ -515,12 +547,37 @@ Behavior notes:
     restarts when WhatsApp Web transport activity stops, the socket closes, or
     application-level activity stays silent beyond the longer safety window.
 
+    If logs show repeated `status=408 Request Time-out Connection was lost`, tune
+    Baileys socket timings under `web.whatsapp`. Start by shortening
+    `keepAliveIntervalMs` below your network's idle timeout and increasing
+    `connectTimeoutMs` on slow or lossy links:
+
+    ```json5
+    {
+      web: {
+        whatsapp: {
+          keepAliveIntervalMs: 15000,
+          connectTimeoutMs: 60000,
+          defaultQueryTimeoutMs: 60000,
+        },
+      },
+    }
+    ```
+
     Fix:
 
     ```bash
     openclaw doctor
     openclaw logs --follow
     ```
+
+    If `~/.openclaw/logs/whatsapp-health.log` says `Gateway inactive` but
+    `openclaw gateway status` and `openclaw channels status --probe` show the
+    gateway and WhatsApp are healthy, run `openclaw doctor`. On Linux, doctor
+    warns about legacy crontab entries that still invoke
+    `~/.openclaw/bin/ensure-whatsapp.sh`; remove those stale entries with
+    `crontab -e` because cron can lack the systemd user-bus environment and
+    make that old script misreport gateway health.
 
     If needed, re-link with `channels login`.
 
@@ -537,6 +594,15 @@ Behavior notes:
     Outbound sends fail fast when no active gateway listener exists for the target account.
 
     Make sure gateway is running and the account is linked.
+
+  </Accordion>
+
+  <Accordion title="Reply appears in transcript but not in WhatsApp">
+    Transcript rows record what the agent generated. WhatsApp delivery is checked separately: OpenClaw only treats an auto-reply as sent after Baileys returns an outbound message id for at least one visible text or media send.
+
+    Ack reactions are independent pre-reply receipts. A successful reaction does not prove that the later text or media reply was accepted by WhatsApp.
+
+    Check gateway logs for `auto-reply delivery failed` or `auto-reply was not accepted by WhatsApp provider`.
 
   </Accordion>
 
@@ -638,7 +704,7 @@ High-signal WhatsApp fields:
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
 - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
-- operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`
+- operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
 - prompts: `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt`
 

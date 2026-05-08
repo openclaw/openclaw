@@ -122,7 +122,7 @@ describe("dreaming artifact repair", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toContain("# Dream Diary");
     const archivedEntries = await fs.readdir(repair.archiveDir!);
-    expect(archivedEntries.some((entry) => entry.startsWith("session-corpus."))).toBe(true);
-    expect(archivedEntries.some((entry) => entry.startsWith("session-ingestion.json."))).toBe(true);
+    expect(archivedEntries).toContainEqual(expect.stringMatching(/^session-corpus\./));
+    expect(archivedEntries).toContainEqual(expect.stringMatching(/^session-ingestion\.json\./));
   });
 });

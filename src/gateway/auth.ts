@@ -29,6 +29,9 @@ export {
   type ResolvedGatewayAuthModeSource,
 } from "./auth-resolve.js";
 
+const LEGACY_OPENCLAW_ENV_NOTE =
+  " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
+
 export type GatewayAuthResult = {
   ok: boolean;
   method?:
@@ -223,7 +226,7 @@ export function assertGatewayAuthConfigured(
       return;
     }
     throw new Error(
-      "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+      `gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN).${LEGACY_OPENCLAW_ENV_NOTE}`,
     );
   }
   if (auth.mode === "password" && !auth.password) {
@@ -235,7 +238,9 @@ export function assertGatewayAuthConfigured(
         "gateway auth mode is password, but gateway.auth.password contains a provider reference object instead of a resolved string — bootstrap secrets (gateway.auth.password) must be plaintext strings or set via the OPENCLAW_GATEWAY_PASSWORD environment variable because the secrets provider system has not initialised yet at gateway startup", // pragma: allowlist secret
       );
     }
-    throw new Error("gateway auth mode is password, but no password was configured");
+    throw new Error(
+      `gateway auth mode is password, but no password was configured.${LEGACY_OPENCLAW_ENV_NOTE}`,
+    );
   }
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -460,26 +465,6 @@ async function authorizeGatewayConnectCore(
         return originResult;
       }
       return { ok: true, method: "trusted-proxy", user: result.user };
-    }
-    if (localDirect && auth.password && connectAuth?.password) {
-      if (limiter) {
-        const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
-        if (!rlCheck.allowed) {
-          return {
-            ok: false,
-            reason: "rate_limited",
-            rateLimited: true,
-            retryAfterMs: rlCheck.retryAfterMs,
-          };
-        }
-      }
-      return authorizePasswordAuth({
-        authPassword: auth.password,
-        connectPassword: connectAuth.password,
-        limiter,
-        ip,
-        rateLimitScope,
-      });
     }
     return { ok: false, reason: result.reason };
   }

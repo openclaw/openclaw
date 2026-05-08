@@ -6,8 +6,6 @@ read_when:
 title: "Token use and costs"
 ---
 
-# Token use & costs
-
 OpenClaw tracks **tokens**, not characters. Tokens are model-specific, but most
 OpenAI-style models average ~4 characters per token for English text.
 
@@ -21,7 +19,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   with optional per-agent override at
   `agents.list[].skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but bare `/new` and `/reset` can prepend a one-shot startup-context block with recent daily memory for that first turn. That startup prelude is controlled by `agents.defaults.startupContext`.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -63,7 +61,7 @@ For a practical breakdown (per injected file, tools, skills, and system prompt s
 
 Use these in chat:
 
-- `/status` → **emoji‑rich status card** with the session model, context usage,
+- `/status` → **emoji-rich status card** with the session model, context usage,
   last response input/output tokens, and **estimated cost** (API key only).
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
@@ -120,6 +118,14 @@ These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
 `cacheWrite`. If pricing is missing, OpenClaw shows tokens only. OAuth tokens
 never show dollar cost.
 
+After sidecars and channels reach the Gateway ready path, OpenClaw starts an
+optional background pricing bootstrap for configured model refs that do not
+already have local pricing. That bootstrap fetches remote OpenRouter and LiteLLM
+pricing catalogs. Set `models.pricing.enabled: false` to skip those catalog
+fetches on offline or restricted networks; explicit
+`models.providers.*.models[].cost` entries continue to drive local cost
+estimates.
+
 ## Cache TTL and pruning impact
 
 Provider prompt caching only applies within the cache TTL window. OpenClaw can
@@ -141,7 +147,7 @@ per agent with `agents.list[].params.cacheRetention`.
 For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
 
 For Anthropic API pricing, cache reads are significantly cheaper than input
-tokens, while cache writes are billed at a higher multiplier. See Anthropic’s
+tokens, while cache writes are billed at a higher multiplier. See Anthropic's
 prompt caching pricing for the latest rates and TTL multipliers:
 [https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
 

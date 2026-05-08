@@ -205,6 +205,27 @@ describe("isBillingErrorMessage", () => {
     expect(isBillingErrorMessage(sample)).toBe(false);
     expect(classifyFailoverReason(sample)).toBeNull();
   });
+  it("matches insufficient_balance snake_case error codes (#74079)", () => {
+    expect(isBillingErrorMessage("insufficient_balance")).toBe(true);
+    expect(classifyFailoverReason("insufficient_balance")).toBe("billing");
+  });
+  it("matches 'Insufficient MBT balance' with intervening words (#74079)", () => {
+    const msg = "Insufficient MBT balance. Top up or upgrade your subscription to continue.";
+    expect(isBillingErrorMessage(msg)).toBe(true);
+    expect(classifyFailoverReason(msg)).toBe("billing");
+  });
+  it("matches provider spending-limit exhaustion messages", () => {
+    const msg =
+      "Your team has either used all available credits or reached its monthly spending limit.";
+    expect(isBillingErrorMessage(msg)).toBe(true);
+    expect(classifyFailoverReason(msg)).toBe("billing");
+  });
+  it("classifies flat JSON billing payloads with string error code (#74079)", () => {
+    const raw =
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';
+    expect(isBillingErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("billing");
+  });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
       '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}';
@@ -409,17 +430,6 @@ describe("isContextOverflowError", () => {
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
     expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
   });
-
-  it("excludes reasoning-required invalid-request errors", () => {
-    const samples = [
-      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
-      "This model requires reasoning to be enabled",
-    ];
-    for (const sample of samples) {
-      expect(isContextOverflowError(sample)).toBe(false);
-    }
-  });
 });
 
 describe("error classifiers", () => {
@@ -506,17 +516,6 @@ describe("isLikelyContextOverflowError", () => {
     expect(classifyFailoverReason(sample)).toBeNull();
   });
 
-  it("excludes reasoning-required invalid-request errors", () => {
-    const samples = [
-      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
-      "This endpoint requires reasoning",
-    ];
-    for (const sample of samples) {
-      expect(isLikelyContextOverflowError(sample)).toBe(false);
-    }
-  });
-
   it("excludes billing errors even when text matches context overflow patterns", () => {
     const samples = [
       "402 Payment Required: request token limit exceeded for this billing plan",
@@ -526,6 +525,33 @@ describe("isLikelyContextOverflowError", () => {
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
       expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+});
+
+describe("reasoning-required invalid-request errors", () => {
+  it.each([
+    {
+      name: "strict context overflow classifier",
+      classifier: isContextOverflowError,
+      samples: [
+        "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+        '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
+        "This model requires reasoning to be enabled",
+      ],
+    },
+    {
+      name: "likely context overflow classifier",
+      classifier: isLikelyContextOverflowError,
+      samples: [
+        "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+        '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
+        "This endpoint requires reasoning",
+      ],
+    },
+  ])("excludes reasoning-required invalid-request errors from $name", ({ classifier, samples }) => {
+    for (const sample of samples) {
+      expect(classifier(sample)).toBe(false);
     }
   });
 });
@@ -667,7 +693,7 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
   });
 });
 
-describe("classifyFailoverReason", () => {
+describe("classifyFailoverReason HTTP 410 handling", () => {
   it("treats generic 410 text as retryable timeout", () => {
     expect(classifyFailoverReason("410")).toBe("timeout");
     expect(classifyFailoverReason("HTTP 410")).toBe("timeout");
@@ -1043,7 +1069,7 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
   });
 });
 
-describe("classifyFailoverReason", () => {
+describe("classifyFailoverReason provider messages", () => {
   it("classifies documented provider error messages", () => {
     expect(classifyFailoverReason(OPENAI_RATE_LIMIT_MESSAGE)).toBe("rate_limit");
     expect(classifyFailoverReason(GEMINI_RESOURCE_EXHAUSTED_MESSAGE)).toBe("rate_limit");
@@ -1265,6 +1291,62 @@ describe("classifyFailoverReason", () => {
         '{"type":"error","error":{"type":"api_error","message":"permission_error: OAuth authentication is currently not allowed for this organization"}}',
       ),
     ).toBe("auth_permanent");
+  });
+
+  it("classifies Chinese provider error messages correctly", () => {
+    // ZhipuAI/GLM error code 1234: "网络错误" (network error) — real production error
+    // from https://github.com/openclaw/openclaw/issues/56242
+    expect(
+      classifyFailoverReason(
+        "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":"1234","message":"网络错误，错误id：abc123，请联系客服。"},"request_id":"abc123"}',
+      ),
+    ).toBe("timeout");
+
+    // Network/connection errors
+    expect(classifyFailoverReason("网络异常，请稍后重试")).toBe("timeout");
+    expect(classifyFailoverReason("连接超时")).toBe("timeout");
+    expect(classifyFailoverReason("请求超时，请重试")).toBe("timeout");
+    expect(classifyFailoverReason("服务暂时不可用")).toBe("timeout");
+    expect(classifyFailoverReason("连接错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务繁忙，请稍后再试")).toBe("timeout");
+
+    // Server errors
+    expect(classifyFailoverReason("内部错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务器错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务器内部错误")).toBe("timeout");
+    expect(classifyFailoverReason("系统错误，请稍后重试")).toBe("timeout");
+    expect(classifyFailoverReason("系统繁忙")).toBe("timeout");
+    expect(classifyFailoverReason("系统异常")).toBe("timeout");
+
+    // Rate limit errors
+    expect(classifyFailoverReason("请求过于频繁，请稍后重试")).toBe("rate_limit");
+    expect(classifyFailoverReason("调用频率超限")).toBe("rate_limit");
+    expect(classifyFailoverReason("频率限制")).toBe("rate_limit");
+    expect(classifyFailoverReason("配额不足")).toBe("rate_limit");
+    expect(classifyFailoverReason("配额已用尽")).toBe("rate_limit");
+    expect(classifyFailoverReason("额度不足，请充值")).toBe("rate_limit");
+    expect(classifyFailoverReason("额度已用尽")).toBe("rate_limit");
+
+    // Billing errors
+    expect(classifyFailoverReason("余额不足，请充值")).toBe("billing");
+    expect(classifyFailoverReason("账户余额不足")).toBe("billing");
+    expect(classifyFailoverReason("账户已欠费")).toBe("billing");
+
+    // Auth errors
+    expect(classifyFailoverReason("无权访问该模型")).toBe("auth");
+    expect(classifyFailoverReason("403 您无权访问glm-5.1。")).toBe("auth");
+    expect(classifyFailoverReason("认证失败")).toBe("auth");
+    expect(classifyFailoverReason("鉴权失败，请检查API Key")).toBe("auth");
+    expect(classifyFailoverReason("密钥无效")).toBe("auth");
+
+    // Overloaded errors
+    expect(classifyFailoverReason("服务过载，请稍后重试")).toBe("overloaded");
+    expect(classifyFailoverReason("当前负载过高")).toBe("overloaded");
   });
 });
 

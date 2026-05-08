@@ -1,6 +1,6 @@
-import { serializePayload } from "@buape/carbon";
 import { ComponentType } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
+import { serializePayload } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   DISCORD_CUSTOM_ID_MAX_CHARS,
@@ -392,9 +392,8 @@ describe("Discord model picker rendering", () => {
       return parsed?.action === "provider";
     });
     expect(providerButtons).toHaveLength(Object.keys(entries).length);
-    expect(allButtons.some((component) => (component.custom_id ?? "").includes(";a=nav;"))).toBe(
-      false,
-    );
+    const customIds = allButtons.map((component) => component.custom_id ?? "");
+    expect(customIds).not.toEqual(expect.arrayContaining([expect.stringContaining(";a=nav;")]));
   });
 
   it("does not render navigation buttons even when provider count exceeds one page", () => {
@@ -419,9 +418,8 @@ describe("Discord model picker rendering", () => {
     expect(rows.length).toBeGreaterThan(0);
 
     const allButtons = rows.flatMap((row) => row.components ?? []);
-    expect(allButtons.some((component) => (component.custom_id ?? "").includes(";a=nav;"))).toBe(
-      false,
-    );
+    const customIds = allButtons.map((component) => component.custom_id ?? "");
+    expect(customIds).not.toEqual(expect.arrayContaining([expect.stringContaining(";a=nav;")]));
   });
 
   it("supports classic fallback rendering with content + action rows", () => {

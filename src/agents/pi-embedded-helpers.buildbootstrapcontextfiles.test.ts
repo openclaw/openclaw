@@ -219,9 +219,9 @@ describe("buildBootstrapContextFiles", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.path).toBe("/tmp/AGENTS.md");
     expect(warnings).toHaveLength(3);
-    expect(warnings.every((warning) => warning.includes('missing or invalid "path" field'))).toBe(
-      true,
-    );
+    expect(
+      warnings.filter((warning) => !warning.includes('missing or invalid "path" field')),
+    ).toEqual([]);
   });
 });
 

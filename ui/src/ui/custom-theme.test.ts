@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCustomThemeStyles,
   importCustomThemeFromUrl,
@@ -8,6 +8,10 @@ import {
   syncCustomThemeStyleTag,
 } from "./custom-theme.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function createTweakcnPayload() {
   return {
@@ -246,6 +250,27 @@ describe("custom theme import helpers", () => {
 
     payload.cssVars.light.background = "oklch(0.98 0.01 120)";
     payload.cssVars.theme["font-sans"] = "var(--attacker-font)";
+    expect(() =>
+      normalizeImportedCustomTheme(payload, {
+        sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+        themeId: "cmlhfpjhw000004l4f4ax3m7z",
+      }),
+    ).toThrow("Unsupported tweakcn token");
+  });
+
+  it("validates imported font families without regex backtracking", () => {
+    const payload = createTweakcnPayload();
+    payload.cssVars.theme["font-sans"] =
+      '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
+    expect(
+      normalizeImportedCustomTheme(payload, {
+        sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+        themeId: "cmlhfpjhw000004l4f4ax3m7z",
+      }).light["font-body"],
+    ).toBe('"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif');
+
+    payload.cssVars.theme["font-sans"] = `${"Inter, ".repeat(20)}@bad`;
     expect(() =>
       normalizeImportedCustomTheme(payload, {
         sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",

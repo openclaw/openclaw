@@ -426,7 +426,8 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
       const isDefault = agent.id === result?.defaultId;
       const name = agent.identity?.name || agent.name || agent.id;
       const marker = isDefault ? " *(default)*" : "";
-      lines.push(`- \`${agent.id}\` — ${name}${marker}`);
+      const runtime = agent.agentRuntime?.id ? ` · runtime \`${agent.agentRuntime.id}\`` : "";
+      lines.push(`- \`${agent.id}\` — ${name}${marker}${runtime}`);
     }
     return { content: lines.join("\n") };
   } catch (err) {
@@ -654,16 +655,21 @@ function resolveThinkingLevelOptionsForSession(
   if (session?.thinkingLevels?.length) {
     return session.thinkingLevels;
   }
-  if (defaults?.thinkingLevels?.length) {
+  const sessionModelMatchesDefaults =
+    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
+    (!session?.model || session.model === defaults?.model);
+  if (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length) {
     return defaults.thinkingLevels;
   }
   const labels =
-    session?.thinkingOptions?.length || defaults?.thinkingOptions?.length
-      ? (session?.thinkingOptions ?? defaults?.thinkingOptions ?? [])
-      : formatThinkingLevels(
-          session?.modelProvider ?? defaults?.modelProvider,
-          session?.model ?? defaults?.model,
-        ).split(/\s*,\s*/);
+    (session?.thinkingOptions?.length ? session.thinkingOptions : null) ??
+    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+      ? defaults.thinkingOptions
+      : null) ??
+    formatThinkingLevels(
+      session?.modelProvider ?? defaults?.modelProvider,
+      session?.model ?? defaults?.model,
+    ).split(/\s*,\s*/);
   return labels.filter(Boolean).map((label) => ({
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
     label,

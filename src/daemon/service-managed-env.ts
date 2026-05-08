@@ -1,7 +1,7 @@
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
-export const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
+const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
 
 type ServiceEnvCommand = {
   environment?: Record<string, string | undefined>;
@@ -24,7 +24,13 @@ export function isEnvironmentFileOnlySource(
   return source === "file";
 }
 
-export function parseManagedServiceEnvKeys(value: string | undefined): Set<string> {
+export function hasEnvironmentFileSource(
+  source: GatewayServiceEnvironmentValueSource | undefined,
+): boolean {
+  return source === "file" || source === "inline-and-file";
+}
+
+function parseManagedServiceEnvKeys(value: string | undefined): Set<string> {
   const keys = new Set<string>();
   for (const entry of value?.split(",") ?? []) {
     const key = normalizeServiceEnvKey(entry.trim());
@@ -71,7 +77,7 @@ export function readManagedServiceEnvKeysFromEnvironment(
   return new Set();
 }
 
-export function deleteManagedServiceEnvKeys(
+function deleteManagedServiceEnvKeys(
   environment: Record<string, string | undefined>,
   keys: Iterable<string>,
 ): void {

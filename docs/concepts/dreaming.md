@@ -86,6 +86,7 @@ There is also a grounded historical backfill lane for review and recovery work:
     - `memory rem-backfill --path ...` writes reversible grounded diary entries into `DREAMS.md`.
     - `memory rem-backfill --path ... --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase already uses.
     - `memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
+
   </Accordion>
 </AccordionGroup>
 
@@ -109,6 +110,8 @@ Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.
+
+The sweep includes the primary runtime workspace and any configured agent workspaces, deduped by path, so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
 
 Default cadence behavior:
 
@@ -233,6 +236,10 @@ When enabled, the Gateway **Dreams** tab shows:
 - next scheduled run timing
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
+
+## Dreaming never runs: status shows blocked
+
+If `openclaw memory status` reports `Dreaming status: blocked`, the managed cron exists but the default agent heartbeat is not firing. Check that heartbeat is enabled for the default agent and that its target is not `none`, then run `openclaw memory status --deep` again after the next heartbeat interval.
 
 ## Related
 

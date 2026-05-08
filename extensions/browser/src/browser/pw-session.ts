@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
@@ -34,6 +33,7 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { writeViaSiblingTempPath } from "./output-atomic.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { playwrightCore } from "./playwright-core.runtime.js";
 import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
@@ -466,8 +466,13 @@ export function ensurePageState(page: Page): PageState {
         );
         const managedPath = buildManagedDownloadPath(suggested);
         const managedSave = (async () => {
-          await fs.mkdir(DEFAULT_DOWNLOAD_DIR, { recursive: true });
-          await download.saveAs?.(managedPath);
+          await writeViaSiblingTempPath({
+            rootDir: DEFAULT_DOWNLOAD_DIR,
+            targetPath: managedPath,
+            writeTemp: async (tempPath) => {
+              await download.saveAs?.(tempPath);
+            },
+          });
           return managedPath;
         })();
         managedSave.catch(() => {});
@@ -849,16 +854,20 @@ function isSubframeDocumentNavigationRequest(page: Page, request: Request): bool
   }
 }
 
-function isPolicyDenyNavigationError(err: unknown): boolean {
+export function isPolicyDenyNavigationError(err: unknown): boolean {
   return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
 }
 
-async function closeBlockedNavigationTarget(opts: {
+// Mark a page (and its CDP target id when resolvable) as blocked so subsequent
+// OpenClaw operations short-circuit instead of re-running the SSRF check on a
+// page we have already proven is non-compliant. This is a pure bookkeeping
+// step; it does NOT close the tab. Read-only paths can call this safely on a
+// user-owned tab without losing the user's content.
+async function quarantineBlockedTarget(opts: {
   cdpUrl: string;
   page: Page;
   targetId?: string;
 }): Promise<void> {
-  // Quarantine the concrete page first; then persist by target id when available.
   markPageRefBlocked(opts.cdpUrl, opts.page);
   const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
   const fallbackTargetId = normalizeOptionalString(opts.targetId) ?? "";
@@ -866,9 +875,24 @@ async function closeBlockedNavigationTarget(opts: {
   if (targetIdToBlock) {
     markTargetBlocked(opts.cdpUrl, targetIdToBlock);
   }
+}
+
+// Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.
+// Only callers that own the navigation lifecycle (gotoPageWithNavigationGuard
+// and the navigate-style entry points that wrap it) may invoke this — closing
+// a tab is a destructive action that must not happen on user-owned tabs from
+// read-only operations like snapshot/screenshot/interactions.
+export async function closeBlockedNavigationTarget(opts: {
+  cdpUrl: string;
+  page: Page;
+  targetId?: string;
+}): Promise<void> {
+  await quarantineBlockedTarget(opts);
   await opts.page.close().catch(() => {});
 }
 
+// On policy denial: quarantines and rethrows (never closes).
+// Navigate-style callers catch the rethrow and close via closeBlockedNavigationTarget.
 export async function assertPageNavigationCompletedSafely(
   opts: {
     cdpUrl: string;
@@ -891,7 +915,7 @@ export async function assertPageNavigationCompletedSafely(
     });
   } catch (err) {
     if (isPolicyDenyNavigationError(err)) {
-      await closeBlockedNavigationTarget({
+      await quarantineBlockedTarget({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         targetId: opts.targetId,
@@ -1335,14 +1359,27 @@ export async function createPageViaPlaywright(
         throw err;
       }
     }
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response,
-      ssrfPolicy: opts.ssrfPolicy,
-      browserProxyMode: opts.browserProxyMode,
-      targetId: createdTargetId ?? undefined,
-    });
+    // OpenClaw owns this newly-created tab: if the post-navigation safety
+    // check trips, close the tab we just spawned.
+    try {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response,
+        ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
+        targetId: createdTargetId ?? undefined,
+      });
+    } catch (err) {
+      if (isPolicyDenyNavigationError(err)) {
+        await closeBlockedNavigationTarget({
+          cdpUrl: opts.cdpUrl,
+          page,
+          targetId: createdTargetId ?? undefined,
+        });
+      }
+      throw err;
+    }
   }
 
   // Get the targetId for this page

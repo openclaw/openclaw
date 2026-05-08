@@ -86,6 +86,78 @@ describe("config io write prepare", () => {
     expect(persisted.plugins?.installs).toBeUndefined();
   });
 
+  it("preserves authored agent provider params during narrowed agent-list writes", () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          params: { transport: "sse", openaiWsWarmup: false },
+          models: {
+            "openai/gpt-5.4": {
+              alias: "GPT",
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          },
+        },
+        list: [{ id: "main" }],
+      },
+      gateway: { mode: "local" },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        ...sourceConfig,
+        agents: {
+          ...sourceConfig.agents,
+          defaults: {
+            ...sourceConfig.agents.defaults,
+            maxConcurrent: 4,
+          },
+        },
+      },
+      sourceConfig,
+      nextConfig: {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        gateway: { mode: "local" },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.params).toEqual({
+      transport: "sse",
+      openaiWsWarmup: false,
+    });
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
+      alias: "GPT",
+      params: { transport: "sse", openaiWsWarmup: false },
+    });
+    expect(persisted.agents?.list).toEqual([{ id: "main" }, { id: "ops" }]);
+  });
+
+  it("allows explicit unsets to remove authored agent provider params", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          params: { transport: "sse", openaiWsWarmup: false },
+          models: {
+            "openai/gpt-5.4": {
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          },
+        },
+      },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: { agents: { defaults: { models: { "openai/gpt-5.4": {} } } } },
+      unsetPaths: [
+        ["agents", "defaults", "params"],
+        ["agents", "defaults", "models", "openai/gpt-5.4", "params"],
+      ],
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults).not.toHaveProperty("params");
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).not.toHaveProperty("params");
+  });
+
   it("preserves untouched include-owned subtrees during unrelated writes", () => {
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: {
@@ -373,13 +445,12 @@ describe("config io write prepare", () => {
     ).toBeUndefined();
   });
 
-  it("keeps plugin AJV defaults out of the persisted candidate", () => {
+  it("keeps runtime-only channel defaults out of the persisted candidate", () => {
     const sourceConfig = {
       gateway: { port: 18789 },
       channels: {
-        bluebubbles: {
-          serverUrl: "http://localhost:1234",
-          password: "test-password",
+        imessage: {
+          cliPath: "/usr/local/bin/imsg",
         },
       },
     } satisfies OpenClawConfig;
@@ -387,13 +458,12 @@ describe("config io write prepare", () => {
     const runtimeConfig: OpenClawConfig = {
       gateway: { port: 18789 },
       channels: {
-        bluebubbles: {
-          serverUrl: "http://localhost:1234",
-          password: "test-password",
-          enrichGroupParticipantsFromContacts: true,
+        imessage: {
+          cliPath: "/usr/local/bin/imsg",
         },
       },
     } satisfies OpenClawConfig;
+    (runtimeConfig.channels?.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
 
     const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {
@@ -412,10 +482,10 @@ describe("config io write prepare", () => {
       auth: { mode: "token" },
     });
     const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
-    expect(channels?.bluebubbles).toBeDefined();
-    expect(channels?.bluebubbles).not.toHaveProperty("enrichGroupParticipantsFromContacts");
-    expect(channels?.bluebubbles?.serverUrl).toBe("http://localhost:1234");
-    expect(channels?.bluebubbles?.password).toBe("test-password");
+    expect(channels?.imessage).toMatchObject({
+      cliPath: "/usr/local/bin/imsg",
+    });
+    expect(channels?.imessage).not.toHaveProperty("runtimeOnlyDefault");
   });
 
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {

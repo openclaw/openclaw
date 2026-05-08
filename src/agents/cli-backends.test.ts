@@ -4,6 +4,7 @@ import type { CliBackendConfig } from "../config/types.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
+  CliBackendResolveExecutionArgs,
   CliBundleMcpMode,
 } from "../plugins/types.js";
 import {
@@ -31,6 +32,7 @@ function createBackendEntry(params: {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   prepareExecution?: () => Promise<null>;
+  resolveExecutionArgs?: CliBackendResolveExecutionArgs;
   normalizeConfig?: (
     config: CliBackendConfig,
     context?: CliBackendNormalizeConfigContext,
@@ -47,6 +49,7 @@ function createBackendEntry(params: {
       ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
       ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
+      ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
       liveTest: {
         defaultModelRef:
@@ -64,7 +67,7 @@ function createBackendEntry(params: {
             params.id === "claude-cli"
               ? "@anthropic-ai/claude-code"
               : params.id === "codex-cli"
-                ? "@openai/codex@0.125.0"
+                ? "@openai/codex@0.129.0"
                 : params.id === "google-gemini-cli"
                   ? "@google/gemini-cli"
                   : undefined,
@@ -287,7 +290,7 @@ beforeEach(() => {
           "--sandbox",
           "workspace-write",
           "-c",
-          'service_tier="fast"',
+          'service_tier="priority"',
           "--skip-git-repo-check",
         ],
         resumeArgs: [
@@ -297,7 +300,7 @@ beforeEach(() => {
           "-c",
           'sandbox_mode="workspace-write"',
           "-c",
-          'service_tier="fast"',
+          'service_tier="priority"',
           "--skip-git-repo-check",
         ],
         systemPromptFileConfigArg: "-c",
@@ -385,7 +388,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "--sandbox",
       "workspace-write",
       "-c",
-      'service_tier="fast"',
+      'service_tier="priority"',
       "--skip-git-repo-check",
     ]);
     expect(resolved?.config.resumeArgs).toEqual([
@@ -395,7 +398,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "-c",
       'sandbox_mode="workspace-write"',
       "-c",
-      'service_tier="fast"',
+      'service_tier="priority"',
       "--skip-git-repo-check",
     ]);
   });
@@ -430,6 +433,48 @@ describe("resolveCliBackendConfig reliability merge", () => {
     expect(resolved?.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
     expect(resolved?.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
   });
+
+  it("deep-merges reliability output-limit overrides", () => {
+    runtimeBackendEntries.unshift(
+      createRuntimeBackendEntry({
+        pluginId: "test",
+        id: "test-cli",
+        config: {
+          command: "test-cli",
+          reliability: {
+            outputLimits: {
+              maxTurnRawChars: 8192,
+              maxTurnLines: 20_000,
+            },
+          },
+        },
+      }),
+    );
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "test-cli": {
+              command: "test-cli",
+              reliability: {
+                outputLimits: {
+                  maxTurnRawChars: 16_384,
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("test-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.reliability?.outputLimits).toEqual({
+      maxTurnRawChars: 16_384,
+      maxTurnLines: 20_000,
+    });
+  });
 });
 
 describe("resolveCliBackendLiveTest", () => {
@@ -448,7 +493,7 @@ describe("resolveCliBackendLiveTest", () => {
       defaultModelRef: "codex-cli/gpt-5.5",
       defaultImageProbe: true,
       defaultMcpProbe: true,
-      dockerNpmPackage: "@openai/codex@0.125.0",
+      dockerNpmPackage: "@openai/codex@0.129.0",
       dockerBinaryName: "codex",
     });
   });
@@ -925,6 +970,29 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved?.config.systemPromptFileConfigKey).toBe("model_instructions_file");
     expect(resolved?.config.systemPromptWhen).toBe("first");
     expect(resolved?.config.imagePathScope).toBe("workspace");
+  });
+
+  it("preserves backend-owned per-run arg resolvers", () => {
+    const resolveExecutionArgs: CliBackendResolveExecutionArgs = ({ baseArgs }) => [
+      ...baseArgs,
+      "--effort",
+      "high",
+    ];
+    runtimeBackendEntries = [
+      createRuntimeBackendEntry({
+        pluginId: "anthropic",
+        id: "claude-cli",
+        config: {
+          command: "claude",
+          args: ["-p"],
+        },
+        resolveExecutionArgs,
+      }),
+    ];
+
+    const resolved = resolveCliBackendConfig("claude-cli");
+
+    expect(resolved?.resolveExecutionArgs).toBe(resolveExecutionArgs);
   });
 });
 

@@ -171,6 +171,13 @@ describe("QmdMemoryManager", () => {
     return manager;
   }
 
+  function requireValue<T>(value: T | null | undefined, message: string): T {
+    if (value == null) {
+      throw new Error(message);
+    }
+    return value;
+  }
+
   async function createManager(params?: {
     mode?: "full" | "status" | "cli";
     cfg?: OpenClawConfig;
@@ -185,11 +192,7 @@ describe("QmdMemoryManager", () => {
         mode: params?.mode ?? "status",
       }),
     );
-    expect(manager).toBeTruthy();
-    if (!manager) {
-      throw new Error("manager missing");
-    }
-    return { manager, resolved };
+    return { manager: requireValue(manager, "manager missing"), resolved };
   }
 
   beforeAll(async () => {
@@ -432,6 +435,18 @@ describe("QmdMemoryManager", () => {
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
+    const [, watchOptions] = watchMock.mock.calls[0] as unknown as [
+      string[],
+      { ignored?: (watchPath: string) => boolean },
+    ];
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(
+      true,
+    );
+    expect(watchOptions.ignored?.(path.join(workspaceDir, ".cache", "qmd", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "vendor", "pkg", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "dist", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"))).toBe(false);
 
     watcher.emit("change", path.join(workspaceDir, "notes.md"));
     expect(manager.status().dirty).toBe(true);
@@ -586,6 +601,7 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager({ mode: "full" });
+    expect(manager.status()).toMatchObject({ backend: "qmd", requestedProvider: "qmd" });
     await manager?.close();
   });
 
@@ -638,15 +654,14 @@ describe("QmdMemoryManager", () => {
         mode: "full",
       }),
     );
-    expect(manager).toBeTruthy();
-    await manager?.close();
+    await requireValue(manager, "manager missing").close();
 
     const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
     const removeSessions = commands.find(
       (args) =>
         args[0] === "collection" && args[1] === "remove" && args[2] === sessionCollectionName,
     );
-    expect(removeSessions).toBeDefined();
+    requireValue(removeSessions, "sessions collection remove command missing");
 
     const addSessions = commands.find((args) => {
       if (args[0] !== "collection" || args[1] !== "add") {
@@ -655,8 +670,9 @@ describe("QmdMemoryManager", () => {
       const nameIdx = args.indexOf("--name");
       return nameIdx >= 0 && args[nameIdx + 1] === sessionCollectionName;
     });
-    expect(addSessions).toBeDefined();
-    expect(addSessions?.[2]).toBe(path.join(stateDir, "agents", devAgentId, "qmd", "sessions"));
+    expect(requireValue(addSessions, "sessions collection add command missing")[2]).toBe(
+      path.join(stateDir, "agents", devAgentId, "qmd", "sessions"),
+    );
   });
 
   it("avoids destructive rebind when qmd only reports collection names", async () => {
@@ -742,9 +758,9 @@ describe("QmdMemoryManager", () => {
       const nameIdx = args.indexOf("--name");
       return nameIdx >= 0 && args[nameIdx + 1] === "workspace-main";
     });
-    expect(addCall).toBeDefined();
-    expect(addCall?.[2]).toBe(workspaceDir);
-    expect(addCall).toContain("**/*.md");
+    const workspaceAddCall = requireValue(addCall, "workspace collection add command missing");
+    expect(workspaceAddCall[2]).toBe(workspaceDir);
+    expect(workspaceAddCall).toContain("**/*.md");
   });
 
   it("migrates unscoped legacy collections before adding scoped names", async () => {
@@ -1329,11 +1345,7 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved, mode: "status" });
     await vi.advanceTimersByTimeAsync(0);
-    const manager = trackManager(await createPromise);
-    expect(manager).toBeTruthy();
-    if (!manager) {
-      throw new Error("manager missing");
-    }
+    const manager = requireValue(trackManager(await createPromise), "manager missing");
     const syncPromise = manager.sync({ reason: "manual" });
     const rejected = expect(syncPromise).rejects.toThrow("qmd update timed out after 20ms");
     await vi.advanceTimersByTimeAsync(20);
@@ -2456,8 +2468,8 @@ describe("QmdMemoryManager", () => {
       isMcporterCommand(call[0]),
     );
     expect(mcporterCalls.length).toBeGreaterThan(0);
-    expect(mcporterCalls.some((call: unknown[]) => (call[1] as string[])[0] === "daemon")).toBe(
-      false,
+    expect(mcporterCalls.map((call: unknown[]) => (call[1] as string[])[0])).not.toContain(
+      "daemon",
     );
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("cold-start"));
 
@@ -2958,7 +2970,7 @@ describe("QmdMemoryManager", () => {
     await manager.search("hello again", { sessionKey: "agent:main:slack:dm:u123" });
 
     expect(selectors.length).toBeGreaterThanOrEqual(2);
-    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
+    expect(selectors.filter((selector) => selector !== "qmd.query")).toEqual([]);
     expect(logWarnMock).not.toHaveBeenCalledWith(
       expect.stringContaining("falling back to v1 tool names"),
     );
@@ -3027,7 +3039,7 @@ describe("QmdMemoryManager", () => {
 
     expect(runMcporterSpy).toHaveBeenCalled();
     expect(selectors.length).toBeGreaterThanOrEqual(1);
-    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
+    expect(selectors.filter((selector) => selector !== "qmd.query")).toEqual([]);
     expect(logWarnMock).not.toHaveBeenCalledWith(
       expect.stringContaining("falling back to v1 tool names"),
     );
@@ -3084,10 +3096,10 @@ describe("QmdMemoryManager", () => {
       const mcporterCall = spawnMock.mock.calls.find((call: unknown[]) =>
         (call[1] as string[] | undefined)?.includes("call"),
       );
-      expect(mcporterCall).toBeDefined();
-      const callCommand = mcporterCall?.[0];
+      const searchCall = requireValue(mcporterCall, "mcporter search call missing");
+      const callCommand = searchCall[0];
       expect(typeof callCommand).toBe("string");
-      const options = mcporterCall?.[2] as { shell?: boolean } | undefined;
+      const options = searchCall[2] as { shell?: boolean } | undefined;
       expect(callCommand).not.toBe("mcporter.cmd");
       expect(options?.shell).not.toBe(true);
 
@@ -3188,8 +3200,8 @@ describe("QmdMemoryManager", () => {
     const mcporterCall = spawnMock.mock.calls.find(
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
-    expect(mcporterCall).toBeDefined();
-    const spawnOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    const searchCall = requireValue(mcporterCall, "mcporter search call missing");
+    const spawnOpts = searchCall[2] as { env?: NodeJS.ProcessEnv } | undefined;
     const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
     expect(normalizePath(spawnOpts?.env?.XDG_CONFIG_HOME)).toContain("/agents/main/qmd/xdg-config");
     expect(normalizePath(spawnOpts?.env?.QMD_CONFIG_DIR)).toContain(
@@ -3384,8 +3396,9 @@ describe("QmdMemoryManager", () => {
     });
 
     expect(results).toHaveLength(4);
-    expect(results.some((entry) => entry.source === "memory")).toBe(true);
-    expect(results.some((entry) => entry.source === "sessions")).toBe(true);
+    expect(results.map((entry) => entry.source)).toEqual(
+      expect.arrayContaining(["memory", "sessions"]),
+    );
     await manager.close();
   });
 
@@ -3417,11 +3430,7 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const createPromise = QmdMemoryManager.create({ cfg, agentId, resolved, mode: "status" });
     await vi.advanceTimersByTimeAsync(0);
-    const manager = trackManager(await createPromise);
-    expect(manager).toBeTruthy();
-    if (!manager) {
-      throw new Error("manager missing");
-    }
+    const manager = requireValue(trackManager(await createPromise), "manager missing");
     const syncPromise = manager.sync({ reason: "manual" });
     const resolvedSync = expect(syncPromise).resolves.toBeUndefined();
     await vi.advanceTimersByTimeAsync(20);
@@ -4443,9 +4452,12 @@ describe("QmdMemoryManager", () => {
       collectionRoots: Map<string, { path: string }>;
       resolveReadPath: (relPath: string) => string;
     };
-    const sessionRoot = inner.collectionRoots.get("sessions-main");
-    expect(sessionRoot?.path).toBeTruthy();
-    const exportedSessionPath = path.join(sessionRoot!.path, "session-1.md");
+    const sessionRoot = requireValue(
+      inner.collectionRoots.get("sessions-main"),
+      "sessions collection root missing",
+    );
+    expect(sessionRoot.path).toContain(path.join("qmd", "sessions"));
+    const exportedSessionPath = path.join(sessionRoot.path, "session-1.md");
 
     const results = await manager.search("session canary", {
       sessionKey: "agent:main:slack:dm:u123",
@@ -4760,6 +4772,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: false,
+      semanticAvailable: false,
       loadError: "QMD index has 0 vectors; semantic search is unavailable until embeddings finish",
     });
     await manager.close();
@@ -4793,6 +4806,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: true,
+      semanticAvailable: true,
       loadError: undefined,
     });
     await manager.close();
@@ -4851,6 +4865,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: false,
+      semanticAvailable: false,
       loadError: "Could not determine QMD vector status from `qmd status`",
     });
     await manager.close();
@@ -4877,6 +4892,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: false,
       available: false,
+      semanticAvailable: false,
       loadError: undefined,
     });
     await manager.close();
@@ -4964,7 +4980,6 @@ describe("QmdMemoryManager", () => {
         logWarnMock.mockClear();
         await testCase.setup?.();
         const { manager } = await createManager({ mode: "full" });
-        expect(manager, testCase.name).toBeTruthy();
         try {
           await testCase.assert();
         } finally {

@@ -522,7 +522,8 @@ public actor GatewayChannelActor {
             (includeDeviceIdentity && explicitPassword == nil && explicitBootstrapToken == nil
                 ? storedToken
                 : nil)
-        let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil
+        let authBootstrapToken =
+            authToken == nil && explicitPassword == nil ? explicitBootstrapToken : nil
         let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
         let authSource: GatewayAuthSource = if authDeviceToken != nil || (explicitToken == nil && authToken != nil) {
             .deviceToken
@@ -912,9 +913,6 @@ public actor GatewayChannelActor {
     }
 
     private func isTrustedDeviceRetryEndpoint() -> Bool {
-        // This client currently treats loopback as the only trusted retry target.
-        // Unlike the Node gateway client, it does not yet expose a pinned TLS-fingerprint
-        // trust path for remote retry, so remote fallback remains disabled by default.
         guard let host = self.url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               !host.isEmpty
         else {
@@ -922,6 +920,11 @@ public actor GatewayChannelActor {
         }
         if host == "localhost" || host == "::1" || host == "127.0.0.1" || host.hasPrefix("127.") {
             return true
+        }
+        if self.url.scheme?.lowercased() == "wss",
+           let trust = self.session as? GatewayDeviceTokenRetryTrustProviding
+        {
+            return trust.allowsDeviceTokenRetryAuth
         }
         return false
     }
@@ -1010,10 +1013,13 @@ public actor GatewayChannelActor {
 
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
-        if error is GatewayConnectAuthError || error is GatewayResponseError || error is GatewayDecodingError {
+        if error is GatewayConnectAuthError || error is GatewayResponseError || error is GatewayDecodingError || error is GatewayTLSValidationError {
             return error
         }
         if let urlError = error as? URLError {
+            if let failure = (self.session as? GatewayTLSFailureProviding)?.consumeLastTLSFailure() {
+                return GatewayTLSValidationError(failure: failure, context: context)
+            }
             let desc = urlError.localizedDescription.isEmpty ? "cancelled" : urlError.localizedDescription
             return NSError(
                 domain: URLError.errorDomain,

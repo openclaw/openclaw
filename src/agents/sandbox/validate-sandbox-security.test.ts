@@ -93,19 +93,19 @@ describe("validateBindMounts", () => {
 
   it("allows legitimate project directory mounts", () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-safe-"));
-    expect(() =>
+    expect(
       validateBindMounts([
         `${join(projectRoot, "source")}:/source:rw`,
         `${join(projectRoot, "projects")}:/projects:ro`,
         `${join(projectRoot, "data")}:/data`,
         `${join(projectRoot, "config")}:/config:ro`,
       ]),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("allows undefined or empty binds", () => {
-    expect(() => validateBindMounts(undefined)).not.toThrow();
-    expect(() => validateBindMounts([])).not.toThrow();
+    expect(validateBindMounts(undefined)).toBeUndefined();
+    expect(validateBindMounts([])).toBeUndefined();
   });
 
   it("blocks dangerous bind source paths", () => {
@@ -162,7 +162,7 @@ describe("validateBindMounts", () => {
   });
 
   it("allows parent mounts that are not blocked", () => {
-    expect(() => validateBindMounts(["/var:/var"])).not.toThrow();
+    expect(validateBindMounts(["/var:/var"])).toBeUndefined();
   });
 
   it("blocks sensitive home credential binds", () => {
@@ -172,6 +172,25 @@ describe("validateBindMounts", () => {
       /blocked path/,
     );
     expect(() => validateBindMounts(["/home/tester/.netrc:/mnt/netrc:ro"])).toThrow(/blocked path/);
+  });
+
+  it("allows drive-absolute Windows bind sources", () => {
+    expect(validateBindMounts(["D:/data/openclaw/src:/src:ro"])).toBeUndefined();
+    expect(validateBindMounts(["D:\\data\\openclaw\\output:/output:rw"])).toBeUndefined();
+  });
+
+  it("compares Windows allowed roots case-insensitively", () => {
+    expect(() =>
+      validateBindMounts(["d:/DATA/OpenClaw/src:/src:ro"], {
+        allowedSourceRoots: ["D:/data/openclaw"],
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      validateBindMounts(["D:/other/project:/src:ro"], {
+        allowedSourceRoots: ["d:/data/openclaw"],
+      }),
+    ).toThrow(/outside allowed roots/);
   });
 
   it("blocks credential binds through canonical home aliases", () => {
@@ -193,14 +212,7 @@ describe("validateBindMounts", () => {
 
   it("blocks symlink escapes into blocked directories", () => {
     if (process.platform === "win32") {
-      // Symlinks to non-existent targets like /etc require
-      // SeCreateSymbolicLinkPrivilege on Windows.  The Windows branch of this
-      // test does not need a real symlink — it only asserts that Windows source
-      // paths are rejected as non-POSIX.
-      const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
-      const fakePath = join(dir, "etc-link", "passwd");
-      const run = () => validateBindMounts([`${fakePath}:/mnt/passwd:ro`]);
-      expect(run).toThrow(/non-absolute source path/);
+      // Symlink setup for blocked POSIX targets like /etc is POSIX-only.
       return;
     }
 
@@ -213,7 +225,7 @@ describe("validateBindMounts", () => {
 
   it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", () => {
     if (process.platform === "win32") {
-      // Windows source paths (e.g. C:\\...) are intentionally rejected as non-POSIX.
+      // Windows symlink semantics differ; POSIX symlink escape coverage runs on POSIX hosts.
       return;
     }
     const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
@@ -233,7 +245,7 @@ describe("validateBindMounts", () => {
 
   it("blocks symlink-parent escapes into blocked paths when leaf does not exist", () => {
     if (process.platform === "win32") {
-      // Windows source paths (e.g. C:\\...) are intentionally rejected as non-POSIX.
+      // Symlink setup for blocked POSIX targets like /var/run is POSIX-only.
       return;
     }
     const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
@@ -309,10 +321,10 @@ function normalizePathForSnapshot(input: string): string {
 
 describe("validateNetworkMode", () => {
   it("allows bridge/none/custom/undefined", () => {
-    expect(() => validateNetworkMode("bridge")).not.toThrow();
-    expect(() => validateNetworkMode("none")).not.toThrow();
-    expect(() => validateNetworkMode("my-custom-network")).not.toThrow();
-    expect(() => validateNetworkMode(undefined)).not.toThrow();
+    expect(validateNetworkMode("bridge")).toBeUndefined();
+    expect(validateNetworkMode("none")).toBeUndefined();
+    expect(validateNetworkMode("my-custom-network")).toBeUndefined();
+    expect(validateNetworkMode(undefined)).toBeUndefined();
   });
 
   it("blocks host mode (case-insensitive)", () => {
@@ -352,15 +364,15 @@ describe("validateNetworkMode", () => {
 
 describe("validateSeccompProfile", () => {
   it("allows custom profile paths/undefined", () => {
-    expect(() => validateSeccompProfile("/tmp/seccomp.json")).not.toThrow();
-    expect(() => validateSeccompProfile(undefined)).not.toThrow();
+    expect(validateSeccompProfile("/tmp/seccomp.json")).toBeUndefined();
+    expect(validateSeccompProfile(undefined)).toBeUndefined();
   });
 });
 
 describe("validateApparmorProfile", () => {
   it("allows named profile/undefined", () => {
-    expect(() => validateApparmorProfile("openclaw-sandbox")).not.toThrow();
-    expect(() => validateApparmorProfile(undefined)).not.toThrow();
+    expect(validateApparmorProfile("openclaw-sandbox")).toBeUndefined();
+    expect(validateApparmorProfile(undefined)).toBeUndefined();
   });
 });
 

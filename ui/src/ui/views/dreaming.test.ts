@@ -384,6 +384,29 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
+  it("renders dream diary markdown through the sanitized markdown pipeline", () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("dreams");
+    const container = renderInto(
+      buildProps({
+        dreamDiaryContent: [
+          "# Dream Diary",
+          "",
+          "---",
+          "",
+          "*April 8, 2026*",
+          "",
+          "**Bold** and *italic*",
+        ].join("\n"),
+      }),
+    );
+
+    const body = container.querySelector(".dreams-diary__para");
+    expect(body?.querySelector("strong")?.textContent).toBe("Bold");
+    expect(body?.querySelector("em")?.textContent).toBe("italic");
+    setDreamSubTab("scene");
+  });
+
   it("flattens structured backfill diary entries into plain prose", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("dreams");
@@ -464,7 +487,9 @@ describe("dreaming view", () => {
     const labels = [...container.querySelectorAll(".dreams-diary__day-chip")].map((node) =>
       node.textContent?.replace(/\s+/g, "").trim(),
     );
-    expect(labels.filter(Boolean).some((label) => /^\d+\/\d+$/.test(label ?? ""))).toBe(true);
+    expect(labels.filter((label): label is string => Boolean(label))).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^\d+\/\d+$/)]),
+    );
     setDreamSubTab("scene");
   });
 

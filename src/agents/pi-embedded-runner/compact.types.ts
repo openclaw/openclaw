@@ -1,3 +1,4 @@
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
@@ -43,6 +44,8 @@ export type CompactEmbeddedPiSessionParams = {
   skillsSnapshot?: SkillSnapshot;
   provider?: string;
   model?: string;
+  /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
+  modelFallbacksOverride?: string[];
   /** Optional caller-resolved context engine for harness-owned compaction. */
   contextEngine?: ContextEngine;
   /** Optional caller-resolved token budget for harness-owned compaction. */
@@ -66,8 +69,15 @@ export type CompactEmbeddedPiSessionParams = {
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  onCompactionHookMessages?: (payload: {
+    phase: "before" | "after";
+    messages: string[];
+    sessionId: string;
+    sessionKey: string;
+  }) => void | Promise<void>;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
 };

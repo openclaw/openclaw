@@ -348,7 +348,7 @@ describe("processEvent (functional)", () => {
       from: "+15553333333",
     });
 
-    expect(() => processEvent(ctx, event)).not.toThrow();
+    processEvent(ctx, event);
     expect(ctx.activeCalls.size).toBe(0);
   });
 
@@ -424,6 +424,70 @@ describe("processEvent (functional)", () => {
     expect(ctx.activeCalls.size).toBe(1);
     const call = requireFirstActiveCall(ctx);
     expect(call.direction).toBe("inbound");
+  });
+
+  it("assigns per-call session keys to inbound calls when configured", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        sessionScope: "per-call",
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-inbound-session-scope",
+      type: "call.initiated",
+      callId: "CA-inbound-session-scope",
+      providerCallId: "CA-inbound-session-scope",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+15550000000",
+    };
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(call.sessionKey).toBe(`voice:call:${call.callId}`);
+  });
+
+  it("applies per-number inbound greeting and stores the matched route key", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        inboundGreeting: "Hello from global.",
+        numbers: {
+          "+15550002222": {
+            inboundGreeting: "Silver Fox Cards, how can I help?",
+          },
+        },
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-inbound-number-route",
+      type: "call.initiated",
+      callId: "CA-inbound-number-route",
+      providerCallId: "CA-inbound-number-route",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+1 (555) 000-2222",
+    };
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(call.metadata).toEqual(
+      expect.objectContaining({
+        initialMessage: "Silver Fox Cards, how can I help?",
+        numberRouteKey: "+15550002222",
+      }),
+    );
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", () => {

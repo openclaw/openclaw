@@ -21,6 +21,7 @@ import {
   formatBackfillDiaryDate,
   generateAndAppendDreamNarrative,
   removeBackfillDiaryEntries,
+  runDetachedDreamNarrative,
   type NarrativePhaseData,
   writeBackfillDiaryEntries,
 } from "./dreaming-narrative.js";
@@ -28,6 +29,7 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -97,6 +99,16 @@ describe("extractNarrativeText", () => {
       },
     ];
     expect(extractNarrativeText(messages)).toBe("First paragraph.\nSecond paragraph.");
+  });
+
+  it("extracts from OpenAI output_text assistant parts", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "The light phase found a diary thread." }],
+      },
+    ];
+    expect(extractNarrativeText(messages)).toBe("The light phase found a diary thread.");
   });
 
   it("returns null when no assistant message exists", () => {
@@ -393,7 +405,9 @@ describe("appendNarrativeEntry", () => {
     });
 
     const stat = await fs.stat(dreamsPath);
-    expect(stat.mode & 0o777).toBe(0o600);
+    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
+      expect(stat.mode & 0o777).toBe(0o600);
+    }
   });
 
   it("dedupes only exact diary duplicates while keeping distinct timestamps", async () => {
@@ -965,7 +979,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     const sessionFiles = await fs.readdir(sessionsDir);
-    expect(sessionFiles.some((name) => name.startsWith("orphan.jsonl.deleted."))).toBe(true);
+    expect(sessionFiles).toContainEqual(expect.stringMatching(/^orphan\.jsonl\.deleted\./));
     expect(sessionFiles).toContain("still-live.jsonl");
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("dreaming cleanup scrubbed"));
   });
@@ -1001,5 +1015,119 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(secondSessionKey).toContain("dreaming-narrative-light-");
     expect(subagent.deleteSession.mock.calls[0]?.[0]?.sessionKey).toBe(firstSessionKey);
     expect(subagent.deleteSession.mock.calls[1]?.[0]?.sessionKey).toBe(secondSessionKey);
+  });
+});
+
+describe("runDetachedDreamNarrative", () => {
+  type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
+  function deferred<T>(): Deferred<T> {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  function createBlockingSubagent() {
+    const runDeferreds: Array<Deferred<{ runId: string }>> = [];
+    const subagent = {
+      run: vi.fn(() => {
+        const d = deferred<{ runId: string }>();
+        runDeferreds.push(d);
+        return d.promise;
+      }),
+      // Resolve the rest of the pipeline as a no-op so a single resolve()
+      // on a deferred unblocks the slot for the queued task.
+      waitForRun: vi.fn().mockResolvedValue({ status: "timeout" }),
+      getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+    };
+    return { subagent, runDeferreds };
+  }
+
+  function createMockLogger() {
+    return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  }
+
+  async function drainMicrotasks(rounds = 30): Promise<void> {
+    for (let i = 0; i < rounds; i += 1) {
+      await Promise.resolve();
+    }
+  }
+
+  it("caps the number of in-flight detached narratives at 3", async () => {
+    const { subagent, runDeferreds } = createBlockingSubagent();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-detach-");
+    const logger = createMockLogger();
+
+    for (let i = 0; i < 5; i += 1) {
+      runDetachedDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: { phase: "light", snippets: [`fragment-${i}`] },
+        nowMs: Date.parse("2026-04-28T03:00:00Z"),
+        logger,
+      });
+    }
+
+    await drainMicrotasks();
+
+    // Only the first 3 should have reached subagent.run; the rest are queued.
+    expect(subagent.run).toHaveBeenCalledTimes(3);
+
+    // Drain the rest so module-level concurrency state does not leak into
+    // subsequent tests. The mock subagent creates a new deferred every time
+    // queued tasks acquire a slot, so loop until no new deferreds appear.
+    for (let iter = 0; iter < 10; iter += 1) {
+      const before = runDeferreds.length;
+      for (const d of runDeferreds) {
+        d.resolve({ runId: "drain" });
+      }
+      if (before >= 5) {
+        break;
+      }
+      await vi.waitFor(() => {
+        expect(runDeferreds.length).toBeGreaterThan(before);
+      });
+    }
+    for (const d of runDeferreds) {
+      d.resolve({ runId: "drain" });
+    }
+    await vi.waitFor(() => {
+      expect(subagent.deleteSession).toHaveBeenCalledTimes(5);
+    });
+    expect(subagent.run).toHaveBeenCalledTimes(5);
+    expect(subagent.waitForRun).toHaveBeenCalledTimes(5);
+  });
+
+  it("swallows underlying narrative errors instead of leaving an unhandled rejection", async () => {
+    const error = new Error("boom");
+    const subagent = {
+      run: vi.fn().mockRejectedValue(error),
+      waitForRun: vi.fn().mockResolvedValue({ status: "ok" }),
+      getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const logger = createMockLogger();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-detach-");
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+
+    try {
+      runDetachedDreamNarrative({
+        subagent,
+        workspaceDir,
+        data: { phase: "light", snippets: ["fragment"] },
+        nowMs: Date.parse("2026-04-28T03:00:00Z"),
+        logger,
+      });
+
+      await drainMicrotasks();
+
+      expect(subagent.run).toHaveBeenCalledOnce();
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });

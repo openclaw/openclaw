@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatNowMock = vi.fn();
+const requestHeartbeatMock = vi.fn();
 const readAcpSessionEntryMock = vi.fn();
 const resolveSessionFilePathMock = vi.fn();
 const resolveSessionFilePathOptionsMock = vi.fn();
@@ -17,7 +17,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
       "../infra/heartbeat-wake.js",
     ),
     () => ({
-      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+      requestHeartbeat: (...args: unknown[]) => requestHeartbeatMock(...args),
     }),
   );
 });
@@ -63,7 +63,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
-    requestHeartbeatNowMock.mockClear();
+    requestHeartbeatMock.mockClear();
     readAcpSessionEntryMock.mockReset();
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
@@ -113,9 +113,15 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: hello from child"))).toBe(true);
-    expect(texts.some((text) => text.includes("codex run completed in 2s"))).toBe(true);
+    expect(texts).toEqual(
+      expect.arrayContaining([expect.stringContaining("Started codex session")]),
+    );
+    expect(texts).toEqual(
+      expect.arrayContaining([expect.stringContaining("codex: hello from child")]),
+    );
+    expect(texts).toEqual(
+      expect.arrayContaining([expect.stringContaining("codex run completed in 2s")]),
+    );
     expect(
       enqueueSystemEventMock.mock.calls.every(
         (call) => (call[1] as { trusted?: boolean } | undefined)?.trusted === false,
@@ -129,7 +135,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         trusted: false,
       }),
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "acp:spawn:stream",
         sessionKey: "agent:main:main",
@@ -150,8 +156,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     vi.advanceTimersByTime(1_500);
-    expect(collectedTexts().some((text) => text.includes("has produced no output for 1s"))).toBe(
-      true,
+    expect(collectedTexts()).toEqual(
+      expect.arrayContaining([expect.stringContaining("has produced no output for 1s")]),
     );
 
     emitAgentEvent({
@@ -164,8 +170,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(5);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("resumed output."))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: resumed output"))).toBe(true);
+    expect(texts).toEqual(expect.arrayContaining([expect.stringContaining("resumed output.")]));
+    expect(texts).toEqual(
+      expect.arrayContaining([expect.stringContaining("codex: resumed output")]),
+    );
 
     emitAgentEvent({
       runId: "run-2",
@@ -175,7 +183,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
         error: "boom",
       },
     });
-    expect(collectedTexts().some((text) => text.includes("run failed: boom"))).toBe(true);
+    expect(collectedTexts()).toEqual(
+      expect.arrayContaining([expect.stringContaining("run failed: boom")]),
+    );
     relay.dispose();
   });
 
@@ -191,8 +201,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     vi.advanceTimersByTime(1_001);
-    expect(collectedTexts().some((text) => text.includes("stream relay timed out after 1s"))).toBe(
-      true,
+    expect(collectedTexts()).toEqual(
+      expect.arrayContaining([expect.stringContaining("stream relay timed out after 1s")]),
     );
 
     const before = enqueueSystemEventMock.mock.calls.length;
@@ -218,11 +228,15 @@ describe("startAcpSpawnParentStreamRelay", () => {
       emitStartNotice: false,
     });
 
-    expect(collectedTexts().some((text) => text.includes("Started codex session"))).toBe(false);
+    expect(collectedTexts()).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("Started codex session")]),
+    );
 
     relay.notifyStarted();
 
-    expect(collectedTexts().some((text) => text.includes("Started codex session"))).toBe(true);
+    expect(collectedTexts()).toEqual(
+      expect.arrayContaining([expect.stringContaining("Started codex session")]),
+    );
     relay.dispose();
   });
 
@@ -255,7 +269,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     expect(collectedTexts()).toEqual([]);
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
     relay.dispose();
   });
 
@@ -286,7 +300,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(15);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    expect(texts).toEqual(expect.arrayContaining([expect.stringContaining("codex: hello world")]));
     relay.dispose();
   });
 
@@ -311,8 +325,12 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(15);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("checking thread context"))).toBe(false);
-    expect(texts.some((text) => text.includes("post a tight progress reply here"))).toBe(false);
+    expect(texts).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("checking thread context")]),
+    );
+    expect(texts).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("post a tight progress reply here")]),
+    );
     relay.dispose();
   });
 
@@ -345,8 +363,12 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(15);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("checking thread context"))).toBe(false);
-    expect(texts.some((text) => text.includes("codex: final answer ready"))).toBe(true);
+    expect(texts).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("checking thread context")]),
+    );
+    expect(texts).toEqual(
+      expect.arrayContaining([expect.stringContaining("codex: final answer ready")]),
+    );
     relay.dispose();
   });
 

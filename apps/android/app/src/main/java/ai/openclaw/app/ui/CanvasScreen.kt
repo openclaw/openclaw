@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.MainViewModel
 import android.annotation.SuppressLint
 import android.net.Uri
 import android.util.Log
@@ -23,13 +24,16 @@ import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import ai.openclaw.app.MainViewModel
 import java.util.concurrent.atomic.AtomicReference
 
 @SuppressLint("SetJavaScriptEnabled")
 @Suppress("DEPRECATION")
 @Composable
-fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
+fun CanvasScreen(
+  viewModel: MainViewModel,
+  visible: Boolean,
+  modifier: Modifier = Modifier,
+) {
   val context = LocalContext.current
   val isDebuggable = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
   val webViewRef = remember { arrayOfNulls<WebView>(1) }
@@ -110,7 +114,10 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
             )
           }
 
-          override fun onPageFinished(view: WebView, url: String?) {
+          override fun onPageFinished(
+            view: WebView,
+            url: String?,
+          ) {
             currentPageUrlRef.set(url)
             if (isDebuggable) {
               Log.d("OpenClawWebView", "onPageFinished: $url")

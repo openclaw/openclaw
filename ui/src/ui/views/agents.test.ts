@@ -1,5 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderAgents, type AgentsProps } from "./agents.ts";
 
@@ -123,6 +125,68 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
 }
 
 describe("renderAgents", () => {
+  it("selects the configured primary model on initial render", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+        list: [{ id: "alpha" }, { id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const defaultSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(select?.value).toBe("openai/gpt-5.4");
+      return select;
+    });
+    expect(defaultSelect?.selectedOptions[0]?.value).toBe("openai/gpt-5.4");
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const inheritedSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(select?.value).toBe("");
+      return select;
+    });
+    expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
+      "Inherit default (openai/gpt-5.4)",
+    );
+  });
+
   it("remounts overview model controls when switching selected agents", async () => {
     const container = document.createElement("div");
     const configForm = {
@@ -243,6 +307,40 @@ describe("renderAgents", () => {
     );
 
     expect(skillsTab?.textContent?.trim()).toContain("1");
+  });
+
+  it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    await i18n.setLocale("zh-CN");
+    const container = document.createElement("div");
+
+    try {
+      render(
+        renderAgents(
+          createProps({
+            activePanel: "channels",
+            channels: {
+              snapshot: null,
+              loading: false,
+              error: null,
+              lastSuccess: null,
+            },
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
+
+      const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
+        (button) => button.textContent?.trim(),
+      );
+
+      expect(tabLabels).toContain("Cron Jobs");
+      expect(container.textContent).toContain("上次刷新：从未");
+    } finally {
+      await i18n.setLocale("en");
+      vi.unstubAllGlobals();
+    }
   });
 });
 

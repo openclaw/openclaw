@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -35,6 +38,9 @@ const mocks = vi.hoisted(() => ({
   resolveIsNixMode: vi.fn(() => false),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
+  needsNodeRuntimeMigration: vi.fn(() => false),
+  renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
+  resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
   isSystemdUnitActive: vi.fn().mockResolvedValue(false),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   note: vi.fn(),
@@ -59,13 +65,13 @@ vi.mock("../daemon/inspect.js", () => ({
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
-  renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
-  resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
+  renderSystemNodeWarning: mocks.renderSystemNodeWarning,
+  resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
 }));
 
 vi.mock("../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
-  needsNodeRuntimeMigration: vi.fn(() => false),
+  needsNodeRuntimeMigration: mocks.needsNodeRuntimeMigration,
   readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   SERVICE_AUDIT_CODES: {
     gatewayCommandMissing: testServiceAuditCodes.gatewayCommandMissing,
@@ -243,6 +249,9 @@ describe("maybeRepairGatewayServiceConfig", () => {
     vi.clearAllMocks();
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.needsNodeRuntimeMigration.mockReturnValue(false);
+    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
+    mocks.resolveSystemNodeInfo.mockResolvedValue(null);
     mocks.isSystemdUnitActive.mockResolvedValue(false);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
@@ -298,6 +307,50 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
+    const nvmNode = "/home/orin/.nvm/versions/node/v22.22.2/bin/node";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [nvmNode, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+      environment: {},
+    });
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
+      warn?.(
+        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.16+. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
+        "Gateway runtime",
+      );
+      return {
+        programArguments: [nvmNode, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+        workingDirectory: "/tmp",
+        environment: {},
+      };
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [{ code: "runtime", message: "runtime migration", level: "recommended" }],
+    });
+    mocks.needsNodeRuntimeMigration.mockReturnValue(true);
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/usr/bin/node",
+      version: "20.20.2",
+      supported: false,
+    });
+    mocks.renderSystemNodeWarning.mockReturnValue("duplicate doctor runtime warning");
+
+    await runRepair({ gateway: {} });
+
+    const runtimeNotes = mocks.note.mock.calls.filter(([, title]) => title === "Gateway runtime");
+    const runtimeMessages = runtimeNotes.map(([message]) => message);
+    expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
+    expect(runtimeMessages).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("not found")]),
+    );
+    expect(runtimeMessages).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Using /home/orin/.nvm/versions/node/v22.22.2/bin/node"),
+      ]),
+    );
   });
 
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
@@ -661,7 +714,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.stage).not.toHaveBeenCalled();
   });
 
-  it("repairs entrypoint mismatch in non-interactive fix mode", async () => {
+  it("skips entrypoint rewrite in non-interactive fix mode", async () => {
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
       installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
@@ -677,8 +730,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw gateway install --force"),
+      "Gateway service config",
+    );
     expect(mocks.stage).not.toHaveBeenCalled();
-    expect(mocks.install).toHaveBeenCalledTimes(1);
+    expect(mocks.install).not.toHaveBeenCalled();
   });
 
   it("stages service config repairs during non-interactive update repairs", async () => {
@@ -899,6 +956,38 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
       expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).not.toHaveBeenCalled();
+    });
+  });
+
+  it("warns when the gateway service entrypoint resolves to a source checkout", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-service-layout-"));
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const entrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(entrypoint, "export {};\n", "utf8");
+        mocks.readCommand.mockResolvedValue(createGatewayCommand(entrypoint));
+        mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+        mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayCommand(entrypoint));
+
+        await runRepair({ gateway: {} });
+
+        expect(mocks.note).toHaveBeenCalledWith(
+          expect.stringContaining("resolves to a source checkout"),
+          "Gateway service config",
+        );
+        expect(mocks.install).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
     });
   });
 });

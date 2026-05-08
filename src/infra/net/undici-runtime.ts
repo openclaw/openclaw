@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
 
 export const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
@@ -8,6 +9,11 @@ export type UndiciRuntimeDeps = {
   FormData?: typeof import("undici").FormData;
   ProxyAgent: typeof import("undici").ProxyAgent;
   fetch: typeof import("undici").fetch;
+};
+
+export type UndiciGlobalDispatcherDeps = Pick<UndiciRuntimeDeps, "Agent" | "EnvHttpProxyAgent"> & {
+  getGlobalDispatcher: typeof import("undici").getGlobalDispatcher;
+  setGlobalDispatcher: typeof import("undici").setGlobalDispatcher;
 };
 
 type UndiciAgentOptions = ConstructorParameters<UndiciRuntimeDeps["Agent"]>[0];
@@ -27,6 +33,17 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function applyMissingConnectOptions(
+  connect: Record<string, unknown>,
+  defaults: Record<string, unknown>,
+): void {
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!(key in connect)) {
+      connect[key] = value;
+    }
+  }
+}
+
 function isUndiciRuntimeDeps(value: unknown): value is UndiciRuntimeDeps {
   return (
     typeof value === "object" &&
@@ -35,6 +52,17 @@ function isUndiciRuntimeDeps(value: unknown): value is UndiciRuntimeDeps {
     typeof (value as UndiciRuntimeDeps).EnvHttpProxyAgent === "function" &&
     typeof (value as UndiciRuntimeDeps).ProxyAgent === "function" &&
     typeof (value as UndiciRuntimeDeps).fetch === "function"
+  );
+}
+
+function isUndiciGlobalDispatcherDeps(value: unknown): value is UndiciGlobalDispatcherDeps {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as UndiciGlobalDispatcherDeps).Agent === "function" &&
+    typeof (value as UndiciGlobalDispatcherDeps).EnvHttpProxyAgent === "function" &&
+    typeof (value as UndiciGlobalDispatcherDeps).getGlobalDispatcher === "function" &&
+    typeof (value as UndiciGlobalDispatcherDeps).setGlobalDispatcher === "function"
   );
 }
 
@@ -55,9 +83,26 @@ export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
   };
 }
 
+export function loadUndiciGlobalDispatcherDeps(): UndiciGlobalDispatcherDeps {
+  const override = (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY];
+  if (isUndiciGlobalDispatcherDeps(override)) {
+    return override;
+  }
+
+  const require = createRequire(import.meta.url);
+  const undici = require("undici") as typeof import("undici");
+  return {
+    Agent: undici.Agent,
+    EnvHttpProxyAgent: undici.EnvHttpProxyAgent,
+    getGlobalDispatcher: undici.getGlobalDispatcher,
+    setGlobalDispatcher: undici.setGlobalDispatcher,
+  };
+}
+
 function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
   options?: T,
   timeoutMs?: number,
+  applyTo?: { connect?: boolean; proxyTls?: boolean },
 ): (T extends object ? T : Record<never, never>) & { allowH2: false } {
   const base = {} as (T extends object ? T : Record<never, never>) & { allowH2: false };
   if (options) {
@@ -65,14 +110,32 @@ function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
   }
   // Enforce HTTP/1.1-only — must come after options to prevent accidental override
   Object.assign(base, HTTP1_ONLY_DISPATCHER_OPTIONS);
+  const baseRecord = base as Record<string, unknown>;
+  const targets = applyTo ?? { connect: true };
+  const autoSelectConnect = resolveUndiciAutoSelectFamilyConnectOptions();
+  if (autoSelectConnect && targets.connect && typeof baseRecord.connect !== "function") {
+    const connect = isObjectRecord(baseRecord.connect) ? baseRecord.connect : {};
+    applyMissingConnectOptions(connect, autoSelectConnect);
+    baseRecord.connect = connect;
+  }
+  if (autoSelectConnect && targets.proxyTls) {
+    const proxyTls = isObjectRecord(baseRecord.proxyTls) ? baseRecord.proxyTls : {};
+    applyMissingConnectOptions(proxyTls, autoSelectConnect);
+    baseRecord.proxyTls = proxyTls;
+  }
   if (timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0) {
     const normalizedTimeoutMs = Math.floor(timeoutMs);
-    const baseRecord = base as Record<string, unknown>;
     baseRecord.bodyTimeout = normalizedTimeoutMs;
     baseRecord.headersTimeout = normalizedTimeoutMs;
-    if (typeof baseRecord.connect !== "function") {
+    if (targets.connect && typeof baseRecord.connect !== "function") {
       baseRecord.connect = {
         ...(isObjectRecord(baseRecord.connect) ? baseRecord.connect : {}),
+        timeout: normalizedTimeoutMs,
+      };
+    }
+    if (targets.proxyTls) {
+      baseRecord.proxyTls = {
+        ...(isObjectRecord(baseRecord.proxyTls) ? baseRecord.proxyTls : {}),
         timeout: normalizedTimeoutMs,
       };
     }
@@ -93,7 +156,12 @@ export function createHttp1EnvHttpProxyAgent(
   timeoutMs?: number,
 ): import("undici").EnvHttpProxyAgent {
   const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
-  return new EnvHttpProxyAgent(withHttp1OnlyDispatcherOptions(options, timeoutMs));
+  return new EnvHttpProxyAgent(
+    withHttp1OnlyDispatcherOptions(options, timeoutMs, {
+      connect: true,
+      proxyTls: true,
+    }),
+  );
 }
 
 export function createHttp1ProxyAgent(
@@ -106,6 +174,8 @@ export function createHttp1ProxyAgent(
       ? { uri: options.toString() }
       : { ...options };
   return new ProxyAgent(
-    withHttp1OnlyDispatcherOptions(normalized as object, timeoutMs) as UndiciProxyAgentOptions,
+    withHttp1OnlyDispatcherOptions(normalized as object, timeoutMs, {
+      proxyTls: true,
+    }) as UndiciProxyAgentOptions,
   );
 }

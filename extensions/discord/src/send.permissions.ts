@@ -1,7 +1,13 @@
-import type { RequestClient } from "@buape/carbon";
 import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
-import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import { resolveDiscordRest } from "./client.js";
+import {
+  getChannel,
+  getCurrentUser,
+  getGuild,
+  getGuildMember,
+  type RequestClient,
+} from "./internal/discord.js";
 import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
@@ -47,11 +53,76 @@ export function isThreadChannelType(channelType?: number) {
 }
 
 async function fetchBotUserId(rest: RequestClient) {
-  const me = (await rest.get(Routes.user("@me"))) as { id?: string };
+  const me = await getCurrentUser(rest);
   if (!me?.id) {
     throw new Error("Failed to resolve bot user id");
   }
   return me.id;
+}
+
+function resolveMemberGuildPermissionBits(params: {
+  guild: Pick<APIGuild, "id" | "roles">;
+  member: Pick<APIGuildMember, "roles">;
+}) {
+  const rolesById = new Map<string, APIRole>(
+    (params.guild.roles ?? []).map((role) => [role.id, role]),
+  );
+  const everyoneRole = rolesById.get(params.guild.id);
+  let permissions = 0n;
+  if (everyoneRole?.permissions) {
+    permissions = addPermissionBits(permissions, everyoneRole.permissions);
+  }
+  for (const roleId of params.member.roles ?? []) {
+    const role = rolesById.get(roleId);
+    if (role?.permissions) {
+      permissions = addPermissionBits(permissions, role.permissions);
+    }
+  }
+  return permissions;
+}
+
+function resolveMemberChannelPermissionBits(params: {
+  guildId: string;
+  userId: string;
+  guild: Pick<APIGuild, "id" | "roles">;
+  member: Pick<APIGuildMember, "roles">;
+  channel: APIChannel;
+}) {
+  let permissions = resolveMemberGuildPermissionBits({
+    guild: params.guild,
+    member: params.member,
+  });
+
+  if (hasAdministrator(permissions)) {
+    return ALL_PERMISSIONS;
+  }
+
+  const overwrites =
+    "permission_overwrites" in params.channel ? (params.channel.permission_overwrites ?? []) : [];
+  for (const overwrite of overwrites) {
+    if (overwrite.id === params.guildId) {
+      permissions = removePermissionBits(permissions, overwrite.deny ?? "0");
+      permissions = addPermissionBits(permissions, overwrite.allow ?? "0");
+    }
+  }
+  let roleDeny = 0n;
+  let roleAllow = 0n;
+  for (const overwrite of overwrites) {
+    if (params.member.roles?.includes(overwrite.id)) {
+      roleDeny = addPermissionBits(roleDeny, overwrite.deny ?? "0");
+      roleAllow = addPermissionBits(roleAllow, overwrite.allow ?? "0");
+    }
+  }
+  permissions = permissions & ~roleDeny;
+  permissions = permissions | roleAllow;
+  for (const overwrite of overwrites) {
+    if (overwrite.id === params.userId) {
+      permissions = removePermissionBits(permissions, overwrite.deny ?? "0");
+      permissions = addPermissionBits(permissions, overwrite.allow ?? "0");
+    }
+  }
+
+  return permissions;
 }
 
 /**
@@ -65,25 +136,43 @@ export async function fetchMemberGuildPermissionsDiscord(
   const rest = resolveDiscordRest(opts);
   try {
     const [guild, member] = await Promise.all([
-      rest.get(Routes.guild(guildId)) as Promise<APIGuild>,
-      rest.get(Routes.guildMember(guildId, userId)) as Promise<APIGuildMember>,
+      getGuild(rest, guildId),
+      getGuildMember(rest, guildId, userId),
     ]);
-    const rolesById = new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role]));
-    const everyoneRole = rolesById.get(guildId);
-    let permissions = 0n;
-    if (everyoneRole?.permissions) {
-      permissions = addPermissionBits(permissions, everyoneRole.permissions);
-    }
-    for (const roleId of member.roles ?? []) {
-      const role = rolesById.get(roleId);
-      if (role?.permissions) {
-        permissions = addPermissionBits(permissions, role.permissions);
-      }
-    }
-    return permissions;
+    return resolveMemberGuildPermissionBits({ guild, member });
   } catch {
     // Not a guild member, guild not found, or API failure.
     return null;
+  }
+}
+
+export async function canViewDiscordGuildChannel(
+  guildId: string,
+  channelId: string,
+  userId: string,
+  opts: DiscordReactOpts,
+): Promise<boolean> {
+  const rest = resolveDiscordRest(opts);
+  try {
+    const channel = await getChannel(rest, channelId);
+    const channelGuildId = "guild_id" in channel ? channel.guild_id : undefined;
+    if (channelGuildId !== guildId) {
+      return false;
+    }
+    const [guild, member] = await Promise.all([
+      getGuild(rest, guildId),
+      getGuildMember(rest, guildId, userId),
+    ]);
+    const permissions = resolveMemberChannelPermissionBits({
+      guildId,
+      userId,
+      guild,
+      member,
+      channel,
+    });
+    return hasPermissionBit(permissions, PermissionFlagsBits.ViewChannel);
+  } catch {
+    return false;
   }
 }
 
@@ -156,7 +245,7 @@ export async function fetchChannelPermissionsDiscord(
   opts: DiscordReactOpts,
 ): Promise<DiscordPermissionsSummary> {
   const rest = resolveDiscordRest(opts);
-  const channel = (await rest.get(Routes.channel(channelId))) as APIChannel;
+  const channel = await getChannel(rest, channelId);
   const channelType = "type" in channel ? channel.type : undefined;
   const guildId = "guild_id" in channel ? channel.guild_id : undefined;
   if (!guildId) {
@@ -171,55 +260,17 @@ export async function fetchChannelPermissionsDiscord(
 
   const botId = await fetchBotUserId(rest);
   const [guild, member] = await Promise.all([
-    rest.get(Routes.guild(guildId)) as Promise<APIGuild>,
-    rest.get(Routes.guildMember(guildId, botId)) as Promise<APIGuildMember>,
+    getGuild(rest, guildId),
+    getGuildMember(rest, guildId, botId),
   ]);
 
-  const rolesById = new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role]));
-  const everyoneRole = rolesById.get(guildId);
-  let base = 0n;
-  if (everyoneRole?.permissions) {
-    base = addPermissionBits(base, everyoneRole.permissions);
-  }
-  for (const roleId of member.roles ?? []) {
-    const role = rolesById.get(roleId);
-    if (role?.permissions) {
-      base = addPermissionBits(base, role.permissions);
-    }
-  }
-
-  if (hasAdministrator(base)) {
-    return {
-      channelId,
-      guildId,
-      permissions: bitfieldToPermissions(ALL_PERMISSIONS),
-      raw: ALL_PERMISSIONS.toString(),
-      isDm: false,
-      channelType,
-    };
-  }
-
-  let permissions = base;
-  const overwrites =
-    "permission_overwrites" in channel ? (channel.permission_overwrites ?? []) : [];
-  for (const overwrite of overwrites) {
-    if (overwrite.id === guildId) {
-      permissions = removePermissionBits(permissions, overwrite.deny ?? "0");
-      permissions = addPermissionBits(permissions, overwrite.allow ?? "0");
-    }
-  }
-  for (const overwrite of overwrites) {
-    if (member.roles?.includes(overwrite.id)) {
-      permissions = removePermissionBits(permissions, overwrite.deny ?? "0");
-      permissions = addPermissionBits(permissions, overwrite.allow ?? "0");
-    }
-  }
-  for (const overwrite of overwrites) {
-    if (overwrite.id === botId) {
-      permissions = removePermissionBits(permissions, overwrite.deny ?? "0");
-      permissions = addPermissionBits(permissions, overwrite.allow ?? "0");
-    }
-  }
+  const permissions = resolveMemberChannelPermissionBits({
+    guildId,
+    userId: botId,
+    guild,
+    member,
+    channel,
+  });
 
   return {
     channelId,

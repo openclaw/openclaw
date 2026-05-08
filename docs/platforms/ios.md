@@ -114,6 +114,17 @@ Expected operator flow:
 4. The app publishes `push.apns.register` automatically after it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
 
+## Background alive beacons
+
+When iOS wakes the app for a silent push, background refresh, or significant-location event, the app
+attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`.
+The gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only
+after the authenticated node device identity is known.
+
+The app treats a background wake as successfully recorded only when the gateway response includes
+`handled: true`. Older gateways may acknowledge `node.event` with `{ "ok": true }`; that response is
+compatible but does not count as a durable last-seen update.
+
 Compatibility note:
 
 - `OPENCLAW_APNS_RELAY_BASE_URL` still works as a temporary env override for the gateway.
@@ -252,12 +263,16 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## Voice wake + talk mode
 
 - Voice wake and talk mode are available in Settings.
+- Talk-capable iOS nodes advertise the `talk` capability and can declare
+  `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`;
+  the Gateway allows those push-to-talk commands by default for trusted
+  Talk-capable nodes.
 - iOS may suspend background audio; treat voice features as best-effort when the app is not active.
 
 ## Common errors
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
-- `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise a canvas host URL; check `canvasHost` in [Gateway configuration](/gateway/configuration).
+- `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise the Canvas plugin surface URL; check `plugins.entries.canvas.config.host` in [Gateway configuration](/gateway/configuration).
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
 - Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
 

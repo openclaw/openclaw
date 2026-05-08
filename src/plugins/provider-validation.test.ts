@@ -101,6 +101,7 @@ describe("normalizeRegisteredProvider", () => {
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
                 initialSelections: [" demo/model "],
+                loadCatalog: true,
                 message: " Demo models ",
               },
             },
@@ -140,6 +141,7 @@ describe("normalizeRegisteredProvider", () => {
               modelAllowlist: {
                 allowedKeys: ["demo/model"],
                 initialSelections: ["demo/model"],
+                loadCatalog: true,
                 message: "Demo models",
               },
             },
@@ -217,8 +219,11 @@ describe("normalizeRegisteredProvider", () => {
         'provider "demo" registered both catalog and discovery; using catalog',
       ],
       assert: (provider: ReturnType<typeof normalizeRegisteredProvider>) => {
-        expect(provider?.catalog).toBeDefined();
-        expect(provider?.discovery).toBeUndefined();
+        if (!provider) {
+          throw new Error("expected provider");
+        }
+        expect(provider).toMatchObject({ catalog: { run: expect.any(Function) } });
+        expect(provider.discovery).toBeUndefined();
       },
     },
   ] as const)(

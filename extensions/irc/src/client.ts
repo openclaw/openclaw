@@ -1,5 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
+import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   parseIrcLine,
@@ -11,7 +12,7 @@ import {
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
 
-export type IrcPrivmsgEvent = {
+type IrcPrivmsgEvent = {
   senderNick: string;
   senderUser?: string;
   senderHost?: string;
@@ -39,7 +40,7 @@ export type IrcClientOptions = {
   onLine?: (line: string) => void;
 };
 
-export type IrcNickServOptions = {
+type IrcNickServOptions = {
   enabled?: boolean;
   service?: string;
   password?: string;
@@ -62,24 +63,6 @@ function toError(err: unknown): Error {
     return err;
   }
   return new Error(typeof err === "string" ? err : JSON.stringify(err));
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
-      timeoutMs,
-    );
-    promise
-      .then((result) => {
-        clearTimeout(timer);
-        resolve(result);
-      })
-      .catch((error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-  });
 }
 
 function buildFallbackNick(nick: string): string {

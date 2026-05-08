@@ -18,7 +18,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 /** Context values available during one inbound message handling cycle. */
-export interface RequestContext {
+interface RequestContext {
   /** The account ID handling this request. */
   accountId: string;
   /**
@@ -57,19 +57,4 @@ export function runWithRequestContext<T>(ctx: RequestContext, fn: () => T): T {
  */
 export function getRequestContext(): RequestContext | undefined {
   return store.getStore();
-}
-
-/**
- * Convenience accessor for the current request's fully qualified
- * delivery target.
- */
-export function getRequestTarget(): string | undefined {
-  return store.getStore()?.target;
-}
-
-/**
- * Convenience accessor for the current request's account ID.
- */
-export function getRequestAccountId(): string | undefined {
-  return store.getStore()?.accountId;
 }

@@ -41,6 +41,12 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       groups: { "*": { requireMention: true } },
     },
   },
+  messages: {
+    visibleReplies: "automatic",
+    groupChat: {
+      visibleReplies: "message_tool", // default; use "automatic" for legacy room replies
+    },
+  },
 }
 ```
 
@@ -96,30 +102,27 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Message formatting
   messages: {
     messagePrefix: "[openclaw]",
+    visibleReplies: "automatic",
     responsePrefix: ">",
     ackReaction: "👀",
     ackReactionScope: "group-mentions",
-  },
-
-  // Routing + queue
-  routing: {
     groupChat: {
-      mentionPatterns: ["@openclaw", "openclaw"],
       historyLimit: 50,
+      visibleReplies: "message_tool", // normal final replies stay private in groups/channels
     },
     queue: {
-      mode: "collect",
-      debounceMs: 1000,
+      mode: "steer",
+      debounceMs: 500,
       cap: 20,
       drop: "summarize",
       byChannel: {
-        whatsapp: "collect",
-        telegram: "collect",
-        discord: "collect",
-        slack: "collect",
-        signal: "collect",
-        imessage: "collect",
-        webchat: "collect",
+        whatsapp: "steer",
+        telegram: "steer",
+        discord: "steer",
+        slack: "steer",
+        signal: "steer",
+        imessage: "steer",
+        webchat: "steer",
       },
     },
   },
@@ -163,7 +166,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       mode: "warn",
       pruneAfter: "30d",
       maxEntries: 500,
-      rotateBytes: "10mb",
       resetArchiveRetention: "30d", // duration or false
       maxDiskBytes: "500mb", // optional
       highWaterBytes: "400mb", // optional (defaults to 80% of maxDiskBytes)
@@ -247,6 +249,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       skills: ["github", "weather"], // inherited by agents that omit list[].skills
       thinkingDefault: "low",
       verboseDefault: "off",
+      toolProgressDetail: "explain",
+      reasoningDefault: "off",
       elevatedDefault: "on",
       blockStreamingDefault: "off",
       blockStreamingBreak: "text_end",
@@ -304,6 +308,9 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         id: "main",
         default: true,
         // inherits defaults.skills -> github, weather
+        groupChat: {
+          mentionPatterns: ["@openclaw", "openclaw"],
+        },
         thinkingDefault: "high", // per-agent thinking override
         reasoningDefault: "on", // per-agent reasoning visibility
         fastModeDefault: false, // per-agent fast mode
@@ -525,7 +532,7 @@ public-key upgrades still require manual approval.
 
 ### Secure DM mode (shared inbox / multi-user DMs)
 
-If more than one person can DM your bot (multiple entries in `allowFrom`, pairing approvals for multiple people, or `dmPolicy: "open"`), enable **secure DM mode** so DMs from different senders don’t share one context by default:
+If more than one person can DM your bot (multiple entries in `allowFrom`, pairing approvals for multiple people, or `dmPolicy: "open"`), enable **secure DM mode** so DMs from different senders don't share one context by default:
 
 ```json5
 {
@@ -647,7 +654,7 @@ Only enable direct mutable name/email/nick matching with each channel's `dangero
 
 - If you set `dmPolicy: "open"`, the matching `allowFrom` list must include `"*"`.
 - Provider IDs differ (phone numbers, user IDs, channel IDs). Use the provider docs to confirm the format.
-- Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
+- Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `plugins`, `talk`, `signal`, `imessage`.
 - See [Providers](/providers) and [Troubleshooting](/gateway/troubleshooting) for deeper setup notes.
 
 ## Related

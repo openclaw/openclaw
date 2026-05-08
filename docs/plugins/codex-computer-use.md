@@ -96,10 +96,6 @@ Computer Use available before a thread starts:
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      agentRuntime: {
-        id: "codex",
-        fallback: "none",
-      },
     },
   },
 }
@@ -115,9 +111,8 @@ register the bundled Codex marketplace from
 fails. If setup still cannot make the MCP server available, the turn fails
 before the thread starts.
 
-Existing sessions keep their runtime and Codex thread binding. After changing
-`agentRuntime` or Computer Use config, use `/new` or `/reset` in the affected
-chat before testing.
+After changing Computer Use config, use `/new` or `/reset` in the affected chat
+before testing if an existing Codex thread has already started.
 
 ## Commands
 
@@ -281,12 +276,18 @@ restart Codex Computer Use, relaunch Codex Desktop if needed, then retry in a
 fresh OpenClaw session.
 
 **A Computer Use tool says `Native hook relay unavailable`.** The Codex-native
-tool hook reached OpenClaw with a stale or missing relay registration. Start a
-fresh OpenClaw session with `/new` or `/reset`. If it keeps happening, restart
-the gateway so old app-server threads and hook registrations are dropped, then
-retry.
+tool hook could not reach an active OpenClaw relay through the local bridge or
+Gateway fallback. Start a fresh OpenClaw session with `/new` or `/reset`. If it
+keeps happening, restart the gateway so old app-server threads and hook
+registrations are dropped, then retry.
 
 **Turn-start auto-install refuses a source.** This is intentional. Add the
 source with explicit `/codex computer-use install --source <marketplace-source>`
 first, then future turn-start auto-install can use the discovered local
 marketplace.
+
+## Related
+
+- [Codex harness](/plugins/codex-harness)
+- [Peekaboo bridge](/platforms/mac/peekaboo)
+- [iOS app](/platforms/ios)

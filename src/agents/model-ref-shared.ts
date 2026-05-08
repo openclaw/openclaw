@@ -1,8 +1,10 @@
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type StaticModelRef = {
+type StaticModelRef = {
   provider: string;
   model: string;
 };
@@ -23,19 +25,38 @@ export function modelKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
-export function normalizeStaticProviderModelId(provider: string, model: string): string {
-  return (
+export function normalizeStaticProviderModelId(
+  provider: string,
+  model: string,
+  options: {
+    allowManifestNormalization?: boolean;
+    manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  } = {},
+): string {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (options.allowManifestNormalization === false) {
+    return normalizeBuiltInProviderModelId(normalizedProvider, model);
+  }
+  const manifestModelId =
     normalizeProviderModelIdWithManifest({
-      provider,
+      provider: normalizedProvider,
+      plugins: options.manifestPlugins,
       context: {
-        provider,
+        provider: normalizedProvider,
         modelId: model,
       },
-    }) ?? model
-  );
+    }) ?? model;
+  return normalizeBuiltInProviderModelId(normalizedProvider, manifestModelId);
 }
 
-export function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
+function normalizeBuiltInProviderModelId(provider: string, model: string): string {
+  if (provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex") {
+    return normalizeGooglePreviewModelId(model);
+  }
+  return model;
+}
+
+function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -62,4 +83,18 @@ export function resolveStaticAllowlistModelKey(
     return null;
   }
   return modelKey(parsed.provider, parsed.model);
+}
+
+export function formatLiteralProviderPrefixedModelRef(provider: string, modelRef: string): string {
+  const providerId = normalizeProviderId(provider);
+  const trimmedRef = modelRef.trim();
+  if (!providerId || !trimmedRef) {
+    return trimmedRef;
+  }
+  const normalizedRef = normalizeLowercaseStringOrEmpty(trimmedRef);
+  const literalPrefix = `${providerId}/${providerId}/`;
+  if (normalizedRef.startsWith(literalPrefix)) {
+    return trimmedRef;
+  }
+  return normalizedRef.startsWith(`${providerId}/`) ? `${providerId}/${trimmedRef}` : trimmedRef;
 }

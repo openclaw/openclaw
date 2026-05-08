@@ -48,10 +48,17 @@ describe("runAgentStep", () => {
     ).resolves.toBe("done");
 
     expect(gatewayCalls[0]?.params).toMatchObject({
+      message: expect.stringContaining("[Inter-session message"),
       sessionKey: "agent:main:subagent:child",
       deliver: false,
       lane: "nested:agent:main:subagent:child",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+      },
     });
+    expect((gatewayCalls[0]?.params as { message?: string })?.message).toContain("isUser=false");
+    expect((gatewayCalls[0]?.params as { message?: string })?.message).toContain("hello");
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
       sessionKey: "agent:main:subagent:child",
       reason: "nested-agent-step-complete",
@@ -76,5 +83,40 @@ describe("runAgentStep", () => {
     ).resolves.toBeUndefined();
 
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+  });
+
+  it("forwards explicit transcript bodies for nested bookkeeping turns", async () => {
+    const gatewayCalls: CallGatewayOptions[] = [];
+    const agentCommandFromIngress = vi.fn(async () => ({
+      payloads: [{ text: "done", mediaUrl: null }],
+      meta: { durationMs: 1 },
+    }));
+    __testing.setDepsForTest({
+      agentCommandFromIngress,
+      callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+        gatewayCalls.push(opts);
+        return { runId: "run-nested" } as T;
+      },
+    });
+    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+      status: "ok",
+      replyText: "done",
+    });
+
+    await runAgentStep({
+      sessionKey: "agent:main:subagent:child",
+      message: "internal announce step",
+      transcriptMessage: "",
+      extraSystemPrompt: "announce only",
+      timeoutMs: 10_000,
+    });
+
+    expect(gatewayCalls).toEqual([]);
+    expect(agentCommandFromIngress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("internal announce step"),
+        transcriptMessage: "",
+      }),
+    );
   });
 });

@@ -194,6 +194,7 @@ describe("openai image generation provider", () => {
     const provider = buildOpenAIImageGenerationProvider();
 
     expect(provider.defaultModel).toBe("gpt-image-2");
+    expect(provider.aliases).toContain("openai-codex");
     expect(provider.models).toEqual([
       "gpt-image-2",
       "gpt-image-1.5",
@@ -646,7 +647,6 @@ describe("openai image generation provider", () => {
         {
           buffer: Buffer.from("jpeg-bytes"),
           mimeType: "image/jpeg",
-          fileName: "style.jpg",
         },
       ],
     });
@@ -674,7 +674,7 @@ describe("openai image generation provider", () => {
     expect(images).toHaveLength(2);
     expect(images[0]?.name).toBe("reference.png");
     expect(images[0]?.type).toBe("image/png");
-    expect(images[1]?.name).toBe("style.jpg");
+    expect(images[1]?.name).toBe("image-2.jpg");
     expect(images[1]?.type).toBe("image/jpeg");
     expect(postJsonRequestMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://api.openai.com/v1/images/edits" }),

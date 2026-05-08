@@ -763,10 +763,14 @@ describe("exec notifyOnExit", () => {
     );
     const formatted = await drainNotifyEvents();
 
-    expect(finished).toBeTruthy();
+    expect(finished).toMatchObject({
+      id: sessionId,
+      status: PROCESS_STATUS_COMPLETED,
+      exitCode: 0,
+    });
     expect(hasEvent).toBe(true);
     expect(queuedEvent).toMatchObject({ trusted: false });
-    expect(formatted).toContain("System (untrusted):");
+    expect(formatted).toBeUndefined();
   });
 
   it("preserves the origin delivery context on background exec completion events", async () => {
@@ -797,6 +801,8 @@ describe("exec notifyOnExit", () => {
 
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
     await expectNotifyOnExitWake(createNotifyOnExitExecTool(), {
+      source: "exec-event",
+      intent: "event",
       reason: "exec-event",
       sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
     });
@@ -804,6 +810,8 @@ describe("exec notifyOnExit", () => {
 
   it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
     await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
+      source: "exec-event",
+      intent: "event",
       reason: "exec-event",
     });
   });
@@ -952,18 +960,12 @@ describe("exec backgrounded onUpdate suppression", () => {
       // Abort almost immediately so the signal fires while the command
       // is still producing output.
       setTimeout(() => abortController.abort(), 0);
-      const result = await execTool.execute(
-        nextCallId(),
-        { command },
-        abortController.signal,
-        onUpdateSpy,
-      );
+      await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
       const callsAtAbort = onUpdateSpy.mock.calls.length;
       // Allow a tick for any straggling stdout data events.
       await waitOneTurn();
       // After abort, no new onUpdate calls should have been made.
       expect(onUpdateSpy.mock.calls.length).toBe(callsAtAbort);
-      expect(result).toBeDefined();
     },
     isWin ? 10_000 : 5_000,
   );

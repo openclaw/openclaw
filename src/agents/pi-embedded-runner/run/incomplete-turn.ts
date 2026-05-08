@@ -12,6 +12,10 @@ import {
   stripProviderPrefix,
 } from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import {
+  hasCommittedMessagingToolDeliveryEvidence,
+  hasMessagingToolDeliveryEvidence,
+} from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
@@ -24,18 +28,20 @@ type ReplayMetadataAttempt = Pick<
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
   | "successfulCronAdds"
->;
+> &
+  Partial<Pick<EmbeddedRunAttemptResult, "messagingToolSentTargets">>;
 
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
-  | "clientToolCall"
+  | "clientToolCalls"
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "didSendViaMessagingTool"
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
+  | "messagingToolSentTargets"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
@@ -46,7 +52,7 @@ type IncompleteTurnAttempt = Pick<
 type PlanningOnlyAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
-  | "clientToolCall"
+  | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "didSendViaMessagingTool"
@@ -54,12 +60,15 @@ type PlanningOnlyAttempt = Pick<
   | "lastAssistant"
   | "itemLifecycle"
   | "replayMetadata"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
+  | "messagingToolSentTargets"
   | "toolMetas"
 >;
 
 type SilentToolResultAttempt = Pick<
   EmbeddedRunAttemptResult,
-  | "clientToolCall"
+  | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "lastToolError"
@@ -81,7 +90,12 @@ export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
   lastAssistant?: { stopReason?: string } | null;
 }): boolean {
-  return !params.hasAssistantVisibleText && params.lastAssistant?.stopReason === "toolUse";
+  // A tool-use stop reason means the model issued a tool call and expected
+  // to continue after tool results. If the session ended before the
+  // post-tool assistant message arrived, the turn is incomplete regardless
+  // of whether pre-tool text exists — that text is preliminary analysis,
+  // not the final answer. (#76477)
+  return params.lastAssistant?.stopReason === "toolUse";
 }
 
 const PLANNING_ONLY_PROMISE_RE =
@@ -185,30 +199,13 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
-function hasStringEntry(values: readonly unknown[] | undefined): boolean {
-  return (
-    Array.isArray(values) &&
-    values.some((value) => typeof value === "string" && value.trim().length > 0)
-  );
-}
-
-export function hasCommittedUserVisibleToolDelivery(
-  attempt: Pick<EmbeddedRunAttemptResult, "messagingToolSentTexts" | "messagingToolSentMediaUrls">,
-): boolean {
-  return (
-    hasStringEntry(attempt.messagingToolSentTexts) ||
-    hasStringEntry(attempt.messagingToolSentMediaUrls)
-  );
-}
-
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
   const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
   const hadPotentialSideEffects =
     hadMutatingTools ||
-    params.didSendViaMessagingTool ||
-    hasCommittedUserVisibleToolDelivery(params) ||
+    hasMessagingToolDeliveryEvidence(params) ||
     (params.successfulCronAdds ?? 0) > 0;
   return {
     hadPotentialSideEffects,
@@ -228,11 +225,18 @@ export function resolveIncompleteTurnPayloadText(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
+  // Tool-use terminal guard: when the last assistant message ended with a
+  // tool-call stop reason, the model expected to continue after tool results.
+  // Pre-tool text alone (payloadCount > 0) must not suppress the incomplete-
+  // turn check in that case — the final post-tool response was never
+  // produced. (#76477)
+  const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+
   if (
-    params.payloadCount !== 0 ||
+    (params.payloadCount !== 0 && !toolUseTerminal) ||
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError
@@ -244,7 +248,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
+  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return null;
   }
 
@@ -347,7 +351,7 @@ export function resolveSilentToolResultReplyPayload(params: {
     params.aborted ||
     params.timedOut ||
     (params.attempt.toolMetas?.length ?? 0) === 0 ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
@@ -398,7 +402,7 @@ export function resolveRunLivenessState(params: {
   return "working";
 }
 
-export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
+function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -476,7 +480,7 @@ function shouldSkipPlanningOnlyRetry(params: {
   return Boolean(
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
@@ -494,7 +498,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipPlanningOnlyRetry(params)) {
     return false;
   }
-  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
+  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
   return isNonVisibleAssistantTurnEligibleForSilentReply({
@@ -827,10 +831,10 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.didSendViaMessagingTool ||
+    hasMessagingToolDeliveryEvidence(params.attempt) ||
     params.attempt.lastToolError ||
     (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
     ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&

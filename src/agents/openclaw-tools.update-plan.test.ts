@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { isUpdatePlanToolEnabledForOpenClawTools } from "./openclaw-tools.registration.js";
+import { isToolWrappedWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 
 type UpdatePlanGatingParams = Parameters<typeof isUpdatePlanToolEnabledForOpenClawTools>[0];
 
 function expectUpdatePlanEnabled(params: UpdatePlanGatingParams, expected: boolean): void {
   expect(isUpdatePlanToolEnabledForOpenClawTools(params)).toBe(expected);
+}
+
+function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
+  return tools.map((tool) => tool.name);
 }
 
 function openAiGpt5Params(
@@ -31,6 +37,46 @@ describe("openclaw-tools update_plan gating", () => {
     expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, false);
   });
 
+  it("does not expose update_plan from default tool construction", () => {
+    const defaultTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+    const emptyAllowlistTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: [],
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(toolNames(defaultTools)).not.toContain("update_plan");
+    expect(toolNames(emptyAllowlistTools)).not.toContain("update_plan");
+  });
+
+  it("wraps constructed tools with before-tool-call hooks by default", () => {
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+    });
+    const unwrappedTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+
+    expect(
+      isToolWrappedWithBeforeToolCallHook(tools.find((tool) => tool.name === "sessions_list")!),
+    ).toBe(true);
+    expect(
+      isToolWrappedWithBeforeToolCallHook(
+        unwrappedTools.find((tool) => tool.name === "sessions_list")!,
+      ),
+    ).toBe(false);
+  });
+
   it("registers update_plan when explicitly enabled", () => {
     const config = {
       tools: {
@@ -42,6 +88,54 @@ describe("openclaw-tools update_plan gating", () => {
 
     expectUpdatePlanEnabled({ config }, true);
     expect(createUpdatePlanTool().displaySummary).toBe("Track a short structured work plan.");
+  });
+
+  it("registers update_plan when the runtime allowlist explicitly requests it", () => {
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["update_plan"],
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(toolNames(tools)).toContain("update_plan");
+  });
+
+  it("registers update_plan when a config allowlist group includes it", () => {
+    const tools = createOpenClawTools({
+      config: { tools: { allow: ["group:agents"] } } as OpenClawConfig,
+      disablePluginTools: true,
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(toolNames(tools)).toContain("update_plan");
+  });
+
+  it("registers update_plan when a runtime allowlist group includes it", () => {
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["group:agents"],
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(toolNames(tools)).toContain("update_plan");
+  });
+
+  it("respects deny policy while constructing update_plan for grouped allowlists", () => {
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["group:agents"],
+      pluginToolDenylist: ["update_plan"],
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(toolNames(tools)).not.toContain("update_plan");
   });
 
   it("auto-enables update_plan for unconfigured GPT-5 openai runs", () => {

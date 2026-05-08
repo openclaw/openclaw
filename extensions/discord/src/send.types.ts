@@ -1,6 +1,7 @@
-import type { RequestClient } from "@buape/carbon";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import type { RequestClient } from "./internal/discord.js";
 
 export class DiscordSendError extends Error {
   kind?: "missing-permissions" | "dm-blocked";
@@ -29,6 +30,7 @@ export const DISCORD_MAX_EVENT_COVER_BYTES = 8 * 1024 * 1024;
 export type DiscordSendResult = {
   messageId: string;
   channelId: string;
+  receipt: MessageReceipt;
 };
 
 export type DiscordRuntimeAccountContext = {
@@ -150,7 +152,7 @@ export type DiscordChannelCreate = {
   nsfw?: boolean;
 };
 
-export type DiscordForumTag = {
+type DiscordForumTag = {
   id?: string;
   name: string;
   moderated?: boolean;

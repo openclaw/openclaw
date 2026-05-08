@@ -156,6 +156,11 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     }
 
     migrateThreadBinding(next.session, changes, "session");
+    const sessionMaintenance = asRecord(asRecord(next.session)?.maintenance);
+    if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
+      delete sessionMaintenance.rotateBytes;
+      changes.push("Removed deprecated session.maintenance.rotateBytes.");
+    }
     const channels = asRecord(next.channels);
     for (const [channelId, channelRaw] of Object.entries(channels ?? {})) {
       if (channelId === "defaults") {
@@ -191,11 +196,17 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     return changes.length > 0 ? { next, changes } : { next: null, changes: [] };
   }
 
+  let partiallyValidOverride: boolean | undefined;
+
   return {
     migrate,
     migrateLegacyConfig: (raw: unknown) => {
       const { next, changes } = migrate(raw);
-      return { config: next, changes };
+      const partiallyValid = partiallyValidOverride;
+      return { config: next, changes, ...(partiallyValid ? { partiallyValid } : {}) };
+    },
+    setPartiallyValidOverride(value: boolean | undefined) {
+      partiallyValidOverride = value;
     },
   };
 });
@@ -331,6 +342,14 @@ vi.mock("../config/legacy.js", () => {
           issues,
           ["session", "threadBindings", "ttlHours"],
           'session.threadBindings.ttlHours is legacy; use session.threadBindings.idleHours. Run "openclaw doctor --fix".',
+        );
+      }
+      const sessionMaintenance = asRecord(asRecord(root.session)?.maintenance);
+      if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
+        addIssue(
+          issues,
+          ["session", "maintenance"],
+          'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
         );
       }
       const xSearch = asRecord(asRecord(asRecord(root.tools)?.web)?.x_search);
@@ -582,7 +601,7 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
 }));
 
 vi.mock("./doctor/shared/legacy-config-migrate.js", () => ({
-  migrateLegacyConfig: legacyConfigMigrationForTest.migrateLegacyConfig,
+  migrateLegacyConfig: (raw: unknown) => legacyConfigMigrationForTest.migrateLegacyConfig(raw),
 }));
 
 vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
@@ -810,6 +829,26 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
         match: hasLegacyTalkFields,
       },
     ],
+  };
+});
+
+vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
+  const {
+    collectRelevantDoctorPluginIds,
+    listPluginDoctorLegacyConfigRules,
+  }: typeof import("../plugins/doctor-contract-registry.js") =
+    await import("../plugins/doctor-contract-registry.js");
+  const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
+    await import("../config/legacy.js");
+  return {
+    findDoctorLegacyConfigIssues: (raw: unknown, sourceRaw?: unknown) =>
+      findLegacyConfigIssues(
+        raw,
+        sourceRaw,
+        listPluginDoctorLegacyConfigRules({
+          pluginIds: collectRelevantDoctorPluginIds(raw),
+        }),
+      ),
   };
 });
 
@@ -1369,7 +1408,33 @@ describe("doctor config flow", () => {
         },
       },
     });
-    expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("mutable allowlist")]),
+    );
+  });
+
+  it("warns when hooks transformsDir points outside the hook transforms root", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      hooks: {
+        enabled: true,
+        token: "hook-secret",
+        transformsDir: "/virtual/.openclaw/workspace/skills/linear-webhook",
+        mappings: [
+          {
+            match: { path: "linear" },
+            action: "agent",
+            messageTemplate: "Linear event",
+            transform: { module: "./openclaw-linear-transform.js" },
+          },
+        ],
+      },
+    });
+
+    const warning = doctorWarnings.join("\n");
+    expect(warning).toContain("hooks.transformsDir:");
+    expect(warning).toContain("/virtual/.openclaw/workspace/skills/linear-webhook");
+    expect(warning).toContain("/virtual/.openclaw/hooks/transforms");
+    expect(warning).toContain("move custom transforms there or remove hooks.transformsDir");
   });
 
   it("does not warn about sender-based group allowlist for googlechat", async () => {
@@ -1470,14 +1535,16 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes(
+    expect(doctorWarnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
           'channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false.',
         ),
-      ),
-    ).toBe(true);
-    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+      ]),
+    );
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("first-time setup mode")]),
+    );
   });
 
   it("shows plugin-blocked guidance instead of first-time Telegram guidance when plugins are disabled globally", async () => {
@@ -1493,14 +1560,16 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(
-      doctorWarnings.some((line) =>
-        line.includes(
+    expect(doctorWarnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
           "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
         ),
-      ),
-    ).toBe(true);
-    expect(doctorWarnings.some((line) => line.includes("first-time setup mode"))).toBe(false);
+      ]),
+    );
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("first-time setup mode")]),
+    );
   });
 
   it("warns on mutable Zalouser group entries when dangerous name matching is disabled", async () => {
@@ -1534,7 +1603,9 @@ describe("doctor config flow", () => {
       },
     });
 
-    expect(doctorWarnings.some((line) => line.includes("channels.zalouser.groups"))).toBe(false);
+    expect(doctorWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("channels.zalouser.groups")]),
+    );
   });
 
   it("warns when imessage group allowlist is empty even if allowFrom is set", async () => {
@@ -1563,6 +1634,11 @@ describe("doctor config flow", () => {
         bridge: { bind: "auto" },
         gateway: { auth: { mode: "token", token: "ok", extra: true } },
         agents: { list: [{ id: "pi" }] },
+        session: {
+          maintenance: {
+            rotateBytes: "10mb",
+          },
+        },
         browser: {
           relayBindHost: "0.0.0.0",
           profiles: {
@@ -1595,6 +1671,24 @@ describe("doctor config flow", () => {
     ).toBe("existing-session");
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+  });
+
+  it("preserves commitments config on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        commitments: {
+          enabled: true,
+          maxPerDay: 2,
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.commitments).toEqual({
+      enabled: true,
+      maxPerDay: 2,
+    });
   });
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -2304,6 +2398,9 @@ describe("doctor config flow", () => {
         bind?: string;
       };
       session?: {
+        maintenance?: {
+          rotateBytes?: unknown;
+        };
         threadBindings?: {
           idleHours?: number;
           ttlHours?: number;
@@ -2348,6 +2445,7 @@ describe("doctor config flow", () => {
       every: "30m",
     });
     expect(cfg.gateway?.bind).toBe("lan");
+    expect(cfg.session?.maintenance?.rotateBytes).toBeUndefined();
     expect(cfg.session?.threadBindings).toMatchObject({
       idleHours: 24,
     });
@@ -2414,6 +2512,9 @@ describe("doctor config flow", () => {
             },
           },
           session: {
+            maintenance: {
+              rotateBytes: "10mb",
+            },
             threadBindings: {
               ttlHours: 24,
             },
@@ -2454,6 +2555,8 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("does not rewrite this shape automatically");
       expect(legacyMessages).toContain("session.threadBindings.ttlHours");
       expect(legacyMessages).toContain("session.threadBindings.idleHours");
+      expect(legacyMessages).toContain("session.maintenance.rotateBytes");
+      expect(legacyMessages).toContain("deprecated and ignored");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
       expect(legacyMessages).toContain("talk:");
@@ -2498,7 +2601,7 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.allowFrom).toBeUndefined();
   });
 
   it("does not report repeat talk provider normalization on consecutive repair runs", async () => {
@@ -2553,5 +2656,24 @@ describe("doctor config flow", () => {
       },
       { skipSessionCleanup: true },
     );
+  });
+
+  it("sets skipPluginValidationOnWrite when legacy migration is only partially valid (#76800)", async () => {
+    legacyConfigMigrationForTest.setPartiallyValidOverride(true);
+    try {
+      const result = await runDoctorConfigWithInput({
+        config: {
+          heartbeat: { model: "openai/gpt-4o", every: 60 },
+          tools: { web: { search: { provider: "brave" } } },
+        },
+        repair: true,
+        preflightMode: "compat",
+        run: ({ options, confirm }) =>
+          loadAndMaybeMigrateDoctorConfig({ options, confirm: async () => confirm() }),
+      });
+      expect(result.skipPluginValidationOnWrite).toBe(true);
+    } finally {
+      legacyConfigMigrationForTest.setPartiallyValidOverride(undefined);
+    }
   });
 });

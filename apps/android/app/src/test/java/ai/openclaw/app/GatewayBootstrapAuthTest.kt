@@ -1,11 +1,16 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.node.InvokeDispatcher
+import ai.openclaw.app.protocol.OpenClawTalkCommand
+import ai.openclaw.app.voice.TalkModeManager
+import android.Manifest
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -15,6 +20,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.lang.reflect.Field
 import java.util.UUID
@@ -221,6 +227,23 @@ class GatewayBootstrapAuthTest {
     assertNull(authStore.loadToken(deviceId, "operator"))
   }
 
+  @Test
+  fun talkPttStart_cleansPreparedCaptureWhenBeginFails() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = NodeRuntime(app)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+
+      val result = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+
+      assertEquals("UNAVAILABLE", result.error?.code)
+      assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+      val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+      assertFalse(talkMode.ttsOnAllResponses)
+    }
+
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {
     repeat(50) {
       runtime.pendingGatewayTrust.value?.let { return it }
@@ -240,13 +263,19 @@ class GatewayBootstrapAuthTest {
     error("Expected status text update")
   }
 
-  private fun desiredBootstrapToken(runtime: NodeRuntime, sessionFieldName: String): String? {
+  private fun desiredBootstrapToken(
+    runtime: NodeRuntime,
+    sessionFieldName: String,
+  ): String? {
     val session = readField<GatewaySession>(runtime, sessionFieldName)
     val desired = readField<Any?>(session, "desired") ?: return null
     return readField(desired, "bootstrapToken")
   }
 
-  private fun <T> readField(target: Any, name: String): T {
+  private fun <T> readField(
+    target: Any,
+    name: String,
+  ): T {
     var type: Class<*>? = target.javaClass
     while (type != null) {
       try {

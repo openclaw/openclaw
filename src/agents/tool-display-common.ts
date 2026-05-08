@@ -2,10 +2,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { resolveExecDetail } from "./tool-display-exec.js";
+import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
-export type ToolDisplayActionSpec = {
+type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
 };
@@ -17,7 +17,7 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-export type CoerceDisplayValueOptions = {
+type CoerceDisplayValueOptions = {
   includeFalse?: boolean;
   includeZero?: boolean;
   includeNonFinite?: boolean;
@@ -34,17 +34,18 @@ export function defaultTitle(name: string): string {
   if (!cleaned) {
     return "Tool";
   }
-  return cleaned
-    .split(/\s+/)
-    .map((part) =>
+  const parts: string[] = [];
+  for (const part of cleaned.split(/\s+/)) {
+    parts.push(
       part.length <= 2 && part.toUpperCase() === part
         ? part
         : `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`,
-    )
-    .join(" ");
+    );
+  }
+  return parts.join(" ");
 }
 
-export function normalizeVerb(value?: string): string | undefined {
+function normalizeVerb(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
@@ -52,7 +53,7 @@ export function normalizeVerb(value?: string): string | undefined {
   return trimmed.replace(/_/g, " ");
 }
 
-export function resolveActionArg(args: unknown): string | undefined {
+function resolveActionArg(args: unknown): string | undefined {
   if (!args || typeof args !== "object") {
     return undefined;
   }
@@ -71,6 +72,7 @@ export function resolveToolVerbAndDetailForArgs(params: {
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
+  toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
@@ -83,13 +85,14 @@ export function resolveToolVerbAndDetailForArgs(params: {
     spec: params.spec,
     fallbackDetailKeys: params.fallbackDetailKeys,
     detailMode: params.detailMode,
+    toolDetailMode: params.toolDetailMode,
     detailCoerce: params.detailCoerce,
     detailMaxEntries: params.detailMaxEntries,
     detailFormatKey: params.detailFormatKey,
   });
 }
 
-export function coerceDisplayValue(
+function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
 ): string | undefined {
@@ -129,19 +132,28 @@ export function coerceDisplayValue(
     return String(value);
   }
   if (Array.isArray(value)) {
-    const values = value
-      .map((item) => coerceDisplayValue(item, opts))
-      .filter((item): item is string => Boolean(item));
-    if (values.length === 0) {
+    const values: string[] = [];
+    let displayValueCount = 0;
+    for (const item of value) {
+      const display = coerceDisplayValue(item, opts);
+      if (!display) {
+        continue;
+      }
+      displayValueCount += 1;
+      if (values.length < maxArrayEntries) {
+        values.push(display);
+      }
+    }
+    if (displayValueCount === 0) {
       return undefined;
     }
-    const preview = values.slice(0, maxArrayEntries).join(", ");
-    return values.length > maxArrayEntries ? `${preview}…` : preview;
+    const preview = values.join(", ");
+    return displayValueCount > maxArrayEntries ? `${preview}…` : preview;
   }
   return undefined;
 }
 
-export function lookupValueByPath(args: unknown, path: string): unknown {
+function lookupValueByPath(args: unknown, path: string): unknown {
   if (!args || typeof args !== "object") {
     return undefined;
   }
@@ -160,8 +172,13 @@ export function lookupValueByPath(args: unknown, path: string): unknown {
 }
 
 export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
-  const segments = raw.split(".").filter(Boolean);
-  const last = segments.at(-1) ?? raw;
+  let last = "";
+  for (const segment of raw.split(".")) {
+    if (segment) {
+      last = segment;
+    }
+  }
+  last ||= raw;
   const override = overrides[last];
   if (override) {
     return override;
@@ -171,7 +188,7 @@ export function formatDetailKey(raw: string, overrides: Record<string, string> =
   return normalizeLowercaseStringOrEmpty(spaced) || normalizeLowercaseStringOrEmpty(last);
 }
 
-export function resolvePathArg(args: unknown): string | undefined {
+function resolvePathArg(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -188,7 +205,7 @@ export function resolvePathArg(args: unknown): string | undefined {
   return undefined;
 }
 
-export function resolveReadDetail(args: unknown): string | undefined {
+function resolveReadDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -225,7 +242,7 @@ export function resolveReadDetail(args: unknown): string | undefined {
   return `from ${path}`;
 }
 
-export function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
+function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -257,26 +274,83 @@ export function resolveWriteDetail(toolKey: string, args: unknown): string | und
   return `${destinationPrefix} ${path}`;
 }
 
-export function resolveWebSearchDetail(args: unknown): string | undefined {
+function resolveWebSearchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
   }
 
-  const query = normalizeOptionalString(record.query);
+  const queries = collectWebSearchQueries(record);
   const count =
     typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
       ? Math.floor(record.count)
-      : undefined;
+      : typeof record.max_results === "number" &&
+          Number.isFinite(record.max_results) &&
+          record.max_results > 0
+        ? Math.floor(record.max_results)
+        : typeof record.num_results === "number" &&
+            Number.isFinite(record.num_results) &&
+            record.num_results > 0
+          ? Math.floor(record.num_results)
+          : typeof record.limit === "number" && Number.isFinite(record.limit) && record.limit > 0
+            ? Math.floor(record.limit)
+            : typeof record.top_k === "number" && Number.isFinite(record.top_k) && record.top_k > 0
+              ? Math.floor(record.top_k)
+              : undefined;
 
-  if (!query) {
+  if (queries.length === 0) {
     return undefined;
   }
 
-  return count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
+  const displayedQueries = queries.slice(0, 3).map((query) => `"${query}"`);
+  const queryText =
+    queries.length > displayedQueries.length
+      ? `${displayedQueries.join(", ")}…`
+      : displayedQueries.join(", ");
+
+  return count !== undefined ? `for ${queryText} (top ${count})` : `for ${queryText}`;
 }
 
-export function resolveWebFetchDetail(args: unknown): string | undefined {
+function collectWebSearchQueries(record: Record<string, unknown>): string[] {
+  const queries: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: unknown) => {
+    const normalized = normalizeOptionalString(value);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    queries.push(normalized);
+  };
+
+  add(record.query);
+  add(record.q);
+  add(record.search);
+  add(record.input);
+
+  for (const key of ["search_query", "image_query", "queries"]) {
+    const value = record[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      if (typeof entry === "string") {
+        add(entry);
+        continue;
+      }
+      const entryRecord = asRecord(entry);
+      if (!entryRecord) {
+        continue;
+      }
+      add(entryRecord.query);
+      add(entryRecord.q);
+      add(entryRecord.search);
+    }
+  }
+
+  return queries;
+}
+function resolveWebFetchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -293,19 +367,18 @@ export function resolveWebFetchDetail(args: unknown): string | undefined {
       ? Math.floor(record.maxChars)
       : undefined;
 
-  const suffix = [
-    mode ? `mode ${mode}` : undefined,
-    maxChars !== undefined ? `max ${maxChars} chars` : undefined,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(", ");
+  let suffix = "";
+  if (mode) {
+    suffix = `mode ${mode}`;
+  }
+  if (maxChars !== undefined) {
+    suffix = suffix ? `${suffix}, max ${maxChars} chars` : `max ${maxChars} chars`;
+  }
 
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
-export { resolveExecDetail };
-
-export function resolveActionSpec(
+function resolveActionSpec(
   spec: ToolDisplaySpec | undefined,
   action: string | undefined,
 ): ToolDisplayActionSpec | undefined {
@@ -315,7 +388,7 @@ export function resolveActionSpec(
   return spec.actions?.[action] ?? undefined;
 }
 
-export function resolveDetailFromKeys(
+function resolveDetailFromKeys(
   args: unknown,
   keys: string[],
   opts: {
@@ -366,13 +439,18 @@ export function resolveDetailFromKeys(
     return undefined;
   }
 
-  return unique
-    .slice(0, opts.maxEntries ?? 8)
-    .map((entry) => `${entry.label} ${entry.value}`)
-    .join(" · ");
+  const maxEntries = opts.maxEntries ?? 8;
+  const parts: string[] = [];
+  for (let index = 0; index < unique.length && index < maxEntries; index += 1) {
+    const entry = unique[index];
+    if (entry) {
+      parts.push(`${entry.label} ${entry.value}`);
+    }
+  }
+  return parts.join(" · ");
 }
 
-export function resolveToolVerbAndDetail(params: {
+function resolveToolVerbAndDetail(params: {
   toolKey: string;
   args?: unknown;
   meta?: string;
@@ -380,6 +458,7 @@ export function resolveToolVerbAndDetail(params: {
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
+  toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
@@ -394,8 +473,8 @@ export function resolveToolVerbAndDetail(params: {
   const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
 
   let detail: string | undefined;
-  if (params.toolKey === "exec") {
-    detail = resolveExecDetail(params.args);
+  if (params.toolKey === "exec" || params.toolKey === "bash") {
+    detail = resolveExecDetail(params.args, { detailMode: params.toolDetailMode });
   }
   if (!detail && params.toolKey === "read") {
     detail = resolveReadDetail(params.args);
@@ -437,11 +516,16 @@ export function formatToolDetailText(
     return undefined;
   }
   const normalized = detail.includes(" · ")
-    ? detail
-        .split(" · ")
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0)
-        .join(", ")
+    ? (() => {
+        const parts: string[] = [];
+        for (const part of detail.split(" · ")) {
+          const trimmed = part.trim();
+          if (trimmed) {
+            parts.push(trimmed);
+          }
+        }
+        return parts.join(", ");
+      })()
     : detail;
   if (!normalized) {
     return undefined;

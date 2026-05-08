@@ -54,10 +54,12 @@ openclaw agent --agent ops --message "Run locally" --local
 
 - Gateway mode falls back to the embedded agent when the Gateway request fails. Use `--local` to force embedded execution up front.
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
-- Each `openclaw agent` invocation is treated as a one-shot run. Bundled or user-configured MCP servers opened for that run are retired after the reply, even when the command uses the Gateway path, so stdio MCP child processes do not stay alive between scripted invocations.
+- `--local` and embedded fallback runs are treated as one-shot runs. Bundled MCP loopback resources and warm Claude stdio sessions opened for that local process are retired after the reply, so scripted invocations do not keep local child processes alive.
+- Gateway-backed runs leave Gateway-owned MCP loopback resources under the running Gateway process; older clients may still send the historical cleanup flag, but the Gateway accepts it as a compatibility no-op.
 - `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not session routing.
 - `--json` keeps stdout reserved for the JSON response. Gateway, plugin, and embedded-fallback diagnostics are routed to stderr so scripts can parse stdout directly.
 - Embedded fallback JSON includes `meta.transport: "embedded"` and `meta.fallbackFrom: "gateway"` so scripts can distinguish fallback runs from Gateway runs.
+- If the Gateway accepts an agent run but the CLI times out waiting for the final reply, embedded fallback uses a fresh explicit `gateway-fallback-*` session/run id and reports `meta.fallbackReason: "gateway_timeout"` plus the fallback session fields. This avoids racing the Gateway-owned transcript lock or silently replacing the original routed conversation session.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.
 - Marker writes are source-authoritative: OpenClaw persists markers from the active source config snapshot, not from resolved runtime secret values.
 

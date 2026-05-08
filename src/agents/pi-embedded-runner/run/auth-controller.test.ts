@@ -176,6 +176,12 @@ describe("createEmbeddedRunAuthController", () => {
 
     await controller.initializeAuthProfile();
 
+    expect(mocks.getApiKeyForModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
     expect(harness.runtimeModel.baseUrl).toBe("https://runtime.example.com/v1");
     expect(harness.runtimeModel.headers).toEqual({
       "api-key": "runtime-header-token",
@@ -338,7 +344,9 @@ describe("createEmbeddedRunAuthController", () => {
 
       vi.advanceTimersByTime(5_000);
       await Promise.resolve();
-      expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).toBeTruthy();
+      expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).toEqual(
+        expect.any(Promise),
+      );
 
       await controller.advanceAuthProfile();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("backup");

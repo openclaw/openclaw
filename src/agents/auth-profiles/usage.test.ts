@@ -380,7 +380,7 @@ describe("clearExpiredCooldowns", () => {
     expect(stats?.errorCount).toBe(0);
     expect(stats?.failureCounts).toBeUndefined();
     // lastFailureAt preserved for failureWindowMs decay
-    expect(stats?.lastFailureAt).toBeDefined();
+    expect(stats?.lastFailureAt).toEqual(expect.any(Number));
   });
 
   it("clears expired disabledUntil and disabledReason", () => {
@@ -895,6 +895,8 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer codex-access-token",
           "ChatGPT-Account-Id": "acct_test_123",
+          originator: "openclaw",
+          "User-Agent": expect.stringMatching(/^openclaw\//),
         }),
       }),
     );

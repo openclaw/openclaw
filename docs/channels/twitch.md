@@ -14,7 +14,7 @@ Twitch chat support via IRC connection. OpenClaw connects as a Twitch user (bot 
 Twitch ships as a bundled plugin in current OpenClaw releases, so normal packaged builds do not need a separate install.
 </Note>
 
-If you are on an older build or a custom install that excludes Twitch, install it manually:
+If you are on an older build or a custom install that excludes Twitch, install the npm package directly:
 
 <Tabs>
   <Tab title="npm registry">
@@ -28,6 +28,9 @@ If you are on an older build or a custom install that excludes Twitch, install i
     ```
   </Tab>
 </Tabs>
+
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Details: [Plugins](/tools/plugin)
 
@@ -275,6 +278,7 @@ openclaw channels status --probe
   <Accordion title="Bot does not respond to messages">
     - **Check access control:** Ensure your user ID is in `allowFrom`, or temporarily remove `allowFrom` and set `allowedRoles: ["all"]` to test.
     - **Check the bot is in the channel:** The bot must join the channel specified in `channel`.
+
   </Accordion>
   <Accordion title="Token issues">
     "Failed to connect" or authentication errors:
