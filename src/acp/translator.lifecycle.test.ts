@@ -186,12 +186,13 @@ describe("acp translator stable lifecycle handlers", () => {
       "agent:main:a1",
       "agent:main:a2",
     ]);
-    expect(first.sessions.every((session) => session.cwd === "/work/a")).toBe(true);
+    expect(first.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
     expect(first.nextCursor).toEqual(expect.any(String));
     expect(second.sessions.map((session) => session.sessionId)).toEqual([
       "agent:main:a3",
       "agent:main:a4",
     ]);
+    expect(second.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
     expect(second.nextCursor).toBeNull();
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       limit: 3,
@@ -225,7 +226,7 @@ describe("acp translator stable lifecycle handlers", () => {
     const result = await agent.listSessions(createListSessionsRequest({ cwd: "/work/a" }));
 
     expect(result.sessions.map((session) => session.sessionId)).toEqual(["agent:main:a1"]);
-    expect(result.sessions.every((session) => session.cwd === "/work/a")).toBe(true);
+    expect(result.sessions.map((session) => session.cwd)).toEqual(["/work/a"]);
 
     sessionStore.clearAllSessionsForTest();
   });
