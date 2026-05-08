@@ -3433,3 +3433,33 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 });
+
+describe("chat.send operator UI client sender context", () => {
+  it("does not inject sender identity fields for Control UI clients", async () => {
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-control-ui-sender",
+      message: "hello from control ui",
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            version: "dev",
+            platform: "web",
+          },
+          scopes: ["operator.write"],
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.SenderId).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.SenderName).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.SenderUsername).toBeUndefined();
+  });
+});
