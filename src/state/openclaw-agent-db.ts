@@ -20,7 +20,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 
-const OPENCLAW_AGENT_SCHEMA_VERSION = 4;
+const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
@@ -36,20 +36,9 @@ export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
 };
 
-type UserVersionRow = {
-  user_version?: number | bigint;
-};
-
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
-
-type TranscriptEventIdentityBackfillRow = {
-  session_id?: unknown;
-  seq?: unknown;
-  event_json?: unknown;
-  created_at?: unknown;
-};
 
 export type OpenClawRegisteredAgentDatabase = {
   agentId: string;
@@ -58,12 +47,6 @@ export type OpenClawRegisteredAgentDatabase = {
   lastSeenAt: number;
   sizeBytes: number | null;
 };
-
-function getUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as UserVersionRow | undefined;
-  const raw = row?.user_version ?? 0;
-  return typeof raw === "bigint" ? Number(raw) : raw;
-}
 
 export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentDatabaseOptions): string {
   const agentId = normalizeAgentId(options.agentId);
@@ -90,125 +73,8 @@ function ensureOpenClawAgentDatabasePermissions(pathname: string): void {
   }
 }
 
-function migrateAgentSchema(db: DatabaseSync, fromVersion: number): void {
-  if (fromVersion < 4) {
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_agent_transcript_events_updated
-        ON transcript_events(session_id, created_at DESC, seq DESC);
-      CREATE TABLE IF NOT EXISTS transcript_event_identities (
-        session_id TEXT NOT NULL,
-        event_id TEXT NOT NULL,
-        seq INTEGER NOT NULL,
-        event_type TEXT,
-        has_parent INTEGER NOT NULL DEFAULT 0,
-        parent_id TEXT,
-        message_idempotency_key TEXT,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (session_id, event_id),
-        FOREIGN KEY (session_id, seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_message_idempotency
-        ON transcript_event_identities(session_id, message_idempotency_key)
-        WHERE message_idempotency_key IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_agent_transcript_tail
-        ON transcript_event_identities(session_id, seq DESC)
-        WHERE has_parent = 1;
-    `);
-    backfillTranscriptEventIdentities(db);
-  }
-}
-
-function readTranscriptEventIdentity(eventJson: unknown): {
-  eventId: string;
-  eventType: string | null;
-  hasParent: 0 | 1;
-  parentId: string | null;
-  messageIdempotencyKey: string | null;
-} | null {
-  if (typeof eventJson !== "string") {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(eventJson);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const record = parsed as {
-    id?: unknown;
-    type?: unknown;
-    parentId?: unknown;
-    message?: { idempotencyKey?: unknown };
-  };
-  if (typeof record.id !== "string" || !record.id.trim()) {
-    return null;
-  }
-  const idempotencyKey =
-    typeof record.message?.idempotencyKey === "string" && record.message.idempotencyKey.trim()
-      ? record.message.idempotencyKey
-      : null;
-  return {
-    eventId: record.id,
-    eventType: typeof record.type === "string" ? record.type : null,
-    hasParent: Object.hasOwn(record, "parentId") ? 1 : 0,
-    parentId: typeof record.parentId === "string" ? record.parentId : null,
-    messageIdempotencyKey: idempotencyKey,
-  };
-}
-
-function backfillTranscriptEventIdentities(db: DatabaseSync): void {
-  const rows = db
-    .prepare(
-      `SELECT session_id, seq, event_json, created_at
-       FROM transcript_events
-       ORDER BY session_id ASC, seq ASC`,
-    )
-    .all() as TranscriptEventIdentityBackfillRow[];
-  const insert = db.prepare(
-    `INSERT OR IGNORE INTO transcript_event_identities
-       (session_id, event_id, seq, event_type, has_parent, parent_id, message_idempotency_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  for (const row of rows) {
-    if (typeof row.session_id !== "string") {
-      continue;
-    }
-    const seq = typeof row.seq === "bigint" ? Number(row.seq) : Number(row.seq);
-    const createdAt =
-      typeof row.created_at === "bigint" ? Number(row.created_at) : Number(row.created_at);
-    if (!Number.isInteger(seq) || !Number.isFinite(createdAt)) {
-      continue;
-    }
-    const identity = readTranscriptEventIdentity(row.event_json);
-    if (!identity) {
-      continue;
-    }
-    insert.run(
-      row.session_id,
-      identity.eventId,
-      seq,
-      identity.eventType,
-      identity.hasParent,
-      identity.parentId,
-      identity.messageIdempotencyKey,
-      createdAt,
-    );
-  }
-}
-
-function ensureAgentSchema(db: DatabaseSync, pathname: string): void {
-  const userVersion = getUserVersion(db);
-  if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
-    throw new Error(
-      `OpenClaw agent database schema version ${userVersion} is newer than supported version ${OPENCLAW_AGENT_SCHEMA_VERSION}: ${pathname}`,
-    );
-  }
-
+function ensureAgentSchema(db: DatabaseSync): void {
   db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-  migrateAgentSchema(db, userVersion);
   db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
 }
 
@@ -291,7 +157,7 @@ export function openOpenClawAgentDatabase(
   db.exec("PRAGMA synchronous = NORMAL;");
   db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   db.exec("PRAGMA foreign_keys = ON;");
-  ensureAgentSchema(db, pathname);
+  ensureAgentSchema(db);
   ensureOpenClawAgentDatabasePermissions(pathname);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);

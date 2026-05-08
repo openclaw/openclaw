@@ -96,6 +96,10 @@ The branch already has a real shared SQLite base:
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
+- The SQLite schemas are collapsed to `user_version = 1` because this database
+  layout has not shipped yet. Runtime openers create the current schema only;
+  file-to-database import remains in doctor/migrate code, not in branch-local
+  database upgrade helpers.
 - Relational ownership is enforced where the ownership boundary is canonical:
   transcript-file mappings cascade from `agent_databases`, source migration
   rows cascade from `migration_runs`, task delivery state cascades from
@@ -115,13 +119,14 @@ The branch already has a real shared SQLite base:
   site.
 - Subagent run recovery state now lives in typed shared `subagent_runs` rows
   with indexed child, requester, and controller session keys. The old
-  `subagent_runs` KV scope is migration input only.
+  `subagents/runs.json` file is doctor migration input only.
 - Current conversation bindings now live in typed shared
   `current_conversation_bindings` rows keyed by normalized conversation id and
-  indexed by target session. The old KV scope is migration input only.
+  indexed by target session. The old `bindings/current-conversations.json` file
+  is doctor migration input only.
 - TUI last-session restore pointers now live in typed shared
   `tui_last_sessions` rows keyed by the hashed TUI connection/session scope.
-  The old JSON file and `tui:last-session` KV scope are migration input only.
+  The old TUI JSON file is doctor migration input only.
 - `src/agents/filesystem/virtual-agent-fs.sqlite.ts` implements a SQLite VFS
   over the agent database `vfs_entries` table.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
@@ -269,7 +274,7 @@ The remaining cleanup is mostly consolidation and deletion:
   `agentId`, `sessionId`, and the stored SQLite session row.
 - Cron persistence now reconciles SQLite `cron_jobs` rows instead of
   deleting/reinserting the whole job table on each save. Plugin target
-  writebacks update matching cron rows directly and keep `cron.jobs.state` in
+  writebacks update matching cron rows directly and keep runtime cron state in
   the same state-database transaction.
 - Cron runtime callers now resolve a SQLite cron store key. The old
   `resolveCronStorePath` name remains only as a compatibility alias for legacy
@@ -357,8 +362,8 @@ The remaining cleanup is mostly consolidation and deletion:
   whole-store JSON blob. Doctor imports legacy `commitments.json` and removes
   it after a successful import.
 - Cron job definitions, schedule state, and run history no longer have runtime
-  JSON writers or readers. Runtime uses `cron_jobs`, `kv` scope
-  `cron.jobs.state`, and `cron_run_logs`; doctor imports legacy `jobs.json`,
+  JSON writers or readers. Runtime uses `cron_jobs` rows with inline runtime
+  state plus `cron_run_logs`; doctor imports legacy `jobs.json`,
   `jobs-state.json`, and `runs/*.jsonl` files and removes the imported sources.
   Plugin target writebacks update matching `cron_jobs` rows instead of loading
   and replacing the whole cron store.
@@ -434,9 +439,10 @@ The remaining cleanup is mostly consolidation and deletion:
   the legacy JSON files and removes them after a successful migration.
 - Plugin conversation binding approvals now use shared SQLite KV instead of
   `plugin-binding-approvals.json`; the legacy file is a doctor migration input.
-- Generic current-conversation bindings now store one SQLite KV row per
-  conversation instead of rewriting `bindings/current-conversations.json`; doctor
-  imports the legacy JSON file and removes it after a successful migration.
+- Generic current-conversation bindings now store typed
+  `current_conversation_bindings` rows instead of rewriting
+  `bindings/current-conversations.json`; doctor imports the legacy JSON file and
+  removes it after a successful migration.
 - Memory Wiki imported-source sync ledgers now store one SQLite plugin-state row
   per vault/source key instead of rewriting `.openclaw-wiki/source-sync.json`;
   the migration provider imports and removes the legacy JSON ledger.
@@ -479,10 +485,9 @@ The remaining cleanup is mostly consolidation and deletion:
   `acpx/process-leases` instead of a whole-file `process-leases.json` registry.
   Each lease is stored as its own row, preserving startup stale-process reaping
   without a runtime JSON rewrite path.
-- Subagent run registry persistence uses shared SQLite KV rows under
-  `subagent_runs`. The old `subagents/runs.json` path is now only a doctor
-  migration input, and runtime helper names no longer describe the state layer
-  as disk-backed.
+- Subagent run registry persistence uses typed shared `subagent_runs` rows. The
+  old `subagents/runs.json` path is now only a doctor migration input, and
+  runtime helper names no longer describe the state layer as disk-backed.
 - Backup stages the state directory before archiving, copies non-database files,
   snapshots `*.sqlite` databases with `VACUUM INTO`, omits live WAL/SHM
   sidecars, records snapshot metadata in the archive manifest, and records
