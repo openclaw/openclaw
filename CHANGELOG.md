@@ -210,6 +210,7 @@ Docs: https://docs.openclaw.ai
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.
 - Honor owner enforcement for native commands [AI]. (#78864) Thanks @pgondhi987.
+- Gateway/auth: allow `gateway.auth.mode: "none"` loopback backend RPC clients to skip device identity only for local non-browser backend connections, restoring subagent spawns and gateway tools without opening remote or browser-origin bypasses. Fixes #75780. Thanks @yozakura-ava.
 - Tavily: resolve dedicated `tavily_search` and `tavily_extract` tool credentials from the active runtime config snapshot, so `exec` SecretRef-backed API keys do not reach the tools unresolved. (#78610) Thanks @VACInc.
 - Gateway/sessions: clear cached skills snapshots during `/new` and `sessions.reset` so long-lived channel sessions rebuild the visible skill list after skills change. (#78873) Thanks @Evizero.
 - fix(auto-reply): gate inline skill tool dispatch [AI]. (#78517) Thanks @pgondhi987.
@@ -1204,7 +1205,6 @@ Docs: https://docs.openclaw.ai
 - Agents/replies: defer implicit image model discovery and keep OAuth auth-store adoption on persisted profiles during reply startup, cutting OCM MarCodex warm prep to sub-second in live checks. Thanks @shakkernerd.
 - Plugins/tools: enforce `contracts.tools` as the manifest ownership contract for plugin tool registration, rejecting undeclared runtime tool names and adding bundled plugin drift coverage. Thanks @shakkernerd.
 - Agents/Codex: stop prompting message-tool-only source turns to finish with `NO_REPLY`, so quiet turns are represented by not calling the visible message tool instead of conflicting final-text instructions. Thanks @pashpashpash.
-
 - Gateway/config: report failed backup restores as failed in logs and config observe audit records instead of marking them valid. (#70515) Thanks @davidangularme.
 - Compaction: use the active session model fallback chain for implicit summarization failures without persisting fallback model selection, so Azure content-filter 400s can recover. Fixes #64960. (#74470) Thanks @jalehman and @OpenCodeEngineer.
 - Gateway/config: allow `gateway config.patch` to update documented subagent thinking defaults. Fixes #75764. (#75802) Thanks @kAIborg24.
