@@ -739,7 +739,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.threadBindings.defaultSpawnContext": "Thread Spawn Context",
   cron: "Cron",
   "cron.enabled": "Cron Enabled",
-  "cron.store": "Cron Store Path",
+  "cron.store": "Cron Legacy Store Key",
   "cron.maxConcurrentRuns": "Cron Max Concurrent Runs",
   "cron.retry": "Cron Retry Policy",
   "cron.retry.maxAttempts": "Cron Retry Max Attempts",

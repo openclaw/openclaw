@@ -3,7 +3,7 @@ import {
   replaceConfigFile,
 } from "openclaw/plugin-sdk/config-mutation";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { resolveCronStorePath, updateCronStoreJobs } from "openclaw/plugin-sdk/cron-store-runtime";
+import { resolveCronStoreKey, updateCronStoreJobs } from "openclaw/plugin-sdk/cron-store-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -192,8 +192,8 @@ export async function maybePersistResolvedTelegramTarget(params: {
   }
 
   try {
-    const storePath = resolveCronStorePath(params.cfg.cron?.store);
-    const result = await updateCronStoreJobs(storePath, (job) => {
+    const storeKey = resolveCronStoreKey(params.cfg.cron?.store);
+    const result = await updateCronStoreJobs(storeKey, (job) => {
       if (job.delivery?.channel !== "telegram") {
         return undefined;
       }

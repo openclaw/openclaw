@@ -38,7 +38,7 @@ function resolveDefaultCronDir(): string {
   return path.join(resolveConfigDir(), "cron");
 }
 
-function resolveDefaultCronStorePath(): string {
+function resolveDefaultCronStoreKey(): string {
   return path.join(resolveDefaultCronDir(), "jobs.json");
 }
 
@@ -172,16 +172,22 @@ function extractStateFile(store: CronStoreFile): CronStateFile {
   return { version: 1, jobs };
 }
 
-export function resolveCronStorePath(storePath?: string) {
-  if (storePath?.trim()) {
-    const raw = storePath.trim();
+export function resolveCronStoreKey(configuredLegacyStorePath?: string) {
+  if (configuredLegacyStorePath?.trim()) {
+    const raw = configuredLegacyStorePath.trim();
     if (raw.startsWith("~")) {
       return path.resolve(expandHomePrefix(raw));
     }
     return path.resolve(raw);
   }
-  return resolveDefaultCronStorePath();
+  return resolveDefaultCronStoreKey();
 }
+
+/**
+ * @deprecated Use `resolveCronStoreKey`. The returned value is now a SQLite
+ * partition key and legacy import namespace, not a runtime JSON store path.
+ */
+export const resolveCronStorePath = resolveCronStoreKey;
 
 export function legacyCronStoreFileExists(storePath: string): boolean {
   try {

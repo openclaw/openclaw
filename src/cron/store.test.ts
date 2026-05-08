@@ -9,7 +9,7 @@ import {
   loadCronStore,
   loadCronStoreSync,
   loadLegacyCronStoreForMigration,
-  resolveCronStorePath,
+  resolveCronStoreKey,
   saveCronStore,
   updateCronStoreJobs,
 } from "./store.js";
@@ -66,7 +66,7 @@ function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   };
 }
 
-describe("resolveCronStorePath", () => {
+describe("resolveCronStoreKey", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -75,7 +75,7 @@ describe("resolveCronStorePath", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
 
-    const result = resolveCronStorePath("~/cron/jobs.json");
+    const result = resolveCronStoreKey("~/cron/jobs.json");
     expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));
   });
 });

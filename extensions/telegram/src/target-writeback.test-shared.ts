@@ -10,7 +10,7 @@ const replaceConfigFile: AsyncUnknownMock = vi.fn(async (params: unknown) => {
   const record = params as { nextConfig?: unknown; writeOptions?: unknown };
   await writeConfigFile(record.nextConfig, record.writeOptions);
 });
-const resolveCronStorePath: UnknownMock = vi.fn();
+const resolveCronStoreKey: UnknownMock = vi.fn();
 const updateCronStoreJobs: AsyncUnknownMock = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/config-mutation", async () => {
@@ -31,7 +31,7 @@ vi.mock("openclaw/plugin-sdk/cron-store-runtime", async () => {
   );
   return {
     ...actual,
-    resolveCronStorePath,
+    resolveCronStoreKey,
     updateCronStoreJobs,
   };
 });
@@ -75,9 +75,9 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
       readConfigFileSnapshotForWrite.mockReset();
       replaceConfigFile.mockClear();
       writeConfigFile.mockReset();
-      resolveCronStorePath.mockReset();
+      resolveCronStoreKey.mockReset();
       updateCronStoreJobs.mockReset();
-      resolveCronStorePath.mockReturnValue("/tmp/cron/jobs.json");
+      resolveCronStoreKey.mockReturnValue("/tmp/cron/jobs.json");
       updateCronStoreJobs.mockResolvedValue({ updatedJobs: 0 });
     });
 
