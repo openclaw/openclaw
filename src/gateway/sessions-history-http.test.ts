@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, test } from "vitest";
-import {
-  appendAssistantMessageToSessionTranscript,
-  appendExactAssistantMessageToSessionTranscript,
-} from "../config/sessions/transcript.js";
+import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -66,13 +63,15 @@ async function seedSession(params?: { text?: string }) {
 function makeTranscriptAssistantMessage(params: {
   text: string;
   content?: AssistantMessage["content"];
+  provider?: string;
+  model?: string;
 }): AssistantMessage {
   return {
     role: "assistant" as const,
     content: params.content ?? [{ type: "text", text: params.text }],
     api: "openai-responses",
-    provider: "openclaw",
-    model: "delivery-mirror",
+    provider: params.provider ?? "anthropic",
+    model: params.model ?? "claude-sonnet-4-6",
     usage: {
       input: 0,
       output: 0,
@@ -90,6 +89,18 @@ function makeTranscriptAssistantMessage(params: {
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };
+}
+
+async function appendAssistantMessageToSessionTranscript(params: {
+  sessionKey: string;
+  text: string;
+  storePath?: string;
+}) {
+  return await appendExactAssistantMessageToSessionTranscript({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath ?? testState.sessionStorePath,
+    message: makeTranscriptAssistantMessage({ text: params.text }),
+  });
 }
 
 async function appendTranscriptMessage(params: {

@@ -162,6 +162,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/history: omit transcript-only OpenClaw assistant artifacts from `chat.history` and `sessions.get`, and apply history limits after hidden delivery mirrors and Gateway-injected tails are removed. Refs #69208.
 - Gateway/watch: leave `OPENCLAW_TRACE_SYNC_IO` disabled by default in `pnpm gateway:watch:raw` so watch mode avoids noisy Node sync-I/O stack traces unless explicitly requested.
 - Providers: preserve non-OK `text/event-stream` response bodies so provider HTTP errors keep their JSON detail instead of collapsing to generic streaming failures. Fixes #78180.
 - Gateway/auth: make explicit `trusted-proxy` mode fail closed instead of accepting local password fallback credentials after trusted-proxy identity checks fail. Fixes #78684.

@@ -216,6 +216,10 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
+function resolveRawHistoryWindow(limit: number): number {
+  return limit * 20 + 20;
+}
+
 type ChatSendDeliveryEntry = {
   deliveryContext?: {
     channel?: string;
@@ -1747,7 +1751,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const localMessages =
       sessionId && storePath
         ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            maxMessages: max,
+            maxMessages: resolveRawHistoryWindow(max),
+            maxLines: resolveRawHistoryWindow(max),
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           })
         : [];

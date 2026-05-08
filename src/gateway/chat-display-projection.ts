@@ -1,5 +1,6 @@
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../config/sessions/transcript-artifacts.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
@@ -423,6 +424,9 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
+  }
+  if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return true;
   }
   const entry = message as { role?: unknown };
   if (entry.role !== "assistant") {

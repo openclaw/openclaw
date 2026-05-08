@@ -372,6 +372,73 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
   expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
 
+  await fs.writeFile(
+    path.join(dir, "sess-main.jsonl"),
+    [
+      JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+      JSON.stringify({
+        message: {
+          role: "user",
+          content: "older visible",
+          timestamp: 1,
+        },
+      }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: "mirrored delivery",
+          timestamp: 2,
+        },
+      }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: "injected transcript tail",
+          timestamp: 3,
+        },
+      }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          content: "real answer",
+          timestamp: 4,
+        },
+      }),
+    ].join("\n"),
+    "utf-8",
+  );
+  const messagesGet = await directSessionReq<{
+    messages: Array<{
+      role?: string;
+      content?: string;
+      provider?: string;
+      model?: string;
+      timestamp?: number;
+      __openclaw?: { seq?: number };
+    }>;
+  }>("sessions.get", {
+    key: "agent:main:main",
+    limit: 2,
+  });
+  expect(messagesGet.ok).toBe(true);
+  expect(messagesGet.payload?.messages).toEqual([
+    { role: "user", content: "older visible", timestamp: 1, __openclaw: { seq: 1 } },
+    {
+      role: "assistant",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      content: "real answer",
+      timestamp: 4,
+      __openclaw: { seq: 4 },
+    },
+  ]);
+
   const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
     key: "agent:main:main",
     maxLines: 3,

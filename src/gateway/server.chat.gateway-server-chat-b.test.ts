@@ -681,6 +681,61 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history limits visible messages after hiding transcript-only OpenClaw artifacts", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: "older visible",
+            timestamp: 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            content: "mirrored delivery",
+            timestamp: 2,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "openclaw",
+            model: "gateway-injected",
+            content: "injected transcript tail",
+            timestamp: 3,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            content: "real answer",
+            timestamp: 4,
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 2 });
+      expect(messages).toEqual([
+        { role: "user", content: "older visible", timestamp: 1, __openclaw: { seq: 1 } },
+        {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          content: "real answer",
+          timestamp: 4,
+          __openclaw: { seq: 4 },
+        },
+      ]);
+    });
+  });
+
   test("chat.send does not force-disable block streaming", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;
