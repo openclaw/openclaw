@@ -389,6 +389,63 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("continues in a new message when rendered preview crosses maxChars", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createDraftStream(api, { maxChars: 20 });
+
+    stream.update("Hello world");
+    await stream.flush();
+    stream.update("Hello world foo bar baz qux");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello world", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "foo bar baz qux", undefined);
+  });
+
+  it("splits a first oversized rendered preview into chained messages", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createDraftStream(api, { maxChars: 10 });
+
+    stream.update("1234567890ABCDEFGHIJ");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
+  });
+
+  it("retains overflow preview pages", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const onSupersededPreview = vi.fn();
+    const stream = createDraftStream(api, {
+      maxChars: 20,
+      onSupersededPreview,
+    });
+
+    stream.update("Hello world");
+    await stream.flush();
+    stream.update("Hello world foo bar baz qux");
+    await stream.flush();
+
+    expect(onSupersededPreview).toHaveBeenCalledWith({
+      messageId: 17,
+      textSnapshot: "Hello world",
+      parseMode: undefined,
+      visibleSinceMs: expect.any(Number),
+      retain: true,
+    });
+  });
+
   it("enforces maxChars after renderText expansion", async () => {
     const api = createMockDraftApi();
     const warn = vi.fn();
