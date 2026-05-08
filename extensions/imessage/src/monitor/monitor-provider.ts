@@ -54,6 +54,10 @@ import { combineIMessagePayloads } from "./coalesce.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
+  warnGroupAllowlistDropPerChatOnce,
+  warnGroupAllowlistMisconfigOnce,
+} from "./group-allowlist-warnings.js";
+import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
@@ -137,6 +141,16 @@ function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
   );
 }
 
+function formatIMessageReactionText(message: IMessagePayload): string | undefined {
+  if (!message.is_reaction) {
+    return undefined;
+  }
+  const action = message.is_reaction_add === false ? "removed" : "added";
+  const emoji = message.reaction_emoji?.trim() || message.reaction_type?.trim() || "reaction";
+  const target = message.reacted_to_guid?.trim();
+  return target ? `${action} ${emoji} reaction to [id:${target}]` : `${action} ${emoji} reaction`;
+}
+
 async function waitForWatchSubscribeRetryDelay(params: {
   ms: number;
   abortSignal?: AbortSignal;
@@ -192,6 +206,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "imessage",
+    accountId: accountInfo.accountId,
+    log: (message) => runtime.log?.(warn(message)),
+  });
+  warnGroupAllowlistMisconfigOnce({
+    groupPolicy,
+    groups: imessageCfg.groups,
     accountId: accountInfo.accountId,
     log: (message) => runtime.log?.(warn(message)),
   });
@@ -328,7 +348,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   };
 
   async function handleMessageNow(message: IMessagePayload) {
-    const messageText = (message.text ?? "").trim();
+    const reactionText = formatIMessageReactionText(message);
+    const messageText = (reactionText ?? message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
@@ -398,6 +419,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         decision.reason === "from me";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
+      }
+      // Surface the silent-allowlist drop once per chat. Without this, operators
+      // who migrate from BlueBubbles and copy groupPolicy="allowlist" without
+      // populating channels.imessage.groups see every group message vanish at
+      // default log level. See issue #78749.
+      if (decision.reason === "group id not in allowlist") {
+        warnGroupAllowlistDropPerChatOnce({
+          accountId: accountInfo.accountId,
+          chatId: message.chat_id ?? undefined,
+          log: (msg) => runtime.log?.(warn(msg)),
+        });
       }
       return;
     }
@@ -783,6 +815,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         "watch.subscribe",
         {
           attachments: includeAttachments,
+          include_reactions: true,
         },
         { timeoutMs: probeTimeoutMs },
       );

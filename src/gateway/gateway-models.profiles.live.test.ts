@@ -94,7 +94,6 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
-  "google/gemini-3-pro-preview",
   "google/gemini-3.1-flash-lite-preview",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
@@ -697,6 +696,32 @@ describe("resolveExplicitLiveModelCandidates", () => {
       },
       modelFilter: new Set(["xai/grok-4.3"]),
       providerFilter: new Set(["xai"]),
+      targetMatcher: matcher,
+    });
+
+    expect(candidates).toEqual([model]);
+  });
+
+  it("normalizes retired Google Gemini refs before targeted lookup", () => {
+    const model = createGatewayLiveTestModel("google", "gemini-3.1-pro-preview");
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["google"]),
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      env: {},
+    });
+    const candidates = resolveExplicitLiveModelCandidates({
+      modelRegistry: {
+        find(provider, modelId) {
+          expect(provider).toBe("google");
+          expect(modelId).toBe("gemini-3.1-pro-preview");
+          return model;
+        },
+        getAll() {
+          throw new Error("explicit model lookup should not enumerate registry");
+        },
+      },
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      providerFilter: new Set(["google"]),
       targetMatcher: matcher,
     });
 
@@ -1330,7 +1355,10 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toBeDefined();
+      expect(sanitized.profiles.codexProfile).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+      });
       expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
       expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
       expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
@@ -1629,7 +1657,11 @@ function parseExplicitLiveModelRef(
   const slash = trimmed.indexOf("/");
   if (slash !== -1) {
     const provider = normalizeProviderId(trimmed.slice(0, slash));
-    const modelId = trimmed.slice(slash + 1).trim();
+    const rawModelId = trimmed.slice(slash + 1).trim();
+    const modelId =
+      provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
+        ? normalizeGoogleModelId(rawModelId)
+        : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
   if (!providerFilter || providerFilter.size !== 1) {
@@ -2765,6 +2797,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
           );
         }
+        expect(selectedCandidates.length).toBeGreaterThan(0);
         const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
         if (imageCandidates.length === 0) {
           logProgress("[all-models] no image-capable models selected; image probe will be skipped");

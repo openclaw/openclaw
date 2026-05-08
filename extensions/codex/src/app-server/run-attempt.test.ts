@@ -87,6 +87,7 @@ function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
       id: threadId,
+      sessionId: "session-1",
       forkedFromId: null,
       preview: "",
       ephemeral: false,
@@ -673,8 +674,10 @@ describe("runCodexAppServerAttempt", () => {
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.toolsAllow = ["message", "web_search", "heartbeat_respond"];
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start", 60_000);
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -1952,6 +1955,7 @@ describe("runCodexAppServerAttempt", () => {
     const { waitForMethod } = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { pluginConfig: { appServer: { mode: "yolo" } } },
     );
 
     await waitForMethod("turn/start");
@@ -1973,6 +1977,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { pluginConfig: { appServer: { mode: "yolo" } } },
     );
     await waitForMethod("turn/start");
 
@@ -3106,7 +3111,9 @@ describe("runCodexAppServerAttempt", () => {
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const { requests, waitForMethod, completeTurn } = createResumeHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
     await waitForMethod("turn/start");
     await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
@@ -4006,7 +4013,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
-      serviceTier: "fast",
+      serviceTier: "priority",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
@@ -4018,7 +4025,7 @@ describe("runCodexAppServerAttempt", () => {
             approvalPolicy: "on-request",
             approvalsReviewer: "guardian_subagent",
             sandboxPolicy: { type: "dangerFullAccess" },
-            serviceTier: "fast",
+            serviceTier: "priority",
             model: "gpt-5.4-codex",
           }),
         },
@@ -4026,7 +4033,7 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
-  it("drops invalid legacy service tiers before app-server resume and turn requests", async () => {
+  it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
@@ -4046,13 +4053,9 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    expect(resumeRequest?.params).toEqual(
-      expect.not.objectContaining({ serviceTier: expect.anything() }),
-    );
+    expect(resumeRequest?.params).toEqual(expect.objectContaining({ serviceTier: "priority" }));
     const turnRequest = requests.find((request) => request.method === "turn/start");
-    expect(turnRequest?.params).toEqual(
-      expect.not.objectContaining({ serviceTier: expect.anything() }),
-    );
+    expect(turnRequest?.params).toEqual(expect.objectContaining({ serviceTier: "priority" }));
   });
 
   it("keys plugin app inventory by websocket credentials without exposing them", () => {
