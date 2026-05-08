@@ -2,6 +2,11 @@ import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/sha
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
+import {
+  resolveTrustedSourceLinkedOfficialClawHubSpec,
+  resolveTrustedSourceLinkedOfficialNpmSpec,
+} from "../../plugins/update.js";
 import {
   runPluginPayloadSmokeCheck,
   type PluginPayloadSmokeFailure,
@@ -73,7 +78,15 @@ export async function runPostCorePluginConvergence(params: {
   }));
 
   const records: Record<string, PluginInstallRecord> = repair.records;
-  const smoke = await runPluginPayloadSmokeCheck({ records, env });
+  // Filter the smoke-check input to active records ONLY: configured /
+  // enabled plugins, plus trusted-source-linked official sync targets
+  // (mirroring the existing `collectMissingPluginInstallPayloads` policy
+  // at update-command.ts:~218 with `skipDisabledPlugins: true`). Without
+  // this filter, a stale install record for a disabled or no-longer-
+  // configured plugin whose payload was deleted on disk would block the
+  // entire update — even though the gateway will never load that plugin.
+  const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records });
+  const smoke = await runPluginPayloadSmokeCheck({ records: smokeRecords, env });
   for (const failure of smoke.failures) {
     warnings.push({
       pluginId: failure.pluginId,
@@ -90,6 +103,50 @@ export async function runPostCorePluginConvergence(params: {
     smokeFailures: smoke.failures,
     installRecords: records,
   };
+}
+
+/**
+ * Drop install records that the gateway would never activate: disabled
+ * plugin entries, plugins listed in `plugins.deny`, etc. Records that
+ * resolve as a trusted-source-linked official install (npm or ClawHub)
+ * are retained even when the entry is disabled, mirroring the existing
+ * `collectMissingPluginInstallPayloads({ skipDisabledPlugins: true,
+ * syncOfficialPluginInstalls: true })` policy at
+ * `update-command.ts:~218`. We do NOT collapse to the configured plugin
+ * id set here — that would over-filter and miss e.g. providers/runtimes
+ * that are enabled implicitly via auth profiles or model refs. Effective
+ * enable state is the right precision boundary.
+ */
+export function filterRecordsToActive(params: {
+  cfg: OpenClawConfig;
+  records: Record<string, PluginInstallRecord>;
+}): Record<string, PluginInstallRecord> {
+  const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
+  const filtered: Record<string, PluginInstallRecord> = {};
+  for (const [pluginId, record] of Object.entries(params.records)) {
+    if (!record || typeof record !== "object") {
+      continue;
+    }
+    const enableState = resolveEffectiveEnableState({
+      id: pluginId,
+      origin: "global",
+      config: normalizedPluginConfig,
+      rootConfig: params.cfg,
+    });
+    if (enableState.enabled) {
+      filtered[pluginId] = record;
+      continue;
+    }
+    // Even when disabled, retain trusted-source-linked official installs
+    // because the existing post-update sync path treats them as
+    // authoritative regardless of the entry's enable flag.
+    const officialNpm = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
+    const officialClawHub = resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record });
+    if (officialNpm || officialClawHub) {
+      filtered[pluginId] = record;
+    }
+  }
+  return filtered;
 }
 
 /**

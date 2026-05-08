@@ -15,6 +15,7 @@ vi.mock("./plugin-payload-validation.js", () => ({
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   convergenceWarningsToOutcomes,
+  filterRecordsToActive,
   runPostCorePluginConvergence,
 } from "./post-core-plugin-convergence.js";
 
@@ -209,5 +210,82 @@ describe("convergenceWarningsToOutcomes", () => {
       installRecords: {},
     });
     expect(folded).toEqual({ warnings: [], outcomes: [], errored: false });
+  });
+});
+
+describe("filterRecordsToActive", () => {
+  it("retains records for plugins whose entry is enabled", () => {
+    const records = {
+      enabled: { source: "npm" as const, installPath: "/p/enabled" },
+    };
+    const filtered = filterRecordsToActive({
+      cfg: {
+        plugins: { enabled: true, entries: { enabled: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      records,
+    });
+    expect(filtered).toEqual(records);
+  });
+
+  it("drops records for plugins whose entry is explicitly disabled", () => {
+    const records = {
+      "stale-disabled": { source: "npm" as const, installPath: "/p/stale" },
+      "active-plugin": { source: "npm" as const, installPath: "/p/active" },
+    };
+    const filtered = filterRecordsToActive({
+      cfg: {
+        plugins: {
+          enabled: true,
+          entries: {
+            "stale-disabled": { enabled: false },
+            "active-plugin": { enabled: true },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      records,
+    });
+    expect(filtered).toEqual({
+      "active-plugin": { source: "npm", installPath: "/p/active" },
+    });
+  });
+
+  it("drops records for plugins listed in plugins.deny", () => {
+    const records = {
+      denied: { source: "npm" as const, installPath: "/p/denied" },
+    };
+    const filtered = filterRecordsToActive({
+      cfg: {
+        plugins: {
+          enabled: true,
+          deny: ["denied"],
+        },
+      } as unknown as OpenClawConfig,
+      records,
+    });
+    expect(filtered).toEqual({});
+  });
+
+  it("retains a disabled trusted-source-linked official npm install (mirroring syncOfficialPluginInstalls policy)", () => {
+    // The Codex install record carries the trusted-source marker. The
+    // existing post-update sync path treats it as authoritative regardless
+    // of the entry's enable flag, so the convergence smoke check must too.
+    const records = {
+      codex: {
+        source: "npm" as const,
+        spec: "@openclaw/codex",
+        installPath: "/p/codex",
+        trustedSourceLinkedOfficial: true,
+      },
+    };
+    const filtered = filterRecordsToActive({
+      cfg: {
+        plugins: {
+          enabled: true,
+          entries: { codex: { enabled: false } },
+        },
+      } as unknown as OpenClawConfig,
+      records,
+    });
+    expect(filtered).toEqual(records);
   });
 });
