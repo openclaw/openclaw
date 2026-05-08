@@ -67,14 +67,23 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelector(".qs-card--model")).not.toBeNull();
-    expect(container.querySelector(".qs-card--channels")).not.toBeNull();
-    expect(container.querySelector(".qs-card--security")).not.toBeNull();
-    expect(container.querySelector(".qs-card--appearance")).not.toBeNull();
-    expect(container.querySelector(".qs-card--automations")).not.toBeNull();
-    expect(container.querySelector(".qs-side-stack .qs-card--appearance")).not.toBeNull();
-    expect(container.querySelector(".qs-side-stack .qs-card--automations")).not.toBeNull();
-    expect(container.querySelector(".qs-card--personal")).not.toBeNull();
+    expect(
+      Array.from(container.querySelectorAll(".qs-card"))
+        .map((card) =>
+          Array.from(card.classList).find(
+            (className) => className.startsWith("qs-card--") && className !== "qs-card--span-all",
+          ),
+        )
+        .filter(Boolean),
+    ).toEqual([
+      "qs-card--model",
+      "qs-card--channels",
+      "qs-card--security",
+      "qs-card--personal",
+      "qs-card--appearance",
+      "qs-card--automations",
+    ]);
+    expect(container.querySelectorAll(".qs-side-stack .qs-card")).toHaveLength(2);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });
 
@@ -203,9 +212,9 @@ describe("renderQuickSettings", () => {
       const input = inputs.find((node) =>
         node.closest(".qs-identity-card--assistant"),
       ) as HTMLInputElement | null;
-      expect(input).not.toBeNull();
+      expect(input?.type).toBe("file");
       if (!input) {
-        return;
+        throw new Error("expected assistant avatar file input");
       }
 
       Object.defineProperty(input, "files", {
@@ -247,7 +256,7 @@ describe("renderQuickSettings", () => {
     const clear = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Clear override",
     );
-    expect(clear).not.toBeUndefined();
+    expect(clear?.textContent?.trim()).toBe("Clear override");
     clear?.dispatchEvent(new Event("click"));
 
     expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
