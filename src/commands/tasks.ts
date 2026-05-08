@@ -9,7 +9,7 @@ import {
   updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
-import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
+import { loadCronStoreSync, resolveCronStoreKey, resolveCronStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -74,7 +74,7 @@ async function loadTaskCancelConfig() {
 function configureTaskMaintenanceFromConfig(): void {
   const cfg = getRuntimeConfig();
   configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+    cronStorePath: resolveCronStoreKey(cfg.cron?.store),
   });
 }
 

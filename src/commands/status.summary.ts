@@ -4,7 +4,7 @@ import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { listSessionEntries } from "../config/sessions/store.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveCronStorePath } from "../cron/store.js";
+import { resolveCronStoreKey } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -149,7 +149,7 @@ export async function getStatusSummary(
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
   taskMaintenanceModule.configureTaskRegistryMaintenance({
-    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+    cronStorePath: resolveCronStoreKey(cfg.cron?.store),
   });
   const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
   const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();

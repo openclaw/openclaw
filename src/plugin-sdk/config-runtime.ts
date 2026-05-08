@@ -74,6 +74,7 @@ export { resolveActiveTalkProviderConfig } from "../config/talk.js";
 export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export {
   loadCronStore,
+  resolveCronStoreKey,
   resolveCronStorePath,
   saveCronStore,
   updateCronStoreJobs,

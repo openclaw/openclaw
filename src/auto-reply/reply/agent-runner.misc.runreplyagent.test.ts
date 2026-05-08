@@ -189,6 +189,7 @@ const loadCronStoreMock = vi.fn();
 vi.mock("../../cron/store.js", () => {
   return {
     loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
+    resolveCronStoreKey: (statePath?: string) => statePath ?? "/tmp/openclaw-cron-store.json",
     resolveCronStorePath: (statePath?: string) => statePath ?? "/tmp/openclaw-cron-store.json",
   };
 });

@@ -1,5 +1,6 @@
 export {
   loadCronStore,
+  resolveCronStoreKey,
   resolveCronStorePath,
   saveCronStore,
   updateCronStoreJobs,

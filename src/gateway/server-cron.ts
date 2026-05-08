@@ -14,7 +14,7 @@ import { appendCronRunLogToSqlite, resolveCronRunLogPruneOptions } from "../cron
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
-import { resolveCronStorePath } from "../cron/store.js";
+import { resolveCronStoreKey } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -38,6 +38,7 @@ import {
 
 export type GatewayCronState = {
   cron: CronServiceContract;
+  /** SQLite cron partition key. Kept as `storePath` for older RPC/status shapes. */
   storePath: string;
   cronEnabled: boolean;
 };
@@ -106,7 +107,7 @@ export function buildGatewayCronService(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const storePath = resolveCronStorePath(params.cfg.cron?.store);
+  const storePath = resolveCronStoreKey(params.cfg.cron?.store);
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
@@ -381,7 +382,7 @@ export function buildGatewayCronService(params: {
         mode,
         accountId,
       }),
-    log: getChildLogger({ module: "cron", storePath }),
+    log: getChildLogger({ module: "cron", storeKey: storePath }),
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
       // Build hook event from CronEvent. The job snapshot is carried on the
@@ -459,7 +460,7 @@ export function buildGatewayCronService(params: {
           },
           runLogPrune,
         ).catch((err) => {
-          cronLogger.warn({ err: String(err), storePath }, "cron: run log append failed");
+          cronLogger.warn({ err: String(err), storeKey: storePath }, "cron: run log append failed");
         });
       }
     },

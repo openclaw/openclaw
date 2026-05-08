@@ -1,5 +1,5 @@
 import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
-import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
+import { loadCronStoreSync, resolveCronStoreKey } from "../cron/store.js";
 
 const MAX_QUOTED_FIELD_CHARS = 140;
 
@@ -99,7 +99,7 @@ function readCronJobName(cronJobId: string | undefined): string | undefined {
     return undefined;
   }
   try {
-    const store = loadCronStoreSync(resolveCronStorePath());
+    const store = loadCronStoreSync(resolveCronStoreKey());
     const job = store.jobs.find((entry) => entry.id === cronJobId);
     return typeof job?.name === "string" && job.name.trim() ? job.name.trim() : undefined;
   } catch {

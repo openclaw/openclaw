@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { readCronRunLogEntriesFromSqliteSync } from "../cron/run-log.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
-import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
+import { loadCronStoreSync, resolveCronStoreKey } from "../cron/store.js";
 import type { CronJob, CronStoreFile } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
@@ -68,7 +68,7 @@ const SWEEP_YIELD_BATCH_SIZE = 25;
 let sweeper: NodeJS.Timeout | null = null;
 let deferredSweep: NodeJS.Timeout | null = null;
 let sweepInProgress = false;
-let configuredCronStorePath: string | undefined;
+let configuredCronStoreKey: string | undefined;
 let configuredCronRuntimeAuthoritative = false;
 
 type TaskRegistryMaintenanceRuntime = {
@@ -97,7 +97,7 @@ type TaskRegistryMaintenanceRuntime = {
   resolveTaskForLookupToken: typeof resolveTaskForLookupToken;
   setTaskCleanupAfterById: typeof setTaskCleanupAfterById;
   isCronRuntimeAuthoritative: () => boolean;
-  resolveCronStorePath: typeof resolveCronStorePath;
+  resolveCronStoreKey: typeof resolveCronStoreKey;
   loadCronStoreSync: typeof loadCronStoreSync;
   readCronRunLogEntriesSync: typeof readCronRunLogEntriesFromSqliteSync;
 };
@@ -135,7 +135,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
   isCronRuntimeAuthoritative: () => configuredCronRuntimeAuthoritative,
-  resolveCronStorePath: () => configuredCronStorePath ?? resolveCronStorePath(),
+  resolveCronStoreKey: () => configuredCronStoreKey ?? resolveCronStoreKey(),
   loadCronStoreSync,
   readCronRunLogEntriesSync: readCronRunLogEntriesFromSqliteSync,
 };
@@ -164,7 +164,7 @@ type CronTerminalRecovery = {
 };
 
 type CronRecoveryContext = {
-  storePath: string;
+  storeKey: string;
   store?: CronStoreFile | null;
   runLogsByJobId: Map<string, CronRunLogEntry[]>;
 };
@@ -176,7 +176,7 @@ type BackingSessionLookupContext = {
 
 function createCronRecoveryContext(): CronRecoveryContext {
   return {
-    storePath: taskRegistryMaintenanceRuntime.resolveCronStorePath(),
+    storeKey: taskRegistryMaintenanceRuntime.resolveCronStoreKey(),
     runLogsByJobId: new Map<string, CronRunLogEntry[]>(),
   };
 }
@@ -280,7 +280,7 @@ function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): Cron
   }
   let entries: CronRunLogEntry[] = [];
   try {
-    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync(context.storePath, {
+    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync(context.storeKey, {
       jobId,
       limit: 5000,
     });
@@ -296,7 +296,7 @@ function getCronStore(context: CronRecoveryContext): CronStoreFile | null {
     return context.store;
   }
   try {
-    context.store = taskRegistryMaintenanceRuntime.loadCronStoreSync(context.storePath);
+    context.store = taskRegistryMaintenanceRuntime.loadCronStoreSync(context.storeKey);
   } catch {
     context.store = null;
   }
@@ -1058,7 +1058,7 @@ export function setTaskRegistryMaintenanceRuntimeForTests(
 
 export function resetTaskRegistryMaintenanceRuntimeForTests(): void {
   taskRegistryMaintenanceRuntime = defaultTaskRegistryMaintenanceRuntime;
-  configuredCronStorePath = undefined;
+  configuredCronStoreKey = undefined;
   configuredCronRuntimeAuthoritative = false;
 }
 
@@ -1066,7 +1066,7 @@ export function configureTaskRegistryMaintenance(options: {
   cronStorePath?: string;
   cronRuntimeAuthoritative?: boolean;
 }): void {
-  configuredCronStorePath = options.cronStorePath?.trim() || undefined;
+  configuredCronStoreKey = options.cronStorePath?.trim() || undefined;
   if (options.cronRuntimeAuthoritative !== undefined) {
     configuredCronRuntimeAuthoritative = options.cronRuntimeAuthoritative;
   }

@@ -1,4 +1,4 @@
-import { loadCronStore, resolveCronStorePath } from "../../cron/store.js";
+import { loadCronStore, resolveCronStoreKey } from "../../cron/store.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -31,7 +31,7 @@ export async function hasSessionRelatedCronJobs(params: {
   sessionKey?: string;
 }): Promise<boolean> {
   try {
-    const cronStorePath = resolveCronStorePath(params.cronStorePath);
+    const cronStorePath = resolveCronStoreKey(params.cronStorePath);
     const store = await loadCronStore(cronStorePath);
     if (store.jobs.length === 0) {
       return false;
