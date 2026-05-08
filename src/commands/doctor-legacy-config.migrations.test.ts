@@ -666,11 +666,11 @@ describe("normalizeCompatibilityConfigValues", () => {
       agents: {
         defaults: {
           model: {
-            primary: "google-gemini-cli/gemini-3.1-pro-preview",
+            primary: "google-gemini-cli/gemini-3-pro-preview",
             fallbacks: ["google-gemini-cli/gemini-3-flash-preview"],
           },
           models: {
-            "google-gemini-cli/gemini-3.1-pro-preview": { alias: "Gemini CLI" },
+            "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
             "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
           },
         },
@@ -683,7 +683,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
-      "google-gemini-cli/gemini-3.1-pro-preview": { alias: "Gemini CLI" },
+      "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
       "google/gemini-3.1-pro-preview": {
         alias: "Gemini API",
         agentRuntime: { id: "google-gemini-cli" },
