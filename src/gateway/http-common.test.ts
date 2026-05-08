@@ -14,6 +14,7 @@ import {
   sendJson,
   sendMethodNotAllowed,
   sendRateLimited,
+  sendScopeForbidden,
   sendText,
   sendUnauthorized,
   setDefaultSecurityHeaders,
@@ -130,6 +131,26 @@ describe("sendUnauthorized", () => {
     expect(end).toHaveBeenCalledWith(
       JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
     );
+  });
+});
+
+describe("sendScopeForbidden", () => {
+  it("responds with 403 and a structured forbidden payload including the missing scope", () => {
+    const { res, end } = makeMockHttpResponse();
+    sendScopeForbidden(res, "operator.write");
+    expect(res.statusCode).toBe(403);
+    expect(end).toHaveBeenCalledWith(
+      JSON.stringify({
+        ok: false,
+        error: { type: "forbidden", message: "missing scope: operator.write" },
+      }),
+    );
+  });
+
+  it("embeds the exact missingScope string in the message", () => {
+    const { res, end } = makeMockHttpResponse();
+    sendScopeForbidden(res, "operator.admin");
+    expect(end).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.admin"));
   });
 });
 

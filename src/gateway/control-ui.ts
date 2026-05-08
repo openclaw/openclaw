@@ -45,7 +45,7 @@ import {
   normalizeControlUiBasePath,
   resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
+import { sendGatewayAuthFailure, sendScopeForbidden } from "./http-common.js";
 import {
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
@@ -341,13 +341,7 @@ async function authorizeControlUiReadRequest(
     requestedScopes,
   );
   if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendScopeForbidden(res, scopeAuth.missingScope);
     return false;
   }
 

@@ -68,6 +68,16 @@ export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayA
   sendUnauthorized(res);
 }
 
+export function sendScopeForbidden(res: ServerResponse, missingScope: string) {
+  sendJson(res, 403, {
+    ok: false,
+    error: {
+      type: "forbidden",
+      message: `missing scope: ${missingScope}`,
+    },
+  });
+}
+
 export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },

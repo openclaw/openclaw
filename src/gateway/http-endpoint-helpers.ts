@@ -1,7 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { readJsonBodyOrError, sendJson, sendMethodNotAllowed } from "./http-common.js";
+import {
+  readJsonBodyOrError,
+  sendJson,
+  sendMethodNotAllowed,
+  sendScopeForbidden,
+} from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
@@ -57,13 +62,7 @@ export async function handleGatewayPostJsonEndpoint(
       requestedScopes,
     );
     if (!scopeAuth.allowed) {
-      sendJson(res, 403, {
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: `missing scope: ${scopeAuth.missingScope}`,
-        },
-      });
+      sendScopeForbidden(res, scopeAuth.missingScope);
       return undefined;
     }
   }
