@@ -3,8 +3,9 @@ import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { clearNvidiaFeaturedModelCacheForTests } from "./provider-catalog.js";
 
 type NvidiaManifest = {
   providerAuthChoices?: Array<{ choiceId?: string; method?: string; provider?: string }>;
@@ -19,6 +20,11 @@ function readManifest(): NvidiaManifest {
 async function registerNvidiaProvider() {
   return registerSingleProviderPlugin(plugin);
 }
+
+afterEach(() => {
+  clearNvidiaFeaturedModelCacheForTests();
+  vi.unstubAllGlobals();
+});
 
 describe("nvidia provider hooks", () => {
   it("registers the nvidia provider with correct metadata", async () => {
@@ -115,7 +121,11 @@ describe("nvidia provider hooks", () => {
     expect(provider.wrapStreamFn).toBeUndefined();
   });
 
-  it("surfaces the bundled NVIDIA models via augmentModelCatalog", async () => {
+  it("surfaces the bundled NVIDIA models when featured catalog fetch fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 503 })),
+    );
     const provider = await registerNvidiaProvider();
 
     const entries = await provider.augmentModelCatalog?.({
@@ -130,6 +140,38 @@ describe("nvidia provider hooks", () => {
       "z-ai/glm5",
     ]);
     expect(entries?.filter((entry) => entry.provider !== "nvidia")).toEqual([]);
+  });
+
+  it("surfaces live featured NVIDIA models via augmentModelCatalog", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          "featured-models": [
+            {
+              model: "minimaxai/minimax-m2.7",
+              "model-name": "Minimax M2.7",
+              context: 196608,
+              "max-output": 8192,
+            },
+          ],
+        }),
+      ),
+    );
+    const provider = await registerNvidiaProvider();
+
+    const entries = await provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [],
+    });
+
+    expect(entries?.map((entry) => entry.id)).toEqual([
+      "minimaxai/minimax-m2.7",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "moonshotai/kimi-k2.5",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
+    ]);
   });
 
   it("opts into literal provider-prefix preservation", async () => {
