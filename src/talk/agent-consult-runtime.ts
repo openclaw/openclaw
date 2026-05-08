@@ -4,6 +4,10 @@ import {
   forkSessionFromParent,
   resolveParentForkDecision,
 } from "../auto-reply/reply/session-fork.js";
+import {
+  createSqliteSessionTranscriptLocator,
+  isSqliteSessionTranscriptLocator,
+} from "../config/sessions/paths.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -246,9 +250,14 @@ export async function consultRealtimeVoiceAgent(params: {
     resolvedDeliveryContext ?? deliveryContextFromSession(sessionEntry);
   const sessionId = sessionEntry.sessionId;
 
-  const sessionFile = params.agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
-    agentId,
-  });
+  const persistedSessionFile = sessionEntry.sessionFile?.trim();
+  const sessionFile =
+    persistedSessionFile && isSqliteSessionTranscriptLocator(persistedSessionFile)
+      ? persistedSessionFile
+      : createSqliteSessionTranscriptLocator({
+          agentId,
+          sessionId,
+        });
   const result = await params.agentRuntime.runEmbeddedPiAgent({
     sessionId,
     sessionKey: params.sessionKey,

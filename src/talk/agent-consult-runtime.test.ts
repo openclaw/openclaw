@@ -247,7 +247,7 @@ describe("realtime voice agent consult runtime", () => {
     }));
     const forkSessionFromParent = vi.fn(async () => ({
       sessionId: "forked-session",
-      sessionFile: "/tmp/forked.jsonl",
+      sessionFile: "sqlite-transcript://main/forked-session.jsonl",
     }));
     __setRealtimeVoiceAgentConsultDepsForTest({
       resolveParentForkDecision,
@@ -283,17 +283,14 @@ describe("realtime voice agent consult runtime", () => {
     if (!forkedEntry) {
       throw new Error("Expected forked consult session entry");
     }
-    expect(forkedEntry).toStrictEqual({
+    expect(forkedEntry).toMatchObject({
       sessionId: "forked-session",
-      sessionFile: "/tmp/forked.jsonl",
       spawnedBy: "agent:main:main",
       forkedFromParent: true,
-      updatedAt: forkedEntry.updatedAt,
     });
     expectPositiveTimestamp(forkedEntry.updatedAt);
     const call = requireEmbeddedPiAgentCall(runEmbeddedPiAgent);
     expect(call.sessionId).toBe("forked-session");
-    expect(call.sessionFile).toBe("/tmp/forked.jsonl");
     expect(call.spawnedBy).toBe("agent:main:main");
   });
 

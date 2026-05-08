@@ -28,8 +28,6 @@ const hoisted = await vi.hoisted(async () => {
 
 vi.mock("../../config/sessions/paths.js", () => ({
   createSqliteSessionTranscriptLocator: hoisted.createSqliteSessionTranscriptLocatorMock,
-  resolveSessionFilePath: hoisted.resolveSessionFilePathMock,
-  resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
 }));
 
 vi.mock("../../config/sessions/store.js", () => ({
