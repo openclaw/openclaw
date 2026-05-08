@@ -91,14 +91,81 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.failures[0]?.detail).toContain("dist/index.js");
   });
 
-  it("falls back to package root index.js when main is absent", async () => {
+  it("accepts a manifest with no main field (OpenClaw plugins commonly use `exports` or `openclaw.extensions`)", async () => {
     const dir = path.join(tmpRoot, "matrix");
-    await writePackage(dir, { name: "@openclaw/plugin-matrix" }, "module.exports = {};");
+    await writePackage(dir, { name: "@openclaw/plugin-matrix" });
     const result = await runPluginPayloadSmokeCheck({
       records: { matrix: { source: "npm", installPath: dir } },
       env: {},
     });
     expect(result.failures).toEqual([]);
+  });
+
+  it("accepts a manifest that declares only `exports` and no `main`", async () => {
+    const dir = path.join(tmpRoot, "qa");
+    await writePackage(dir, {
+      name: "@openclaw/qa-channel",
+      exports: { ".": "./index.js", "./api.js": "./api.js" },
+    });
+    const result = await runPluginPayloadSmokeCheck({
+      records: { qa: { source: "npm", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toEqual([]);
+  });
+
+  it("accepts a manifest that declares only `openclaw.extensions` and no `main`", async () => {
+    const dir = path.join(tmpRoot, "brave");
+    await writePackage(dir, {
+      name: "@openclaw/brave-plugin",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    const result = await runPluginPayloadSmokeCheck({
+      records: { brave: { source: "npm", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toEqual([]);
+  });
+
+  it("reports a failure when `main` resolves to a directory rather than a file", async () => {
+    const dir = path.join(tmpRoot, "dir-main");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "package.json"),
+      JSON.stringify({ name: "dir-main", main: "lib" }),
+      "utf8",
+    );
+    await fs.mkdir(path.join(dir, "lib"), { recursive: true });
+    const result = await runPluginPayloadSmokeCheck({
+      records: { x: { source: "npm", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({ pluginId: "x", reason: "missing-main-entry" });
+  });
+
+  it("reports a failure when `main` is a symlink whose target is missing", async () => {
+    const dir = path.join(tmpRoot, "broken-symlink");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "package.json"),
+      JSON.stringify({ name: "broken-symlink", main: "dist/entry.js" }),
+      "utf8",
+    );
+    await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+    await fs.symlink(
+      path.join(dir, "dist", "missing-target.js"),
+      path.join(dir, "dist", "entry.js"),
+    );
+    const result = await runPluginPayloadSmokeCheck({
+      records: { x: { source: "npm", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      pluginId: "x",
+      reason: "missing-main-entry",
+    });
   });
 
   it("reports a failure when package.json cannot be parsed", async () => {

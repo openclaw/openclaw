@@ -20,6 +20,16 @@ export type PostCoreConvergenceResult = {
   warnings: PostCoreConvergenceWarning[];
   errored: boolean;
   smokeFailures: PluginPayloadSmokeFailure[];
+  /**
+   * Install records as they exist on disk *after* the convergence pass has
+   * (potentially) repaired missing plugins. Callers that subsequently write
+   * back the installed-plugin index MUST seed their write from these records
+   * — otherwise the in-memory pre-convergence snapshot will overwrite the
+   * fresh repairs that convergence just persisted via
+   * `repairMissingConfiguredPluginInstalls` →
+   * `writePersistedInstalledPluginIndexInstallRecords`.
+   */
+  installRecords: Record<string, PluginInstallRecord>;
 };
 
 const REPAIR_GUIDANCE = "Run `openclaw doctor --fix` to retry plugin repair.";
@@ -70,6 +80,7 @@ export async function runPostCorePluginConvergence(params: {
     warnings,
     errored: warnings.length > 0,
     smokeFailures: smoke.failures,
+    installRecords: records,
   };
 }
 

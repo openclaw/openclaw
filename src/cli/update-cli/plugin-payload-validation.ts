@@ -80,9 +80,9 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
-    let manifest: { main?: unknown };
+    let manifest: { main?: unknown; exports?: unknown; openclaw?: unknown };
     try {
-      manifest = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as { main?: unknown };
+      manifest = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as typeof manifest;
     } catch (err) {
       failures.push({
         pluginId,
@@ -93,8 +93,16 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
-    const mainRel =
-      typeof manifest.main === "string" && manifest.main.trim() ? manifest.main.trim() : "index.js";
+    // Only fail on `missing-main-entry` when `main` is *explicitly declared*
+    // and absent on disk. OpenClaw plugins use multiple entry mechanisms
+    // (`main`, `exports`, `openclaw.extensions`); fully resolving `exports`
+    // conditional sub-keys is out of scope for a static smoke check, so we
+    // are intentionally permissive: if `main` is not declared we trust the
+    // package and stop at the dir/package.json existence checks above.
+    if (typeof manifest.main !== "string" || !manifest.main.trim()) {
+      continue;
+    }
+    const mainRel = manifest.main.trim();
     const mainPath = path.join(installPath, mainRel);
     const mainStat = await safeStat(mainPath);
     if (!mainStat?.isFile()) {

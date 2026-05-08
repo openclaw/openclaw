@@ -61,6 +61,23 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it("returns the freshly-loaded post-repair install records so callers can re-seed pluginConfig", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async () => {
+      // Simulate repair persisting a new install record on disk.
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+        discord: { source: "npm", installPath: "/p/discord" },
+      });
+      return { changes: ["Repaired"], warnings: [] };
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: { plugins: { entries: { discord: { enabled: true } } } } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.installRecords).toEqual({
+      discord: { source: "npm", installPath: "/p/discord" },
+    });
+  });
+
   it("flags errored=true and surfaces actionable guidance when repair warns", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
@@ -162,6 +179,7 @@ describe("convergenceWarningsToOutcomes", () => {
       ],
       errored: true,
       smokeFailures: [],
+      installRecords: {},
     });
     expect(folded.errored).toBe(true);
     expect(folded.outcomes).toEqual([
@@ -176,6 +194,7 @@ describe("convergenceWarningsToOutcomes", () => {
       warnings: [],
       errored: false,
       smokeFailures: [],
+      installRecords: {},
     });
     expect(folded).toEqual({ warnings: [], outcomes: [], errored: false });
   });

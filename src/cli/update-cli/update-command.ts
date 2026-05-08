@@ -1116,11 +1116,26 @@ async function updatePluginsAfterCoreUpdate(params: {
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
+    // Mandatory post-core convergence requires a parseable config to know
+    // which plugins are configured. If we still see an invalid config after
+    // the post-install doctor pass, we can't validate plugin payloads — and
+    // restarting the gateway in this state would just fail health-checks
+    // with a config error. Surface this as a hard error with guidance so
+    // the existing pre-restart gate (`status === "error"` ⇒ exit 1) fires.
+    const guidance = [
+      "Run `openclaw doctor` to inspect the config validation errors.",
+      "Once the config parses, rerun `openclaw update`.",
+    ];
+    const message =
+      "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.";
     if (!params.opts.json) {
-      defaultRuntime.log(theme.warn("Skipping plugin updates: config is invalid."));
+      defaultRuntime.log(theme.error(message));
+      for (const line of guidance) {
+        defaultRuntime.log(theme.muted(`  ${line}`));
+      }
     }
     return {
-      status: "skipped",
+      status: "error",
       reason: "invalid-config",
       changed: false,
       sync: {
@@ -1135,7 +1150,7 @@ async function updatePluginsAfterCoreUpdate(params: {
         outcomes: [],
       },
       integrityDrifts: [],
-      warnings: [],
+      warnings: [{ reason: "invalid-config", message, guidance }],
     };
   }
 
@@ -1313,10 +1328,22 @@ async function updatePluginsAfterCoreUpdate(params: {
     warnings.push(warning);
     if (!params.opts.json) {
       defaultRuntime.log(theme.warn(warning.message));
+      for (const guidance of warning.guidance) {
+        defaultRuntime.log(theme.muted(`  ${guidance}`));
+      }
     }
   }
   pluginUpdateOutcomes.push(...convergenceFolded.outcomes);
   const convergenceErrored = convergenceFolded.errored;
+  // Convergence may have called
+  // `writePersistedInstalledPluginIndexInstallRecords` directly (via
+  // `repairMissingConfiguredPluginInstalls`). Adopt those fresh records
+  // into the in-memory `pluginConfig` so the commit block below cannot
+  // overwrite the disk with the stale pre-repair snapshot.
+  if (convergence.changes.length > 0) {
+    pluginConfig = withPluginInstallRecords(pluginConfig, convergence.installRecords);
+    pluginsChanged = true;
+  }
 
   if (pluginsChanged) {
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
