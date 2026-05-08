@@ -138,7 +138,7 @@ describe("commands registry", () => {
       textAliases: ["/btw", "/side"],
     });
     expect(normalizeCommandBody("/side what changed?")).toBe("/btw what changed?");
-    expect(findCommandByNativeName("side")?.key).toBe("btw");
+    expect(requireNativeCommand("side").key).toBe("btw");
     expect(listNativeCommandSpecs().find((spec) => spec.name === "side")).toMatchObject({
       acceptsArgs: true,
     });
@@ -217,7 +217,7 @@ describe("commands registry", () => {
       { provider: "discord" },
     );
     expect([...nativeNameSet(native)]).toContain("voice");
-    expect(findCommandByNativeName("voice", "discord")?.key).toBe("tts");
+    expect(requireNativeCommand("voice", "discord").key).toBe("tts");
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
   });
 
@@ -228,7 +228,7 @@ describe("commands registry", () => {
       { provider: "slack" },
     );
     expect([...nativeNameSet(native)]).toContain("agentstatus");
-    expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
+    expect(requireNativeCommand("agentstatus", "slack").key).toBe("status");
     expect(findCommandByNativeName("status", "slack")).toBeUndefined();
     expect(
       findCommandByNativeName("agentstatus", "slack", {
@@ -243,11 +243,10 @@ describe("commands registry", () => {
   });
 
   it("can resolve default native command names without loading bundled channel fallbacks", () => {
-    expect(
-      findCommandByNativeName("status", "discord", {
-        includeBundledChannelFallback: false,
-      })?.key,
-    ).toBe("status");
+    const command = findCommandByNativeName("status", "discord", {
+      includeBundledChannelFallback: false,
+    });
+    expect(command).toMatchObject({ key: "status" });
   });
 
   it("keeps discord native command specs within slash-command limits", () => {
@@ -262,7 +261,7 @@ describe("commands registry", () => {
 
       const command = requireNativeCommand(spec.name, "discord");
 
-      const args = command?.args ?? spec.args ?? [];
+      const args = command.args ?? spec.args ?? [];
       const argNames = new Set<string>();
       let sawOptional = false;
       for (const arg of args) {
