@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendMemoryHostEvent,
+  importLegacyMemoryHostEventLogToSqlite,
   readMemoryHostEvents,
   resolveMemoryHostEventLogPath,
 } from "./memory-host-events.js";
@@ -48,19 +49,47 @@ describe("memory host event journal helpers", () => {
       reportPath: path.join(workspaceDir, "memory", "dreaming", "light", "2026-04-05.md"),
     });
 
-    const eventLogPath = resolveMemoryHostEventLogPath(workspaceDir);
-    await expect(fs.readFile(eventLogPath, "utf8")).resolves.toContain(
-      '"type":"memory.recall.recorded"',
-    );
-
     const events = await readMemoryHostEvents({ workspaceDir });
     const tail = await readMemoryHostEvents({ workspaceDir, limit: 1 });
+    await expect(fs.stat(resolveMemoryHostEventLogPath(workspaceDir))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     expect(events).toHaveLength(2);
     expect(events[0]?.type).toBe("memory.recall.recorded");
     expect(events[1]?.type).toBe("memory.dream.completed");
     expect(tail).toHaveLength(1);
     expect(tail[0]?.type).toBe("memory.dream.completed");
+  });
+
+  it("imports legacy JSONL journals into SQLite and removes the source after success", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-legacy-");
+    const eventLogPath = resolveMemoryHostEventLogPath(workspaceDir);
+    await fs.mkdir(path.dirname(eventLogPath), { recursive: true });
+    await fs.writeFile(
+      eventLogPath,
+      `${JSON.stringify({
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-05T12:00:00.000Z",
+        query: "legacy event",
+        resultCount: 0,
+        results: [],
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(importLegacyMemoryHostEventLogToSqlite({ workspaceDir })).resolves.toEqual({
+      imported: 1,
+      warnings: [],
+    });
+    await expect(fs.stat(eventLogPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await expect(readMemoryHostEvents({ workspaceDir })).resolves.toMatchObject([
+      {
+        type: "memory.recall.recorded",
+        query: "legacy event",
+      },
+    ]);
   });
 });
 

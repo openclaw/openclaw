@@ -14,12 +14,14 @@ import {
   MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
 } from "./dreaming-state-store.js";
 import { resolveMemoryDreamingWorkspaces } from "./dreaming.js";
+import { importLegacyMemoryHostEventLogToSqlite, resolveMemoryHostEventLogPath } from "./events.js";
 
 const DREAMING_STATE_RELATIVE_PATHS = {
   dailyIngestion: path.join("memory", ".dreams", "daily-ingestion.json"),
   sessionIngestion: path.join("memory", ".dreams", "session-ingestion.json"),
   shortTermRecall: path.join("memory", ".dreams", "short-term-recall.json"),
   phaseSignals: path.join("memory", ".dreams", "phase-signals.json"),
+  events: path.join("memory", ".dreams", "events.jsonl"),
   shortTermLock: path.join("memory", ".dreams", "short-term-promotion.lock"),
 } as const;
 
@@ -28,6 +30,7 @@ type MigrationResult = {
   files: number;
   rows: number;
   removedLocks: number;
+  warnings: string[];
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -124,7 +127,13 @@ export async function importLegacyMemoryCoreDreamingStateFilesToSqlite(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<MigrationResult> {
-  const result: MigrationResult = { workspaces: 0, files: 0, rows: 0, removedLocks: 0 };
+  const result: MigrationResult = {
+    workspaces: 0,
+    files: 0,
+    rows: 0,
+    removedLocks: 0,
+    warnings: [],
+  };
   for (const workspaceDir of configuredDreamingWorkspaces(params.cfg)) {
     let touchedWorkspace = false;
 
@@ -237,6 +246,21 @@ export async function importLegacyMemoryCoreDreamingStateFilesToSqlite(params: {
       }
       await fs.rm(phasePath, { force: true });
       result.files += 1;
+      touchedWorkspace = true;
+    }
+
+    const eventsPath = resolveMemoryHostEventLogPath(workspaceDir);
+    if (await fileExists(eventsPath)) {
+      const imported = await importLegacyMemoryHostEventLogToSqlite({
+        workspaceDir,
+        eventLogPath: eventsPath,
+        env: params.env,
+      });
+      result.rows += imported.imported;
+      result.warnings.push(...imported.warnings);
+      if (imported.warnings.length === 0) {
+        result.files += 1;
+      }
       touchedWorkspace = true;
     }
 

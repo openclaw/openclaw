@@ -18,6 +18,7 @@ import {
   readDreamingWorkspaceMap,
   readDreamingWorkspaceValue,
 } from "../memory-host-sdk/dreaming-state-store.js";
+import { readMemoryHostEvents } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { listChannelPairingRequests, readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
@@ -650,6 +651,17 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           })}\n`,
           "utf8",
         );
+        await fs.writeFile(
+          path.join(dreamsDir, "events.jsonl"),
+          `${JSON.stringify({
+            type: "memory.recall.recorded",
+            timestamp: "2026-04-05T14:00:00.000Z",
+            query: "legacy doctor event",
+            resultCount: 0,
+            results: [],
+          })}\n`,
+          "utf8",
+        );
         await fs.writeFile(path.join(dreamsDir, "short-term-promotion.lock"), "999999:0\n", "utf8");
 
         await maybeRepairLegacyRuntimeStateFiles({
@@ -672,6 +684,9 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           { code: "ENOENT" },
         );
         await expect(fs.stat(path.join(dreamsDir, "phase-signals.json"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.stat(path.join(dreamsDir, "events.jsonl"))).rejects.toMatchObject({
           code: "ENOENT",
         });
         await expect(
@@ -713,6 +728,12 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
             "phase-signals",
           ),
         ).resolves.toEqual({ updatedAt: "2026-04-05T13:00:00.000Z" });
+        await expect(readMemoryHostEvents({ workspaceDir, env })).resolves.toMatchObject([
+          {
+            type: "memory.recall.recorded",
+            query: "legacy doctor event",
+          },
+        ]);
       });
     });
   });

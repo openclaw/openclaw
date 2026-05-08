@@ -51,7 +51,9 @@ describe("listMemoryCorePublicArtifacts", () => {
       },
     };
 
-    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toEqual([
+    const artifacts = await listMemoryCorePublicArtifacts({ cfg });
+    expect(artifacts).toHaveLength(4);
+    expect(artifacts).toEqual([
       {
         kind: "memory-root",
         workspaceDir,
@@ -83,6 +85,9 @@ describe("listMemoryCorePublicArtifacts", () => {
         absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
         agentIds: ["main"],
         contentType: "json",
+        content: expect.stringContaining('"type":"memory.recall.recorded"'),
+        sizeBytes: expect.any(Number),
+        updatedAtMs: Date.parse("2026-04-06T12:00:00.000Z"),
       },
     ]);
   });

@@ -8,6 +8,8 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import {
   appendMemoryHostEvent,
+  readMemoryHostEvents,
+  renderMemoryHostEventsJsonl,
   resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -226,6 +228,7 @@ describe("syncMemoryWikiBridgeSources", () => {
         },
       ],
     });
+    const eventContent = renderMemoryHostEventsJsonl(await readMemoryHostEvents({ workspaceDir }));
     registerBridgeArtifacts([
       {
         kind: "event-log",
@@ -234,6 +237,9 @@ describe("syncMemoryWikiBridgeSources", () => {
         absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
         agentIds: ["main"],
         contentType: "json",
+        content: eventContent,
+        sizeBytes: Buffer.byteLength(eventContent),
+        updatedAtMs: Date.parse("2026-04-05T12:00:00.000Z"),
       },
     ]);
 

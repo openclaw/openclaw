@@ -503,6 +503,9 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
           `- Imported ${result.rows} memory-core dreaming checkpoint row(s) from ${result.files} legacy file(s) into SQLite${result.removedLocks > 0 ? ` and removed ${result.removedLocks} stale lock file(s)` : ""}.`,
         );
       }
+      warnings.push(
+        ...result.warnings.map((warning) => `- Memory-core dreaming state: ${warning}`),
+      );
     });
   }
 
