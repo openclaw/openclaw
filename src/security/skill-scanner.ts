@@ -451,7 +451,7 @@ async function mapWithConcurrency<T, R>(
       while (nextIndex < items.length) {
         const index = nextIndex;
         nextIndex += 1;
-        results[index] = await mapper(items[index] as T, index);
+        results[index] = await mapper(items[index], index);
       }
     }),
   );
