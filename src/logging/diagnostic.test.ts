@@ -261,7 +261,7 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.long_running")).toBe(false);
     const stuckEvents = events.filter((event) => event.type === "session.stuck");
     expect(stuckEvents).toHaveLength(1);
     expect(stuckEvents[0]).toMatchObject({
@@ -298,9 +298,9 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "session.stalled")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expect(events.some((event) => event.type === "session.long_running")).toBe(false);
   });
 
   it("backs off repeated stuck warnings while a session remains unchanged", () => {
@@ -359,7 +359,7 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
     const stalledEvents = events.filter((event) => event.type === "session.stalled");
     expect(stalledEvents).toHaveLength(1);
     expect(stalledEvents[0]).toMatchObject({
@@ -657,8 +657,8 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "session.stalled")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
     const longRunningEvents = events.filter((event) => event.type === "session.long_running");
     expect(longRunningEvents).toHaveLength(1);
     expect(longRunningEvents[0]).toMatchObject({
@@ -737,8 +737,8 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
-    expect(events.filter((event) => event.type === "session.stalled")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
     const longRunningEvents = events.filter((event) => event.type === "session.long_running");
     expect(longRunningEvents).toHaveLength(1);
     expect(longRunningEvents[0]).toMatchObject({
@@ -1077,7 +1077,7 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
+    expect(events.some((event) => event.type === "session.stuck")).toBe(false);
   });
 
   it("uses default threshold for invalid values", () => {

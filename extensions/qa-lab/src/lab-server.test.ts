@@ -673,7 +673,7 @@ describe("qa-lab server", () => {
     const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
       messages: Array<{ direction: string }>;
     };
-    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toHaveLength(0);
+    expect(snapshot.messages.some((message) => message.direction === "outbound")).toBe(false);
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {
