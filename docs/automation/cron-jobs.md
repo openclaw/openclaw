@@ -407,7 +407,6 @@ Model override note:
       retryOn: ["rate_limit", "overloaded", "network", "server_error"],
     },
     webhookToken: "replace-with-dedicated-webhook-token",
-    sessionRetention: "24h",
     runLog: { maxBytes: "2mb", keepLines: 2000 },
   },
 }
@@ -429,7 +428,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`) prunes isolated run-session entries. `cron.runLog.maxBytes` / `cron.runLog.keepLines` auto-prune run-log files.
+    `openclaw sessions cleanup` maintains isolated run-session entries. `cron.runLog.maxBytes` / `cron.runLog.keepLines` auto-prune run-log files.
   </Accordion>
 </AccordionGroup>
 

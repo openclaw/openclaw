@@ -136,7 +136,6 @@ const TARGET_KEYS = [
   "cron.retry.retryOn",
   "cron.webhook",
   "cron.webhookToken",
-  "cron.sessionRetention",
   "cron.runLog",
   "cron.runLog.maxBytes",
   "cron.runLog.keepLines",
@@ -682,12 +681,6 @@ describe("config help copy quality", () => {
     expect(/deprecated|legacy/i.test(legacy)).toBe(true);
     expect(legacy.includes('delivery.mode="webhook"')).toBe(true);
     expect(legacy.includes("delivery.to")).toBe(true);
-
-    const retention = FIELD_HELP["cron.sessionRetention"];
-    expect(retention.includes("24h")).toBe(true);
-    expect(retention.includes("7d")).toBe(true);
-    expect(retention.includes("1h30m")).toBe(true);
-    expect(/false/i.test(retention)).toBe(true);
 
     const token = FIELD_HELP["cron.webhookToken"];
     expect(/token|bearer/i.test(token)).toBe(true);

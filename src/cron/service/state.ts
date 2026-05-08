@@ -52,10 +52,6 @@ export type CronServiceDeps = {
   cronConfig?: CronConfig;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
-  /** Resolve session store path for a given agent id. */
-  resolveSessionStorePath?: (agentId?: string) => string;
-  /** Path to the session store (sessions.json) for reaper use. */
-  sessionStorePath?: string;
   /**
    * Delay in ms between missed job executions on startup.
    * Prevents overwhelming the gateway when many jobs are overdue.

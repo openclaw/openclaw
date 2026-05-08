@@ -2,12 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createCronServiceState } from "./state.js";
 
 describe("cron service state seam coverage", () => {
-  it("threads heartbeat and session-store dependencies into internal state", () => {
+  it("threads heartbeat dependencies into internal state", () => {
     const nowMs = vi.fn(() => 123_456);
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const runHeartbeatOnce = vi.fn();
-    const resolveSessionStorePath = vi.fn((agentId?: string) => `/tmp/${agentId ?? "main"}.json`);
 
     const state = createCronServiceState({
       nowMs,
@@ -20,8 +19,6 @@ describe("cron service state seam coverage", () => {
       storePath: "/tmp/cron/jobs.json",
       cronEnabled: true,
       defaultAgentId: "ops",
-      sessionStorePath: "/tmp/sessions.json",
-      resolveSessionStorePath,
       enqueueSystemEvent,
       requestHeartbeat,
       runHeartbeatOnce,
@@ -38,8 +35,6 @@ describe("cron service state seam coverage", () => {
     expect(state.deps.storePath).toBe("/tmp/cron/jobs.json");
     expect(state.deps.cronEnabled).toBe(true);
     expect(state.deps.defaultAgentId).toBe("ops");
-    expect(state.deps.sessionStorePath).toBe("/tmp/sessions.json");
-    expect(state.deps.resolveSessionStorePath).toBe(resolveSessionStorePath);
     expect(state.deps.enqueueSystemEvent).toBe(enqueueSystemEvent);
     expect(state.deps.requestHeartbeat).toBe(requestHeartbeat);
     expect(state.deps.runHeartbeatOnce).toBe(runHeartbeatOnce);

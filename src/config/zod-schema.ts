@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -697,7 +696,6 @@ export const OpenClawSchema = z
           .optional(),
         webhook: HttpUrlSchema.optional(),
         webhookToken: SecretInputSchema.optional().register(sensitive),
-        sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
         runLog: z
           .object({
             maxBytes: z.union([z.string(), z.number()]).optional(),
@@ -728,19 +726,6 @@ export const OpenClawSchema = z
       })
       .strict()
       .superRefine((val, ctx) => {
-        if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
-          try {
-            parseDurationMs(normalizeStringifiedOptionalString(val.sessionRetention) ?? "", {
-              defaultUnit: "h",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["sessionRetention"],
-              message: "invalid duration (use ms, s, m, h, d)",
-            });
-          }
-        }
         if (val.runLog?.maxBytes !== undefined) {
           try {
             parseByteSize(normalizeStringifiedOptionalString(val.runLog.maxBytes) ?? "", {

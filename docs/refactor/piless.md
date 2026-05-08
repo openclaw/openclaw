@@ -58,7 +58,9 @@ This plan has started landing in slices:
   parser, and SQLite-backed agent session directories remain discoverable after
   doctor deletes the legacy `sessions.json` file. The legacy JSON session-store
   object/serialized cache is gone; JSON fallback reads now parse directly while
-  canonical SQLite stores avoid that path.
+  canonical SQLite stores avoid that path. The cron timer no longer runs a
+  dedicated session reaper; cron run sessions are maintained through the same
+  explicit session cleanup path as other rows.
 - Transcript events have a SQLite store primitive with JSONL import/export.
   Transcript append paths dual-write when the caller already has agent and
   session scope, including gateway-injected assistant messages. Scoped appends
@@ -559,6 +561,8 @@ Phase 1: SQLite session index
 - Remove the duplicate status-only session JSON reader and stop requiring a
   physical `sessions.json` file for discovered SQLite-backed agent stores.
 - Remove the legacy JSON session-store cache layer.
+- Remove the dedicated cron timer session reaper and `cron.sessionRetention`
+  config; explicit session cleanup owns row pruning.
 
 Phase 2: VFS scratch
 
