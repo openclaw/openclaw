@@ -264,7 +264,7 @@ function runtimeLocalImportsForTarget(target: StripOnlyTarget): string[] {
       .replaceAll(path.sep, "/");
     importedPaths.add(importedPath);
   }
-  return Array.from(importedPaths).sort();
+  return Array.from(importedPaths).toSorted();
 }
 
 function assertCompleteLocalRuntimeFiles(target: StripOnlyTarget) {
