@@ -6,6 +6,10 @@ import type { AssistantMessage } from "../agents/pi-ai-contract.js";
 import { SessionManager } from "../agents/transcript/session-transcript-contract.js";
 import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
 import {
+  createSqliteSessionTranscriptLocator,
+  isSqliteSessionTranscriptLocator,
+} from "../config/sessions/paths.js";
+import {
   exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents,
   hasSqliteSessionTranscriptSnapshot,
@@ -167,6 +171,56 @@ describe("session-compaction-checkpoints", () => {
     }
   });
 
+  test("async capture keeps checkpoint transcript locators virtual for SQLite sources", async () => {
+    const sourceSessionId = "source-capture-virtual";
+    const sourceFile = createSqliteSessionTranscriptLocator({
+      agentId: DEFAULT_AGENT_ID,
+      sessionId: sourceSessionId,
+    });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: DEFAULT_AGENT_ID,
+      sessionId: sourceSessionId,
+      transcriptPath: sourceFile,
+      events: [
+        {
+          type: "session",
+          id: sourceSessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: "/tmp/openclaw-virtual-capture",
+        },
+        {
+          type: "message",
+          id: "capture-leaf",
+          role: "user",
+          content: "virtual checkpoint source",
+        },
+      ],
+    });
+
+    const snapshot = await captureCompactionCheckpointSnapshotAsync({
+      sessionFile: sourceFile,
+    });
+
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.leafId).toBe("capture-leaf");
+    expect(snapshot?.sessionFile).toBeTruthy();
+    expect(isSqliteSessionTranscriptLocator(snapshot?.sessionFile)).toBe(true);
+    expect(snapshot?.sessionFile).toContain("sqlite-transcript://");
+    expect(snapshot?.sessionFile).not.toMatch(/^sqlite-transcript:\/[^/]/u);
+    expect(
+      hasSqliteSessionTranscriptSnapshot({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: sourceSessionId,
+        snapshotId: snapshot!.sessionId,
+      }),
+    ).toBe(true);
+    expect(readSqliteTranscriptEvents(snapshot!.sessionId)[0]).toMatchObject({
+      type: "session",
+      id: snapshot!.sessionId,
+      parentSession: sourceFile,
+    });
+  });
+
   test("async capture skips oversized pre-compaction transcripts without sync copy", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-oversized-"));
     tempDirs.push(dir);
@@ -243,6 +297,59 @@ describe("session-compaction-checkpoints", () => {
     expect(forkedEntries.slice(1)).toEqual(
       sourceEntries.filter((entry) => entry.type !== "session"),
     );
+  });
+
+  test("async fork keeps transcript locators virtual for SQLite sources", async () => {
+    const sourceSessionId = "source-fork-virtual";
+    const sourceFile = createSqliteSessionTranscriptLocator({
+      agentId: DEFAULT_AGENT_ID,
+      sessionId: sourceSessionId,
+    });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: DEFAULT_AGENT_ID,
+      sessionId: sourceSessionId,
+      transcriptPath: sourceFile,
+      events: [
+        {
+          type: "session",
+          id: sourceSessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: "/tmp/openclaw-virtual-fork",
+        },
+        {
+          type: "message",
+          id: "fork-leaf",
+          role: "assistant",
+          content: "virtual fork source",
+        },
+      ],
+    });
+
+    const forked = await forkCompactionCheckpointTranscriptAsync({
+      sourceFile,
+    });
+
+    expect(forked).not.toBeNull();
+    expect(forked?.sessionId).toBeTruthy();
+    expect(isSqliteSessionTranscriptLocator(forked?.sessionFile)).toBe(true);
+    expect(forked?.sessionFile).toContain("sqlite-transcript://");
+    expect(forked?.sessionFile).not.toMatch(/^sqlite-transcript:\/[^/]/u);
+    const forkedEntries = readSqliteTranscriptEvents(forked!.sessionId);
+    expect(forkedEntries[0]).toMatchObject({
+      type: "session",
+      id: forked!.sessionId,
+      cwd: "/tmp/openclaw-virtual-fork",
+      parentSession: sourceFile,
+    });
+    expect(forkedEntries[1]).toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: "virtual fork source",
+    });
+    expect(readSqliteTranscriptEvents(sourceSessionId)[1]).toMatchObject({
+      type: "message",
+      id: "fork-leaf",
+    });
   });
 
   test("async fork ignores legacy checkpoint files that doctor has not imported", async () => {
