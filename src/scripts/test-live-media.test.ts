@@ -18,7 +18,6 @@ function requirePlanEntry(
   suiteId: string,
 ) {
   const entry = plan.find((candidate) => candidate.suite.id === suiteId);
-  expect(entry).toBeDefined();
   if (!entry) {
     throw new Error(`expected ${suiteId} run plan entry`);
   }

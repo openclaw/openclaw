@@ -19,7 +19,6 @@ function expectFencesBalanced(chunks: string[]) {
 
 function requireChunk(chunks: string[], index: number): string {
   const chunk = chunks[index];
-  expect(chunk).toBeDefined();
   if (chunk === undefined) {
     throw new Error(`expected chunk ${index}`);
   }
