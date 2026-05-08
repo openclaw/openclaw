@@ -7,7 +7,7 @@ import {
   resolveSessionStoreEntry,
   resolveStorePath,
 } from "../../config/sessions.js";
-import type { SessionAcpMeta } from "../../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export async function persistAcpDispatchTranscript(params: {
@@ -48,7 +48,7 @@ export async function persistAcpDispatchTranscript(params: {
     preResolved?.storePath ??
     resolveStorePath(params.cfg.session?.store, { agentId: sessionAgentId });
   const sessionStore = preResolved
-    ? ({ [params.sessionKey]: preResolved.entry } as ReturnType<typeof loadSessionStore>)
+    ? ({ [params.sessionKey]: preResolved.entry! } as Record<string, SessionEntry>)
     : loadSessionStore(storePath, { skipCache: true });
   const sessionEntry =
     preResolved?.entry ??

@@ -16,6 +16,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -68,6 +69,8 @@ function loadDispatchAcpTtsRuntime() {
 function loadDispatchAcpTranscriptRuntime() {
   return dispatchAcpTranscriptRuntimeLoader.load();
 }
+
+const log = createSubsystemLogger("dispatch-acp");
 
 type DispatchProcessedRecorder = (
   outcome: "completed" | "skipped" | "error",
@@ -531,13 +534,11 @@ export async function tryDispatchAcpReply(params: {
         sessionStoreEntry,
       });
     } catch (error) {
-      // Use console.warn (not logVerbose) so transcript write failures are
+      // Use log.warn (not logVerbose) so transcript write failures are
       // visible in operator logs without requiring verbose mode. This was a
       // silent swallow before catalog #22 was fixed. Still non-fatal.
-      console.warn(
-        `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
-          error,
-        )}`,
+      log.warn(
+        `transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(error)}`,
       );
     }
     queuedFinal =
