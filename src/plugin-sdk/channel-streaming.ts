@@ -758,6 +758,8 @@ export function formatChannelProgressDraftText(params: {
   seed?: string;
   random?: () => number;
   formatLine?: (line: string) => string;
+  formatStructuredLine?: (line: ChannelProgressDraftLine) => string;
+  labelPlacement?: "header" | "line";
   bullet?: string;
 }): string {
   const label = resolveChannelProgressDraftLabel({
@@ -768,17 +770,27 @@ export function formatChannelProgressDraftText(params: {
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
-  const lines = params.lines
-    .map((line) =>
-      compactChannelProgressDraftLine(
-        getProgressDraftLineText(line),
-        DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS,
-      ),
-    )
-    .filter((line) => line.length > 0)
+  const labelPlacement = params.labelPlacement ?? "header";
+  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> =
+    labelPlacement === "line" && label ? [{ draftLabel: label }, ...params.lines] : params.lines;
+  const lines = rawLines
+    .map((line) => {
+      const isLabelLine = typeof line === "object" && line !== null && "draftLabel" in line;
+      const rawText = isLabelLine
+        ? line.draftLabel
+        : typeof line === "string"
+          ? line
+          : (params.formatStructuredLine?.(line) ?? getProgressDraftLineText(line));
+      const text = compactChannelProgressDraftLine(rawText, DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS);
+      return text ? { text, isLabelLine } : undefined;
+    })
+    .filter((line): line is { text: string; isLabelLine: boolean } => Boolean(line))
     .slice(-maxLines)
-    .map((line) =>
-      shouldPrefixProgressLine(line) ? `${bullet} ${formatLine(line)}` : formatLine(line),
-    );
-  return [label, ...lines].filter((line): line is string => Boolean(line)).join("\n");
+    .map(({ text, isLabelLine }) => {
+      const formatted = formatLine(text);
+      return !isLabelLine && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted;
+    });
+  return [labelPlacement === "header" ? label : undefined, ...lines]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
 }
