@@ -104,8 +104,9 @@ describe("command secret target ids", () => {
     });
 
     expect(scoped.targetIds.size).toBeGreaterThan(0);
-    expect([...scoped.targetIds].every((id) => id.startsWith("channels.discord."))).toBe(true);
-    expect([...scoped.targetIds].some((id) => id.startsWith("channels.telegram."))).toBe(false);
+    const targetIds = [...scoped.targetIds];
+    expect(targetIds.filter((id) => !id.startsWith("channels.discord."))).toEqual([]);
+    expect(targetIds.filter((id) => id.startsWith("channels.telegram."))).toEqual([]);
   });
 
   it("does not coerce missing accountId to default when channel is scoped", () => {
@@ -127,7 +128,7 @@ describe("command secret target ids", () => {
 
     expect(scoped.allowedPaths).toBeUndefined();
     expect(scoped.targetIds.size).toBeGreaterThan(0);
-    expect([...scoped.targetIds].every((id) => id.startsWith("channels.discord."))).toBe(true);
+    expect([...scoped.targetIds].filter((id) => !id.startsWith("channels.discord."))).toEqual([]);
   });
 
   it("scopes allowed paths to channel globals + selected account", () => {
