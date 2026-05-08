@@ -117,6 +117,12 @@ describe("active-memory plugin", () => {
       | undefined;
     return entries?.find((entry) => entry.pluginId === "active-memory")?.lines ?? [];
   };
+  const expectLinesToContain = (lines: string[], text: string) => {
+    expect(lines).toEqual(expect.arrayContaining([expect.stringContaining(text)]));
+  };
+  const expectLinesNotToContain = (lines: string[], text: string) => {
+    expect(lines).not.toEqual(expect.arrayContaining([expect.stringContaining(text)]));
+  };
   const writeTranscriptJsonl = async (sessionFile: string, records: unknown[], suffix = "\n") => {
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
     await fs.writeFile(
@@ -2122,7 +2128,7 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
-    expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
+    expectLinesNotToContain(lines, "timeout_partial");
   });
 
   it("keeps timeout status when the timeout transcript path does not exist", async () => {
@@ -2152,7 +2158,7 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
-    expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
+    expectLinesNotToContain(lines, "timeout_partial");
   });
 
   it("does not inject embedded timeout boilerplate from partial transcripts", async () => {
@@ -2197,8 +2203,8 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
-    expect(lines.some((line) => line.includes("timeout_partial"))).toBe(false);
-    expect(lines.some((line) => line.includes("LLM request timed out"))).toBe(false);
+    expectLinesNotToContain(lines, "timeout_partial");
+    expectLinesNotToContain(lines, "LLM request timed out");
   });
 
   it("returns partial transcript text when an aborted subagent rejects before the race timeout wins", async () => {
@@ -2521,7 +2527,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes(" cached "))).toBe(false);
+    expectLinesNotToContain(infoLines, " cached ");
   });
 
   it("does not share cached recall results across session-id-only contexts", async () => {
@@ -2554,7 +2560,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes(" cached "))).toBe(false);
+    expectLinesNotToContain(infoLines, " cached ");
   });
 
   it("ignores late subagent payloads once the active-memory timeout signal has fired", async () => {
@@ -2589,7 +2595,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
+    expectLinesToContain(infoLines, "status=timeout");
     expect(
       infoLines.some(
         (line: string) =>
@@ -2632,7 +2638,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(false);
+    expectLinesNotToContain(infoLines, "status=timeout");
   });
 
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
@@ -2669,7 +2675,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
+    expectLinesToContain(infoLines, "status=timeout");
     // Hard deadline: wall-clock time must be near timeoutMs, not 30s.
     expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + HARD_DEADLINE_MARGIN_MS);
   });
@@ -2710,8 +2716,8 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
-    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
+    expectLinesToContain(infoLines, "done status=empty");
+    expectLinesNotToContain(infoLines, "done status=timeout");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
       expect.stringContaining("🧩 Active Memory: status=empty"),
       expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
@@ -2802,8 +2808,8 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("done status=empty"))).toBe(true);
-    expect(infoLines.some((line: string) => line.includes("done status=timeout"))).toBe(false);
+    expectLinesToContain(infoLines, "done status=empty");
+    expectLinesNotToContain(infoLines, "done status=timeout");
     expect(getActiveMemoryLines(sessionKey)).toEqual([
       expect.stringContaining("🧩 Active Memory: status=empty"),
       expect.stringContaining(
@@ -2862,7 +2868,7 @@ describe("active-memory plugin", () => {
     const warnLines = vi
       .mocked(api.logger.warn)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(warnLines.some((line: string) => line.includes("before_prompt_build"))).toBe(true);
+    expectLinesToContain(warnLines, "before_prompt_build");
   });
 
   it("honors configured timeoutMs values above the former 60 000 ms ceiling", async () => {
@@ -3733,8 +3739,8 @@ describe("active-memory plugin", () => {
     const lines =
       (store[sessionKey]?.pluginDebugEntries as Array<{ lines?: string[] }> | undefined)?.[0]
         ?.lines ?? [];
-    expect(lines.some((line) => line.includes("\u001b"))).toBe(false);
-    expect(lines.some((line) => line.includes("\r"))).toBe(false);
+    expectLinesNotToContain(lines, "\u001b");
+    expectLinesNotToContain(lines, "\r");
   });
 
   it("caps the active-memory cache size and evicts the oldest entries", () => {
@@ -3829,7 +3835,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("circuit breaker open"))).toBe(true);
+    expectLinesToContain(infoLines, "circuit breaker open");
   });
 
   it("resets circuit breaker after a successful recall", async () => {
