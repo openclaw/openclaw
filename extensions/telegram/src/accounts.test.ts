@@ -448,6 +448,56 @@ describe("mergeTelegramAccountConfig", () => {
       allowFrom: ["456"],
     });
   });
+
+  it("falls back to root groups when account sets explicit empty groups object", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+          groupPolicy: "allowlist",
+          groups: {
+            "-1003221749234": { requireMention: false },
+          },
+          accounts: {
+            default: {
+              botToken: "legacy-token",
+              groupPolicy: "allowlist",
+              groups: {},
+            },
+          },
+        },
+      },
+    };
+
+    expect(mergeTelegramAccountConfig(cfg, "default")).toMatchObject({
+      groups: { "-1003221749234": { requireMention: false } },
+    });
+  });
+
+  it("preserves account groups when non-empty, not falling back to root", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+          groups: {
+            "-1000000000001": { requireMention: false },
+          },
+          accounts: {
+            default: {
+              botToken: "legacy-token",
+              groups: {
+                "-1000000000002": { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const merged = mergeTelegramAccountConfig(cfg, "default");
+    expect(merged.groups).toMatchObject({ "-1000000000002": { requireMention: true } });
+    expect(merged.groups).not.toHaveProperty("-1000000000001");
+  });
 });
 
 describe("resolveTelegramPollActionGateState", () => {

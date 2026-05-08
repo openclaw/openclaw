@@ -70,7 +70,10 @@ export function mergeTelegramAccountConfig(
   // Multi-account bots must not inherit channel-level groups unless explicitly set.
   const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
   const isMultiAccount = configuredAccountIds.length > 1;
-  const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
+  // An explicit `groups: {}` is not nullish but is semantically "unset" for single-account bots.
+  // Treat an empty object the same as undefined so the root channelGroups fallback applies.
+  const accountGroupsDefined = account.groups != null && Object.keys(account.groups).length > 0;
+  const groups = accountGroupsDefined ? account.groups : isMultiAccount ? undefined : channelGroups;
   const allowFrom = resolveMergedAllowFrom({
     baseAllowFrom: base.allowFrom,
     accountAllowFrom: account.allowFrom,
