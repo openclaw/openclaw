@@ -98,11 +98,6 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
-    name: "path",
-    description: "Inspect and edit workspace files via the oc:// addressing scheme",
-    hasSubcommands: true,
-  },
-  {
     name: "qa",
     description: "Run QA scenarios and launch the private QA debugger UI",
     hasSubcommands: true,
