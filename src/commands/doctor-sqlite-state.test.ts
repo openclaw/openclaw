@@ -41,8 +41,25 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
 
   it("imports legacy runtime JSON files into SQLite during doctor --fix", async () => {
     await withTempDir("openclaw-doctor-sqlite-state-", async (stateDir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST_FAST: "1" };
+      const openClawHome = path.join(stateDir, "home");
+      const env = {
+        ...process.env,
+        OPENCLAW_HOME: openClawHome,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TEST_FAST: "1",
+      };
       await withEnvAsync(env, async () => {
+        const execApprovalsPath = path.join(openClawHome, ".openclaw", "exec-approvals.json");
+        await fs.mkdir(path.dirname(execApprovalsPath), { recursive: true });
+        await fs.writeFile(
+          execApprovalsPath,
+          `${JSON.stringify({
+            version: 1,
+            defaults: { security: "allowlist", ask: "on-miss" },
+            agents: {},
+          })}\n`,
+          "utf8",
+        );
         await fs.mkdir(path.join(stateDir, "devices"), { recursive: true });
         await fs.writeFile(
           path.join(stateDir, "devices", "bootstrap.json"),
@@ -367,6 +384,10 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           displayName: "Legacy Node",
           gateway: { host: "gateway.local", port: 18443, tls: true },
         });
+        expect(readOpenClawStateKvJson("exec.approvals", "current", { env })).toContain(
+          '"security":"allowlist"',
+        );
+        await expect(fs.stat(execApprovalsPath)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
           code: "ENOENT",
         });

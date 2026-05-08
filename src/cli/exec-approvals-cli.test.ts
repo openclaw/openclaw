@@ -190,7 +190,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         effectivePolicy: {
-          note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+          note: "Effective exec policy is the host approvals state intersected with requested tools.exec policy.",
           scopes: [
             expect.objectContaining({
               scopeLabel: "tools.exec",
@@ -301,7 +301,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         effectivePolicy: {
-          note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+          note: "Effective exec policy is the node host approvals state intersected with gateway tools.exec policy.",
           scopes: [
             expect.objectContaining({
               scopeLabel: "tools.exec",

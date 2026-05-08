@@ -1351,7 +1351,7 @@ export function createExecTool(
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
-      // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
+      // Keep local exec defaults in sync with approvals state when tools.exec.* is unset.
       const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "off";
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);

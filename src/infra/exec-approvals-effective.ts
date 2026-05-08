@@ -15,7 +15,7 @@ import {
 
 const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "full";
 const DEFAULT_REQUESTED_ASK: ExecAsk = "off";
-const DEFAULT_HOST_PATH = "~/.openclaw/exec-approvals.json";
+const DEFAULT_HOST_PATH = "SQLite exec approvals state";
 const REQUESTED_DEFAULT_LABEL = {
   security: DEFAULT_REQUESTED_SECURITY,
   ask: DEFAULT_REQUESTED_ASK,

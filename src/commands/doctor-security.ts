@@ -138,7 +138,7 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
         `  Config: ${configParts.join(", ")}`,
         `  Host: ${hostParts.join(", ")}`,
         `  Effective host exec stays security="${snapshot.security.effective}" ask="${snapshot.ask.effective}" because the stricter side wins.`,
-        "  Headless runs like isolated cron cannot answer approval prompts; align both files or enable Web UI, terminal UI, or chat exec approvals.",
+        "  Headless runs like isolated cron cannot answer approval prompts; align config and host approvals state or enable Web UI, terminal UI, or chat exec approvals.",
         `  Inspect with: ${formatCliCommand("openclaw approvals get --gateway")}`,
       ].join("\n"),
     );
@@ -185,7 +185,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   if (cfg.approvals?.exec?.enabled === false) {
     warnings.push(
       "- Note: approvals.exec.enabled=false disables approval forwarding only.",
-      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      "  Host exec gating still comes from SQLite exec approvals state.",
       `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
     );
   }

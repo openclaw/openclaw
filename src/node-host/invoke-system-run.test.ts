@@ -25,6 +25,8 @@ import {
   saveExecApprovals,
 } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { deleteOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
@@ -42,16 +44,20 @@ type MockedSendNodeEvent = Mock<HandleSystemRunInvokeOptions["sendNodeEvent"]>;
 describe("handleSystemRunInvoke mac app exec host routing", () => {
   let sharedFixtureRoot = "";
   let sharedOpenClawHome = "";
+  let sharedStateDir = "";
   let sharedRuntimeBinDir = "";
   let sharedFixtureId = 0;
   let previousOpenClawHome: string | undefined;
+  let previousStateDir: string | undefined;
   const sharedRuntimeBins = new Set<string>();
 
   beforeAll(() => {
     sharedFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-fixtures-"));
     sharedOpenClawHome = path.join(sharedFixtureRoot, "openclaw-home");
+    sharedStateDir = path.join(sharedFixtureRoot, "openclaw-state");
     sharedRuntimeBinDir = path.join(sharedFixtureRoot, "bin");
     fs.mkdirSync(sharedOpenClawHome, { recursive: true });
+    fs.mkdirSync(sharedStateDir, { recursive: true });
     fs.mkdirSync(sharedRuntimeBinDir, { recursive: true });
   });
 
@@ -69,17 +75,27 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   beforeEach(() => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_HOME = sharedOpenClawHome;
+    process.env.OPENCLAW_STATE_DIR = sharedStateDir;
     fs.rmSync(resolveExecApprovalsPath(), { force: true });
+    deleteOpenClawStateKvJson("exec.approvals", "current");
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+    deleteOpenClawStateKvJson("exec.approvals", "current");
+    closeOpenClawStateDatabaseForTest();
     if (previousOpenClawHome === undefined) {
       delete process.env.OPENCLAW_HOME;
     } else {
       process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
   });
 

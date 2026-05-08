@@ -239,7 +239,7 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
     effectivePolicy: {
       note: hasNodeRuntimeScope
         ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
-        : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+        : "Effective exec policy is the host approvals state intersected with requested tools.exec policy.",
       scopes,
     },
   };
