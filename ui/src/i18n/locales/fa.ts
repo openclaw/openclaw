@@ -712,11 +712,11 @@ export const fa: TranslationMap = {
       all: "همه",
     },
     scope: {
-      instance: "Current instance",
-      instanceHint: "Show only the active session id for each logical session.",
-      family: "Historical lineage",
-      familyHint: "Roll up known rotated transcript-backed session ids.",
-      familyIncluded: "Historical lineage includes {count} session instances.",
+      instance: "نمونهٔ فعلی",
+      instanceHint: "برای هر نشست منطقی، فقط شناسهٔ نشست فعال را نشان دهید.",
+      family: "تبارچهٔ تاریخی",
+      familyHint: "شناسه‌های نشست شناخته‌شده و چرخش‌یافتهٔ مبتنی بر رونوشت را تجمیع کنید.",
+      familyIncluded: "تبارچهٔ تاریخی شامل {count} نمونهٔ نشست است.",
     },
     filters: {
       title: "فیلترها",
