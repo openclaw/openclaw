@@ -800,7 +800,7 @@ describe("runCli exit behavior", () => {
       const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH 149.154.167.220:443"), {
         code: "EHOSTUNREACH",
       });
-      expect(() => handler(hostUnreachable)).not.toThrow();
+      expect(handler(hostUnreachable)).toBeUndefined();
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal uncaught exception (continuing):",
         expect.stringContaining("EHOSTUNREACH"),
