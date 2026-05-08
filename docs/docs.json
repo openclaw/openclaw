@@ -1169,6 +1169,7 @@
                   "concepts/messages",
                   "concepts/message-lifecycle-refactor",
                   "concepts/streaming",
+                  "concepts/acp-streaming",
                   "concepts/progress-drafts",
                   "concepts/retry",
                   "concepts/queue",
