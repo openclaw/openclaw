@@ -18,6 +18,8 @@ export type BackgroundEmailDeliveryParams = {
   consultResult: string;
   backgroundEmailPrompt?: string;
   recipientEmail?: string;
+  provider?: string;
+  model?: string;
   timeoutMs?: number;
 };
 
@@ -67,6 +69,8 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
     consultResult,
     backgroundEmailPrompt,
     recipientEmail,
+    provider,
+    model,
     timeoutMs,
   } = params;
 
@@ -106,6 +110,8 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
         extraSystemPrompt:
           backgroundEmailPrompt ?? resolveEmailDeliverySystemPrompt(recipientEmail),
         fallbackText: "",
+        provider,
+        model,
       });
       logger.info(`[voice-call] Background email delivery completed for session ${sessionKey}`);
     } catch (err) {
