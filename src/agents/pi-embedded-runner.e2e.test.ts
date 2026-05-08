@@ -4,6 +4,8 @@ import {
   createSqliteSessionTranscriptLocator,
   parseSqliteSessionTranscriptLocator,
 } from "../config/sessions/paths.js";
+import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -20,6 +22,7 @@ import {
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
+import { readTranscriptState } from "./transcript/transcript-state.js";
 
 const runEmbeddedAttemptMock = vi.fn();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
@@ -156,7 +159,6 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let SessionManager: typeof import("./transcript/session-transcript-contract.js").SessionManager;
 let e2eWorkspace: EmbeddedPiRunnerTestWorkspace | undefined;
 let agentDir: string;
 let workspaceDir: string;
@@ -173,10 +175,10 @@ beforeAll(async () => {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = e2eWorkspace.stateDir;
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
-  ({ SessionManager } = await import("./transcript/session-transcript-contract.js"));
 }, 180_000);
 
 afterAll(async () => {
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -215,13 +217,20 @@ const nextSessionFile = () => {
 };
 const sessionIdFromLocator = (sessionFile: string) =>
   parseSqliteSessionTranscriptLocator(sessionFile)?.sessionId ?? "session:test";
+const appendTestSessionMessage = async (sessionFile: string, message: unknown) =>
+  await appendSessionTranscriptMessage({
+    agentId: "test",
+    sessionId: sessionIdFromLocator(sessionFile),
+    transcriptPath: sessionFile,
+    cwd: workspaceDir,
+    message,
+  });
 const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
 const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
 
 const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
   const sessionFile = nextSessionFile();
-  const sessionManager = SessionManager.open(sessionFile);
-  sessionManager.appendMessage({
+  await appendTestSessionMessage(sessionFile, {
     role: "user",
     content: [{ type: "text", text }],
     timestamp: Date.now(),
@@ -263,12 +272,28 @@ const textFromContent = (content: unknown) => {
   return undefined;
 };
 
-const readSessionEntries = async (sessionFile: string) =>
-  SessionManager.open(sessionFile).getEntries() as Array<{
+const readSessionEntries = async (
+  sessionFile: string,
+): Promise<
+  Array<{
     type?: string;
     customType?: string;
     data?: unknown;
-  }>;
+  }>
+> => {
+  try {
+    return (await readTranscriptState(sessionFile)).getEntries() as Array<{
+      type?: string;
+      customType?: string;
+      data?: unknown;
+    }>;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Transcript is not in SQLite:")) {
+      return [];
+    }
+    throw error;
+  }
+};
 
 const readSessionMessages = async (sessionFile: string) => {
   const entries = await readSessionEntries(sessionFile);
@@ -675,13 +700,12 @@ describe("runEmbeddedPiAgent", () => {
       const sessionFile = nextSessionFile();
       const sessionKey = nextSessionKey();
 
-      const sessionManager = SessionManager.open(sessionFile);
-      sessionManager.appendMessage({
+      await appendTestSessionMessage(sessionFile, {
         role: "user",
         content: [{ type: "text", text: "seed user" }],
         timestamp: Date.now(),
       });
-      sessionManager.appendMessage({
+      await appendTestSessionMessage(sessionFile, {
         role: "assistant",
         content: [{ type: "text", text: "seed assistant" }],
         stopReason: "stop",
