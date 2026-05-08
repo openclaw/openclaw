@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import { resolveLegacySessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
@@ -69,7 +69,7 @@ function restoreEnv(snapshot: EnvSnapshot) {
 
 function setupSessionState(env: NodeJS.ProcessEnv, homeDir: string) {
   const agentId = "main";
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, () => homeDir);
+  const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(agentId, env, () => homeDir);
   fs.mkdirSync(sessionsDir, { recursive: true });
 }
 
@@ -163,7 +163,11 @@ async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir
     },
   };
   setupSessionState(process.env, homeDir);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => homeDir);
+  const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
+    "main",
+    process.env,
+    () => homeDir,
+  );
   fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
   const confirmRuntimeRepair = vi.fn(async () => false);
   await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
@@ -448,7 +452,11 @@ describe("doctor state integrity oauth dir checks", () => {
   it("detects orphan transcripts and offers delete remediation", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(process.env, process.env.HOME ?? "");
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
+      "main",
+      process.env,
+      () => tempHome,
+    );
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
     const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
       params.message.includes("Delete 1 orphan transcript file"),
@@ -469,7 +477,11 @@ describe("doctor state integrity oauth dir checks", () => {
   it("does not auto-delete orphan transcripts from non-interactive repair mode", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(process.env, process.env.HOME ?? "");
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
+      "main",
+      process.env,
+      () => tempHome,
+    );
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
     const confirmRuntimeRepair = vi.fn(
       async (params: { initialValue?: boolean; requiresInteractiveConfirmation?: boolean }) =>
@@ -501,7 +513,7 @@ describe("doctor state integrity oauth dir checks", () => {
         process.env.OPENCLAW_STATE_DIR = path.join(symlinkHome, ".openclaw");
 
         setupSessionState(process.env, symlinkHome);
-        const sessionsDir = resolveSessionTranscriptsDirForAgent(
+        const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
           "main",
           process.env,
           () => symlinkHome,
@@ -568,7 +580,11 @@ describe("doctor state integrity oauth dir checks", () => {
   it("moves a heartbeat-poisoned main session and clears stale TUI restore pointers", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(process.env, tempHome);
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
+      "main",
+      process.env,
+      () => tempHome,
+    );
     const heartbeatTranscriptPath = path.join(sessionsDir, "heartbeat-session.jsonl");
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
@@ -622,7 +638,11 @@ describe("doctor state integrity oauth dir checks", () => {
   it("does not move a mixed main transcript that has real user activity", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(process.env, tempHome);
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
+      "main",
+      process.env,
+      () => tempHome,
+    );
     const mixedTranscriptPath = path.join(sessionsDir, "mixed-session.jsonl");
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",

@@ -5,7 +5,7 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js
 import { resolveStateDir } from "../paths.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
-function resolveAgentSessionsDir(
+function resolveLegacyAgentSessionsDir(
   agentId?: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
@@ -15,12 +15,12 @@ function resolveAgentSessionsDir(
   return path.join(root, "agents", id, "sessions");
 }
 
-export function resolveSessionTranscriptsDirForAgent(
+export function resolveLegacySessionTranscriptsDirForAgent(
   agentId?: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): string {
-  return resolveAgentSessionsDir(agentId, env, homedir);
+  return resolveLegacyAgentSessionsDir(agentId, env, homedir);
 }
 
 export type SessionTranscriptLocatorOptions = {
