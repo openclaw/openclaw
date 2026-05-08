@@ -87,10 +87,13 @@ async function flushMicrotasks(rounds = 3): Promise<void> {
 }
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((next) => {
     resolve = next;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
