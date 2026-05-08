@@ -147,7 +147,7 @@ function createSdkStub(): MSTeamsTeamsSdk {
 }
 
 describe("createMSTeamsApp", () => {
-  it("does not crash with express 5 path-to-regexp (#55161)", async () => {
+  it("creates app without the Express 5 wildcard route regression (#55161)", async () => {
     // Regression test for: https://github.com/openclaw/openclaw/issues/55161
     // createMSTeamsApp passes a no-op httpServerAdapter to prevent the SDK from
     // creating its default HttpPlugin (which registers `/api*` — invalid in Express 5).
