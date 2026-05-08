@@ -785,45 +785,53 @@ describe("scoped vitest configs", () => {
   });
 
   it("normalizes acp include patterns relative to the scoped dir", () => {
-    expect(defaultAcpConfig.test?.dir).toBe(path.join(process.cwd(), "src", "acp"));
-    expect(defaultAcpConfig.test?.include).toEqual(["**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultAcpConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "acp"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
   it("normalizes cli include patterns relative to the scoped dir", () => {
-    expect(defaultCliConfig.test?.dir).toBe(path.join(process.cwd(), "src", "cli"));
-    expect(defaultCliConfig.test?.include).toEqual(["**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultCliConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "cli"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
   it("normalizes commands include patterns relative to the scoped dir", () => {
-    expect(defaultCommandsConfig.test?.dir).toBe(path.join(process.cwd(), "src", "commands"));
-    expect(defaultCommandsConfig.test?.include).toEqual(["**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultCommandsConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "commands"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
   it("normalizes auto-reply include patterns relative to the scoped dir", () => {
-    expect(defaultAutoReplyConfig.test?.dir).toBe(path.join(process.cwd(), "src", "auto-reply"));
-    expect(defaultAutoReplyConfig.test?.include).toEqual(["**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultAutoReplyConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "auto-reply"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
   it("normalizes agents include patterns relative to the scoped dir", () => {
-    expect(defaultAgentsConfig.test?.dir).toBe(path.join(process.cwd(), "src", "agents"));
-    expect(defaultAgentsConfig.test?.include).toEqual(["**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultAgentsConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "agents"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
   });
 
   it("normalizes plugins include patterns relative to the scoped dir", () => {
-    expect(defaultPluginsConfig.test?.dir).toBe(path.join(process.cwd(), "src", "plugins"));
-    expect(defaultPluginsConfig.test?.include).toEqual(["**/*.test.ts"]);
-    expect(defaultPluginsConfig.test?.exclude).toContain("contracts/**");
+    const testConfig = requireTestConfig(defaultPluginsConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "plugins"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
+    expect(testConfig.exclude).toContain("contracts/**");
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {
-    expect(defaultUiConfig.test?.dir).toBe(process.cwd());
-    expect(defaultUiConfig.test?.include).toEqual(["ui/src/**/*.test.ts"]);
-    expect(defaultUiConfig.test?.exclude).toContain("ui/src/ui/app-chat.test.ts");
+    const testConfig = requireTestConfig(defaultUiConfig);
+    expect(testConfig.dir).toBe(process.cwd());
+    expect(testConfig.include).toEqual(["ui/src/**/*.test.ts"]);
+    expect(testConfig.exclude).toContain("ui/src/ui/app-chat.test.ts");
   });
 
   it("normalizes utils include patterns relative to the scoped dir", () => {
-    expect(defaultUtilsConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultUtilsConfig.test?.include).toEqual(["utils/**/*.test.ts"]);
-    expect(normalizeConfigPaths(defaultUtilsConfig.test?.setupFiles)).toEqual(["test/setup.ts"]);
+    const testConfig = requireTestConfig(defaultUtilsConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["utils/**/*.test.ts"]);
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual(["test/setup.ts"]);
   });
 });
