@@ -3,6 +3,10 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b";
@@ -82,13 +86,22 @@ async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nul
 
 async function fetchNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | null> {
   try {
-    const response = await fetch(NVIDIA_FEATURED_MODELS_URL, {
-      signal: AbortSignal.timeout(FEATURED_MODEL_FETCH_TIMEOUT_MS),
+    const { response, release } = await fetchWithSsrFGuard({
+      url: NVIDIA_FEATURED_MODELS_URL,
+      init: {
+        signal: AbortSignal.timeout(FEATURED_MODEL_FETCH_TIMEOUT_MS),
+      },
+      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
+      auditContext: "nvidia-featured-model-catalog",
     });
-    if (!response.ok) {
-      return null;
+    try {
+      if (!response.ok) {
+        return null;
+      }
+      return parseNvidiaFeaturedModels(await response.json());
+    } finally {
+      release();
     }
-    return parseNvidiaFeaturedModels(await response.json());
   } catch {
     return null;
   }
