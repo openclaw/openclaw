@@ -14,7 +14,6 @@ export {
   onSessionTranscriptUpdate,
   parseUsageCountedSessionIdFromFileName,
   resolveSqliteSessionTranscriptScopeForPath,
-  resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime.js";

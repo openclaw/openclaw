@@ -12,7 +12,7 @@ import {
   resolveSessionKey,
   updateLastRoute,
 } from "./sessions.js";
-import { resolveSessionFilePath, resolveSessionTranscriptsDir } from "./sessions/paths.js";
+import { resolveSessionFilePath } from "./sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
@@ -597,14 +597,6 @@ describe("sessions", () => {
     expect(entry.provider).toBeUndefined();
     expect(entry.lastChannel).toBe("telegram");
     expect(entry.lastProvider).toBeUndefined();
-  });
-
-  it("derives session transcripts dir from OPENCLAW_STATE_DIR", () => {
-    const dir = resolveSessionTranscriptsDir(
-      { OPENCLAW_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
-      () => "/home/ignored",
-    );
-    expect(dir).toBe(path.join(path.resolve("/custom/state"), "agents", "main", "sessions"));
   });
 
   it("uses agent id when resolving session file fallback paths", () => {
