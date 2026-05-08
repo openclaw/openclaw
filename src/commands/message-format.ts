@@ -4,7 +4,7 @@ import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { hasNonEmptyString, normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -35,7 +35,10 @@ function extractMessageId(payload: unknown): string | null {
 
 type FormatOpts = {
   width: number;
+  displayLimit?: number;
 };
+
+const DEFAULT_MESSAGE_LIST_LIMIT = 25;
 
 function renderObjectSummary(payload: unknown, opts: FormatOpts): string[] {
   if (!payload || typeof payload !== "object") {
@@ -85,8 +88,22 @@ function renderObjectSummary(payload: unknown, opts: FormatOpts): string[] {
   ];
 }
 
-function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: string): string[] {
-  const rows = messages.slice(0, 25).map((m) => {
+type ListRenderResult = {
+  lines: string[];
+  total: number;
+  displayed: number;
+  limit: number;
+};
+
+function renderMessageList(
+  messages: unknown[],
+  opts: FormatOpts,
+  emptyLabel: string,
+): ListRenderResult {
+  const limit = opts.displayLimit ?? DEFAULT_MESSAGE_LIST_LIMIT;
+  const total = messages.length;
+  const displayed = Math.min(total, limit);
+  const rows = messages.slice(0, displayed).map((m) => {
     const msg = m as Record<string, unknown>;
     const id =
       (typeof msg.id === "string" && msg.id) ||
@@ -116,24 +133,29 @@ function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: st
   });
 
   if (rows.length === 0) {
-    return [theme.muted(emptyLabel)];
+    return { lines: [theme.muted(emptyLabel)], total, displayed, limit };
   }
 
-  return [
-    renderTable({
-      width: opts.width,
-      columns: [
-        { key: "Time", header: "Time", minWidth: 14 },
-        { key: "Author", header: "Author", minWidth: 10 },
-        { key: "Text", header: "Text", flex: true, minWidth: 24 },
-        { key: "Id", header: "Id", minWidth: 10 },
-      ],
-      rows,
-    }).trimEnd(),
-  ];
+  return {
+    lines: [
+      renderTable({
+        width: opts.width,
+        columns: [
+          { key: "Time", header: "Time", minWidth: 14 },
+          { key: "Author", header: "Author", minWidth: 10 },
+          { key: "Text", header: "Text", flex: true, minWidth: 24 },
+          { key: "Id", header: "Id", minWidth: 10 },
+        ],
+        rows,
+      }).trimEnd(),
+    ],
+    total,
+    displayed,
+    limit,
+  };
 }
 
-function renderMessagesFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
+function renderMessagesFromPayload(payload: unknown, opts: FormatOpts): ListRenderResult | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -144,7 +166,7 @@ function renderMessagesFromPayload(payload: unknown, opts: FormatOpts): string[]
   return renderMessageList(messages, opts, "No messages.");
 }
 
-function renderPinsFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
+function renderPinsFromPayload(payload: unknown, opts: FormatOpts): ListRenderResult | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -153,6 +175,28 @@ function renderPinsFromPayload(payload: unknown, opts: FormatOpts): string[] | n
     return null;
   }
   return renderMessageList(pins, opts, "No pins.");
+}
+
+function renderPaginationHint(payload: unknown, rendered: ListRenderResult): string | null {
+  const { displayed, total, limit } = rendered;
+  if (total > displayed) {
+    return `Showing ${displayed} of ${total}; raise --limit to see more`;
+  }
+  if (payload && typeof payload === "object") {
+    const p = payload as Record<string, unknown>;
+    const hasCursor =
+      p.hasMore === true ||
+      hasNonEmptyString(p.nextBatch) ||
+      hasNonEmptyString(p["@odata.nextLink"]);
+    if (hasCursor) {
+      return "More results available beyond this page; use --json for the raw cursor";
+    }
+  }
+  // Heuristic: a full page implies older history may exist beyond it
+  if (displayed > 0 && displayed === limit) {
+    return `Reached --limit (${limit}); raise it to fetch older history if any`;
+  }
+  return null;
 }
 
 function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null {
@@ -237,14 +281,21 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
   ];
 }
 
-export function formatMessageCliText(result: MessageActionRunResult): string[] {
+export type FormatMessageCliTextOpts = {
+  displayLimit?: number;
+};
+
+export function formatMessageCliText(
+  result: MessageActionRunResult,
+  textOpts: FormatMessageCliTextOpts = {},
+): string[] {
   const rich = isRich();
   const ok = (text: string) => (rich ? theme.success(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
   const width = getTerminalTableWidth();
-  const opts: FormatOpts = { width };
+  const opts: FormatOpts = { width, displayLimit: textOpts.displayLimit };
 
   if (result.handledBy === "dry-run") {
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
@@ -357,21 +408,27 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     return lines;
   }
 
+  const pushSection = (rendered: ListRenderResult, headingText: string): string[] => {
+    lines.push(heading(headingText));
+    lines.push(rendered.lines[0] ?? "");
+    const hint = renderPaginationHint(payload, rendered);
+    if (hint) {
+      lines.push(muted(hint));
+    }
+    return lines;
+  };
+
   if (result.action === "read") {
-    const messagesTable = renderMessagesFromPayload(payload, opts);
-    if (messagesTable) {
-      lines.push(heading("Messages"));
-      lines.push(messagesTable[0] ?? "");
-      return lines;
+    const rendered = renderMessagesFromPayload(payload, opts);
+    if (rendered) {
+      return pushSection(rendered, "Messages");
     }
   }
 
   if (result.action === "list-pins") {
-    const pinsTable = renderPinsFromPayload(payload, opts);
-    if (pinsTable) {
-      lines.push(heading("Pinned messages"));
-      lines.push(pinsTable[0] ?? "");
-      return lines;
+    const rendered = renderPinsFromPayload(payload, opts);
+    if (rendered) {
+      return pushSection(rendered, "Pinned messages");
     }
   }
 
@@ -379,9 +436,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     const results = (payload as { results?: unknown }).results;
     const list = extractDiscordSearchResultsMessages(results);
     if (list) {
-      lines.push(heading("Search results"));
-      lines.push(renderMessageList(list, opts, "No results.")[0] ?? "");
-      return lines;
+      return pushSection(renderMessageList(list, opts, "No results."), "Search results");
     }
   }
 

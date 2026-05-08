@@ -120,6 +120,7 @@ Name lookup:
 - `pins` (list)
   - Channels: Discord/Slack/Matrix
   - Required: `--target`
+  - Optional: `--limit`
 
 - `permissions`
   - Channels: Discord/Matrix
