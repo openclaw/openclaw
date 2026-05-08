@@ -45,6 +45,8 @@ openclaw doctor --deep
 openclaw doctor --fix
 openclaw doctor --fix --non-interactive
 openclaw doctor --generate-gateway-token
+openclaw doctor --post-upgrade
+openclaw doctor --post-upgrade --json
 ```
 
 For channel-specific permissions, use the channel probes instead of `doctor`:
@@ -68,7 +70,8 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--allow-exec`: allow doctor to execute configured exec SecretRefs while verifying secrets
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 - `--lint`: run modernized health checks in read-only mode and emit diagnostic findings
-- `--json`: with `--lint`, emit JSON findings instead of human output
+- `--post-upgrade`: run post-upgrade plugin compatibility probes; emits findings to stdout; exits with code 1 if any error-level findings are present
+- `--json`: with `--lint`, emit JSON findings instead of human output; with `--post-upgrade`, emit a machine-readable JSON envelope (`{ probesRun, findings }`)
 - `--severity-min <level>`: with `--lint`, drop findings below `info`, `warning`, or `error`
 - `--skip <id>`: with `--lint`, skip a check id; repeat to skip more than one
 - `--only <id>`: with `--lint`, run only a check id; repeat to run a small selected set
@@ -187,6 +190,14 @@ openclaw doctor --lint --skip core/doctor/skills-readiness
 id is not registered, no check runs for that id; use the command's `checksRun`
 and `checksSkipped` fields to verify a focused gate is selecting the checks you
 expect.
+
+## Post-upgrade mode
+
+`openclaw doctor --post-upgrade` runs plugin compatibility probes intended to be
+chained after a build or upgrade. Findings are emitted to stdout; the command
+exits with code 1 if any finding has `level: "error"`. Add `--json` to receive a
+machine-readable envelope (`{ probesRun, findings }`) suitable for CI, the
+community `fork-upgrade` skill, and other post-upgrade smoke tooling.
 
 Notes:
 
