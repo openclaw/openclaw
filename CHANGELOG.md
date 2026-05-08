@@ -186,6 +186,7 @@ Docs: https://docs.openclaw.ai
 
 - Cron/agents: recognize same-target `edit`↔`write` recovery in `isSameToolMutationAction`, so a successful `write` to a path clears an earlier failed `edit` on the same path. Stops cron from reporting fatal failures when an agent self-heals across `edit` and `write`, while preserving same-tool fingerprint matching, blocking different-target writes, and excluding tools (including `apply_patch`) whose real call args do not produce a stable `path` fingerprint segment. Fixes #79024. Thanks @RenzoMXD.
 - Agents/compaction: keep the recent tail after manual `/compact` when Pi returns an empty or no-op compaction summary, preventing blank checkpoints from replacing the live context.
+- Native commands: handle slash commands before workspace and agent-reply bootstrap so Telegram `/status` and other command-only native replies do not wait behind full agent turn setup.
 - fix(discord): gate user allowlist name resolution [AI]. (#79002) Thanks @pgondhi987.
 - fix(msteams): gate startup user allowlist resolution [AI]. (#79003) Thanks @pgondhi987.
 - Infra/fetch-timeout: pass `operation` and `url` context to `buildTimeoutAbortSignal` from the music-generate reference fetch and the Matrix guarded redirect transport, so the `fetch timeout reached; aborting operation` warning carries actionable structured fields instead of a bare line. Fixes #79195. Thanks @pandadev66.
