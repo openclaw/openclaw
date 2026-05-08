@@ -357,7 +357,6 @@ describe("describeReplyTarget", () => {
         from: { id: 42, first_name: "Alice", is_bot: false },
       },
     } as any);
-    expect(result).not.toBeNull();
     expect(result?.body).toBe("Original message");
     expect(result?.sender).toBe("Alice");
     expect(result?.id).toBe("1");
@@ -486,7 +485,6 @@ describe("describeReplyTarget", () => {
         },
       },
     } as any);
-    expect(result).not.toBeNull();
     expect(result?.body).toBe("This is the forwarded content");
     expect(result?.id).toBe("2");
     expect(result?.forwardedFrom).toMatchObject({
@@ -517,7 +515,6 @@ describe("describeReplyTarget", () => {
         },
       },
     } as any);
-    expect(result).not.toBeNull();
     expect(result?.forwardedFrom).toMatchObject({
       from: "Tech News (Editor)",
       fromType: "channel",
@@ -577,7 +574,6 @@ describe("describeReplyTarget", () => {
         },
       },
     } as any);
-    expect(result).not.toBeNull();
     expect(result?.id).toBe("4");
     expect(result?.forwardedFrom?.from).toBe("Eve Stone (@eve)");
     expect(result?.forwardedFrom?.fromType).toBe("user");
