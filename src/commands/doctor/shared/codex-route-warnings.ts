@@ -625,6 +625,19 @@ function clearStaleCodexFallbackNotice(entry: SessionEntry): boolean {
   return true;
 }
 
+function clearStaleSessionRuntimePins(entry: SessionEntry): boolean {
+  let changed = false;
+  if (entry.agentHarnessId !== undefined) {
+    delete entry.agentHarnessId;
+    changed = true;
+  }
+  if (entry.agentRuntimeOverride !== undefined) {
+    delete entry.agentRuntimeOverride;
+    changed = true;
+  }
+  return changed;
+}
+
 export function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   now?: number;
@@ -647,7 +660,9 @@ export function repairCodexSessionStoreRoutes(params: {
     });
     const changedModelRoute = changedRuntimeModelRoute || changedOverrideModelRoute;
     const changedFallbackNotice = clearStaleCodexFallbackNotice(entry);
-    if (!changedModelRoute && !changedFallbackNotice) {
+    const changedRuntimePins =
+      changedModelRoute || changedFallbackNotice ? clearStaleSessionRuntimePins(entry) : false;
+    if (!changedModelRoute && !changedFallbackNotice && !changedRuntimePins) {
       continue;
     }
     entry.updatedAt = now;

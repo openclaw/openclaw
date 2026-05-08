@@ -239,7 +239,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.changes.join("\n")).not.toContain("agentRuntime.id");
   });
 
-  it("repairs persisted session route refs and preserves existing runtime and auth pins", () => {
+  it("repairs persisted session route refs, clears runtime pins, and preserves auth pins", () => {
     const store: Record<string, SessionEntry> = {
       main: {
         sessionId: "s1",
@@ -278,12 +278,12 @@ describe("collectCodexRouteWarnings", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       modelOverrideSource: "auto",
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "codex",
       authProfileOverride: "openai-codex:default",
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 2,
     });
+    expect(store.main.agentHarnessId).toBeUndefined();
+    expect(store.main.agentRuntimeOverride).toBeUndefined();
     expect(store.main.fallbackNoticeSelectedModel).toBeUndefined();
     expect(store.main.fallbackNoticeActiveModel).toBeUndefined();
     expect(store.main.fallbackNoticeReason).toBeUndefined();
