@@ -52,6 +52,16 @@ let envSnapshot: SkillsHomeEnvSnapshot;
 let tempRoot = "";
 let workspaceCaseIndex = 0;
 
+function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean): T[] {
+  const matches: T[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(item);
+    }
+  }
+  return matches;
+}
+
 async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -599,7 +609,10 @@ describe("loadWorkspaceSkillEntries", () => {
         },
       }).map((entry) => entry.skill.name);
 
-      expect(names.filter((name) => name.startsWith("valid-"))).toEqual(["valid-a", "valid-b"]);
+      expect(collectMatching(names, (name) => name.startsWith("valid-"))).toEqual([
+        "valid-a",
+        "valid-b",
+      ]);
     });
   });
 });

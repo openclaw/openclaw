@@ -29,6 +29,20 @@ type BeforeToolCallHookInstall = {
   handler: BeforeToolCallHandlerMock;
 };
 
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
+}
+
 function installBeforeToolCallHook(params?: {
   enabled?: boolean;
   runBeforeToolCallImpl?: (...args: unknown[]) => unknown;
@@ -427,10 +441,13 @@ describe("before_tool_call hook integration for client tools", () => {
     releaseFirstHook();
     await firstRun;
 
-    expect(slots.filter((slot) => slot.completed).map((slot) => slot.name)).toEqual([
-      "first_tool",
-      "second_tool",
-    ]);
+    expect(
+      collectMatching(
+        slots,
+        (slot) => slot.completed,
+        (slot) => slot.name,
+      ),
+    ).toEqual(["first_tool", "second_tool"]);
     expect(slots.map((slot) => slot.params)).toEqual([
       { value: "first", marker: "first_tool" },
       { value: "second", marker: "second_tool" },
