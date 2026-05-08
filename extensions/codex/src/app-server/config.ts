@@ -665,25 +665,6 @@ function resolveRuntimePermissions(params: {
     });
   }
 
-  if (
-    fullAccessDisallowed &&
-    params.policyMode === "yolo" &&
-    params.policyModeSource === "default" &&
-    explicitFieldCount > 0 &&
-    !isGuardianPermissionTuple({
-      approvalPolicy: approvalPolicy.value,
-      sandbox: sandbox.value,
-      approvalsReviewer: approvalsReviewer.value,
-    })
-  ) {
-    throwPolicyConflict({
-      requirementsPolicy: params.requirementsPolicy,
-      requestedSandboxMode: sandbox.value,
-      reason:
-        "a partial app-server permission override would mix explicit values with the restricted workspace-policy fallback",
-    });
-  }
-
   if (!isCodexSandboxAllowedByPolicy(params.requirementsPolicy, sandbox.value)) {
     if (defaultYoloTuple || guardianModeTuple) {
       const fallbackSandbox = preferredCodexSandboxForPolicy(params.requirementsPolicy);
@@ -730,18 +711,6 @@ function resolveValueWithSource<T>(
     value: defaultValue,
     source: derivedSource === "mode" ? "mode" : "default",
   };
-}
-
-function isGuardianPermissionTuple(params: {
-  approvalPolicy: CodexAppServerApprovalPolicy;
-  sandbox: CodexAppServerSandboxMode;
-  approvalsReviewer: CodexAppServerApprovalsReviewer;
-}): boolean {
-  return (
-    params.approvalPolicy !== "never" &&
-    params.sandbox !== "danger-full-access" &&
-    params.approvalsReviewer !== "user"
-  );
 }
 
 function throwPolicyConflict(params: {

@@ -220,6 +220,30 @@ describe("Codex app-server config", () => {
     ).toThrow("requested sandbox danger-full-access is not allowed");
   });
 
+  it("honors explicit policy-compliant sandbox overrides when requirements forbid full access", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: { appServer: { sandbox: "workspace-write" } },
+      env: {},
+      requirementsPolicy: {
+        sourcePath: "/test/requirements.toml",
+        allowedSandboxModes: ["read-only", "workspace-write"],
+      },
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "workspace-write",
+        approvalsReviewer: "user",
+        permissionSources: expect.objectContaining({
+          approvalPolicy: "default",
+          sandbox: "config",
+          approvalsReviewer: "default",
+        }),
+      }),
+    );
+  });
+
   it("does not apply local requirements policy to websocket app-server transports", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
