@@ -582,7 +582,12 @@ describe("runCli exit behavior", () => {
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
       await vi.waitFor(() => {
-        expect(processOnceSpy.mock.calls.filter(([event]) => event === "exit")).toHaveLength(2);
+        expect(
+          processOnceSpy.mock.calls.reduce(
+            (count, [event]) => count + (event === "exit" ? 1 : 0),
+            0,
+          ),
+        ).toBe(2);
       });
 
       const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];

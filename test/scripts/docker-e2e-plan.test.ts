@@ -60,10 +60,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-23");
-    expect(plan.lanes.filter((lane) => lane.name === "install-e2e-openai")).toHaveLength(1);
-    expect(
-      plan.lanes.filter((lane) => lane.name === "bundled-plugin-install-uninstall-0"),
-    ).toHaveLength(1);
+    const countLane = (name: string) =>
+      plan.lanes.reduce((count, lane) => count + (lane.name === name ? 1 : 0), 0);
+    expect(countLane("install-e2e-openai")).toBe(1);
+    expect(countLane("bundled-plugin-install-uninstall-0")).toBe(1);
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("bundled-plugin-install-uninstall");
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("bundled-channel-deps");
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");

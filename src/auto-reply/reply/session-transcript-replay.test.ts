@@ -73,7 +73,7 @@ describe("replayRecentUserAssistantMessages", () => {
       .split(/\r?\n/)
       .filter((line) => line.trim().length > 0)
       .map((line) => JSON.parse(line));
-    expect(records.filter((r) => r.type === "session")).toHaveLength(1);
+    expect(records.reduce((count, r) => count + (r.type === "session" ? 1 : 0), 0)).toBe(1);
     expect(records[0]).toMatchObject({ id: "existing" });
     expect(records[1].message.role).toBe("user");
   });
