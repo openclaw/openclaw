@@ -31,6 +31,13 @@ export type VoiceRealtimeSpeakerContext = {
   speakerLabel: string;
 };
 
+export type VoiceRealtimeAgentTurnParams = {
+  context: VoiceRealtimeSpeakerContext;
+  message: string;
+  toolsAllow?: string[];
+  userId: string;
+};
+
 export type VoiceRealtimeSession = {
   close: () => void;
   connect: () => Promise<void>;

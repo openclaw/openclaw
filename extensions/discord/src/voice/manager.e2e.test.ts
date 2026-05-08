@@ -753,6 +753,73 @@ describe("DiscordVoiceManager", () => {
     expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
       text: "consult answer",
     });
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderIsOwner: true,
+        toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("authorizes realtime speakers before subscribing receiver streams", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Denied Speaker",
+      roles: [],
+      user: {
+        id: "u-denied",
+        username: "denied",
+        globalName: "Denied",
+        discriminator: "3333",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "allowlist",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                roles: ["role:voice-allowed"],
+              },
+            },
+          },
+        },
+        voice: {
+          enabled: true,
+          mode: "bidi",
+          realtime: {
+            provider: "openai",
+            model: "gpt-realtime-2",
+          },
+        },
+      },
+      client,
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      | {
+          player: { state: { status: string } };
+        }
+      | undefined;
+    expect(entry).toBeDefined();
+    if (entry) {
+      entry.player.state.status = "playing";
+    }
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u-denied");
+
+    expect(connection.receiver.subscribe).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+    expect(client.fetchMember).toHaveBeenCalledWith("g1", "u-denied");
   });
 
   it("stores guild metadata on joined voice sessions", async () => {

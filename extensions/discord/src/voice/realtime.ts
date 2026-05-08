@@ -11,6 +11,7 @@ import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceAgentConsultToolPolicy,
   resolveRealtimeVoiceAgentConsultTools,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceBridgeSession,
@@ -27,6 +28,7 @@ import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import {
   logVoiceVerbose,
+  type VoiceRealtimeAgentTurnParams,
   type VoiceRealtimeSession,
   type VoiceRealtimeSpeakerContext,
   type VoiceSessionEntry,
@@ -63,6 +65,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private outputStream: PassThrough | null = null;
   private readonly talkback: RealtimeVoiceAgentTalkbackQueue;
   private stopped = false;
+  private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
+  private consultToolsAllow: string[] | undefined;
   private speakerContext: DiscordRealtimeSpeakerContext | undefined;
 
   constructor(
@@ -71,11 +75,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       discordConfig: DiscordAccountConfig;
       entry: VoiceSessionEntry;
       mode: Exclude<DiscordVoiceMode, "stt-tts">;
-      runAgentTurn: (params: {
-        context: VoiceRealtimeSpeakerContext;
-        message: string;
-        userId: string;
-      }) => Promise<string>;
+      runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
     },
   ) {
     this.talkback = createRealtimeVoiceAgentTalkbackQueue({
@@ -111,6 +111,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       this.realtimeConfig?.toolPolicy,
       "safe-read-only",
     );
+    this.consultToolPolicy = toolPolicy;
+    this.consultToolsAllow = resolveRealtimeVoiceAgentConsultToolsAllow(toolPolicy);
     const consultPolicy = this.realtimeConfig?.consultPolicy ?? "auto";
     const instructions = buildDiscordRealtimeInstructions({
       mode: this.params.mode,
@@ -234,6 +236,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
       return;
     }
+    if (this.consultToolPolicy === "none") {
+      session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
+      return;
+    }
     if (session.bridge.supportsToolResultContinuation) {
       session.submitToolResult(callId, buildRealtimeVoiceAgentConsultWorkingResponse("speaker"), {
         willContinue: true,
@@ -256,6 +262,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     return this.params.runAgentTurn({
       context,
       message: params.message,
+      toolsAllow: this.params.mode === "bidi" ? this.consultToolsAllow : undefined,
       userId: context.userId,
     });
   }

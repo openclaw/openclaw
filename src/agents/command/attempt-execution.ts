@@ -624,6 +624,7 @@ export function runAgentAttempt(params: {
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
+    toolsAllow: params.opts.toolsAllow,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,

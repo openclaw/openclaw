@@ -983,6 +983,53 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
+  it("forwards runtime toolsAllow into embedded attempts", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "tools-allow-session",
+      updatedAt: Date.now(),
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "read only",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-tools-allow",
+      opts: {
+        senderIsOwner: true,
+        toolsAllow: ["read", "web_search"],
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolsAllow: ["read", "web_search"],
+      }),
+    );
+  });
+
   it("lets provider/model runtime policy choose Codex without storing a session harness pin", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "codex-history-session",

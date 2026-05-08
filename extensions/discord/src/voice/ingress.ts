@@ -72,6 +72,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
   context?: DiscordVoiceIngressContext;
+  toolsAllow?: string[];
   ownerAllowFrom?: string[];
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
@@ -102,6 +103,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       senderIsOwner: context.senderIsOwner,
       allowModelOverride: Boolean(voiceModel),
       model: voiceModel,
+      toolsAllow: params.toolsAllow,
       deliver: false,
     },
     params.runtime,
