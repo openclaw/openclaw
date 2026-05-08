@@ -137,8 +137,12 @@ export async function resolveSlackThreadContextData(params: {
       botId: starter.botId,
     }),
   );
+  const allowCurrentBotStarterContext =
+    starterIsCurrentBot &&
+    (params.message.channel_type === "im" || params.message.channel_type === "mpim");
   const starterAllowed =
     !starter ||
+    allowCurrentBotStarterContext ||
     (!starterIsCurrentBot &&
       isSlackThreadContextSenderAllowed({
         allowFromLower: params.allowFromLower,
@@ -149,6 +153,7 @@ export async function resolveSlackThreadContextData(params: {
       }));
   const includeStarterContext =
     !starter ||
+    allowCurrentBotStarterContext ||
     (!starterIsCurrentBot &&
       shouldIncludeSupplementalContext({
         mode: params.contextVisibilityMode,
@@ -175,7 +180,7 @@ export async function resolveSlackThreadContextData(params: {
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
-  if (starter?.text && starterIsCurrentBot) {
+  if (starter?.text && starterIsCurrentBot && !allowCurrentBotStarterContext) {
     logVerbose("slack: omitted current-bot thread starter from context");
   } else if (starter?.text && !includeStarterContext) {
     logVerbose(

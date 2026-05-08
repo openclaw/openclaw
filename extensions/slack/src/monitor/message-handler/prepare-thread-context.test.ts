@@ -49,6 +49,7 @@ describe("resolveSlackThreadContextData", () => {
     threadStarter: { text: string; userId?: string; ts: string; botId?: string };
     allowFromLower: string[];
     allowNameMatching: boolean;
+    messageOverrides?: Partial<SlackMessageEvent>;
   }) {
     const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
@@ -65,7 +66,7 @@ describe("resolveSlackThreadContextData", () => {
     const result = await resolveSlackThreadContextData({
       ctx,
       account: createSlackTestAccount({ thread: { initialHistoryLimit: 20 } }),
-      message: createThreadMessage(),
+      message: createThreadMessage(params.messageOverrides),
       isThreadReply: true,
       threadTs: "100.000",
       threadStarter: params.threadStarter,
@@ -152,6 +153,30 @@ describe("resolveSlackThreadContextData", () => {
     expect(result.threadLabel).toBe("Slack thread #general");
     expect(result.threadHistoryBody).toContain("allowed follow-up");
     expect(result.threadHistoryBody).not.toContain("bot starter");
+    expect(result.threadHistoryBody).not.toContain("current message");
+  });
+
+  it("keeps self-authored starter text for direct message thread replies", async () => {
+    const { result } = await resolveAllowlistedThreadContext({
+      repliesMessages: [
+        { text: "bot decision summary", bot_id: "B1", ts: "100.000" },
+        { text: "actually choose Sunday", user: "U1", ts: "100.800" },
+        { text: "current message", user: "U1", ts: "101.000" },
+      ],
+      threadStarter: {
+        text: "bot decision summary",
+        botId: "B1",
+        ts: "100.000",
+      },
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+      messageOverrides: { channel_type: "im" },
+    });
+
+    expect(result.threadStarterBody).toBe("bot decision summary");
+    expect(result.threadLabel).toContain("bot decision summary");
+    expect(result.threadHistoryBody).toContain("actually choose Sunday");
+    expect(result.threadHistoryBody).not.toContain("bot decision summary");
     expect(result.threadHistoryBody).not.toContain("current message");
   });
 
