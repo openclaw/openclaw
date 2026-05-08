@@ -249,9 +249,7 @@ describe("loadCliSessionHistoryMessages", () => {
           sessionKey: "agent:main:main",
           agentId: "main",
           config: {
-            session: {
-              store: storePath,
-            },
+            session: {},
           },
         }),
       ).toMatchObject([{ role: "user", content: "custom store history" }]);

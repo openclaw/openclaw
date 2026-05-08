@@ -4,11 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  updateSessionStore,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
@@ -54,7 +50,6 @@ describe("Telegram direct session recreation after delete", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
-    clearSessionStoreCacheForTest();
   });
 
   afterAll(async () => {
@@ -75,30 +70,9 @@ describe("Telegram direct session recreation after delete", () => {
       messages: { groupChat: { mentionPatterns: [] } },
       session: {
         dmScope: "per-channel-peer" as const,
-        store: storePath,
       },
     };
     setRuntimeConfigSnapshot(cfg as never);
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [TELEGRAM_DIRECT_KEY]: {
-            sessionId: "old-session",
-            updatedAt: 1_700_000_000_000,
-            chatType: "direct",
-            channel: "telegram",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    await updateSessionStore(storePath, (store) => {
-      delete store[TELEGRAM_DIRECT_KEY];
-    });
-
     const context = await buildTelegramMessageContextForTest({
       cfg,
       message: {
@@ -112,16 +86,18 @@ describe("Telegram direct session recreation after delete", () => {
     });
     expect(context).not.toBeNull();
     await context?.turn.recordInboundSession({
-      storePath: context.turn.storePath,
       sessionKey: String(context.ctxPayload.SessionKey),
       ctx: context.ctxPayload as never,
       updateLastRoute: context.turn.record.updateLastRoute,
       onRecordError: context.turn.record.onRecordError,
     });
 
-    const store = loadSessionStore(storePath);
+    const entry = getSessionEntry({
+      agentId: "main",
+      sessionKey: TELEGRAM_DIRECT_KEY,
+    });
     expect(context?.ctxPayload?.SessionKey).toBe(TELEGRAM_DIRECT_KEY);
-    expect(store[TELEGRAM_DIRECT_KEY]).toEqual(
+    expect(entry).toEqual(
       expect.objectContaining({
         lastChannel: "telegram",
         lastTo: "telegram:7463849194",

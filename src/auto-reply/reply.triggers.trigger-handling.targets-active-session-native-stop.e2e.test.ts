@@ -10,12 +10,17 @@ import {
   MAIN_SESSION_KEY,
   makeCfg,
   mockRunEmbeddedPiAgentOk,
-  requireSessionStorePath,
   expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { savePersistedAuthProfileState } from "../agents/auth-profiles/state.js";
-import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
+import { resolveSessionKey } from "../config/sessions.js";
+import {
+  deleteSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
@@ -158,16 +163,31 @@ async function writeDailyMemoryNotes(
   }
 }
 
-async function seedTargetSession(storePath: string, targetSessionKey: string) {
-  await fs.writeFile(
-    storePath,
-    JSON.stringify({
-      [targetSessionKey]: {
-        sessionId: "session-target",
-        updatedAt: Date.now(),
-      },
-    }),
+async function replaceSessionStore(
+  agentId: string,
+  store: Record<string, SessionEntry>,
+): Promise<void> {
+  for (const { sessionKey } of listSessionEntries({ agentId })) {
+    deleteSessionEntry({ agentId, sessionKey });
+  }
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    upsertSessionEntry({ agentId, sessionKey, entry });
+  }
+}
+
+function readSessionStore(agentId: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
+}
+
+async function seedTargetSession(agentId: string, targetSessionKey: string) {
+  await replaceSessionStore(agentId, {
+    [targetSessionKey]: {
+      sessionId: "session-target",
+      updatedAt: Date.now(),
+    },
+  });
 }
 
 function makeNativeTelegramCommandMessage(params: {
@@ -240,18 +260,14 @@ async function expectNextRunUsesTargetSession(
 }
 
 async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
-  await fs.writeFile(
-    requireSessionStorePath(cfg),
-    JSON.stringify({
-      [MAIN_SESSION_KEY]: {
-        sessionId: "main",
-        updatedAt: Date.now(),
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-      },
-    }),
-    "utf-8",
-  );
+  await replaceSessionStore("main", {
+    [MAIN_SESSION_KEY]: {
+      sessionId: "main",
+      updatedAt: Date.now(),
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+    },
+  });
 }
 
 function mockSuccessfulCompaction() {
@@ -290,10 +306,6 @@ async function expectResetBlockedForNonOwner(params: { home: string }): Promise<
   cfg.commands = {
     ...cfg.commands,
     ownerAllowFrom: ["whatsapp:+1999"],
-  };
-  cfg.session = {
-    ...cfg.session,
-    store: join(home, "blocked-reset.sessions.json"),
   };
   const res = await getReplyFromConfig(
     {
@@ -505,7 +517,6 @@ describe("trigger handling", () => {
         runEmbeddedPiAgentMock.mockReset();
         mockEmbeddedOkPayload();
         const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, `${testCase.label}.sessions.json`) };
         await writeStoredModelOverride(cfg);
         testCase.setup(cfg);
         await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
@@ -519,9 +530,7 @@ describe("trigger handling", () => {
 
   it("compacts the active main session", async () => {
     await withTempHome(async (home) => {
-      const storePath = join(home, "compact-main.sessions.json");
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: storePath };
       mockSuccessfulCompaction();
 
       const request = {
@@ -541,7 +550,7 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
       expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
-      const store = loadSessionStore(storePath);
+      const store = readSessionStore("main");
       const sessionKey = resolveSessionKey("per-sender", request);
       expect(store[sessionKey]?.compactionCount).toBe(1);
     });
@@ -552,7 +561,6 @@ describe("trigger handling", () => {
       getCompactEmbeddedPiSessionMock().mockReset();
       mockSuccessfulCompaction();
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "compact-worker.sessions.json") };
       const res = await getReplyFromConfig(
         {
           Body: "/compact",
@@ -577,23 +585,15 @@ describe("trigger handling", () => {
   it("aborts native target sessions and clears queued followups", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "native-stop.sessions.json") };
       getAbortEmbeddedPiRunMock().mockReset().mockReturnValue(false);
-      const storePath = cfg.session?.store;
-      if (!storePath) {
-        throw new Error("missing session store path");
-      }
       const targetSessionKey = "agent:main:telegram:group:123";
       const targetSessionId = "session-target";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [targetSessionKey]: {
-            sessionId: targetSessionId,
-            updatedAt: Date.now(),
-          },
-        }),
-      );
+      await replaceSessionStore("main", {
+        [targetSessionKey]: {
+          sessionId: targetSessionId,
+          updatedAt: Date.now(),
+        },
+      });
       const followupRun: FollowupRun = {
         prompt: "queued",
         enqueuedAt: Date.now(),
@@ -641,7 +641,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("⚙️ Agent was aborted.");
       expect(getAbortEmbeddedPiRunMock()).toHaveBeenCalledWith(targetSessionId);
-      const store = loadSessionStore(storePath);
+      const store = readSessionStore("main");
       expect(store[targetSessionKey]?.abortedLastRun).toBe(true);
       expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
     });
@@ -650,14 +650,12 @@ describe("trigger handling", () => {
   it("applies native model changes to the target session", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "native-model.sessions.json") };
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       runEmbeddedPiAgentMock.mockReset();
-      const storePath = requireSessionStorePath(cfg);
       const slashSessionKey = "telegram:slash:111";
       const targetSessionKey = MAIN_SESSION_KEY;
 
-      await seedTargetSession(storePath, targetSessionKey);
+      await seedTargetSession("main", targetSessionKey);
 
       const res = await getReplyFromConfig(
         makeNativeTelegramCommandMessage({
@@ -671,7 +669,7 @@ describe("trigger handling", () => {
 
       expect(maybeReplyText(res)).toContain("Model set to openai/gpt-4.1-mini");
 
-      const store = loadSessionStore(storePath);
+      const store = readSessionStore("main");
       expect(store[targetSessionKey]?.providerOverride).toBe("openai");
       expect(store[targetSessionKey]?.modelOverride).toBe("gpt-4.1-mini");
       expect(store[slashSessionKey]).toBeUndefined();
@@ -699,24 +697,19 @@ describe("trigger handling", () => {
           },
         },
       };
-      cfg.session = { ...cfg.session, store: join(home, "native-model-thread.sessions.json") };
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       runEmbeddedPiAgentMock.mockReset();
-      const storePath = requireSessionStorePath(cfg);
       const slashSessionKey = "agent:main:telegram:slash:7595562691";
       const targetSessionKey = "agent:main:main:thread:7595562691:12812";
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [targetSessionKey]: {
-            sessionId: "session-target",
-            updatedAt: Date.now(),
-            providerOverride: "zai",
-            modelOverride: "glm-5.1",
-          },
-        }),
-      );
+      await replaceSessionStore("main", {
+        [targetSessionKey]: {
+          sessionId: "session-target",
+          updatedAt: Date.now(),
+          providerOverride: "zai",
+          modelOverride: "glm-5.1",
+        },
+      });
 
       const res = await getReplyFromConfig(
         makeNativeTelegramCommandMessage({
@@ -730,7 +723,7 @@ describe("trigger handling", () => {
 
       expect(maybeReplyText(res)).toContain("Model set to deepseek/deepseek-v4-pro");
 
-      const store = loadSessionStore(storePath);
+      const store = readSessionStore("main");
       expect(store[targetSessionKey]?.providerOverride).toBe("deepseek");
       expect(store[targetSessionKey]?.modelOverride).toBe("deepseek-v4-pro");
       expect(store[slashSessionKey]).toBeUndefined();
@@ -748,10 +741,8 @@ describe("trigger handling", () => {
   it("applies native model auth profile overrides to the target session", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "native-model-auth.sessions.json") };
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       runEmbeddedPiAgentMock.mockReset();
-      const storePath = requireSessionStorePath(cfg);
       const authDir = join(home, ".openclaw", "agents", "main", "agent");
       await fs.mkdir(authDir, { recursive: true });
       await fs.writeFile(
@@ -788,7 +779,7 @@ describe("trigger handling", () => {
       const slashSessionKey = "telegram:slash:111";
       const targetSessionKey = MAIN_SESSION_KEY;
 
-      await seedTargetSession(storePath, targetSessionKey);
+      await seedTargetSession("main", targetSessionKey);
 
       const res = await getReplyFromConfig(
         makeNativeTelegramCommandMessage({
@@ -802,7 +793,7 @@ describe("trigger handling", () => {
 
       expect(maybeReplyText(res)).toContain(`Auth profile set to ${TEST_SECONDARY_PROFILE_ID}`);
 
-      const store = loadSessionStore(storePath);
+      const store = readSessionStore("main");
       expect(store[targetSessionKey]?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
       expect(store[targetSessionKey]?.authProfileOverrideSource).toBe("user");
       expect(store[slashSessionKey]).toBeUndefined();

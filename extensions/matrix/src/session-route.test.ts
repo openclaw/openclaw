@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 
 const tempDirs = new Set<string>();
+const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 const currentDmSessionKey = "agent:main:matrix:channel:!dm:example.org";
 type MatrixChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["matrix"]>;
 
@@ -26,22 +28,26 @@ const defaultAccountPerRoomDmMatrixConfig = {
   },
 } satisfies MatrixChannelConfig;
 
-function createTempStore(entries: Record<string, unknown>): string {
+function seedTempSessionEntries(entries: Record<string, unknown>): void {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-session-route-"));
   tempDirs.add(tempDir);
-  const storePath = path.join(tempDir, "sessions.json");
-  fs.writeFileSync(storePath, JSON.stringify(entries), "utf8");
-  return storePath;
+  process.env.OPENCLAW_STATE_DIR = tempDir;
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: entry as never,
+    });
+  }
 }
 
 function createMatrixRouteConfig(
   entries: Record<string, unknown>,
   matrix: MatrixChannelConfig = perRoomDmMatrixConfig,
 ): OpenClawConfig {
+  seedTempSessionEntries(entries);
   return {
-    session: {
-      store: createTempStore(entries),
-    },
+    session: {},
     channels: {
       matrix,
     },
@@ -173,6 +179,11 @@ function expectFallbackUserRoute(
 }
 
 afterEach(() => {
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
   for (const tempDir of tempDirs) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

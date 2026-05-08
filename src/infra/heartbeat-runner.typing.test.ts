@@ -50,7 +50,6 @@ function createHeartbeatConfig(params: {
       },
     },
     session: {
-      store: params.storePath,
       ...params.session,
     },
   } as OpenClawConfig;

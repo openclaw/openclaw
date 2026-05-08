@@ -4,16 +4,21 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import {
-  resolveStorePath,
-  resolveSessionTranscriptsDirForAgent,
-} from "../config/sessions/paths.js";
-import { loadSessionStore, saveSessionStore } from "../config/sessions/store.js";
+  deleteSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   clearTuiLastSessionPointers,
+  readTuiLastSessionKey,
+  writeTuiLastSessionKey,
+} from "../tui/tui-last-session.js";
+import {
   moveHeartbeatMainSessionEntry,
   resolveHeartbeatMainSessionRepairCandidate,
 } from "./doctor-heartbeat-main-session-repair.js";
@@ -58,12 +63,26 @@ function restoreEnv(snapshot: EnvSnapshot) {
   }
 }
 
-function setupSessionState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, homeDir: string) {
+function setupSessionState(env: NodeJS.ProcessEnv, homeDir: string) {
   const agentId = "main";
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, () => homeDir);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
   fs.mkdirSync(sessionsDir, { recursive: true });
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+}
+
+function replaceSessionStoreForTest(store: Record<string, SessionEntry>): void {
+  const agentId = "main";
+  for (const { sessionKey } of listSessionEntries({ agentId })) {
+    deleteSessionEntry({ agentId, sessionKey });
+  }
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    upsertSessionEntry({ agentId, sessionKey, entry });
+  }
+}
+
+function readSessionStoreForTest(): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
 }
 
 function stateIntegrityText(): string {
@@ -96,7 +115,7 @@ const OAUTH_PROMPT_MATCHER = expect.objectContaining({
 });
 
 async function runStateIntegrity(cfg: OpenClawConfig) {
-  setupSessionState(cfg, process.env, process.env.HOME ?? "");
+  setupSessionState(process.env, process.env.HOME ?? "");
   const confirmRuntimeRepair = vi.fn(async () => false);
   await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
   return confirmRuntimeRepair;
@@ -106,9 +125,8 @@ async function writeSessionStore(
   cfg: OpenClawConfig,
   sessions: Record<string, { sessionId: string; updatedAt: number } & Record<string, unknown>>,
 ) {
-  setupSessionState(cfg, process.env, process.env.HOME ?? "");
-  const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-  await saveSessionStore(storePath, sessions as Record<string, SessionEntry>);
+  setupSessionState(process.env, process.env.HOME ?? "");
+  replaceSessionStoreForTest(sessions as Record<string, SessionEntry>);
 }
 
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
@@ -125,7 +143,7 @@ async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir
       },
     },
   };
-  setupSessionState(cfg, process.env, homeDir);
+  setupSessionState(process.env, homeDir);
   const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => homeDir);
   fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
   const confirmRuntimeRepair = vi.fn(async () => false);
@@ -292,8 +310,7 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const persisted = loadSessionStore(storePath) as Record<
+    const persisted = readSessionStoreForTest() as Record<
       string,
       { abortedLastRun?: boolean; updatedAt?: number }
     >;
@@ -365,7 +382,7 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("detects orphan transcripts and offers delete remediation", async () => {
     const cfg: OpenClawConfig = {};
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    setupSessionState(process.env, process.env.HOME ?? "");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
     const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
@@ -373,7 +390,7 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
     expect(stateIntegrityText()).toContain(
-      "These .jsonl files are no longer referenced by sessions.json",
+      "These legacy .jsonl files are no longer referenced by SQLite session rows",
     );
     expect(stateIntegrityText()).toContain("Examples: orphan-session.jsonl");
     expect(confirmRuntimeRepair).toHaveBeenCalledWith(
@@ -388,7 +405,7 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("does not auto-delete orphan transcripts from non-interactive repair mode", async () => {
     const cfg: OpenClawConfig = {};
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    setupSessionState(process.env, process.env.HOME ?? "");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
     const confirmRuntimeRepair = vi.fn(
@@ -422,7 +439,7 @@ describe("doctor state integrity oauth dir checks", () => {
         process.env.OPENCLAW_HOME = symlinkHome;
         process.env.OPENCLAW_STATE_DIR = path.join(symlinkHome, ".openclaw");
 
-        setupSessionState(cfg, process.env, symlinkHome);
+        setupSessionState(process.env, symlinkHome);
         const sessionsDir = resolveSessionTranscriptsDirForAgent(
           "main",
           process.env,
@@ -454,7 +471,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(true, tempHome);
 
     expect(stateIntegrityText()).not.toContain(
-      "These .jsonl files are no longer referenced by sessions.json",
+      "These legacy .jsonl files are no longer referenced by SQLite session rows",
     );
     expect(confirmRuntimeRepair).not.toHaveBeenCalled();
   });
@@ -463,7 +480,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(false, tempHome);
 
     expect(stateIntegrityText()).toContain(
-      "These .jsonl files are no longer referenced by sessions.json",
+      "These legacy .jsonl files are no longer referenced by SQLite session rows",
     );
     expect(confirmRuntimeRepair).toHaveBeenCalled();
   });
@@ -479,15 +496,15 @@ describe("doctor state integrity oauth dir checks", () => {
     const text = await runStateIntegrityText(cfg);
     expect(text).toContain("recent sessions are missing transcripts");
     expect(text).toContain("openclaw doctor --fix");
-    expect(text).toContain("openclaw sessions cleanup --dry-run");
-    expect(text).toContain("openclaw sessions cleanup --enforce --fix-missing");
+    expect(text).toContain("reset or delete the affected sessions explicitly");
+    expect(text).not.toContain("openclaw sessions cleanup");
     expect(text).not.toContain("--active");
     expect(text).not.toContain(" ls ");
   });
 
   it("moves a heartbeat-poisoned main session and clears stale TUI restore pointers", async () => {
     const cfg: OpenClawConfig = {};
-    setupSessionState(cfg, process.env, tempHome);
+    setupSessionState(process.env, tempHome);
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     const heartbeatTranscriptPath = path.join(sessionsDir, "heartbeat-session.jsonl");
     replaceSqliteSessionTranscriptEvents({
@@ -506,31 +523,24 @@ describe("doctor state integrity oauth dir checks", () => {
         updatedAt: Date.now(),
       },
     });
-    const tuiLastSessionPath = path.join(
-      process.env.OPENCLAW_STATE_DIR ?? "",
-      "tui",
-      "last-session.json",
-    );
-    fs.mkdirSync(path.dirname(tuiLastSessionPath), { recursive: true });
-    fs.writeFileSync(
-      tuiLastSessionPath,
-      JSON.stringify(
-        {
-          default: { sessionKey: "agent:main:main", updatedAt: Date.now() },
-          telegram: { sessionKey: "agent:main:telegram:thread", updatedAt: Date.now() },
-        },
-        null,
-        2,
-      ),
-    );
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    await writeTuiLastSessionKey({
+      stateDir,
+      scopeKey: "default",
+      sessionKey: "agent:main:main",
+    });
+    await writeTuiLastSessionKey({
+      stateDir,
+      scopeKey: "telegram",
+      sessionKey: "agent:main:telegram:thread",
+    });
 
     const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
       params.message.startsWith("Move heartbeat-owned main session"),
     );
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const store = loadSessionStore(storePath);
+    const store = readSessionStoreForTest();
     const recoveredKey = Object.keys(store).find((key) =>
       key.startsWith("agent:main:heartbeat-recovered-"),
     );
@@ -538,14 +548,17 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(recoveredKey).toBeDefined();
     expect(store[recoveredKey ?? ""]?.sessionId).toBe("heartbeat-session");
 
-    expect(fs.existsSync(tuiLastSessionPath)).toBe(false);
+    await expect(readTuiLastSessionKey({ stateDir, scopeKey: "default" })).resolves.toBeNull();
+    await expect(readTuiLastSessionKey({ stateDir, scopeKey: "telegram" })).resolves.toBe(
+      "agent:main:telegram:thread",
+    );
     expect(doctorChangesText()).toContain("Moved heartbeat-owned main session agent:main:main");
     expect(doctorChangesText()).toContain("Cleared 1 stale TUI last-session pointer");
   });
 
   it("does not move a mixed main transcript that has real user activity", async () => {
     const cfg: OpenClawConfig = {};
-    setupSessionState(cfg, process.env, tempHome);
+    setupSessionState(process.env, tempHome);
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     const mixedTranscriptPath = path.join(sessionsDir, "mixed-session.jsonl");
     replaceSqliteSessionTranscriptEvents({
@@ -568,8 +581,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const confirmRuntimeRepair = vi.fn(async () => true);
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const store = loadSessionStore(storePath);
+    const store = readSessionStoreForTest();
     expect(store["agent:main:main"]?.sessionId).toBe("mixed-session");
     expect(Object.keys(store).some((key) => key.includes("heartbeat-recovered"))).toBe(false);
     expect(confirmRuntimeRepair).not.toHaveBeenCalledWith(
@@ -706,7 +718,7 @@ describe("doctor state integrity oauth dir checks", () => {
     }
   });
 
-  it("moves store entries and clears matching TUI pointers without touching others", () => {
+  it("moves store entries and clears matching TUI pointers without touching others", async () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:main": { sessionId: "main-session", updatedAt: 1 },
     };
@@ -724,26 +736,28 @@ describe("doctor state integrity oauth dir checks", () => {
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tui-pointer-clear-"));
     try {
-      const filePath = path.join(tempDir, "last-session.json");
-      fs.writeFileSync(
-        filePath,
-        JSON.stringify({
-          terminal: { sessionKey: "agent:main:main" },
-          telegram: { sessionKey: "agent:main:telegram:thread" },
-        }),
-      );
+      await writeTuiLastSessionKey({
+        scopeKey: "terminal",
+        sessionKey: "agent:main:main",
+        stateDir: tempDir,
+      });
+      await writeTuiLastSessionKey({
+        scopeKey: "telegram",
+        sessionKey: "agent:main:telegram:thread",
+        stateDir: tempDir,
+      });
       expect(
-        clearTuiLastSessionPointers({
-          filePath,
+        await clearTuiLastSessionPointers({
+          stateDir: tempDir,
           sessionKeys: new Set(["agent:main:main"]),
         }),
       ).toBe(1);
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<
-        string,
-        { sessionKey?: string }
-      >;
-      expect(parsed.terminal).toBeUndefined();
-      expect(parsed.telegram?.sessionKey).toBe("agent:main:telegram:thread");
+      await expect(
+        readTuiLastSessionKey({ scopeKey: "terminal", stateDir: tempDir }),
+      ).resolves.toBe(null);
+      await expect(
+        readTuiLastSessionKey({ scopeKey: "telegram", stateDir: tempDir }),
+      ).resolves.toBe("agent:main:telegram:thread");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
