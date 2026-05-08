@@ -55,7 +55,6 @@ class FakeTransport implements OpenClawTransport {
 
 function requireTransportCall(calls: readonly RequestCall[], index: number): RequestCall {
   const call = calls[index];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`Expected transport call ${index}`);
   }
