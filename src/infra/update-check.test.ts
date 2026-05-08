@@ -141,6 +141,36 @@ describe("resolveNpmChannelTag", () => {
       error: "HTTP 404",
     });
   });
+
+  it("uses npm_config_registry env var as registry base when set", async () => {
+    const capturedUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        capturedUrls.push(url);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ version: "1.2.3", engines: { node: ">=22.16.0" } }),
+        } as Response;
+      }),
+    );
+    const originalRegistry = process.env["npm_config_registry"];
+    process.env["npm_config_registry"] = "https://my.mirror.example.com/npm/";
+    try {
+      await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
+    } finally {
+      if (originalRegistry === undefined) {
+        delete process.env["npm_config_registry"];
+      } else {
+        process.env["npm_config_registry"] = originalRegistry;
+      }
+    }
+    expect(capturedUrls).toHaveLength(1);
+    expect(capturedUrls[0]).toMatch(/^https:\/\/my\.mirror\.example\.com\/npm\/openclaw\//);
+  });
 });
 
 describe("formatGitInstallLabel", () => {

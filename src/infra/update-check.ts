@@ -326,7 +326,7 @@ export async function fetchNpmPackageTargetStatus(params: {
   const target = params.target;
   try {
     const res = await fetchWithTimeout(
-      `https://registry.npmjs.org/openclaw/${encodeURIComponent(target)}`,
+      `${(process.env["npm_config_registry"] ?? "https://registry.npmjs.org").replace(/\/$/, "")}/openclaw/${encodeURIComponent(target)}`,
       {},
       Math.max(250, timeoutMs),
     );
