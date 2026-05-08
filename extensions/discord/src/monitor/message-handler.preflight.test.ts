@@ -1148,9 +1148,9 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.shouldRequireMention).toBe(true);
-    expect(result?.wasMentioned).toBe(true);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.shouldRequireMention).toBe(true);
+    expect(preflight.wasMentioned).toBe(true);
   });
 
   it("accepts allowlisted guild messages when guild object is missing", async () => {
@@ -1183,10 +1183,10 @@ describe("preflightDiscordMessage", () => {
       includeGuildObject: false,
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.guildInfo?.id).toBe("guild-1");
-    expect(result?.channelConfig?.allowed).toBe(true);
-    expect(result?.shouldRequireMention).toBe(false);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.guildInfo?.id).toBe("guild-1");
+    expect(preflight.channelConfig?.allowed).toBe(true);
+    expect(preflight.shouldRequireMention).toBe(false);
   });
 
   it("inherits parent thread allowlist when guild object is missing", async () => {
@@ -1231,11 +1231,11 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.guildInfo?.id).toBe("guild-1");
-    expect(result?.threadParentId).toBe(parentId);
-    expect(result?.channelConfig?.allowed).toBe(true);
-    expect(result?.shouldRequireMention).toBe(false);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.guildInfo?.id).toBe("guild-1");
+    expect(preflight.threadParentId).toBe(parentId);
+    expect(preflight.channelConfig?.allowed).toBe(true);
+    expect(preflight.shouldRequireMention).toBe(false);
   });
 
   it("handles partial thread channel owner getters during mention preflight", async () => {
@@ -1294,9 +1294,9 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.threadParentId).toBe(parentId);
-    expect(result?.shouldRequireMention).toBe(false);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.threadParentId).toBe(parentId);
+    expect(preflight.shouldRequireMention).toBe(false);
   });
 
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {
@@ -1336,8 +1336,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
 
-    expect(result).not.toBeNull();
-    expect(result?.hasAnyMention).toBe(true);
+    expect(expectPreflightResult(result).hasAnyMention).toBe(true);
   });
 
   it("ignores bot-sent @everyone mentions for detection", async () => {
@@ -1377,8 +1376,7 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.hasAnyMention).toBe(false);
+    expect(expectPreflightResult(result).hasAnyMention).toBe(false);
   });
 
   it("does not treat bot-sent @everyone as wasMentioned", async () => {
@@ -1418,8 +1416,7 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.wasMentioned).toBe(false);
+    expect(expectPreflightResult(result).wasMentioned).toBe(false);
   });
 
   it("uses attachment content_type for guild audio preflight mention detection", async () => {
