@@ -191,7 +191,8 @@ describe("sessions view", () => {
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".sessions-filter-bar")).toBeNull();
 
-    toggle?.click();
+    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    toggle!.click();
 
     expect(onToggleFiltersCollapsed).toHaveBeenCalledTimes(1);
   });
@@ -492,8 +493,9 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const row = container.querySelector("tbody tr.session-data-row");
-    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const row = container.querySelector<HTMLTableRowElement>("tbody tr.session-data-row");
+    expect(row).toBeInstanceOf(HTMLTableRowElement);
+    row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
@@ -531,7 +533,8 @@ describe("sessions view", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
 
-    trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(trigger).toBeInstanceOf(HTMLButtonElement);
+    trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
   });
 
@@ -623,9 +626,11 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const rows = container.querySelectorAll("tbody tr.session-data-row");
-    const checkbox = rows[0]?.querySelector("input[type=checkbox]");
-    checkbox?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    rows[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const checkbox = rows[0]?.querySelector<HTMLInputElement>("input[type=checkbox]");
+    expect(checkbox).toBeInstanceOf(HTMLInputElement);
+    expect(rows[1]).toBeInstanceOf(HTMLTableRowElement);
+    checkbox!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    rows[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleCheckpointDetails).not.toHaveBeenCalled();
   });
@@ -727,8 +732,9 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const headerCheckbox = container.querySelector("thead input[type=checkbox]");
-    headerCheckbox?.dispatchEvent(new Event("change", { bubbles: true }));
+    const headerCheckbox = container.querySelector<HTMLInputElement>("thead input[type=checkbox]");
+    expect(headerCheckbox).toBeInstanceOf(HTMLInputElement);
+    headerCheckbox!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onDeselectPage).toHaveBeenCalledWith(["page-0"]);
     expect(onDeselectAll).not.toHaveBeenCalled();
