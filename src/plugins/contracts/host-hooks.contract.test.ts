@@ -60,6 +60,16 @@ function requireFirstCommandRegistration(
   return registration;
 }
 
+function joinContextFragments(...fragments: Array<string | undefined>): string {
+  const present: string[] = [];
+  for (const fragment of fragments) {
+    if (fragment) {
+      present.push(fragment);
+    }
+  }
+  return present.join("\n\n");
+}
+
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -960,9 +970,11 @@ describe("host-hook fixture plugin contract", () => {
     );
 
     expect(
-      [queuedContext.prependContext, queuedContext.appendContext, hookContext?.prependContext]
-        .filter(Boolean)
-        .join("\n\n"),
+      joinContextFragments(
+        queuedContext.prependContext,
+        queuedContext.appendContext,
+        hookContext?.prependContext,
+      ),
     ).toContain("approval workflow resumed");
     expect(hookContext?.prependContext).toBe("fixture turn context");
   });
