@@ -175,7 +175,7 @@ describe("doctor command", () => {
     }
     const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;
     expect(profiles).toHaveProperty("anthropic:me@example.com");
-    expect(profiles["anthropic:me@example.com"]).not.toBeNull();
+    expect(profiles["anthropic:me@example.com"]).toEqual(expect.any(Object));
     expect(profiles["anthropic:default"]).toBeUndefined();
   }, 30_000);
 });
