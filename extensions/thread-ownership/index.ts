@@ -175,7 +175,7 @@ export default definePluginEntry({
         // The forwarder is an internal service (e.g. a Docker container); allow private-network
         // access but pin DNS so DNS-rebinding attacks cannot pivot to a different internal host.
         const { response: resp, release } = await fetchWithSsrFGuard({
-          url: `${forwarderUrl}/api/v1/ownership/${channelId}/${threadTs}`,
+          url: `${forwarderUrl}/api/v1/ownership/${encodeURIComponent(channelId)}/${encodeURIComponent(threadTs)}`,
           init: {
             method: "POST",
             headers: { "Content-Type": "application/json" },
