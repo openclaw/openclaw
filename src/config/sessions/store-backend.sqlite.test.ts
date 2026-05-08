@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveLegacySessionStorePath } from "./paths.js";
+import { resolveSessionTranscriptsDirForAgent } from "./paths.js";
 import {
   importJsonSessionStoreToSqlite,
   loadSqliteSessionEntries,
@@ -24,6 +24,16 @@ const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 function createTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-session-store-"));
+}
+
+function resolveLegacySessionJsonFixturePath(params: {
+  agentId: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  return path.join(
+    resolveSessionTranscriptsDirForAgent(params.agentId, params.env),
+    "sessions.json",
+  );
 }
 
 afterEach(() => {
@@ -113,7 +123,7 @@ describe("SQLite session store backend", () => {
   it("routes the production session row API through SQLite", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const storePath = resolveLegacySessionStorePath(undefined, {
+    const storePath = resolveLegacySessionJsonFixturePath({
       agentId: "ops",
       env,
     });
@@ -226,7 +236,7 @@ describe("SQLite session store backend", () => {
   it("uses SQLite by default for canonical per-agent session rows", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const storePath = resolveLegacySessionStorePath(undefined, {
+    const storePath = resolveLegacySessionJsonFixturePath({
       agentId: "ops",
       env,
     });
@@ -247,7 +257,7 @@ describe("SQLite session store backend", () => {
   it("does not import a legacy canonical sessions.json on first SQLite open", async () => {
     const stateDir = createTempDir();
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    const storePath = resolveLegacySessionStorePath(undefined, {
+    const storePath = resolveLegacySessionJsonFixturePath({
       agentId: "ops",
       env: process.env,
     });
