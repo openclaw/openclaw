@@ -71,7 +71,8 @@ describe("buildBootstrapContextFiles", () => {
       warn: (message) => warnings.push(message),
     });
     const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
-    expect(kept).not.toBeNull();
+    expect(kept?.[1]).toEqual(expect.any(String));
+    expect(kept?.[2]).toEqual(expect.any(String));
     if (!kept) {
       throw new Error("missing truncation kept-count marker");
     }
