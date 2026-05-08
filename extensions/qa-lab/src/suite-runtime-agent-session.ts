@@ -1,7 +1,10 @@
 import {
   createSqliteSessionTranscriptLocator,
   CURRENT_SESSION_VERSION,
+  loadCommitmentStore,
   replaceSqliteSessionTranscriptEvents,
+  saveCommitmentStore,
+  type CommitmentStoreFile,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -180,6 +183,18 @@ async function readQaCrestodianAuditEntries(env: Pick<QaSuiteRuntimeEnv, "gatewa
   return (await auditStore.entries()).map((entry) => entry.value);
 }
 
+async function seedQaCommitmentStore(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  store: CommitmentStoreFile,
+) {
+  await saveCommitmentStore(undefined, store, { env: env.gateway.runtimeEnv });
+  return { count: store.commitments.length };
+}
+
+async function readQaCommitmentStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
+  return await loadCommitmentStore(undefined, { env: env.gateway.runtimeEnv });
+}
+
 async function readEffectiveTools(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
   sessionKey: string,
@@ -271,9 +286,11 @@ async function readRawQaSessionEntries(env: Pick<QaSuiteRuntimeEnv, "gateway">) 
 export {
   createSession,
   readEffectiveTools,
+  readQaCommitmentStore,
   readQaCrestodianAuditEntries,
   readRawQaSessionEntries,
   readSkillStatus,
   setQaActiveMemorySessionDisabled,
+  seedQaCommitmentStore,
   seedQaSessionTranscript,
 };
