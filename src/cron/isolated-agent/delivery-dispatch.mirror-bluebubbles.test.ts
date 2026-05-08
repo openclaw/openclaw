@@ -24,10 +24,24 @@ const sessionMetaMocks = vi.hoisted(() => ({
   ),
 }));
 
-const transcriptMocks = vi.hoisted(() => ({
-  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
-  appendExactAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true })),
-}));
+type TranscriptAppendArgs = {
+  agentId?: string;
+  sessionKey: string;
+  text: string;
+  idempotencyKey?: string;
+  config?: unknown;
+};
+const transcriptMocks = vi.hoisted(() => {
+  type AppendFn = (params: TranscriptAppendArgs) => Promise<{ ok: true; sessionFile: string }>;
+  type ExactFn = (params: TranscriptAppendArgs) => Promise<{ ok: true }>;
+  return {
+    appendAssistantMessageToSessionTranscript: vi.fn<AppendFn>(async () => ({
+      ok: true,
+      sessionFile: "x",
+    })),
+    appendExactAssistantMessageToSessionTranscript: vi.fn<ExactFn>(async () => ({ ok: true })),
+  };
+});
 
 // --- Module mocks (must be hoisted before imports) ---
 
@@ -417,7 +431,7 @@ describe("dispatchCronDelivery — BlueBubbles transcript mirror", () => {
     // target transcript. The mirror append is gated on cron's all-success
     // outcome (delivered === true), which best-effort partial failure breaks.
     vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (callParams) => {
-      callParams.onError?.(new Error("send failed"), { text: "skipped" });
+      callParams.onError?.(new Error("send failed"), { text: "skipped", mediaUrls: [] });
       return [{ ok: true }] as never;
     });
     const params = {
