@@ -1463,14 +1463,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
       opts: { source: "message" },
     });
 
-    expect(root).toBeTruthy();
-    expect(followUp).toBeTruthy();
+    assertPrepared(root, "root message");
+    assertPrepared(followUp, "follow-up message");
     // Without the seeding fix, root would land on `agent:main:slack:channel:c0agg76cp1s`
     // while followUp would land on `:thread:<rootTs>`, splitting the conversation
     // across two sessions. Both must share one session key.
-    expect(root!.ctxPayload.SessionKey).toBe(expectedSessionKey);
-    expect(followUp!.ctxPayload.SessionKey).toBe(expectedSessionKey);
-    expect(new Set([root!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(1);
+    expect(root.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(followUp.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(new Set([root.ctxPayload.SessionKey, followUp.ctxPayload.SessionKey]).size).toBe(1);
   });
 
   it("treats Slack user-group mentions as explicit mentions when the bot is a member", async () => {

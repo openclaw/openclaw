@@ -802,7 +802,9 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(codexPluginsManifestKeys).toEqual([...CODEX_PLUGINS_CONFIG_KEYS].toSorted());
     expect(codexPluginsProperties.additionalProperties).toBe(false);
     for (const key of CODEX_PLUGINS_CONFIG_KEYS) {
-      expect(manifest.uiHints[`codexPlugins.${key}`]).toBeTruthy();
+      expect(manifest.uiHints[`codexPlugins.${key}`]).toMatchObject({
+        label: expect.any(String),
+      });
     }
     const pluginEntryProperties = (
       codexPluginsProperties.properties.plugins as {

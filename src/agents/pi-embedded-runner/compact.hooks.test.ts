@@ -1091,10 +1091,12 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       ]
     >;
     const runtimeContext = contextEngineCompactCalls[0]?.[0]?.runtimeContext;
-    expect(runtimeContext).toBeDefined();
+    if (!runtimeContext) {
+      throw new Error("expected compaction runtime context");
+    }
 
     await expect(
-      runtimeContext?.llm?.complete?.({
+      runtimeContext.llm?.complete?.({
         messages: [{ role: "user", content: "summarize" }],
         agentId: "other-agent",
       }),

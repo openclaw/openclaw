@@ -135,7 +135,6 @@ describe("acp translator stable lifecycle handlers", () => {
 
     const result = await agent.initialize(createInitializeRequest());
     const capabilities = result.agentCapabilities;
-    expect(capabilities).toBeDefined();
     if (!capabilities) {
       throw new Error("initialize response did not include agent capabilities");
     }

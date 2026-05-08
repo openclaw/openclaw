@@ -817,12 +817,6 @@ describe("resolveTelegramFetch", () => {
     const seventhDispatcher = getDispatcherFromUndiciCall(7);
     const eighthDispatcher = getDispatcherFromUndiciCall(8);
 
-    expect(firstDispatcher).toBeDefined();
-    expect(secondDispatcher).toBeDefined();
-    expect(sixthDispatcher).toBeDefined();
-    expect(seventhDispatcher).toBeDefined();
-    expect(eighthDispatcher).toBeDefined();
-
     expect(firstDispatcher).not.toBe(secondDispatcher);
     expect(secondDispatcher).toBe(sixthDispatcher);
     expect(seventhDispatcher).toBe(firstDispatcher);
