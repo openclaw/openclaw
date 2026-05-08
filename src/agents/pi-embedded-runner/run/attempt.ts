@@ -2717,6 +2717,30 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // Emit agent_start before the first llm_input dispatch. Awaited because
+        // tracing plugins (e.g. Opik) need their agent_start handler to finish
+        // establishing the trace before llm_input arrives.
+        if (params.sessionKey && hookRunner?.hasHooks("agent_start")) {
+          try {
+            await hookRunner.runAgentStart(
+              {
+                runId: params.runId,
+                sessionKey: params.sessionKey,
+                sessionId: params.sessionId,
+                agentId: hookAgentId,
+                model: params.modelId,
+                provider: params.provider,
+                parentRunId: params.spawnedByRunId ?? undefined,
+                requesterSessionKey: params.spawnedBy ?? undefined,
+                startedAt: promptStartedAt,
+              },
+              hookCtx,
+            );
+          } catch (err) {
+            log.warn(`agent_start hook failed: ${String(err)}`);
+          }
+        }
+
         if (cacheObservabilityEnabled) {
           const cacheObservation = beginPromptCacheObservation({
             sessionId: params.sessionId,

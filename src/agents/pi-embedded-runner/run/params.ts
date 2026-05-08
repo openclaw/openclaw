@@ -80,6 +80,8 @@ export type RunEmbeddedPiAgentParams = {
   memberRoleIds?: string[];
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** Parent agent run id for subagent trace threading. */
+  spawnedByRunId?: string | null;
   /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
   isCanonicalWorkspace?: boolean;
   senderId?: string | null;

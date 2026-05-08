@@ -132,4 +132,65 @@ describe("llm hook runner methods", () => {
     expect(runner.hasHooks("llm_input")).toBe(true);
     expect(runner.hasHooks("llm_output")).toBe(false);
   });
+
+  it("agent_start fires before the first llm_input when invoked in the attempt.ts order", async () => {
+    const calls: Array<{ hook: "agent_start" | "llm_input"; event: Record<string, unknown> }> = [];
+    const agentStartHandler = vi.fn((event: Record<string, unknown>) => {
+      calls.push({ hook: "agent_start", event });
+    });
+    const llmInputHandler = vi.fn((event: Record<string, unknown>) => {
+      calls.push({ hook: "llm_input", event });
+    });
+    const { runner } = createHookRunnerWithRegistry([
+      { hookName: "agent_start", handler: agentStartHandler },
+      { hookName: "llm_input", handler: llmInputHandler },
+    ]);
+
+    const agentCtx = {
+      runId: "run-1",
+      agentId: "main",
+      sessionKey: "session-key-1",
+      sessionId: "session-1",
+      workspaceDir: "/tmp/openclaw-test",
+    };
+
+    // Matches emit order from src/agents/pi-embedded-runner/run/attempt.ts:
+    // agent_start fires after before_agent_start resolves, before the first llm_input.
+    await runner.runAgentStart(
+      {
+        runId: "run-1",
+        sessionKey: "session-key-1",
+        sessionId: "session-1",
+        agentId: "main",
+        model: "sonnet-4.6",
+        provider: "anthropic",
+        parentRunId: undefined,
+        requesterSessionKey: undefined,
+        startedAt: 1_700_000_000_000,
+      },
+      agentCtx,
+    );
+    await runner.runLlmInput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        systemPrompt: "be helpful",
+        prompt: "hello",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      agentCtx,
+    );
+
+    expect(calls.map((c) => c.hook)).toEqual(["agent_start", "llm_input"]);
+    expect(agentStartHandler).toHaveBeenCalledTimes(1);
+    expect(calls[0]?.event).toMatchObject({
+      runId: "run-1",
+      sessionKey: "session-key-1",
+      sessionId: "session-1",
+      startedAt: 1_700_000_000_000,
+    });
+  });
 });

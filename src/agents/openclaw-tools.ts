@@ -409,6 +409,7 @@ export function createOpenClawTools(
             config: resolvedConfig,
             requesterAgentIdOverride: options?.requesterAgentIdOverride,
             workspaceDir: spawnWorkspaceDir,
+            parentRunId: options?.parentRunId,
           }),
         ]),
     createSessionsYieldTool({

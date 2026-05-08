@@ -17,6 +17,7 @@ export type SpawnedToolContext = {
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
   workspaceDir?: string;
+  parentRunId?: string;
 };
 
 type NormalizedSpawnedRunMetadata = {
