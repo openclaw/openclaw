@@ -396,7 +396,7 @@ describe("scoped vitest configs", () => {
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
-    expect(defaultChannelsConfig.test?.include).toEqual(["src/channels/**/*.test.ts"]);
+    expect(requireTestConfig(defaultChannelsConfig).include).toEqual(["src/channels/**/*.test.ts"]);
   });
 
   it("loads channel include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
@@ -419,7 +419,7 @@ describe("scoped vitest configs", () => {
         OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
       });
 
-      expect(config.test?.include).toEqual([
+      expect(requireTestConfig(config).include).toEqual([
         bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
       ]);
     } finally {
@@ -428,11 +428,7 @@ describe("scoped vitest configs", () => {
   });
 
   it("defaults extension tests to threads with the non-isolated runner", () => {
-    expect(defaultExtensionsConfig.test?.isolate).toBe(false);
-    expect(defaultExtensionsConfig.test?.pool).toBe("threads");
-    expect(normalizeConfigPath(defaultExtensionsConfig.test?.runner)).toBe(
-      "test/non-isolated-runner.ts",
-    );
+    expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
   });
 
   it("normalizes split extension channel include patterns relative to the scoped dir", () => {
