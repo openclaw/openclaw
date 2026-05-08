@@ -8,7 +8,7 @@ import {
   replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../../config/sessions/transcript-store.sqlite.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import type {
   FileEntry,
   SessionContext,
@@ -56,13 +56,7 @@ function resolveDefaultSessionDir(cwd: string): string {
 }
 
 function resolveAgentIdFromSessionPath(sessionFile: string): string {
-  const resolved = path.resolve(sessionFile);
-  const sessionsDir = path.dirname(resolved);
-  const agentDir = path.dirname(sessionsDir);
-  const agentsDir = path.dirname(agentDir);
-  if (path.basename(sessionsDir) === "sessions" && path.basename(agentsDir) === "agents") {
-    return normalizeAgentId(path.basename(agentDir));
-  }
+  void sessionFile;
   return DEFAULT_AGENT_ID;
 }
 
