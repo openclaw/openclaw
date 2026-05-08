@@ -1,12 +1,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  isQwenCodingPlanBaseUrl,
-  QWEN_36_PLUS_MODEL_ID,
-  QWEN_BASE_URL,
-  QWEN_DEFAULT_MODEL_REF,
-} from "./models.js";
+import { QWEN_BASE_URL, QWEN_DEFAULT_MODEL_REF } from "./models.js";
 import {
   applyQwenConfig,
   applyQwenConfigCn,
