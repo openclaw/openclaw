@@ -1329,7 +1329,7 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["clawhub/index", "clawhub/quickstart", "clawhub/architecture"]
+                "pages": ["clawhub/index", "clawhub/quickstart", "clawhub/how-it-works"]
               },
               {
                 "group": "Using ClawHub",
