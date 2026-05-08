@@ -255,6 +255,8 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(callConfig.agents?.defaults?.workspace).toBe(
     path.join(os.tmpdir(), "openclaw-gateway-test"),
   );
+  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls[0]?.[0];
+  expect(compactionCall).toBeDefined();
   expect(compactionCall.provider).toBe("anthropic");
   expect(compactionCall.model).toBe("claude-opus-4-6");
   expect(compactionCall.allowGatewaySubagentBinding).toBe(true);
