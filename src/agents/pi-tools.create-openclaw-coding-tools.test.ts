@@ -60,18 +60,13 @@ function collectActionValues(schema: unknown, values: Set<string>): void {
   }
 }
 
-async function writeSessionStore(
-  storeTemplate: string,
-  agentId: string,
-  entries: Record<string, unknown>,
-) {
-  void storeTemplate;
+async function writeSessionRows(agentId: string, entries: Record<string, unknown>) {
   for (const [sessionKey, entry] of Object.entries(entries)) {
     upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
   }
 }
 
-function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
+function createToolsForStoredSession(sessionKey: string) {
   return createOpenClawCodingTools({
     sessionKey,
     config: {
@@ -862,15 +857,7 @@ describe("createOpenClawCodingTools", () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-depth-policy-"));
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
-      const storeTemplate = path.join(
-        tmpDir,
-        ".openclaw",
-        "agents",
-        "{agentId}",
-        "sessions",
-        "sessions.json",
-      );
-      await writeSessionStore(storeTemplate, "main", {
+      await writeSessionRows("main", {
         "agent:main:subagent:flat": {
           sessionId: "session-flat-depth-2",
           updatedAt: Date.now(),
@@ -878,7 +865,7 @@ describe("createOpenClawCodingTools", () => {
         },
       });
 
-      const tools = createToolsForStoredSession(storeTemplate, "agent:main:subagent:flat");
+      const tools = createToolsForStoredSession("agent:main:subagent:flat");
       expectNoSubagentControlTools(tools);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -889,15 +876,7 @@ describe("createOpenClawCodingTools", () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-subagent-policy-"));
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
-      const storeTemplate = path.join(
-        tmpDir,
-        ".openclaw",
-        "agents",
-        "{agentId}",
-        "sessions",
-        "sessions.json",
-      );
-      await writeSessionStore(storeTemplate, "main", {
+      await writeSessionRows("main", {
         "agent:main:acp:child": {
           sessionId: "session-acp-child",
           updatedAt: Date.now(),
@@ -917,7 +896,7 @@ describe("createOpenClawCodingTools", () => {
           spawnedBy: "agent:main:subagent:parent",
         },
       });
-      await writeSessionStore(storeTemplate, "writer", {
+      await writeSessionRows("writer", {
         "agent:writer:acp:child": {
           sessionId: "session-acp-cross-agent-child",
           updatedAt: Date.now(),
@@ -925,18 +904,15 @@ describe("createOpenClawCodingTools", () => {
         },
       });
 
-      const persistedEnvelopeTools = createToolsForStoredSession(
-        storeTemplate,
-        "agent:main:acp:child",
-      );
+      const persistedEnvelopeTools = createToolsForStoredSession("agent:main:acp:child");
       expectNoSubagentControlTools(persistedEnvelopeTools);
 
-      const restrictedTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:plain");
+      const restrictedTools = createToolsForStoredSession("agent:main:acp:plain");
       const restrictedNames = new Set(restrictedTools.map((tool) => tool.name));
       expect(restrictedNames.has("sessions_spawn")).toBe(true);
       expect(restrictedNames.has("subagents")).toBe(true);
 
-      const ancestryTools = createToolsForStoredSession(storeTemplate, "agent:writer:acp:child");
+      const ancestryTools = createToolsForStoredSession("agent:writer:acp:child");
       expectNoSubagentControlTools(ancestryTools);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -947,22 +923,14 @@ describe("createOpenClawCodingTools", () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cross-agent-subagent-"));
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
-      const storeTemplate = path.join(
-        tmpDir,
-        ".openclaw",
-        "agents",
-        "{agentId}",
-        "sessions",
-        "sessions.json",
-      );
-      await writeSessionStore(storeTemplate, "main", {
+      await writeSessionRows("main", {
         "agent:main:subagent:parent": {
           sessionId: "session-main-parent",
           updatedAt: Date.now(),
           spawnedBy: "agent:main:main",
         },
       });
-      await writeSessionStore(storeTemplate, "writer", {
+      await writeSessionRows("writer", {
         "agent:writer:subagent:child": {
           sessionId: "session-writer-child",
           updatedAt: Date.now(),
@@ -970,7 +938,7 @@ describe("createOpenClawCodingTools", () => {
         },
       });
 
-      const tools = createToolsForStoredSession(storeTemplate, "agent:writer:subagent:child");
+      const tools = createToolsForStoredSession("agent:writer:subagent:child");
       expectNoSubagentControlTools(tools);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
