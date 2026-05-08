@@ -277,12 +277,10 @@ describe("updateMattermostPost", () => {
     const { calls } = await updatePostAndCapture({ message: "Updated" });
 
     const firstCall = calls[0];
-    expect(firstCall).toBeDefined();
     if (!firstCall) {
       throw new Error("expected Mattermost update post request");
     }
     expect(firstCall.url).toContain("/posts/post1");
-    expect(firstCall.init).toBeDefined();
     if (!firstCall.init) {
       throw new Error("expected Mattermost update post request init");
     }

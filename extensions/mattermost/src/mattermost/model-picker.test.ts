@@ -60,12 +60,10 @@ describe("Mattermost model picker", () => {
     expect(view.text).toContain("Browse keeps the current runtime");
     expect(view.text).toContain("/oc_model <provider/model> --runtime <runtime>");
     const firstRow = view.buttons[0];
-    expect(firstRow).toBeDefined();
     if (!firstRow) {
       throw new Error("expected Mattermost model picker button row");
     }
     const browseButton = firstRow[0];
-    expect(browseButton).toBeDefined();
     if (!browseButton) {
       throw new Error("expected Mattermost browse providers button");
     }

@@ -131,7 +131,6 @@ describe("slash-commands", () => {
 
     expect(result).toHaveLength(1);
     const firstCommand = result[0];
-    expect(firstCommand).toBeDefined();
     if (!firstCommand) {
       throw new Error("expected Mattermost slash command result");
     }

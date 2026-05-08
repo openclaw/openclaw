@@ -71,7 +71,6 @@ describe("mattermost setup contract", () => {
         expectedAccountId: "default",
         assertPatchedConfig: (cfg) => {
           const mattermostConfig = cfg.channels?.mattermost;
-          expect(mattermostConfig).toBeDefined();
           if (!mattermostConfig) {
             throw new Error("expected Mattermost config patch");
           }

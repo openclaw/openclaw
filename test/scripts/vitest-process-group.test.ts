@@ -9,7 +9,6 @@ import {
 describe("vitest process group helpers", () => {
   function getListenerSet(listeners: Map<string, Set<() => void>>, event: string) {
     const set = listeners.get(event);
-    expect(set).toBeDefined();
     if (!set) {
       throw new Error(`expected ${event} listener set`);
     }
