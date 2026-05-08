@@ -331,17 +331,32 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
   },
   formatChannelProgressDraftText: (params: {
     entry?: { streaming?: { progress?: { label?: string | false; maxLines?: number } } };
-    lines: Array<string | { text: string }>;
+    lines: Array<
+      string | { text: string; icon?: string; detail?: string; status?: string; label: string }
+    >;
     formatLine?: (line: string) => string;
   }) => {
     const label = params.entry?.streaming?.progress?.label;
+    const maxLines = params.entry?.streaming?.progress?.maxLines ?? 8;
     const formatLine = params.formatLine ?? ((line: string) => line);
-    return [
+    const lines = [
       label === false ? undefined : (label ?? "Thinking"),
-      ...params.lines.map((line) => `• ${formatLine(typeof line === "string" ? line : line.text)}`),
+      ...params.lines.map((line) => {
+        const text =
+          typeof line === "string"
+            ? line
+            : line.detail
+              ? `${line.icon ?? ""} ${line.detail}`.trim()
+              : line.status
+                ? `${line.icon ?? ""} ${line.status}`.trim()
+                : line.text;
+        const formatted = formatLine(text);
+        return /^\p{Extended_Pictographic}/u.test(text) ? formatted : `• ${formatted}`;
+      }),
     ]
       .filter((line): line is string => Boolean(line))
-      .join("\n");
+      .slice(-maxLines);
+    return lines.join("\n");
   },
   formatChannelProgressDraftLine: (params: {
     progressText?: string;
@@ -797,7 +812,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
       [
-        "Shelling",
         "• step 1",
         "• step 2",
         "• step 3",
@@ -859,7 +873,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• 🛠️ Exec\n• done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
   });
 

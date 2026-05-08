@@ -57,14 +57,14 @@ A progress draft has two parts:
 | Progress lines | Compact run updates using the same tool icons and detail formatter as verbose output. |
 
 The label appears after the agent starts meaningful work and either remains busy
-for five seconds or emits a second work event. Channels can render it as a fixed
-header or as the first rolling line; Discord uses a rolling line so the starter
-status scrolls away once enough concrete work appears. Plain text-only replies do
-not show a progress draft. Progress lines are added only when the agent emits
-useful work updates, for example `🛠️ run tests`, `🔎 for "discord edit message"`,
-or `✍️ to /tmp/file`. By default they use the same compact explain mode as
-`/verbose`; set `agents.defaults.toolProgressDetail: "raw"` when debugging and
-you also want raw commands/details appended.
+for five seconds or emits a second work event. It is part of the rolling progress
+line list, so the starter status scrolls away once enough concrete work appears.
+Plain text-only replies do not show a progress draft. Progress lines are added
+only when the agent emits useful work updates, for example `🛠️ run tests`,
+`🔎 for "discord edit message"`, or `✍️ to /tmp/file`. By default they use the
+same compact explain mode as `/verbose`; set
+`agents.defaults.toolProgressDetail: "raw"` when debugging and you also want raw
+commands/details appended.
 The final answer replaces the draft when possible; otherwise
 OpenClaw sends the final answer normally and cleans up or stops updating the
 draft according to the channel's transport.
