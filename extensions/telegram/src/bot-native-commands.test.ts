@@ -194,8 +194,9 @@ describe("registerTelegramNativeCommands", () => {
     });
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
-    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "export-session")).toBe(false);
+    const registeredCommandNames = registeredCommands.map((entry) => entry.command);
+    expect(registeredCommandNames).toContain("export_session");
+    expect(registeredCommandNames).not.toContain("export-session");
 
     const registeredHandlers = command.mock.calls.map(([name]) => name);
     expect(registeredHandlers).toContain("export_session");
@@ -230,16 +231,17 @@ describe("registerTelegramNativeCommands", () => {
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
 
     expect(registeredCommands.length).toBeGreaterThan(0);
+    const registeredCommandNames = registeredCommands.map((entry) => entry.command);
     for (const entry of registeredCommands) {
       expect(entry.command.includes("-")).toBe(false);
       expect(TELEGRAM_COMMAND_NAME_PATTERN.test(entry.command)).toBe(true);
     }
 
-    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "custom_backup")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "plugin_status")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "plugin-status")).toBe(false);
-    expect(registeredCommands.some((entry) => entry.command === "custom-bad")).toBe(false);
+    expect(registeredCommandNames).toEqual(
+      expect.arrayContaining(["export_session", "custom_backup", "plugin_status"]),
+    );
+    expect(registeredCommandNames).not.toContain("plugin-status");
+    expect(registeredCommandNames).not.toContain("custom-bad");
   });
 
   it("prefixes native command menu callback data so callback handlers can preserve native routing", async () => {

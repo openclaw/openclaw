@@ -279,7 +279,7 @@ describe("gateway server health/presence", () => {
 
     const presenceRes = await presenceP;
     const entries = (presenceRes.payload ?? []) as Array<Record<string, unknown>>;
-    expect(entries.some((e) => e.instanceId === cliId)).toBe(false);
+    expect(entries.map((entry) => entry.instanceId)).not.toContain(cliId);
 
     ws.close();
   });

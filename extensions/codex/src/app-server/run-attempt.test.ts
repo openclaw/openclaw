@@ -1878,7 +1878,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       ]),
     );
-    expect(agentEvents.some((event) => event.stream === "assistant")).toBe(false);
+    expect(agentEvents.filter((event) => event.stream === "assistant")).toEqual([]);
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         success: false,
@@ -1982,13 +1982,12 @@ describe("runCodexAppServerAttempt", () => {
     await waitForMethod("turn/start");
 
     expect(queueAgentHarnessMessage("session-1", "more context", { debounceMs: 1 })).toBe(true);
-    await vi.waitFor(
-      () => expect(requests.some((entry) => entry.method === "turn/steer")).toBe(true),
-      { interval: 1 },
-    );
+    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/steer"), {
+      interval: 1,
+    });
     expect(abortAgentHarnessRun("session-1")).toBe(true);
     await vi.waitFor(
-      () => expect(requests.some((entry) => entry.method === "turn/interrupt")).toBe(true),
+      () => expect(requests.map((entry) => entry.method)).toContain("turn/interrupt"),
       { interval: 1 },
     );
 
@@ -2164,7 +2163,7 @@ describe("runCodexAppServerAttempt", () => {
     params.onBlockReply = vi.fn();
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
-      () => expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
       { interval: 1 },
     );
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
@@ -2409,7 +2408,7 @@ describe("runCodexAppServerAttempt", () => {
     };
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(() =>
-      expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
     );
     await notify({
       method: "turn/completed",
