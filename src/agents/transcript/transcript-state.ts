@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { isSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import {
   appendSqliteSessionTranscriptEvent,
   loadSqliteSessionTranscriptEvents,
@@ -82,8 +83,11 @@ function resolveTranscriptWriteScope(
   sessionFile: string,
   entries: Array<SessionHeader | SessionEntry>,
 ): { agentId: string; sessionId: string; transcriptPath: string } | undefined {
+  const transcriptPath = isSqliteSessionTranscriptLocator(sessionFile)
+    ? sessionFile
+    : path.resolve(sessionFile);
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
-  const existing = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+  const existing = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
   const sessionId = header?.id ?? existing?.sessionId;
   if (!sessionId) {
     return undefined;
@@ -91,7 +95,7 @@ function resolveTranscriptWriteScope(
   return {
     agentId: existing?.agentId ?? resolveAgentIdFromTranscriptPath(sessionFile),
     sessionId,
-    transcriptPath: path.resolve(sessionFile),
+    transcriptPath,
   };
 }
 
