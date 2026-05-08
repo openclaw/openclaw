@@ -9,6 +9,7 @@ import {
   buildGroupDisplayName,
   createSqliteSessionTranscriptLocator,
   deriveSessionKey,
+  parseSqliteSessionTranscriptLocator,
   resolveSessionKey,
   updateLastRoute,
 } from "./sessions.js";
@@ -622,6 +623,20 @@ describe("sessions", () => {
       expect(sessionFile).toBe(
         createSqliteSessionTranscriptLocator({ agentId: "bot1", sessionId: "sess-1" }),
       );
+    });
+  });
+
+  it("parses SQLite transcript locators with topic ids", () => {
+    const locator = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "sess-topic",
+      topicId: "thread/42",
+    });
+
+    expect(parseSqliteSessionTranscriptLocator(locator)).toEqual({
+      agentId: "main",
+      sessionId: "sess-topic",
+      topicId: "thread/42",
     });
   });
 

@@ -12,8 +12,8 @@ import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js
 import {
   createSqliteSessionTranscriptLocator,
   getSessionEntry,
-  isSqliteSessionTranscriptLocator,
   mergeSessionEntry,
+  parseSqliteSessionTranscriptLocator,
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
@@ -342,18 +342,6 @@ function extractSqliteTranscriptTopicId(
   locator: string | undefined,
   previousSessionId: string,
 ): string | undefined {
-  if (!locator || !isSqliteSessionTranscriptLocator(locator)) {
-    return undefined;
-  }
-  try {
-    const url = new URL(locator.trim());
-    const fileName = decodeURIComponent(url.pathname.replace(/^\/+/u, ""));
-    const topicPrefix = `${previousSessionId}-topic-`;
-    if (!fileName.endsWith(".jsonl") || !fileName.startsWith(topicPrefix)) {
-      return undefined;
-    }
-    return fileName.slice(topicPrefix.length, -".jsonl".length);
-  } catch {
-    return undefined;
-  }
+  const parsed = locator ? parseSqliteSessionTranscriptLocator(locator) : undefined;
+  return parsed?.sessionId === previousSessionId ? parsed.topicId : undefined;
 }
