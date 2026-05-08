@@ -312,6 +312,18 @@ describe("model-selection", () => {
         expected: { provider: "google", model: "gemini-3-flash-preview" },
       },
       {
+        name: "normalizes retired google gemini 3 pro preview ids",
+        variants: ["google/gemini-3-pro-preview", "gemini-3-pro-preview"],
+        defaultProvider: "google",
+        expected: { provider: "google", model: "gemini-3.1-pro-preview" },
+      },
+      {
+        name: "normalizes retired gemini cli 3 pro preview ids",
+        variants: ["google-gemini-cli/gemini-3-pro-preview"],
+        defaultProvider: "google",
+        expected: { provider: "google-gemini-cli", model: "gemini-3.1-pro-preview" },
+      },
+      {
         name: "normalizes gemini 3.1 flash-lite ids",
         variants: ["google/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google",

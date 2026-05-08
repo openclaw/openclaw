@@ -303,9 +303,36 @@ describe("promptDefaultModel", () => {
     expect(optionValues).toEqual([
       "openai/gpt-5.5",
       "anthropic/claude-sonnet-4-6",
-      "google/gemini-3-pro-preview",
+      "google/gemini-3.1-pro-preview",
       "openai-codex/gpt-5.5",
     ]);
+  });
+
+  it("normalizes retired Google Gemini catalog rows before saving config", async () => {
+    loadModelCatalog.mockResolvedValue([
+      { provider: "google", id: "gemini-3-pro-preview", name: "Gemini 3 Pro" },
+    ]);
+
+    const select = vi.fn(async (params) => params.options[0]?.value as never);
+    const prompter = makePrompter({ select });
+
+    const result = await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    expect(result.model).toBe("google/gemini-3.1-pro-preview");
+    expect(select.mock.calls[0]?.[0]?.options).toEqual([
+      expect.objectContaining({ value: "google/gemini-3.1-pro-preview" }),
+    ]);
+    expect(runProviderModelSelectedHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "google/gemini-3.1-pro-preview",
+      }),
+    );
   });
 
   it("uses configured provider models for default picker without loading the full catalog in replace mode", async () => {
@@ -1268,7 +1295,7 @@ describe("runtime model picker visibility", () => {
     expect(optionValues).toEqual([
       "openai/gpt-5.5",
       "anthropic/claude-sonnet-4-6",
-      "google/gemini-3-pro-preview",
+      "google/gemini-3.1-pro-preview",
     ]);
     expect(call?.initialValues).toEqual(["openai/gpt-5.5"]);
   });
@@ -1504,7 +1531,7 @@ describe("applyModelFallbacksFromSelection", () => {
     });
     expect(next.agents?.defaults?.model).toEqual({
       primary: "anthropic/claude-opus-4-6",
-      fallbacks: ["google/gemini-3-pro-preview"],
+      fallbacks: ["google/gemini-3.1-pro-preview"],
     });
   });
 

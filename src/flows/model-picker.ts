@@ -13,6 +13,7 @@ import {
   buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
+  normalizeModelRef,
   normalizeProviderId,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
@@ -231,11 +232,12 @@ function addModelSelectOption(params: {
   hasAuth: (provider: string) => boolean;
   literalPrefixProviders: Set<string>;
 }) {
-  const key = modelKey(params.entry.provider, params.entry.id);
+  const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
+  const key = modelKey(normalizedRef.provider, normalizedRef.model);
   if (
     params.seen.has(key) ||
     HIDDEN_ROUTER_MODELS.has(key) ||
-    !isModelPickerVisibleProvider(params.entry.provider)
+    !isModelPickerVisibleProvider(normalizedRef.provider)
   ) {
     return;
   }
@@ -253,15 +255,15 @@ function addModelSelectOption(params: {
   if (aliases?.length) {
     hints.push(`alias: ${aliases.join(", ")}`);
   }
-  const routeHint = resolveModelRouteHint(params.entry.provider);
+  const routeHint = resolveModelRouteHint(normalizedRef.provider);
   if (routeHint) {
     hints.push(routeHint);
   }
-  if (!params.hasAuth(params.entry.provider)) {
+  if (!params.hasAuth(normalizedRef.provider)) {
     return;
   }
-  const label = params.literalPrefixProviders.has(normalizeProviderId(params.entry.provider))
-    ? `${params.entry.provider}/${params.entry.id}`
+  const label = params.literalPrefixProviders.has(normalizeProviderId(normalizedRef.provider))
+    ? formatLiteralProviderPrefixedModelRef(normalizedRef.provider, key)
     : key;
   params.options.push({
     value: key,
