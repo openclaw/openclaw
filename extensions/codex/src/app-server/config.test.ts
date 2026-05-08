@@ -236,6 +236,37 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("defaults native Codex approvals to guardian when requirements disallow user reviewer", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("selects an allowed reviewer when sandbox requirements force guardian defaults", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml:
+        'allowed_sandbox_modes = ["read-only", "workspace-write"]\nallowed_approvals_reviewers = ["user"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
   it("ignores quoted sandbox modes inside requirements comments", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {},

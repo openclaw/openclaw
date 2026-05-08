@@ -486,9 +486,9 @@ By default, OpenClaw starts local Codex harness sessions in YOLO mode:
 for autonomous heartbeats: Codex can use shell and network tools without
 stopping on native approval prompts that nobody is around to answer. On local
 stdio Codex app-server installs where Codex's system requirements file
-disallows the implicit YOLO approval or sandbox value, OpenClaw treats the
-implicit default as guardian instead and selects allowed guardian permissions so
-it does not send an override that Codex app-server will reject.
+disallows the implicit YOLO approval, reviewer, or sandbox value, OpenClaw
+treats the implicit default as guardian instead and selects allowed guardian
+permissions so it does not send an override that Codex app-server will reject.
 
 To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
 "guardian"`:
@@ -650,10 +650,10 @@ Supported `appServer` fields:
 | `clearEnv`                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. `CODEX_HOME` and `HOME` are reserved for OpenClaw's per-agent Codex isolation on local launches. |
 | `requestTimeoutMs`            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                          |
 | `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after a turn-scoped Codex app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                  |
-| `mode`                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access` or `never` approval make the implicit default guardian.                                                                      |
+| `mode`                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                |
 | `approvalPolicy`              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                 |
 | `sandbox`                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`.                                                                                           |
-| `approvalsReviewer`           | `"user"` or guardian-derived `"auto_review"`           | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias.                                                                                                                         |
+| `approvalsReviewer`           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                   |
 | `serviceTier`                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                      |
 
 OpenClaw-owned dynamic tool calls are bounded independently from

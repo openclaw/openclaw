@@ -12,6 +12,7 @@ type CodexAppServerPolicyMode = "yolo" | "guardian";
 type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
   approvalPolicy?: CodexAppServerApprovalPolicy;
+  approvalsReviewer?: CodexAppServerApprovalsReviewer;
   sandbox?: CodexAppServerSandboxMode;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
@@ -383,6 +384,7 @@ export function resolveCodexAppServerRuntimeOptions(
       (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
+      defaultPolicy?.approvalsReviewer ??
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
   };
@@ -542,16 +544,20 @@ function resolveDefaultCodexAppServerPolicy(params: {
   }
   const allowedSandboxModes = parseAllowedSandboxModesFromCodexRequirements(content);
   const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
+  const allowedApprovalsReviewers = parseAllowedApprovalsReviewersFromCodexRequirements(content);
   const yoloSandboxAllowed =
     allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
   const yoloApprovalAllowed =
     allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("never");
-  if (yoloSandboxAllowed && yoloApprovalAllowed) {
+  const yoloReviewerAllowed =
+    allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("user");
+  if (yoloSandboxAllowed && yoloApprovalAllowed && yoloReviewerAllowed) {
     return { mode: "yolo" };
   }
   return {
     mode: "guardian",
     approvalPolicy: selectGuardianApprovalPolicy(allowedApprovalPolicies),
+    approvalsReviewer: selectGuardianApprovalsReviewer(allowedApprovalsReviewers),
     sandbox: selectGuardianSandbox(allowedSandboxModes),
   };
 }
@@ -611,6 +617,19 @@ function parseAllowedApprovalPoliciesFromCodexRequirements(
     .map((entry) => normalizeRequirementsApprovalPolicy(entry))
     .filter((entry): entry is CodexAppServerApprovalPolicy => entry !== undefined);
   return normalizedPolicies.length > 0 ? new Set(normalizedPolicies) : undefined;
+}
+
+function parseAllowedApprovalsReviewersFromCodexRequirements(
+  content: string,
+): Set<CodexAppServerApprovalsReviewer> | undefined {
+  const values = parseTopLevelRequirementsStringArray(content, "allowed_approvals_reviewers");
+  if (values === undefined) {
+    return undefined;
+  }
+  const normalizedReviewers = values
+    .map((entry) => normalizeRequirementsApprovalsReviewer(entry))
+    .filter((entry): entry is CodexAppServerApprovalsReviewer => entry !== undefined);
+  return normalizedReviewers.length > 0 ? new Set(normalizedReviewers) : undefined;
 }
 
 function parseTopLevelRequirementsStringArray(content: string, key: string): string[] | undefined {
@@ -693,6 +712,13 @@ function normalizeRequirementsApprovalPolicy(
   return resolveApprovalPolicy(normalized);
 }
 
+function normalizeRequirementsApprovalsReviewer(
+  value: string,
+): CodexAppServerApprovalsReviewer | undefined {
+  const normalized = value.trim().toLowerCase();
+  return resolveApprovalsReviewer(normalized);
+}
+
 function selectGuardianApprovalPolicy(
   allowedApprovalPolicies: Set<CodexAppServerApprovalPolicy> | undefined,
 ): CodexAppServerApprovalPolicy {
@@ -709,6 +735,21 @@ function selectGuardianApprovalPolicy(
     return "never";
   }
   return "on-request";
+}
+
+function selectGuardianApprovalsReviewer(
+  allowedApprovalsReviewers: Set<CodexAppServerApprovalsReviewer> | undefined,
+): CodexAppServerApprovalsReviewer {
+  if (allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("auto_review")) {
+    return "auto_review";
+  }
+  if (allowedApprovalsReviewers.has("guardian_subagent")) {
+    return "guardian_subagent";
+  }
+  if (allowedApprovalsReviewers.has("user")) {
+    return "user";
+  }
+  return "auto_review";
 }
 
 function selectGuardianSandbox(
