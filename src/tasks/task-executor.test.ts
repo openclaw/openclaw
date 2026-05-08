@@ -289,7 +289,9 @@ describe("task-executor", () => {
         deliveryStatus: "pending",
       });
 
-      expect(created.parentFlowId).toEqual(expect.any(String));
+      expect(created.parentFlowId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      );
       expect(getTaskFlowById(created.parentFlowId!)).toMatchObject({
         flowId: created.parentFlowId,
         ownerKey: "agent:main:main",

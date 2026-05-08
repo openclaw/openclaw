@@ -1328,7 +1328,9 @@ describe("config io write", () => {
         expect(postWriteSnapshot.valid).toBe(true);
         expect(observedSources).toEqual([postWriteSnapshot.sourceConfig]);
         expect(getRuntimeConfigSourceSnapshot()).toEqual(postWriteSnapshot.sourceConfig);
-        expect(postWriteSnapshot.sourceConfig.meta?.lastTouchedAt).toEqual(expect.any(String));
+        expect(postWriteSnapshot.sourceConfig.meta?.lastTouchedAt).toMatch(
+          /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
+        );
         expect(postWriteSnapshot.sourceConfig.plugins?.entries?.demo?.config).toEqual({});
       } finally {
         unsubscribe();
