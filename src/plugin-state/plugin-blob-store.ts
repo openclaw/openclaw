@@ -34,6 +34,15 @@ export type PluginBlobStore<TMetadata = Record<string, unknown>> = {
   clear(): Promise<void>;
 };
 
+export type PluginBlobSyncStore<TMetadata = Record<string, unknown>> = {
+  register(key: string, metadata: TMetadata, blob: Buffer, opts?: { ttlMs?: number }): void;
+  lookup(key: string): PluginBlobEntry<TMetadata> | undefined;
+  consume(key: string): PluginBlobEntry<TMetadata> | undefined;
+  delete(key: string): boolean;
+  entries(): PluginBlobEntry<TMetadata>[];
+  clear(): void;
+};
+
 const NAMESPACE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/iu;
 const MAX_NAMESPACE_BYTES = 128;
 const MAX_KEY_BYTES = 512;
@@ -150,6 +159,33 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
 ): PluginBlobStore<TMetadata> {
+  const syncStore = createPluginBlobSyncStore<TMetadata>(pluginId, options);
+  return {
+    async register(key, metadata, blob, opts) {
+      syncStore.register(key, metadata, blob, opts);
+    },
+    async lookup(key) {
+      return syncStore.lookup(key);
+    },
+    async consume(key) {
+      return syncStore.consume(key);
+    },
+    async delete(key) {
+      return syncStore.delete(key);
+    },
+    async entries() {
+      return syncStore.entries();
+    },
+    async clear() {
+      syncStore.clear();
+    },
+  };
+}
+
+export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
+  pluginId: string,
+  options: OpenKeyedStoreOptions,
+): PluginBlobSyncStore<TMetadata> {
   if (pluginId.startsWith("core:")) {
     throw new Error("Plugin ids starting with 'core:' are reserved for core consumers.");
   }
@@ -161,7 +197,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
   const now = () => Date.now();
 
   return {
-    async register(key, metadata, blob, opts) {
+    register(key, metadata, blob, opts) {
       const normalizedKey = validateKey(key);
       const metadataJson = assertJsonMetadata(metadata);
       const createdAt = now();
@@ -246,7 +282,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
         }
       });
     },
-    async lookup(key) {
+    lookup(key) {
       const normalizedKey = validateKey(key);
       const database = openOpenClawStateDatabase();
       const row = executeSqliteQueryTakeFirstSync<BlobRow>(
@@ -261,7 +297,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
       );
       return row ? rowToEntry<TMetadata>(row) : undefined;
     },
-    async consume(key) {
+    consume(key) {
       const normalizedKey = validateKey(key);
       const row = runOpenClawStateWriteTransaction((database) => {
         const db = getPluginBlobKysely(database.db);
@@ -287,7 +323,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
       });
       return row ? rowToEntry<TMetadata>(row) : undefined;
     },
-    async delete(key) {
+    delete(key) {
       const normalizedKey = validateKey(key);
       const result = runOpenClawStateWriteTransaction((database) =>
         executeSqliteQuerySync(
@@ -301,7 +337,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
       );
       return Number(result.numAffectedRows ?? 0) > 0;
     },
-    async entries() {
+    entries() {
       const database = openOpenClawStateDatabase();
       const rows = executeSqliteQuerySync<BlobRow>(
         database.db,
@@ -316,7 +352,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
       ).rows;
       return rows.map((row) => rowToEntry<TMetadata>(row));
     },
-    async clear() {
+    clear() {
       runOpenClawStateWriteTransaction((database) => {
         executeSqliteQuerySync(
           database.db,

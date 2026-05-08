@@ -3,6 +3,10 @@ import path from "node:path";
 import type { MigrationProviderPlugin } from "openclaw/plugin-sdk/migration";
 import { createMigrationItem, summarizeMigrationItems } from "openclaw/plugin-sdk/migration";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import {
+  importMemoryWikiLegacyDigestFiles,
+  legacyMemoryWikiDigestFilesExist,
+} from "./digest-state.js";
 import { writeMemoryWikiImportRunRecord } from "./import-runs.js";
 import { importMemoryWikiLegacyLog, resolveMemoryWikiLegacyLogPath } from "./log.js";
 import {
@@ -83,6 +87,7 @@ export function createMemoryWikiSourceSyncMigrationProvider(
   const buildPlan: MigrationProviderPlugin["plan"] = async () => {
     const hasSourceSync = await legacySourceExists(config.vault.path);
     const hasLegacyLog = await legacyLogExists(config.vault.path);
+    const hasLegacyDigests = await legacyMemoryWikiDigestFilesExist(config.vault.path);
     const importRunFiles = await listLegacyImportRunJsonFiles(config.vault.path);
     const items = [
       ...(hasSourceSync
@@ -122,6 +127,18 @@ export function createMemoryWikiSourceSyncMigrationProvider(
             }),
           ]
         : []),
+      ...(hasLegacyDigests
+        ? [
+            createMigrationItem({
+              id: "memory-wiki-compiled-digest-cache",
+              kind: "state",
+              action: "import",
+              source: path.join(config.vault.path, ".openclaw-wiki", "cache"),
+              target: "global SQLite plugin_blob_entries(memory-wiki/compiled-digest)",
+              message: "Import Memory Wiki compiled digest cache into SQLite plugin state.",
+            }),
+          ]
+        : []),
     ];
     return {
       providerId: PROVIDER_ID,
@@ -140,6 +157,7 @@ export function createMemoryWikiSourceSyncMigrationProvider(
       const found =
         (await legacySourceExists(config.vault.path)) ||
         (await legacyLogExists(config.vault.path)) ||
+        (await legacyMemoryWikiDigestFilesExist(config.vault.path)) ||
         (await listLegacyImportRunJsonFiles(config.vault.path)).length > 0;
       return {
         found,
@@ -188,6 +206,18 @@ export function createMemoryWikiSourceSyncMigrationProvider(
             };
           } else if (item.id === "memory-wiki-import-runs-json") {
             const result = await importLegacyImportRunJsonFiles(config.vault.path);
+            warnings.push(...result.warnings);
+            items[itemIndex] = {
+              ...item,
+              status: "migrated",
+              details: {
+                imported: result.imported,
+              },
+            };
+          } else if (item.id === "memory-wiki-compiled-digest-cache") {
+            const result = await importMemoryWikiLegacyDigestFiles({
+              vaultRoot: config.vault.path,
+            });
             warnings.push(...result.warnings);
             items[itemIndex] = {
               ...item,

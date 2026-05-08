@@ -199,12 +199,11 @@ Imported themes are stored only in the current browser profile. They are not wri
 
 The Control UI ships a `manifest.webmanifest` and a service worker, so modern browsers can install it as a standalone PWA. Web Push lets the Gateway wake the installed PWA with notifications even when the tab or browser window is not open.
 
-| Surface                                               | What it does                                                       |
-| ----------------------------------------------------- | ------------------------------------------------------------------ |
-| `ui/public/manifest.webmanifest`                      | PWA manifest. Browsers offer "Install app" once it is reachable.   |
-| `ui/public/sw.js`                                     | Service worker that handles `push` events and notification clicks. |
-| `push/vapid-keys.json` (under the OpenClaw state dir) | Auto-generated VAPID keypair used to sign Web Push payloads.       |
-| `push/web-push-subscriptions.json`                    | Persisted browser subscription endpoints.                          |
+| Surface                          | What it does                                                       |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `ui/public/manifest.webmanifest` | PWA manifest. Browsers offer "Install app" once it is reachable.   |
+| `ui/public/sw.js`                | Service worker that handles `push` events and notification clicks. |
+| `state/openclaw.sqlite`          | SQLite-backed VAPID keys and browser subscription endpoints.       |
 
 Override the VAPID keypair through env vars on the Gateway process when you want to pin keys (for multi-host deployments, secrets rotation, or tests):
 

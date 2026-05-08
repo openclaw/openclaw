@@ -302,8 +302,8 @@ The remaining cleanup is mostly consolidation and deletion:
   than OpenClaw runtime cache rows.
 - Memory Wiki activity logs now use SQLite plugin state instead of
   `.openclaw-wiki/log.jsonl`. The Memory Wiki migration provider imports old
-  JSONL logs; wiki markdown, generated digest files, and user vault content stay
-  file-backed as workspace content.
+  JSONL logs; wiki markdown and user vault content stay file-backed as
+  workspace content.
 - Crestodian audit entries now use core SQLite plugin state instead of
   `audit/crestodian.jsonl`. Doctor imports the legacy JSONL audit log and
   removes it after successful import.
@@ -428,6 +428,10 @@ The remaining cleanup is mostly consolidation and deletion:
   per vault/run id instead of writing `.openclaw-wiki/import-runs/*.json`.
   Rollback snapshots remain explicit vault files until import-run snapshot
   archival is moved into blob storage.
+- Memory Wiki compiled digests now store SQLite plugin blob rows instead of
+  writing `.openclaw-wiki/cache/agent-digest.json` and
+  `.openclaw-wiki/cache/claims.jsonl`. The migration provider imports old cache
+  files and removes the cache directory when it becomes empty.
 - ClawHub skill install tracking now stores one SQLite plugin-state row per
   workspace/skill instead of writing or reading `.clawhub/lock.json` and
   `.clawhub/origin.json` sidecars at runtime. Doctor/migrate imports the legacy
@@ -1077,6 +1081,8 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Memory Wiki `.openclaw-wiki/log.jsonl`
 - Memory Wiki `.openclaw-wiki/source-sync.json`
 - Memory Wiki `.openclaw-wiki/import-runs/*.json`
+- Memory Wiki `.openclaw-wiki/cache/agent-digest.json`
+- Memory Wiki `.openclaw-wiki/cache/claims.jsonl`
 - ClawHub `.clawhub/lock.json`
 - ClawHub `.clawhub/origin.json`
 

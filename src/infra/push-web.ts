@@ -202,7 +202,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
       return {
         publicKey: existing.publicKey,
         privateKey: existing.privateKey,
-        // Env var always wins so operators can change subject without deleting vapid-keys.json.
+        // Env var always wins so operators can change subject without touching persisted keys.
         subject: resolveVapidSubjectFromEnv(),
       };
     }
