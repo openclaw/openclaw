@@ -33,12 +33,10 @@ describe("zalouser setup wizard", () => {
   ) {
     expect(result.accountId).toBe("default");
     const channelConfig = result.cfg.channels?.zalouser;
-    expect(channelConfig).toBeDefined();
     if (!channelConfig) {
       throw new Error("expected Zalo Personal channel config");
     }
     const pluginEntry = result.cfg.plugins?.entries?.zalouser;
-    expect(pluginEntry).toBeDefined();
     if (!pluginEntry) {
       throw new Error("expected Zalo Personal plugin entry");
     }

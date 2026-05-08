@@ -83,7 +83,6 @@ describe("firecrawl tools", () => {
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webSearch.apiKey");
     const pluginEntry = applied.plugins?.entries?.firecrawl;
-    expect(pluginEntry).toBeDefined();
     if (!pluginEntry) {
       throw new Error("expected Firecrawl plugin entry");
     }
@@ -354,7 +353,6 @@ describe("firecrawl tools", () => {
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
     const pluginEntry = applied.plugins?.entries?.firecrawl;
-    expect(pluginEntry).toBeDefined();
     if (!pluginEntry) {
       throw new Error("expected Firecrawl fetch plugin entry");
     }

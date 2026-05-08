@@ -18,7 +18,6 @@ async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) =>
   await run("test-token", fetcher);
   expect(fetcher).toHaveBeenCalledTimes(1);
   const [, init] = fetcher.mock.calls[0] ?? [];
-  expect(init).toBeDefined();
   if (!init) {
     throw new Error("expected Zalo request init");
   }
@@ -71,11 +70,9 @@ describe("Zalo API request methods", () => {
 
       await rejected;
       const [, init] = fetcher.mock.calls[0] ?? [];
-      expect(init).toBeDefined();
       if (!init) {
         throw new Error("expected Zalo chat action request init");
       }
-      expect(init.signal).toBeDefined();
       if (!init.signal) {
         throw new Error("expected Zalo chat action abort signal");
       }

@@ -340,7 +340,6 @@ describe("channels command", () => {
   function getWrittenConfig<T>(): T {
     expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
     const [config] = configMocks.writeConfigFile.mock.calls[0] ?? [];
-    expect(config).toBeDefined();
     if (config === undefined) {
       throw new Error("expected written channel config");
     }

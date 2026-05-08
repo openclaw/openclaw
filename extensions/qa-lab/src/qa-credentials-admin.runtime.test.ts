@@ -18,7 +18,6 @@ function jsonResponse(payload: unknown, status = 200) {
 
 function requireFirstFetchInput(fetchImpl: ReturnType<typeof vi.fn>): RequestInfo | URL {
   const input = fetchImpl.mock.calls[0]?.[0] as RequestInfo | URL | undefined;
-  expect(input).toBeDefined();
   if (!input) {
     throw new Error("expected fetch input");
   }
