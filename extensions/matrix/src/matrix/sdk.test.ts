@@ -1623,9 +1623,12 @@ describe("MatrixClient crypto bootstrapping", () => {
       debug?: (...args: unknown[]) => void;
       getChild?: (namespace: string) => unknown;
     } | null;
-    expect(logger).not.toBeNull();
-    expect(logger?.debug).toBeTypeOf("function");
-    expect(logger?.getChild).toBeTypeOf("function");
+    expect(logger).toEqual(
+      expect.objectContaining({
+        debug: expect.any(Function),
+        getChild: expect.any(Function),
+      }),
+    );
   });
 
   it("passes a custom sync filter to matrix-js-sdk startup", async () => {
