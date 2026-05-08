@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+import { resolveElevatedPermissions } from "./reply-elevated.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const mocks = vi.hoisted(() => ({
@@ -676,5 +677,58 @@ describe("resolveReplyDirectives", () => {
     expect(sessionCtx.Body).toBe("");
     expect(sessionCtx.BodyForAgent).toBe("");
     expect(sessionCtx.BodyStripped).toBe("");
+  });
+
+  it("uses OriginatingChannel as elevated provider key when Provider is a system-event sentinel", async () => {
+    const sessionCtx = {
+      Body: "run task",
+      BodyStripped: "run task",
+      BodyForAgent: "run task",
+      CommandBody: "run task",
+      Provider: "exec-event",
+      Surface: "exec-event",
+    } as TemplateContext;
+
+    await resolveReplyDirectives({
+      ctx: buildTestCtx({
+        Body: "run task",
+        BodyForAgent: "run task",
+        BodyForCommands: "run task",
+        CommandBody: "run task",
+        CommandAuthorized: true,
+        Provider: "exec-event",
+        Surface: "exec-event",
+        OriginatingChannel: "telegram",
+      }),
+      cfg: {},
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp",
+      agentCfg: {},
+      sessionCtx,
+      sessionEntry: makeSessionEntry(),
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:123",
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "run task",
+      resetTriggered: false,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "openai",
+      model: "gpt-4o-mini",
+      hasResolvedHeartbeatModelOverride: false,
+      typing: makeTypingController(),
+      opts: undefined,
+      skillFilter: undefined,
+    });
+
+    expect(resolveElevatedPermissions).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "telegram" }),
+    );
   });
 });

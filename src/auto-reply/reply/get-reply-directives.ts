@@ -19,6 +19,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.parse.js";
+import { isSystemEventProvider } from "./effective-reply-route.js";
 import {
   reserveSkillCommandNames,
   resolveConfiguredDirectiveAliases,
@@ -378,11 +379,14 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
 
-  const messageProviderKey = normalizeOptionalString(sessionCtx.Provider)
-    ? normalizeLowercaseStringOrEmpty(sessionCtx.Provider)
-    : normalizeOptionalString(ctx.Provider)
-      ? normalizeLowercaseStringOrEmpty(ctx.Provider)
-      : "";
+  const messageProviderKey =
+    normalizeOptionalString(sessionCtx.Provider) && !isSystemEventProvider(sessionCtx.Provider)
+      ? normalizeLowercaseStringOrEmpty(sessionCtx.Provider)
+      : normalizeOptionalString(ctx.Provider) && !isSystemEventProvider(ctx.Provider)
+        ? normalizeLowercaseStringOrEmpty(ctx.Provider)
+        : normalizeOptionalString(ctx.OriginatingChannel)
+          ? normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel)
+          : "";
   const elevated = resolveElevatedPermissions({
     cfg,
     agentId,
