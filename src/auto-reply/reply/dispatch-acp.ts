@@ -7,6 +7,7 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -39,6 +40,7 @@ import {
 } from "./dispatch-acp-delivery.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { persistSessionUsageUpdate } from "./session-usage.js";
 
 const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-manager.runtime.js"),
@@ -414,11 +416,25 @@ export async function tryDispatchAcpReply(params: {
       : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
   const effectiveDispatchAccountId =
     explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
+  const acpSessionStorePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: acpAgentId,
+  });
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     deliver: delivery.deliver,
     onProgress: markAcpProgress,
+    onTokenUsage: (usage) => {
+      void persistSessionUsageUpdate({
+        storePath: acpSessionStorePath,
+        sessionKey: canonicalSessionKey,
+        cfg: params.cfg,
+        usage: { input: usage.used, output: 0 },
+        usageIsContextSnapshot: true,
+        contextTokensUsed: usage.size,
+        logLabel: "acp-token-usage",
+      });
+    },
     provider: params.ctx.Surface ?? params.ctx.Provider,
     accountId: effectiveDispatchAccountId,
   });

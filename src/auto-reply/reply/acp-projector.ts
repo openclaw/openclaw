@@ -165,6 +165,12 @@ export type AcpReplyProjector = {
   flush: (force?: boolean) => Promise<void>;
 };
 
+export type AcpTokenUsage = {
+  used: number;
+  size: number;
+  total: number;
+};
+
 export function createAcpReplyProjector(params: {
   cfg: OpenClawConfig;
   shouldSendToolSummaries: boolean;
@@ -174,6 +180,7 @@ export function createAcpReplyProjector(params: {
     meta?: AcpProjectedDeliveryMeta,
   ) => Promise<boolean>;
   onProgress?: () => void;
+  onTokenUsage?: (usage: AcpTokenUsage) => void | Promise<void>;
   provider?: string;
   accountId?: string;
 }): AcpReplyProjector {
@@ -465,6 +472,14 @@ export function createAcpReplyProjector(params: {
     }
 
     if (event.type === "status") {
+      if (
+        event.tag === "usage_update" &&
+        typeof event.used === "number" &&
+        typeof event.size === "number" &&
+        params.onTokenUsage
+      ) {
+        await params.onTokenUsage({ used: event.used, size: event.size, total: event.used });
+      }
       if (!isAcpTagVisible(settings, event.tag)) {
         return;
       }
