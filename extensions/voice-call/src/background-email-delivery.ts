@@ -17,21 +17,30 @@ export type BackgroundEmailDeliveryParams = {
   question: string;
   consultResult: string;
   backgroundEmailPrompt?: string;
+  recipientEmail?: string;
   timeoutMs?: number;
 };
 
 const DEFAULT_EMAIL_DELIVERY_TIMEOUT_MS = 120_000;
 
-const EMAIL_DELIVERY_SYSTEM_PROMPT = [
+const EMAIL_DELIVERY_SYSTEM_PROMPT_BASE = [
   "You are a background task agent.",
   "The user was on a phone call and asked a question. The answer has been found.",
   "Your job: send the answer to the user's email address.",
-  "Look up the user's email in memory if not provided.",
   "Use the himalaya or gog CLI tool via exec to send the email.",
   "Subject line should be concise and reference the original question.",
   "Body should contain the full answer in a clear, readable format.",
-  "If you cannot find the user's email or send the email, log a warning.",
 ].join(" ");
+
+const EMAIL_DELIVERY_LOOKUP_SUFFIX =
+  " Look up the user's email in memory if not provided. If you cannot find the user's email or send the email, log a warning.";
+
+function resolveEmailDeliverySystemPrompt(recipientEmail?: string): string {
+  if (recipientEmail) {
+    return `${EMAIL_DELIVERY_SYSTEM_PROMPT_BASE} Send the email to: ${recipientEmail}. Do NOT look up or ask for the email address — use exactly this one.`;
+  }
+  return `${EMAIL_DELIVERY_SYSTEM_PROMPT_BASE}${EMAIL_DELIVERY_LOOKUP_SUFFIX}`;
+}
 
 /**
  * Set of background delivery promises tracked for graceful shutdown and test cleanup.
@@ -59,6 +68,7 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
     question,
     consultResult,
     backgroundEmailPrompt,
+    recipientEmail,
     timeoutMs,
   } = params;
 
@@ -66,12 +76,16 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
     `[voice-call] Spawning email delivery agent for session=${sessionKey}, agent=${agentId}, question="${question.slice(0, 80)}"`,
   );
 
-  const prompt = [
+  const promptParts = [
     `Original question from the caller: "${question}"`,
     "",
     "Answer to send by email:",
     consultResult,
-  ].join("\n");
+  ];
+  if (recipientEmail) {
+    promptParts.push("", `Recipient email address: ${recipientEmail}`);
+  }
+  const prompt = promptParts.join("\n");
 
   const task = (async () => {
     try {
@@ -91,7 +105,8 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
         assistantLabel: "Agent",
         questionSourceLabel: "caller",
         timeoutMs: timeoutMs ?? DEFAULT_EMAIL_DELIVERY_TIMEOUT_MS,
-        extraSystemPrompt: backgroundEmailPrompt ?? EMAIL_DELIVERY_SYSTEM_PROMPT,
+        extraSystemPrompt:
+          backgroundEmailPrompt ?? resolveEmailDeliverySystemPrompt(recipientEmail),
         fallbackText: "",
       });
       logger.info(`[voice-call] Background email delivery completed for session ${sessionKey}`);

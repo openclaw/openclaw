@@ -73,7 +73,7 @@ export function buildRealtimeVoiceAgentConsultEmailAckResponse(
   return {
     status: "deferred_to_email",
     tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-    message: `Tell the ${audienceLabel} that you will research this and email the answer shortly.`,
+    message: `Tell the ${audienceLabel} that you will research this and email the answer shortly. Do NOT ask for their email address and do NOT say any email address out loud — the system already knows where to send it.`,
   };
 }
 

@@ -335,6 +335,8 @@ const VoiceCallRealtimeConfigSchema = z
     backgroundConsultTimeoutMs: z.number().int().positive().optional(),
     /** Extra system prompt for the background email delivery agent. */
     backgroundEmailPrompt: z.string().optional(),
+    /** Pre-configured recipient email for background email delivery. When set, the voice agent won't ask for or mention the email address. */
+    recipientEmail: z.string().email().optional(),
   })
   .strict()
   .default({
