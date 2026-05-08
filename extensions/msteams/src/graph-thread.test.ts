@@ -162,17 +162,26 @@ describe("fetchThreadReplies", () => {
 
   it("follows pagination and keeps the most recent replies", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({
-      value: [{ id: "reply-1" }, { id: "reply-2" }],
+      value: [
+        { id: "reply-newest", createdDateTime: "2026-05-08T12:04:00Z" },
+        { id: "reply-older", createdDateTime: "2026-05-08T12:01:00Z" },
+      ],
       "@odata.nextLink":
         "https://graph.microsoft.com/v1.0/teams/group-1/channels/channel-1/messages/msg-1/replies?$skiptoken=page2",
     } as never);
     vi.mocked(fetchGraphAbsoluteUrl).mockResolvedValueOnce({
-      value: [{ id: "reply-3" }, { id: "reply-4" }],
+      value: [
+        { id: "reply-oldest", createdDateTime: "2026-05-08T12:00:00Z" },
+        { id: "reply-newer", createdDateTime: "2026-05-08T12:03:00Z" },
+      ],
     } as never);
 
     const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1", 2);
 
-    expect(result).toEqual([{ id: "reply-3" }, { id: "reply-4" }]);
+    expect(result).toEqual([
+      { id: "reply-newer", createdDateTime: "2026-05-08T12:03:00Z" },
+      { id: "reply-newest", createdDateTime: "2026-05-08T12:04:00Z" },
+    ]);
     expect(fetchGraphAbsoluteUrl).toHaveBeenCalledWith({
       token: "tok",
       url: "https://graph.microsoft.com/v1.0/teams/group-1/channels/channel-1/messages/msg-1/replies?$skiptoken=page2",

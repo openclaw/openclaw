@@ -1,4 +1,4 @@
-import { fetchGraphAbsoluteUrl, fetchGraphJson, type GraphPagedResponse } from "./graph.js";
+import { fetchGraphAbsoluteUrl, fetchGraphJson } from "./graph.js";
 
 export type GraphThreadMessage = {
   id?: string;
@@ -8,6 +8,11 @@ export type GraphThreadMessage = {
   };
   body?: { content?: string; contentType?: string };
   createdDateTime?: string;
+};
+
+type GraphThreadRepliesResponse = {
+  value?: GraphThreadMessage[];
+  "@odata.nextLink"?: string;
 };
 
 /** Maximum number of reply pages to follow so thread enrichment stays bounded. */
@@ -96,10 +101,9 @@ export async function fetchChannelMessage(
 /**
  * Fetch thread replies for a channel message, ordered chronologically.
  *
- * Graph returns replies oldest-first and does not support `$orderby`, so this helper
- * follows `@odata.nextLink` pagination under a hard page cap, then keeps the most
- * recent `limit` replies from the collected window. This favors the newest thread
- * context without turning one inbound message into unbounded Graph traffic.
+ * Graph does not support `$orderby` for replies, so this helper follows
+ * `@odata.nextLink` pagination under a hard page cap, then keeps the most
+ * recent `limit` replies by timestamp from the collected window.
  */
 export async function fetchThreadReplies(
   token: string,
@@ -112,7 +116,7 @@ export async function fetchThreadReplies(
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
   const replies: GraphThreadMessage[] = [];
 
-  let res = await fetchGraphJson<GraphPagedResponse<GraphThreadMessage>>({ token, path });
+  let res = await fetchGraphJson<GraphThreadRepliesResponse>({ token, path });
   let pages = 1;
 
   while (true) {
@@ -124,7 +128,7 @@ export async function fetchThreadReplies(
     }
 
     try {
-      res = await fetchGraphAbsoluteUrl<GraphPagedResponse<GraphThreadMessage>>({
+      res = await fetchGraphAbsoluteUrl<GraphThreadRepliesResponse>({
         token,
         url: nextLink,
       });
@@ -139,7 +143,57 @@ export async function fetchThreadReplies(
   if (replies.length <= top) {
     return replies;
   }
-  return replies.slice(-top);
+  return selectRecentThreadReplies(replies, top);
+}
+
+function selectRecentThreadReplies(
+  replies: GraphThreadMessage[],
+  limit: number,
+): GraphThreadMessage[] {
+  return replies
+    .map((reply, index) => ({
+      reply,
+      index,
+      createdAt: parseGraphTimestamp(reply.createdDateTime),
+    }))
+    .toSorted(compareRecentReplies)
+    .slice(0, limit)
+    .toSorted(compareThreadContextOrder)
+    .map(({ reply }) => reply);
+}
+
+function parseGraphTimestamp(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+type RankedThreadReply = {
+  reply: GraphThreadMessage;
+  index: number;
+  createdAt: number | undefined;
+};
+
+function compareRecentReplies(a: RankedThreadReply, b: RankedThreadReply): number {
+  if (a.createdAt !== undefined && b.createdAt !== undefined && a.createdAt !== b.createdAt) {
+    return b.createdAt - a.createdAt;
+  }
+  if (a.createdAt !== undefined && b.createdAt === undefined) {
+    return -1;
+  }
+  if (a.createdAt === undefined && b.createdAt !== undefined) {
+    return 1;
+  }
+  return b.index - a.index;
+}
+
+function compareThreadContextOrder(a: RankedThreadReply, b: RankedThreadReply): number {
+  if (a.createdAt !== undefined && b.createdAt !== undefined && a.createdAt !== b.createdAt) {
+    return a.createdAt - b.createdAt;
+  }
+  return a.index - b.index;
 }
 
 /**
