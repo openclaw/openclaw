@@ -36,7 +36,6 @@ async function loadProviderRegistry() {
 
 function requireImageProvider(id: string): ImageGenerationProviderPlugin {
   const provider = getImageGenerationProvider(id);
-  expect(provider).toBeDefined();
   if (!provider) {
     throw new Error(`expected image generation provider ${id}`);
   }

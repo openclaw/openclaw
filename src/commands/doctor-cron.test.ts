@@ -85,7 +85,6 @@ async function readPersistedJobs(storePath: string): Promise<Array<Record<string
 
 function requirePersistedJob(jobs: Array<Record<string, unknown>>, index: number) {
   const job = jobs[index];
-  expect(job).toBeDefined();
   if (!job) {
     throw new Error(`expected persisted cron job ${index}`);
   }

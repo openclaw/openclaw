@@ -6,7 +6,6 @@ import plugin from "./index.js";
 function registerProvider() {
   const captured = capturePluginRegistration(plugin);
   const provider = captured.providers[0];
-  expect(provider).toBeDefined();
   if (!provider) {
     throw new Error("expected Cloudflare AI Gateway provider");
   }
@@ -53,7 +52,6 @@ describe("cloudflare-ai-gateway plugin", () => {
       {},
     );
 
-    expect(capturedPayload).toBeDefined();
     if (!capturedPayload) {
       throw new Error("expected Cloudflare AI Gateway payload capture");
     }

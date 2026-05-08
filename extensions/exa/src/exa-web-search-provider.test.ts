@@ -15,7 +15,6 @@ describe("exa web search provider", () => {
     expect(provider.onboardingScopes).toEqual(["text-inference"]);
     expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
     const pluginEntry = applied.plugins?.entries?.exa;
-    expect(pluginEntry).toBeDefined();
     if (!pluginEntry) {
       throw new Error("expected Exa plugin entry");
     }
@@ -45,7 +44,6 @@ describe("exa web search provider", () => {
     });
     expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
     const pluginEntry = applied.plugins?.entries?.exa;
-    expect(pluginEntry).toBeDefined();
     if (!pluginEntry) {
       throw new Error("expected contract Exa plugin entry");
     }

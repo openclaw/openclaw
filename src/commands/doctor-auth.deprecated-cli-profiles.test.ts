@@ -51,7 +51,6 @@ function makePrompter(confirmValue: boolean): DoctorPrompter {
 }
 
 function requireAuthConfig(config: OpenClawConfig): NonNullable<OpenClawConfig["auth"]> {
-  expect(config.auth).toBeDefined();
   if (!config.auth) {
     throw new Error("expected repaired auth config");
   }

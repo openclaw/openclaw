@@ -10,7 +10,6 @@ import {
 type QwenProvider = ReturnType<typeof buildQwenProvider>;
 
 function getQwenModelIds(provider: QwenProvider): string[] {
-  expect(provider.models).toBeDefined();
   return provider.models.map((model) => model.id);
 }
 
@@ -43,7 +42,6 @@ describe("qwen provider catalog", () => {
     expect(nativeProvider.models.length).toBeGreaterThan(0);
     expect(
       nativeProvider.models.every((model) => {
-        expect(model.compat).toBeDefined();
         if (!model.compat) {
           throw new Error(`expected Qwen model ${model.id} compat`);
         }
