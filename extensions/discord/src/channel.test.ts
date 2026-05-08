@@ -503,7 +503,7 @@ describe("discordPlugin outbound", () => {
         includeApplication: true,
       }),
     );
-    expect(statusPatches.filter((patch) => "bot" in patch || "application" in patch)).toEqual([]);
+    expect(statusPatches.some((patch) => "bot" in patch || "application" in patch)).toBe(false);
 
     if (!resolveProbe) {
       throw new Error("Expected Discord startup probe resolver to be initialized");
