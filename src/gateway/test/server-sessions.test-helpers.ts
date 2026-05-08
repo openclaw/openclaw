@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { AssistantMessage, UserMessage } from "../../agents/pi-ai-contract.js";
+import { readTranscriptState } from "../../agents/transcript/transcript-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
@@ -401,7 +402,11 @@ export async function createCheckpointFixture(dir: string) {
   if (!preCompactionSessionFile) {
     throw new Error("expected persisted checkpoint snapshot");
   }
-  const preCompactionSession = SessionManager.open(preCompactionSessionFile);
+  const preCompactionSession = await readTranscriptState(preCompactionSessionFile);
+  const preCompactionSessionId = preCompactionSession.getHeader()?.id;
+  if (!preCompactionSessionId) {
+    throw new Error("expected pre-compaction checkpoint session id");
+  }
   session.appendCompaction("checkpoint summary", preCompactionLeafId, 123, { ok: true });
   const postCompactionLeafId = session.getLeafId();
   if (!postCompactionLeafId) {
@@ -412,6 +417,7 @@ export async function createCheckpointFixture(dir: string) {
     sessionId: session.getSessionId(),
     sessionFile,
     preCompactionSession,
+    preCompactionSessionId,
     preCompactionSessionFile,
     preCompactionLeafId,
     postCompactionLeafId,
