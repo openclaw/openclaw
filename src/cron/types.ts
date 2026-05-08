@@ -157,6 +157,8 @@ type CronAgentTurnPayloadFields = {
   fallbacks?: string[];
   thinking?: string;
   timeoutSeconds?: number;
+  /** Per-job no-output watchdog cap in ms (resume lanes only; clamped to 1800000). */
+  noOutputTimeoutMs?: number;
   allowUnsafeExternalContent?: boolean;
   /** Immutable external hook provenance for async dispatch. */
   externalContentSource?: HookExternalContentSource;

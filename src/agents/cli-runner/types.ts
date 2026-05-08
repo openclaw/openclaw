@@ -51,6 +51,8 @@ export type RunCliAgentParams = {
   agentAccountId?: string;
   senderIsOwner?: boolean;
   disableTools?: boolean;
+  /** Per-job no-output watchdog cap declared in the cron payload. Honoured only on resume lanes. */
+  payloadNoOutputTimeoutMs?: number;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;

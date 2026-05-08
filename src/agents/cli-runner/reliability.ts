@@ -62,17 +62,34 @@ function pickWatchdogProfile(
   };
 }
 
+const PAYLOAD_NO_OUTPUT_TIMEOUT_HARD_UPPER_MS = 1_800_000;
+
 export function resolveCliNoOutputTimeoutMs(params: {
   backend: CliBackendConfig;
   timeoutMs: number;
   useResume: boolean;
   trigger?: EmbeddedRunTrigger;
+  /** Per-job override from cron payload (resume lanes only). */
+  payloadNoOutputTimeoutMs?: number;
 }): number {
   const profile = pickWatchdogProfile(params.backend, params.useResume, params.trigger);
   // Keep watchdog below global timeout in normal cases.
   const cap = Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, params.timeoutMs - 1_000);
   if (profile.noOutputTimeoutMs !== undefined) {
     return Math.min(profile.noOutputTimeoutMs, cap);
+  }
+  // On resume lanes, honour the per-job override when it exceeds the profile maxMs.
+  if (
+    params.useResume &&
+    typeof params.payloadNoOutputTimeoutMs === "number" &&
+    Number.isFinite(params.payloadNoOutputTimeoutMs) &&
+    params.payloadNoOutputTimeoutMs > profile.maxMs
+  ) {
+    const clamped = Math.min(
+      params.payloadNoOutputTimeoutMs,
+      PAYLOAD_NO_OUTPUT_TIMEOUT_HARD_UPPER_MS,
+    );
+    return Math.min(Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, clamped), cap);
   }
   const computed = Math.floor(params.timeoutMs * profile.noOutputTimeoutRatio);
   const bounded = Math.min(profile.maxMs, Math.max(profile.minMs, computed));

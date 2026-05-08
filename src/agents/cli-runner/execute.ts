@@ -396,6 +396,7 @@ export async function executePreparedCliRun(
           timeoutMs: params.timeoutMs,
           useResume,
           trigger: params.trigger,
+          payloadNoOutputTimeoutMs: params.payloadNoOutputTimeoutMs,
         });
         const hasJsonlOutput = backend.output === "jsonl";
         if (shouldUseClaudeLiveSession(context)) {

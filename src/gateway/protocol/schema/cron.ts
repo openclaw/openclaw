@@ -10,6 +10,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema; toolsAllow: TSch
       fallbacks: Type.Optional(Type.Array(Type.String())),
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+      noOutputTimeoutMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 1800000 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       lightContext: Type.Optional(Type.Boolean()),
       toolsAllow: Type.Optional(params.toolsAllow),

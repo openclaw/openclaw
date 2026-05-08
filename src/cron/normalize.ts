@@ -6,6 +6,7 @@ import {
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import {
+  NoOutputTimeoutMsFieldSchema,
   TimeoutSecondsFieldSchema,
   TrimmedNonEmptyStringFieldSchema,
   parseDeliveryInput,
@@ -221,6 +222,17 @@ function coercePayload(payload: UnknownRecord) {
       delete next.timeoutSeconds;
     }
   }
+  if ("noOutputTimeoutMs" in next) {
+    const noOutputTimeoutMs = parseOptionalField(
+      NoOutputTimeoutMsFieldSchema,
+      next.noOutputTimeoutMs,
+    );
+    if (noOutputTimeoutMs !== undefined) {
+      next.noOutputTimeoutMs = noOutputTimeoutMs;
+    } else {
+      delete next.noOutputTimeoutMs;
+    }
+  }
   if ("fallbacks" in next) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
     if (fallbacks !== undefined) {
@@ -249,6 +261,7 @@ function coercePayload(payload: UnknownRecord) {
     delete next.fallbacks;
     delete next.thinking;
     delete next.timeoutSeconds;
+    delete next.noOutputTimeoutMs;
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
@@ -382,6 +395,9 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
   if (typeof payload.timeoutSeconds !== "number" && typeof next.timeoutSeconds === "number") {
     payload.timeoutSeconds = next.timeoutSeconds;
   }
+  if (typeof payload.noOutputTimeoutMs !== "number" && typeof next.noOutputTimeoutMs === "number") {
+    payload.noOutputTimeoutMs = next.noOutputTimeoutMs;
+  }
   if (!Array.isArray(payload.fallbacks) && Array.isArray(next.fallbacks)) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
     if (fallbacks !== undefined) {
@@ -411,6 +427,7 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.model;
   delete next.thinking;
   delete next.timeoutSeconds;
+  delete next.noOutputTimeoutMs;
   delete next.fallbacks;
   delete next.lightContext;
   delete next.toolsAllow;

@@ -30,6 +30,8 @@ export const TimeoutSecondsFieldSchema = z
   .finite()
   .transform((value) => Math.max(0, value));
 
+export const NoOutputTimeoutMsFieldSchema = z.number().int().min(1000).max(1_800_000).finite();
+
 type ParsedDeliveryInput = {
   mode?: "announce" | "none" | "webhook";
   channel?: string;
