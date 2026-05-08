@@ -287,7 +287,5 @@ USER node
 # For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-# Use tini as the init process (PID 1) to reap zombie processes and handle signals.
-# The -s flag enables subreaper mode for compatibility with nested inits (e.g. Compose init: true).
 ENTRYPOINT ["tini", "-s", "--"]
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
