@@ -65,7 +65,7 @@ function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | unde
   return String(Math.max(1, Math.min(86400, Math.trunc(parsed))));
 }
 
-function shouldApplyOpenRouterResponseCacheHeaders(model: Parameters<StreamFn>[0]): boolean {
+function isVerifiedOpenRouterRoute(model: Parameters<StreamFn>[0]): boolean {
   const provider = readStringValue(model.provider);
   const endpointClass = resolveProviderRequestPolicy({
     provider,
@@ -78,6 +78,10 @@ function shouldApplyOpenRouterResponseCacheHeaders(model: Parameters<StreamFn>[0
     endpointClass === "openrouter" ||
     (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
   );
+}
+
+function shouldApplyOpenRouterResponseCacheHeaders(model: Parameters<StreamFn>[0]): boolean {
+  return isVerifiedOpenRouterRoute(model);
 }
 
 function resolveOpenRouterResponseCacheHeaders(
@@ -122,6 +126,27 @@ function resolveOpenRouterResponseCacheHeaders(
   return headers;
 }
 
+function normalizeOpenRouterRequestPayloadModel(
+  payload: Record<string, unknown>,
+  model: Parameters<StreamFn>[0],
+): void {
+  if (!isVerifiedOpenRouterRoute(model)) {
+    return;
+  }
+
+  const provider = readStringValue(model.provider);
+  const modelId = readStringValue(model.id);
+  const payloadModel = readStringValue(payload.model);
+  if (!provider || !modelId || !payloadModel) {
+    return;
+  }
+
+  const syntheticModelId = `${provider}/${modelId}`;
+  if (payloadModel === syntheticModelId) {
+    payload.model = modelId;
+  }
+}
+
 function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkLevel): void {
   if (!payload || typeof payload !== "object") {
     return;
@@ -154,25 +179,8 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
 export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const provider = readStringValue(model.provider);
     const modelId = readStringValue(model.id);
-    // Keep OpenRouter-specific cache markers on verified OpenRouter routes
-    // (or the provider's default route), but not on arbitrary OpenAI proxies.
-    const endpointClass = resolveProviderRequestPolicy({
-      provider,
-      api: readStringValue(model.api),
-      baseUrl: readStringValue(model.baseUrl),
-      capability: "llm",
-      transport: "stream",
-    }).endpointClass;
-    if (
-      !modelId ||
-      !isAnthropicModelRef(modelId) ||
-      !(
-        endpointClass === "openrouter" ||
-        (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
-      )
-    ) {
+    if (!modelId || !isAnthropicModelRef(modelId) || !isVerifiedOpenRouterRoute(model)) {
       return underlying(model, context, options);
     }
 
@@ -210,6 +218,7 @@ export function createOpenRouterWrapper(
         headers,
       },
       (payload) => {
+        normalizeOpenRouterRequestPayloadModel(payload, model);
         normalizeProxyReasoningPayload(payload, thinkingLevel);
       },
     );

@@ -31,6 +31,35 @@ function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
   return payload;
 }
 
+function runOpenRouterWrapperPayload(
+  model: Partial<Model<"openai-completions">>,
+  payloadModel: string,
+) {
+  const payload: Record<string, unknown> = {
+    model: payloadModel,
+    messages: [],
+  };
+  const baseStreamFn: StreamFn = (resolvedModel, _context, options) => {
+    options?.onPayload?.(payload, resolvedModel);
+    return createAssistantMessageEventStream();
+  };
+
+  const wrapped = createOpenRouterWrapper(baseStreamFn);
+  void wrapped(
+    {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "stepfun/step-3.5-flash",
+      baseUrl: "https://openrouter.ai/api/v1",
+      ...model,
+    } as Model<"openai-completions">,
+    { messages: [] },
+    {},
+  );
+
+  return payload;
+}
+
 describe("proxy stream wrappers", () => {
   it("adds OpenRouter attribution headers to stream options", () => {
     const calls: Array<{ headers?: Record<string, string> }> = [];
@@ -168,6 +197,30 @@ describe("proxy stream wrappers", () => {
     );
 
     expect(calls[0]?.headers).toBeUndefined();
+  });
+
+  it("sends bare OpenRouter model ids when the transport adds the provider prefix", () => {
+    const payload = runOpenRouterWrapperPayload({}, "openrouter/stepfun/step-3.5-flash");
+
+    expect(payload.model).toBe("stepfun/step-3.5-flash");
+  });
+
+  it("preserves native OpenRouter model namespaces after removing one synthetic prefix", () => {
+    const payload = runOpenRouterWrapperPayload(
+      { id: "openrouter/auto" },
+      "openrouter/openrouter/auto",
+    );
+
+    expect(payload.model).toBe("openrouter/auto");
+  });
+
+  it("does not rewrite model ids for OpenRouter-compatible custom proxy routes", () => {
+    const payload = runOpenRouterWrapperPayload(
+      { baseUrl: "https://proxy.example.com/v1" },
+      "openrouter/stepfun/step-3.5-flash",
+    );
+
+    expect(payload.model).toBe("openrouter/stepfun/step-3.5-flash");
   });
 
   it("injects cache_control markers for declared OpenRouter Anthropic models on the default route", () => {
