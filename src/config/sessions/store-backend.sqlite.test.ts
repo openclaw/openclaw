@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveSessionTranscriptsDirForAgent } from "./paths.js";
 import { loadSqliteSessionEntries } from "./store-backend.sqlite.js";
 import {
   deleteSessionEntry,
@@ -21,14 +20,11 @@ function createTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-session-store-"));
 }
 
-function resolveLegacySessionJsonFixturePath(params: {
+function resolveRetiredSessionJsonFixturePath(params: {
   agentId: string;
   env: NodeJS.ProcessEnv;
 }): string {
-  return path.join(
-    resolveSessionTranscriptsDirForAgent(params.agentId, params.env),
-    "sessions.json",
-  );
+  return path.join(params.env.OPENCLAW_STATE_DIR ?? "", "agents", params.agentId, "sessions.json");
 }
 
 afterEach(() => {
@@ -70,7 +66,7 @@ describe("SQLite session store backend", () => {
   it("routes the production session row API through SQLite", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const storePath = resolveLegacySessionJsonFixturePath({
+    const storePath = resolveRetiredSessionJsonFixturePath({
       agentId: "ops",
       env,
     });
@@ -188,7 +184,7 @@ describe("SQLite session store backend", () => {
   it("uses SQLite by default for canonical per-agent session rows", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    const storePath = resolveLegacySessionJsonFixturePath({
+    const storePath = resolveRetiredSessionJsonFixturePath({
       agentId: "ops",
       env,
     });
