@@ -220,8 +220,12 @@ describe("secrets audit", () => {
     expect(report.status).toBe("findings");
     expect(report.summary.plaintextCount).toBeGreaterThan(0);
     expect(report.summary.shadowedRefCount).toBeGreaterThan(0);
-    expect(hasFinding(report, (entry) => entry.code === "REF_SHADOWED")).toBe(true);
-    expect(hasFinding(report, (entry) => entry.code === "PLAINTEXT_FOUND")).toBe(true);
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "REF_SHADOWED" }),
+        expect.objectContaining({ code: "PLAINTEXT_FOUND" }),
+      ]),
+    );
   });
 
   it("does not mutate legacy auth.json during audit", async () => {
@@ -234,7 +238,9 @@ describe("secrets audit", () => {
     });
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(hasFinding(report, (entry) => entry.code === "LEGACY_RESIDUE")).toBe(true);
+    expect(report.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "LEGACY_RESIDUE" })]),
+    );
     const authJsonStat = await fs.stat(fixture.authJsonPath);
     expect(authJsonStat.isFile()).toBe(true);
     await expect(fs.stat(fixture.authStorePath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -245,9 +251,13 @@ describe("secrets audit", () => {
     await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
-    expect(hasFinding(report, (entry) => entry.file === fixture.authStorePath)).toBe(true);
-    expect(hasFinding(report, (entry) => entry.file === fixture.authJsonPath)).toBe(true);
-    expect(hasFinding(report, (entry) => entry.code === "REF_UNRESOLVED")).toBe(true);
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file: fixture.authStorePath }),
+        expect.objectContaining({ file: fixture.authJsonPath }),
+        expect.objectContaining({ code: "REF_UNRESOLVED" }),
+      ]),
+    );
   });
 
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {
