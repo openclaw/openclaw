@@ -406,13 +406,16 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
 
-## Local session logs live on disk
+## Local session logs live in SQLite
 
-OpenClaw stores session transcripts on disk under `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
-This is required for session continuity and (optionally) session memory indexing, but it also means
-**any process/user with filesystem access can read those logs**. Treat disk access as the trust
-boundary and lock down permissions on `~/.openclaw` (see the audit section below). If you need
-stronger isolation between agents, run them under separate OS users or separate hosts.
+OpenClaw stores session rows and transcript events in SQLite under
+`~/.openclaw/state/openclaw.sqlite` and
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. This is required for
+session continuity and optional session memory indexing, but it also means
+**any process/user with filesystem access can read those databases**. Treat disk
+access as the trust boundary and lock down permissions on `~/.openclaw` (see the
+audit section below). If you need stronger isolation between agents, run them
+under separate OS users or separate hosts.
 
 ## Node execution (system.run)
 
@@ -1293,7 +1296,8 @@ If your AI does something bad:
 ### Audit
 
 1. Check Gateway logs: `/tmp/openclaw/openclaw-YYYY-MM-DD.log` (or `logging.file`).
-2. Review the relevant transcript(s): `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
+2. Review the relevant transcript rows in
+   `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
 3. Review recent config changes (anything that could have widened access: `gateway.bind`, `gateway.auth`, dm/group policies, `tools.elevated`, plugin changes).
 4. Re-run `openclaw security audit --deep` and confirm critical findings are resolved.
 

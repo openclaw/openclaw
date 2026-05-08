@@ -172,13 +172,13 @@ const createCaseDir = async (prefix: string) => {
 
 type TestSessionRowsTarget = {
   agentId: string;
-  sessionsDir: string;
+  transcriptDir: string;
 };
 
 function sessionRowsTarget(root: string, agentId = "main"): TestSessionRowsTarget {
   return {
     agentId,
-    sessionsDir: path.join(root, "agents", agentId, "sessions"),
+    transcriptDir: path.join(root, "transcript-fixtures", agentId),
   };
 }
 
@@ -852,9 +852,9 @@ describe("runHeartbeatOnce", () => {
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       const target = sessionRowsTarget(tmpDir, agentId);
-      const { sessionsDir } = target;
+      const { transcriptDir } = target;
       const sessionId = "sid-ops";
-      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+      const sessionFile = path.join(transcriptDir, `${sessionId}.jsonl`);
 
       await replaceTestSessionRows(target, {
         [sessionKey]: {

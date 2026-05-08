@@ -818,5 +818,13 @@
   {
     "source": "fs-safe Cleanup Plan",
     "target": "fs-safe Cleanup Plan"
+  },
+  {
+    "source": "Kysely best practices",
+    "target": "Kysely 最佳实践"
+  },
+  {
+    "source": "Database-first state refactor",
+    "target": "数据库优先状态重构"
   }
 ]
