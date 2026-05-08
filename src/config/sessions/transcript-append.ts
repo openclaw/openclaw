@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isSqliteSessionTranscriptLocator } from "./paths.js";
 import { appendSqliteSessionTranscriptMessage as appendSqliteSessionTranscriptMessageAtomically } from "./transcript-store.sqlite.js";
 
 async function loadCurrentSessionVersion(): Promise<number> {
@@ -38,7 +39,13 @@ export async function appendSessionTranscriptMessage(params: {
     agentId: scope.agentId,
     sessionId: scope.sessionId,
     sessionVersion,
-    ...(params.transcriptPath ? { transcriptPath: path.resolve(params.transcriptPath) } : {}),
+    ...(params.transcriptPath
+      ? {
+          transcriptPath: isSqliteSessionTranscriptLocator(params.transcriptPath)
+            ? params.transcriptPath
+            : path.resolve(params.transcriptPath),
+        }
+      : {}),
     cwd: params.cwd,
     message: params.message,
     now: () => params.now ?? Date.now(),

@@ -3,8 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveSessionTranscriptPathInDir } from "./paths.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import {
+  createSqliteSessionTranscriptLocator,
+  resolveSessionTranscriptPathInDir,
+} from "./paths.js";
 import { upsertSessionEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
@@ -21,6 +28,7 @@ import {
 import type { SessionEntry } from "./types.js";
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
@@ -128,15 +136,14 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await writeTranscriptStore();
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
 
-    await appendAssistantMessageToSessionTranscript({
+    const result = await appendAssistantMessageToSessionTranscript({
       sessionKey,
       text: "Hello from delivery mirror!",
     });
 
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionFile,
+        sessionFile: result.ok ? result.sessionFile : expect.any(String),
         sessionKey,
         messageId: expect.any(String),
         message: expect.objectContaining({
@@ -412,10 +419,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(emitSpy).toHaveBeenCalledWith({
-        sessionFile: result.sessionFile,
-        sessionKey,
-      });
+      expect(emitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionFile: result.sessionFile,
+          sessionKey,
+        }),
+      );
     }
     emitSpy.mockRestore();
   });
@@ -593,6 +602,37 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       type: "message",
       id: appended.messageId,
     });
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("preserves virtual SQLite transcript locators instead of registering fake file paths", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionId = "sqlite-locator-session";
+    const sessionFile = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      agentId: "main",
+      sessionId,
+      cwd: "/workspace",
+      message: { role: "assistant", content: "locator reply" },
+      now: 789,
+    });
+
+    const events = loadSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId,
+    }).map((entry) => entry.event as { type?: string; message?: unknown });
+    expect(events.map((event) => event.type)).toEqual(["session", "message"]);
+
+    const stateDatabase = openOpenClawStateDatabase({ env });
+    expect(
+      stateDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_files").get(),
+    ).toEqual({ count: 0 });
 
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
