@@ -228,7 +228,7 @@ describe("extension runtime dependency manifests", () => {
   it("keeps json5 in memory-core for packaged runtime config parsing", () => {
     const manifest = readPackageManifest("extensions/memory-core/package.json");
 
-    expect(manifest.dependencies?.json5).toBeDefined();
+    expect(manifest.dependencies?.json5).toEqual(expect.any(String));
   });
 
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {

@@ -696,6 +696,16 @@ export const zh_TW: TranslationMap = {
       today: "今天",
       last7d: "7 天",
       last30d: "30 天",
+      last90d: "90d",
+      last1y: "1y",
+      all: "全部",
+    },
+    scope: {
+      instance: "目前執行個體",
+      instanceHint: "僅顯示每個邏輯工作階段的有效工作階段 ID。",
+      family: "歷史沿革",
+      familyHint: "彙總已知輪替且有逐字稿支援的工作階段 ID。",
+      familyIncluded: "歷史沿革包含 {count} 個工作階段執行個體。",
     },
     filters: {
       title: "篩選條件",

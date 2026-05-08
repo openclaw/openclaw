@@ -708,6 +708,16 @@ export const ja_JP: TranslationMap = {
       today: "今日",
       last7d: "7日",
       last30d: "30日",
+      last90d: "90d",
+      last1y: "1y",
+      all: "すべて",
+    },
+    scope: {
+      instance: "現在のインスタンス",
+      instanceHint: "各論理セッションについて、アクティブなセッション ID のみを表示します。",
+      family: "履歴系譜",
+      familyHint: "既知のローテーション済みトランスクリプト基盤のセッション ID を集計します。",
+      familyIncluded: "履歴系譜には {count} 件のセッションインスタンスが含まれます。",
     },
     filters: {
       title: "フィルター",

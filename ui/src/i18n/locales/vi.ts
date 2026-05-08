@@ -704,6 +704,16 @@ export const vi: TranslationMap = {
       today: "Hôm nay",
       last7d: "7 ngày",
       last30d: "30 ngày",
+      last90d: "90 ngày",
+      last1y: "1 năm",
+      all: "Tất cả",
+    },
+    scope: {
+      instance: "Phiên bản hiện tại",
+      instanceHint: "Chỉ hiển thị id phiên hoạt động cho mỗi phiên logic.",
+      family: "Dòng lịch sử",
+      familyHint: "Gộp các id phiên dựa trên bản chép lời đã biết từng được xoay vòng.",
+      familyIncluded: "Dòng lịch sử bao gồm {count} phiên bản phiên.",
     },
     filters: {
       title: "Bộ lọc",

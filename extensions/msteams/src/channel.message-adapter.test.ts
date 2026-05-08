@@ -51,13 +51,15 @@ describe("msteams channel message adapter", () => {
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
     const adapter = msteamsPlugin.message;
-    expect(adapter).toBeDefined();
-    expect(adapter!.durableFinal?.capabilities?.replyTo).toBeUndefined();
-    expect(adapter!.durableFinal?.capabilities?.thread).toBeUndefined();
+    if (!adapter?.send?.text || !adapter.send.media) {
+      throw new Error("expected msteams channel message adapter with text and media senders");
+    }
+    expect(adapter.durableFinal?.capabilities?.replyTo).toBeUndefined();
+    expect(adapter.durableFinal?.capabilities?.thread).toBeUndefined();
 
     const proveText = async () => {
       mocks.sendText.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send.text({
         cfg,
         to: "conversation:abc",
         text: "hello",
@@ -77,7 +79,7 @@ describe("msteams channel message adapter", () => {
 
     const proveMedia = async () => {
       mocks.sendMedia.mockClear();
-      const result = await adapter!.send!.media!({
+      const result = await adapter.send.media({
         cfg,
         to: "conversation:abc",
         text: "photo",
@@ -100,12 +102,12 @@ describe("msteams channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "msteamsMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
         messageSendingHooks: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(adapter.send.text).toBeTypeOf("function");
         },
       },
     });

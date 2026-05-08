@@ -340,6 +340,7 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(running.pid).toBe(4242);
           running.proc.kill?.("SIGTERM");
         },
       });
@@ -925,6 +926,7 @@ describe("chrome.ts internal", () => {
               extraArgs: [],
             } as unknown as ResolvedBrowserConfig;
             const running = await launchOpenClawChrome(resolved, profile);
+            expect(running.pid).toBe(4242);
             running.proc.kill?.("SIGTERM");
           },
         });
@@ -969,6 +971,7 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(running.pid).toBe(4242);
           running.proc.kill?.("SIGTERM");
         },
       });
@@ -1106,6 +1109,8 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(spawnCount).toBe(2);
+          expect(running.proc).toBe(runtimeProc);
           running.proc.kill?.("SIGTERM");
         },
       });
@@ -1160,6 +1165,8 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(callCount).toBe(2);
+          expect(running.proc).toBe(runtimeProc);
           running.proc.kill?.("SIGTERM");
         },
       });
@@ -1213,6 +1220,7 @@ describe("chrome.ts internal", () => {
             extraArgs: [],
           } as unknown as ResolvedBrowserConfig;
           const running = await launchOpenClawChrome(resolved, profile);
+          expect(running.pid).toBe(4242);
           running.proc.kill?.("SIGTERM");
         },
       });

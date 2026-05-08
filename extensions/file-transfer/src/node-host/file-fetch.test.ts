@@ -67,7 +67,10 @@ describe("handleFileFetch — fs errors", () => {
     const r = await handleFileFetch({ path: tmpRoot });
     expect(r).toMatchObject({ ok: false, code: "IS_DIRECTORY" });
     // canonical path is reported back so the caller can re-check policy
-    expect(r.ok ? null : r.canonicalPath).toBeTruthy();
+    if (r.ok) {
+      throw new Error("expected directory fetch to fail");
+    }
+    expect(r.canonicalPath).toBe(tmpRoot);
   });
 });
 

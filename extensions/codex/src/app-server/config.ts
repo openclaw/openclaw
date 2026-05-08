@@ -1,11 +1,21 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { hostname as readHostName } from "node:os";
 import { z } from "openclaw/plugin-sdk/zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET = randomBytes(32);
+const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
+const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
+type CodexAppServerDefaultPolicy = {
+  mode: CodexAppServerPolicyMode;
+  approvalPolicy?: CodexAppServerApprovalPolicy;
+  approvalsReviewer?: CodexAppServerApprovalsReviewer;
+  sandbox?: CodexAppServerSandboxMode;
+};
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerEffectiveApprovalPolicy =
   | CodexAppServerApprovalPolicy
@@ -305,6 +315,11 @@ export function resolveCodexAppServerRuntimeOptions(
   params: {
     pluginConfig?: unknown;
     env?: NodeJS.ProcessEnv;
+    requirementsToml?: string | null;
+    requirementsPath?: string;
+    readRequirementsFile?: (path: string) => string | undefined;
+    platform?: NodeJS.Platform;
+    hostName?: string;
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
@@ -323,10 +338,20 @@ export function resolveCodexAppServerRuntimeOptions(
   const clearEnv = normalizeStringList(config.clearEnv);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
-  const policyMode =
-    resolvePolicyMode(config.mode) ??
-    resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
-    "yolo";
+  const explicitPolicyMode =
+    resolvePolicyMode(config.mode) ?? resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
+  const defaultPolicy = explicitPolicyMode
+    ? undefined
+    : resolveDefaultCodexAppServerPolicy({
+        transport,
+        env,
+        requirementsToml: params.requirementsToml,
+        requirementsPath: params.requirementsPath,
+        readRequirementsFile: params.readRequirementsFile,
+        platform: params.platform,
+        hostName: params.hostName,
+      });
+  const policyMode = explicitPolicyMode ?? defaultPolicy?.mode ?? "yolo";
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
@@ -353,13 +378,16 @@ export function resolveCodexAppServerRuntimeOptions(
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
+      defaultPolicy?.approvalPolicy ??
       (policyMode === "guardian" ? "on-request" : "never"),
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
+      defaultPolicy?.sandbox ??
       (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
+      defaultPolicy?.approvalsReviewer ??
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
   };
@@ -500,6 +528,333 @@ function resolveTransport(value: unknown): CodexAppServerTransportMode {
 
 function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {
   return value === "guardian" || value === "yolo" ? value : undefined;
+}
+
+function resolveDefaultCodexAppServerPolicy(params: {
+  transport: CodexAppServerTransportMode;
+  env?: NodeJS.ProcessEnv;
+  requirementsToml?: string | null;
+  requirementsPath?: string;
+  readRequirementsFile?: (path: string) => string | undefined;
+  platform?: NodeJS.Platform;
+  hostName?: string;
+}): CodexAppServerDefaultPolicy {
+  if (params.transport !== "stdio") {
+    return { mode: "yolo" };
+  }
+  const content = readCodexRequirementsToml(params);
+  if (content === undefined) {
+    return { mode: "yolo" };
+  }
+  const allowedSandboxModes = parseAllowedSandboxModesFromCodexRequirements(
+    content,
+    readNonEmptyString(params.hostName) ?? readHostName(),
+  );
+  const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
+  const allowedApprovalsReviewers = parseAllowedApprovalsReviewersFromCodexRequirements(content);
+  const yoloSandboxAllowed =
+    allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
+  const yoloApprovalAllowed =
+    allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("never");
+  const yoloReviewerAllowed =
+    allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("user");
+  if (yoloSandboxAllowed && yoloApprovalAllowed && yoloReviewerAllowed) {
+    return { mode: "yolo" };
+  }
+  return {
+    mode: "guardian",
+    approvalPolicy: selectGuardianApprovalPolicy(allowedApprovalPolicies),
+    approvalsReviewer: selectGuardianApprovalsReviewer(allowedApprovalsReviewers),
+    sandbox: selectGuardianSandbox(allowedSandboxModes),
+  };
+}
+
+function readCodexRequirementsToml(params: {
+  env?: NodeJS.ProcessEnv;
+  requirementsToml?: string | null;
+  requirementsPath?: string;
+  readRequirementsFile?: (path: string) => string | undefined;
+  platform?: NodeJS.Platform;
+}): string | undefined {
+  if (params.requirementsToml !== undefined) {
+    return params.requirementsToml ?? undefined;
+  }
+  const path =
+    readNonEmptyString(params.requirementsPath) ??
+    resolveCodexRequirementsPath(params.env ?? process.env, params.platform ?? process.platform);
+  try {
+    if (params.readRequirementsFile) {
+      return params.readRequirementsFile(path);
+    }
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveCodexRequirementsPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  if (platform === "win32") {
+    const programData = readNonEmptyString(env.ProgramData) ?? "C:\\ProgramData";
+    return `${programData.replace(/[\\/]+$/, "")}${WINDOWS_CODEX_REQUIREMENTS_SUFFIX}`;
+  }
+  return UNIX_CODEX_REQUIREMENTS_PATH;
+}
+
+function parseAllowedSandboxModesFromCodexRequirements(
+  content: string,
+  hostName: string,
+): Set<CodexAppServerSandboxMode> | undefined {
+  const remoteSandboxModes = parseMatchingRemoteSandboxModesFromCodexRequirements(
+    content,
+    hostName,
+  );
+  if (remoteSandboxModes !== undefined) {
+    return remoteSandboxModes;
+  }
+  const values = parseTopLevelRequirementsStringArray(content, "allowed_sandbox_modes");
+  return parseRequirementsSandboxModes(values);
+}
+
+function parseAllowedApprovalPoliciesFromCodexRequirements(
+  content: string,
+): Set<CodexAppServerApprovalPolicy> | undefined {
+  const values = parseTopLevelRequirementsStringArray(content, "allowed_approval_policies");
+  if (values === undefined) {
+    return undefined;
+  }
+  const normalizedPolicies = values
+    .map((entry) => normalizeRequirementsApprovalPolicy(entry))
+    .filter((entry): entry is CodexAppServerApprovalPolicy => entry !== undefined);
+  return normalizedPolicies.length > 0 ? new Set(normalizedPolicies) : undefined;
+}
+
+function parseAllowedApprovalsReviewersFromCodexRequirements(
+  content: string,
+): Set<CodexAppServerApprovalsReviewer> | undefined {
+  const values = parseTopLevelRequirementsStringArray(content, "allowed_approvals_reviewers");
+  if (values === undefined) {
+    return undefined;
+  }
+  const normalizedReviewers = values
+    .map((entry) => normalizeRequirementsApprovalsReviewer(entry))
+    .filter((entry): entry is CodexAppServerApprovalsReviewer => entry !== undefined);
+  return normalizedReviewers.length > 0 ? new Set(normalizedReviewers) : undefined;
+}
+
+function parseMatchingRemoteSandboxModesFromCodexRequirements(
+  content: string,
+  hostName: string,
+): Set<CodexAppServerSandboxMode> | undefined {
+  const normalizedHostName = normalizeRequirementsHostName(hostName);
+  if (normalizedHostName === undefined) {
+    return undefined;
+  }
+  for (const section of parseTomlArrayTableSections(content, "remote_sandbox_config")) {
+    const patterns = parseRequirementsStringArray(section, "hostname_patterns");
+    if (!patterns || !requirementsHostNameMatchesAnyPattern(normalizedHostName, patterns)) {
+      continue;
+    }
+    return parseRequirementsSandboxModes(
+      parseRequirementsStringArray(section, "allowed_sandbox_modes"),
+    );
+  }
+  return undefined;
+}
+
+function parseRequirementsSandboxModes(
+  values: string[] | undefined,
+): Set<CodexAppServerSandboxMode> | undefined {
+  if (values === undefined) {
+    return undefined;
+  }
+  const normalizedModes = values
+    .map((entry) => normalizeRequirementsSandboxMode(entry))
+    .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined);
+  return normalizedModes.length > 0 ? new Set(normalizedModes) : undefined;
+}
+
+function parseTopLevelRequirementsStringArray(content: string, key: string): string[] | undefined {
+  const topLevelContent = stripTomlLineComments(content).slice(0, firstTomlTableOffset(content));
+  return parseRequirementsStringArray(topLevelContent, key);
+}
+
+function parseRequirementsStringArray(content: string, key: string): string[] | undefined {
+  const match = content.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
+  if (!match) {
+    return undefined;
+  }
+  const arrayBody = match[1] ?? "";
+  const stringMatches = [...arrayBody.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'/g)];
+  if (stringMatches.length === 0 && arrayBody.trim().length > 0) {
+    return undefined;
+  }
+  return stringMatches.map((entry) => entry[1] ?? entry[2] ?? "");
+}
+
+function parseTomlArrayTableSections(content: string, table: string): string[] {
+  const strippedContent = stripTomlLineComments(content);
+  const escapedTable = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const headerPattern = new RegExp(`^\\s*\\[\\[\\s*${escapedTable}\\s*\\]\\]\\s*$`, "gm");
+  const sections: string[] = [];
+  for (
+    let match = headerPattern.exec(strippedContent);
+    match;
+    match = headerPattern.exec(strippedContent)
+  ) {
+    const sectionStart = headerPattern.lastIndex;
+    const rest = strippedContent.slice(sectionStart);
+    const nextTableOffset = rest.search(/^\s*\[/m);
+    sections.push(nextTableOffset === -1 ? rest : rest.slice(0, nextTableOffset));
+  }
+  return sections;
+}
+
+function firstTomlTableOffset(content: string): number {
+  const match = content.match(/^\s*\[[^\]\n]/m);
+  return match?.index ?? content.length;
+}
+
+function stripTomlLineComments(value: string): string {
+  let output = "";
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index] ?? "";
+    if (quote) {
+      output += char;
+      if (quote === '"' && escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote === '"' && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      output += char;
+      continue;
+    }
+    if (char === "#") {
+      while (index < value.length && value[index] !== "\n") {
+        index += 1;
+      }
+      if (value[index] === "\n") {
+        output += "\n";
+      }
+      continue;
+    }
+    output += char;
+  }
+  return output;
+}
+
+function normalizeRequirementsSandboxMode(value: string): CodexAppServerSandboxMode | undefined {
+  const compact = value.replace(/[\s_-]/g, "").toLowerCase();
+  if (compact === "readonly") {
+    return "read-only";
+  }
+  if (compact === "workspacewrite") {
+    return "workspace-write";
+  }
+  if (compact === "dangerfullaccess") {
+    return "danger-full-access";
+  }
+  return undefined;
+}
+
+function normalizeRequirementsHostName(value: string): string | undefined {
+  const normalized = value.trim().replace(/\.+$/g, "").toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function requirementsHostNameMatchesAnyPattern(hostName: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => {
+    const normalizedPattern = normalizeRequirementsHostName(pattern);
+    return normalizedPattern !== undefined && globPatternMatches(hostName, normalizedPattern);
+  });
+}
+
+function globPatternMatches(value: string, pattern: string): boolean {
+  let regex = "^";
+  for (const char of pattern) {
+    if (char === "*") {
+      regex += ".*";
+    } else if (char === "?") {
+      regex += ".";
+    } else {
+      regex += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  regex += "$";
+  return new RegExp(regex).test(value);
+}
+
+function normalizeRequirementsApprovalPolicy(
+  value: string,
+): CodexAppServerApprovalPolicy | undefined {
+  const normalized = value.trim().toLowerCase();
+  return resolveApprovalPolicy(normalized);
+}
+
+function normalizeRequirementsApprovalsReviewer(
+  value: string,
+): CodexAppServerApprovalsReviewer | undefined {
+  const normalized = value.trim().toLowerCase();
+  return resolveApprovalsReviewer(normalized);
+}
+
+function selectGuardianApprovalPolicy(
+  allowedApprovalPolicies: Set<CodexAppServerApprovalPolicy> | undefined,
+): CodexAppServerApprovalPolicy {
+  if (allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("on-request")) {
+    return "on-request";
+  }
+  if (allowedApprovalPolicies.has("on-failure")) {
+    return "on-failure";
+  }
+  if (allowedApprovalPolicies.has("untrusted")) {
+    return "untrusted";
+  }
+  if (allowedApprovalPolicies.has("never")) {
+    return "never";
+  }
+  return "on-request";
+}
+
+function selectGuardianApprovalsReviewer(
+  allowedApprovalsReviewers: Set<CodexAppServerApprovalsReviewer> | undefined,
+): CodexAppServerApprovalsReviewer {
+  if (allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("auto_review")) {
+    return "auto_review";
+  }
+  if (allowedApprovalsReviewers.has("guardian_subagent")) {
+    return "guardian_subagent";
+  }
+  if (allowedApprovalsReviewers.has("user")) {
+    return "user";
+  }
+  return "auto_review";
+}
+
+function selectGuardianSandbox(
+  allowedSandboxModes: Set<CodexAppServerSandboxMode> | undefined,
+): CodexAppServerSandboxMode {
+  if (allowedSandboxModes === undefined || allowedSandboxModes.has("workspace-write")) {
+    return "workspace-write";
+  }
+  if (allowedSandboxModes.has("read-only")) {
+    return "read-only";
+  }
+  if (allowedSandboxModes.has("danger-full-access")) {
+    return "danger-full-access";
+  }
+  return "workspace-write";
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {

@@ -696,6 +696,16 @@ export const zh_CN: TranslationMap = {
       today: "今天",
       last7d: "7天",
       last30d: "30天",
+      last90d: "90d",
+      last1y: "1y",
+      all: "全部",
+    },
+    scope: {
+      instance: "当前实例",
+      instanceHint: "仅显示每个逻辑会话的活跃会话 ID。",
+      family: "历史谱系",
+      familyHint: "汇总已知的轮换后、由转录记录支持的会话 ID。",
+      familyIncluded: "历史谱系包含 {count} 个会话实例。",
     },
     filters: {
       title: "筛选",

@@ -74,8 +74,10 @@ describe("lmstudio-models", () => {
     contextLength: number,
   ) => {
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    const loadInit = loadCall?.[1] as RequestInit;
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    const loadInit = loadCall[1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(contextLength);
   };
@@ -361,8 +363,10 @@ describe("lmstudio-models", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    expect(loadCall?.[1]).toMatchObject({
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    expect(loadCall[1]).toMatchObject({
       method: "POST",
       headers: {
         "X-Proxy-Auth": "required",

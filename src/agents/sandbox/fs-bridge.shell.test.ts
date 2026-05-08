@@ -54,7 +54,7 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const scripts = getScriptsFromCalls();
     const canonicalScript = scripts.find((script) => script.includes("allow_final"));
-    expect(canonicalScript).toBeDefined();
+    expect(canonicalScript).toContain("allow_final");
     expect(canonicalScript).not.toMatch(/\bdo;/);
     expect(canonicalScript).toMatch(/\bdo\n\s*parent=/);
   });

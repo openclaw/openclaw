@@ -331,8 +331,10 @@ describe("pw-tools-core", () => {
     });
 
     await Promise.resolve();
-    expect(responseHandler).toBeDefined();
-    responseHandler?.(resp);
+    if (!responseHandler) {
+      throw new Error("expected Playwright response handler");
+    }
+    responseHandler(resp);
 
     const res = await p;
     expect(res.url).toBe("https://example.com/api/data");

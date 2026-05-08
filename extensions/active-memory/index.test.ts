@@ -156,6 +156,17 @@ describe("active-memory plugin", () => {
     vi
       .mocked(api.logger.warn)
       .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
+  const expectPrependContextResult = (result: unknown) => {
+    expect(result).toMatchObject({
+      prependContext: expect.any(String),
+    });
+  };
+  const requireNonEmptyString = (value: unknown, message: string): string => {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(message);
+    }
+    return value;
+  };
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -931,7 +942,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    expect(result).toBeDefined();
+    expectPrependContextResult(result);
   });
 
   it("skips sessions whose conversation id is in deniedChatIds even when chat type is allowed", async () => {
@@ -1033,7 +1044,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    expect(result).toBeDefined();
+    expectPrependContextResult(result);
   });
 
   it("matches per-peer direct session keys (agent:<id>:direct:<peer>)", async () => {
@@ -1057,7 +1068,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    expect(result).toBeDefined();
+    expectPrependContextResult(result);
   });
 
   it("matches per-account-channel-peer direct session keys (agent:<id>:<channel>:<account>:direct:<peer>)", async () => {
@@ -1082,7 +1093,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    expect(result).toBeDefined();
+    expectPrependContextResult(result);
   });
 
   it("strips :thread:<id> suffix before matching allowedChatIds (group)", async () => {
@@ -1109,7 +1120,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    expect(result).toBeDefined();
+    expectPrependContextResult(result);
   });
 
   it("strips :thread:<id> suffix before matching deniedChatIds (direct)", async () => {
@@ -1630,13 +1641,13 @@ describe("active-memory plugin", () => {
     const deprecationMessage = warnCalls
       .map(([first]) => (typeof first === "string" ? first : ""))
       .find((message) => message.includes("config.modelFallbackPolicy is deprecated"));
-    expect(deprecationMessage).toBeDefined();
+    const message = requireNonEmptyString(deprecationMessage, "deprecation warning missing");
     // Positive: the warning describes chain-resolution last-resort behavior.
-    expect(deprecationMessage).toContain("chain-resolution");
-    expect(deprecationMessage).toContain("last-resort");
+    expect(message).toContain("chain-resolution");
+    expect(message).toContain("last-resort");
     // Negative: the warning explicitly disclaims runtime failover, since
     // that's the wrong mental model the previous wording invited.
-    expect(deprecationMessage).toMatch(/NOT a runtime failover/i);
+    expect(message).toMatch(/NOT a runtime failover/i);
   });
 
   it("does not use a built-in fallback model even when default-remote is configured", async () => {
@@ -1760,9 +1771,9 @@ describe("active-memory plugin", () => {
     const debugLine = entries?.[0]?.lines.find((line) =>
       line.startsWith("🔎 Active Memory Debug:"),
     );
-    expect(debugLine).toBeDefined();
-    expect(debugLine).toContain("backend=qmd");
-    expect(debugLine).toContain("hits=3");
+    const line = requireNonEmptyString(debugLine, "active memory debug line missing");
+    expect(line).toContain("backend=qmd");
+    expect(line).toContain("hits=3");
   });
 
   it("replaces stale structured active-memory lines on a later empty run", async () => {
@@ -2033,6 +2044,7 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
+    __testing.setTimeoutPartialDataGraceMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 250,
@@ -2299,9 +2311,9 @@ describe("active-memory plugin", () => {
       maxBytes: 10 * 1024 * 1024,
     });
 
-    expect(result).toBeTruthy();
-    expect(result?.length).toBeLessThanOrEqual(128);
-    expect(result).toContain("alpha beta gamma");
+    const partialText = requireNonEmptyString(result, "partial assistant text missing");
+    expect(partialText.length).toBeLessThanOrEqual(128);
+    expect(partialText).toContain("alpha beta gamma");
     expect(readFileSpy).not.toHaveBeenCalled();
   });
 
@@ -2953,9 +2965,9 @@ describe("active-memory plugin", () => {
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
     const startLine = infoLines.find((line: string) => line.includes(" start timeoutMs="));
-    expect(startLine).toBeTruthy();
-    expect(startLine && startLine.length < 500).toBe(true);
-    expect(startLine).toContain("...");
+    const line = requireNonEmptyString(startLine, "active memory start log line missing");
+    expect(line.length).toBeLessThan(500);
+    expect(line).toContain("...");
   });
 
   it("uses a canonical agent session key when only sessionId is available", async () => {

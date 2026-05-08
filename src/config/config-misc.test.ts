@@ -11,6 +11,41 @@ import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from 
 import { validateConfigObject, validateConfigObjectRaw } from "./validation.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+const nonBooleanConfigCases = [
+  {
+    name: "gateway.controlUi.allowExternalEmbedUrls",
+    config: {
+      gateway: {
+        controlUi: {
+          allowExternalEmbedUrls: "yes",
+        },
+      },
+    },
+  },
+  {
+    name: "plugins.entries.*.hooks.allowPromptInjection",
+    config: {
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowPromptInjection: "no",
+              allowConversationAccess: true,
+            },
+          },
+        },
+      },
+    },
+  },
+];
+
+describe("boolean config validation", () => {
+  it.each(nonBooleanConfigCases)("rejects non-boolean values for $name", ({ config }) => {
+    const result = OpenClawSchema.safeParse(config);
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("$schema key in config (#14998)", () => {
   it("accepts config with $schema string", () => {
     const result = OpenClawSchema.safeParse({
@@ -305,17 +340,6 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
       expect(result.success).toBe(true);
     }
   });
-
-  it("rejects non-boolean values", () => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        controlUi: {
-          allowExternalEmbedUrls: "yes",
-        },
-      },
-    });
-    expect(result.success).toBe(false);
-  });
 });
 
 describe("gateway.controlUi.chatMessageMaxWidth", () => {
@@ -414,22 +438,6 @@ describe("plugins.entries.*.hooks", () => {
       },
     });
     expect(result.success).toBe(true);
-  });
-
-  it("rejects non-boolean values", () => {
-    const result = OpenClawSchema.safeParse({
-      plugins: {
-        entries: {
-          "voice-call": {
-            hooks: {
-              allowPromptInjection: "no",
-              allowConversationAccess: true,
-            },
-          },
-        },
-      },
-    });
-    expect(result.success).toBe(false);
   });
 
   it("rejects non-boolean conversation access values", () => {
@@ -930,7 +938,7 @@ describe("config paths", () => {
 });
 
 describe("config strict validation", () => {
-  it("rejects unknown fields", async () => {
+  it("rejects unknown fields", () => {
     const res = validateConfigObject({
       agents: { list: [{ id: "pi" }] },
       customUnknownField: { nested: "value" },
@@ -1035,7 +1043,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("reports legacy messages.tts provider keys without read-time auto-migration", async () => {
+  it("reports legacy messages.tts provider keys without read-time auto-migration", () => {
     const raw = {
       messages: {
         tts: {

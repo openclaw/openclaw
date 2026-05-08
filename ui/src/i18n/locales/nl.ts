@@ -709,6 +709,16 @@ export const nl: TranslationMap = {
       today: "Vandaag",
       last7d: "7d",
       last30d: "30d",
+      last90d: "90d",
+      last1y: "1j",
+      all: "Alle",
+    },
+    scope: {
+      instance: "Huidige instantie",
+      instanceHint: "Toon alleen de actieve sessie-id voor elke logische sessie.",
+      family: "Historische afstamming",
+      familyHint: "Voeg bekende geroteerde sessie-id's met transcriptbacking samen.",
+      familyIncluded: "Historische afstamming omvat {count} sessie-instanties.",
     },
     filters: {
       title: "Filters",

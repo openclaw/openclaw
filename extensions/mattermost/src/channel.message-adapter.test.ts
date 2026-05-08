@@ -24,7 +24,9 @@ describe("mattermost channel message adapter", () => {
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
     const adapter = mattermostPlugin.message;
-    expect(adapter).toBeDefined();
+    if (!adapter) {
+      throw new Error("Expected mattermost plugin to expose a channel message adapter");
+    }
 
     const proveText = async () => {
       sendMessageMattermostMock.mockClear();

@@ -16,13 +16,10 @@ import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
+import { describeIMessageMessageTool } from "./message-tool-api.js";
 import { findLatestIMessageEntryForChat, type IMessageChatContext } from "./monitor-reply-cache.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
-import {
-  inferIMessageTargetChatType,
-  parseIMessageTarget,
-  type IMessageTarget,
-} from "./targets.js";
+import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
@@ -35,20 +32,6 @@ const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
   ...IMESSAGE_ACTION_NAMES,
   "upload-file",
 ]);
-const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
-  "react",
-  "edit",
-  "unsend",
-  "reply",
-  "sendWithEffect",
-  "renameGroup",
-  "setGroupIcon",
-  "addParticipant",
-  "removeParticipant",
-  "leaveGroup",
-  "sendAttachment",
-]);
-
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
 }
@@ -76,16 +59,6 @@ function readMessageIdWithChatFallback(
   // agent gets a clear "you must supply messageId" signal when there is
   // also no cached message to fall back to.
   return readStringParam(params, "messageId", { required: true });
-}
-
-function isGroupTarget(raw?: string | null): boolean {
-  // Defer to the canonical target classifier so action gating and the
-  // routing layer can't drift apart on edge cases (URI-encoded targets,
-  // service prefixes, etc.).
-  if (!raw) {
-    return false;
-  }
-  return inferIMessageTargetChatType(raw) === "group";
 }
 
 type IMessageActionsRuntime = Awaited<ReturnType<typeof loadIMessageActionsRuntime>>;
@@ -329,51 +302,34 @@ function effectIdFromParam(raw?: string): string | undefined {
   );
 }
 
+function assertActionEnabled(
+  action: ChannelMessageActionName,
+  actionsConfig: Record<string, boolean | undefined> | undefined,
+): void {
+  const canonicalAction = action === "upload-file" ? "sendAttachment" : action;
+  const spec = IMESSAGE_ACTIONS[canonicalAction as keyof typeof IMESSAGE_ACTIONS];
+  if (!spec?.gate || !createActionGate(actionsConfig)(spec.gate)) {
+    throw new Error(`iMessage ${action} is disabled in config.`);
+  }
+}
+
 export const imessageMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg, accountId, currentChannelId }) => {
-    const account = resolveIMessageAccount({ cfg, accountId });
-    if (!account.enabled || !account.configured) {
-      return null;
-    }
-    const privateApiStatus = getCachedIMessagePrivateApiStatus(
-      account.config.cliPath?.trim() || "imsg",
-    );
-    const gate = createActionGate(account.config.actions);
-    const actions = new Set<ChannelMessageActionName>();
-    for (const action of IMESSAGE_ACTION_NAMES) {
-      const spec = IMESSAGE_ACTIONS[action];
-      if (!spec?.gate || !gate(spec.gate)) {
-        continue;
-      }
-      if (privateApiStatus?.available === false && PRIVATE_API_ACTIONS.has(action)) {
-        continue;
-      }
-      if (
-        action === "edit" &&
-        privateApiStatus?.selectors &&
-        !privateApiStatus.selectors.editMessage &&
-        !privateApiStatus.selectors.editMessageItem
-      ) {
-        continue;
-      }
-      if (action === "unsend" && privateApiStatus?.selectors?.retractMessagePart !== true) {
-        continue;
-      }
-      actions.add(action);
-    }
-    if (!isGroupTarget(currentChannelId)) {
-      for (const action of IMESSAGE_ACTION_NAMES) {
-        if ("groupOnly" in IMESSAGE_ACTIONS[action] && IMESSAGE_ACTIONS[action].groupOnly) {
-          actions.delete(action);
-        }
-      }
-    }
-    if (actions.delete("sendAttachment")) {
-      actions.add("upload-file");
-    }
-    return { actions: Array.from(actions) };
-  },
+  describeMessageTool: describeIMessageMessageTool,
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
+  messageActionTargetAliases: {
+    react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    edit: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
+    unsend: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
+    reply: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
+    sendWithEffect: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    sendAttachment: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    "upload-file": { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    addParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    removeParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+  },
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     const runtime = await loadIMessageActionsRuntime();
@@ -381,6 +337,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId: accountId ?? undefined,
     });
+    assertActionEnabled(action, account.config.actions);
     const cliPathForProbe = account.config.cliPath?.trim() || "imsg";
     let privateApiStatus = getCachedIMessagePrivateApiStatus(cliPathForProbe);
     const assertPrivateApiEnabled = async () => {
@@ -607,7 +564,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     if (action === "sendAttachment" || action === "upload-file") {
       await assertPrivateApiEnabled();
       const filename = readStringParam(params, "filename", { required: true });
-      const asVoice = readBooleanParam(params, "asVoice");
+      const asVoice = readBooleanParam(params, "asVoice") ?? readBooleanParam(params, "as_voice");
       const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendAttachment({
         chatGuid: resolvedChatGuid,

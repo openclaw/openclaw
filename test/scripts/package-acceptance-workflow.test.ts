@@ -39,18 +39,24 @@ function readWorkflow(path: string): Workflow {
 
 function workflowJob(path: string, jobName: string): WorkflowJob {
   const job = readWorkflow(path).jobs?.[jobName];
-  expect(job, `expected workflow job ${jobName}`).toBeDefined();
-  return job!;
+  if (!job) {
+    throw new Error(`Expected workflow job ${jobName} in ${path}`);
+  }
+  return job;
 }
 
 function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   const step = job.steps?.find((candidate) => candidate.name === stepName);
-  expect(step, `expected workflow step ${stepName}`).toBeDefined();
-  return step!;
+  if (!step) {
+    throw new Error(`Expected workflow step ${stepName}`);
+  }
+  return step;
 }
 
 function expectTextToIncludeAll(text: string | undefined, snippets: string[]): void {
-  expect(text).toBeDefined();
+  if (text === undefined) {
+    throw new Error("Expected text to be defined before checking snippets");
+  }
   for (const snippet of snippets) {
     expect(text).toContain(snippet);
   }

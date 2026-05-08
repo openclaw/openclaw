@@ -72,7 +72,9 @@ describe("security audit gateway exposure findings", () => {
       const finding = findings.find(
         (entry) => entry.checkId === "config.insecure_or_dangerous_flags",
       );
-      expect(finding, testCase.name).toBeTruthy();
+      expect(finding, testCase.name).toMatchObject({
+        checkId: "config.insecure_or_dangerous_flags",
+      });
       expect(finding?.severity, testCase.name).toBe("warn");
       for (const snippet of testCase.expectedDangerousDetails) {
         expect(finding?.detail, `${testCase.name}:${snippet}`).toContain(snippet);

@@ -58,7 +58,9 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       await fs.symlink(outsideDir, linkDir);
 
       createHostWorkspaceEditTool(workspaceDir, { workspaceOnly: true });
-      expect(mocks.operations).toBeDefined();
+      if (mocks.operations === undefined) {
+        throw new Error("expected host edit operations mock");
+      }
 
       // access must NOT throw for outside-workspace paths; the upstream
       // library replaces any access error with a misleading "File not found".

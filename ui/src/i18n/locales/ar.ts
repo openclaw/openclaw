@@ -699,6 +699,16 @@ export const ar: TranslationMap = {
       today: "اليوم",
       last7d: "7 أيام",
       last30d: "30 يومًا",
+      last90d: "90d",
+      last1y: "1y",
+      all: "الكل",
+    },
+    scope: {
+      instance: "المثيل الحالي",
+      instanceHint: "اعرض فقط معرّف الجلسة النشطة لكل جلسة منطقية.",
+      family: "السلالة التاريخية",
+      familyHint: "اجمع معرّفات الجلسات المعروفة والمدعومة بالنصوص المنسوخة التي تم تدويرها.",
+      familyIncluded: "تتضمن السلالة التاريخية {count} من مثيلات الجلسات.",
     },
     filters: {
       title: "عوامل التصفية",
