@@ -1481,7 +1481,7 @@ describe("config io write", () => {
         channels: {
           discord: {
             dm: { policy: "pairing" } as Record<string, unknown>,
-          } as unknown as OpenClawConfig["channels"]["discord"],
+          } as unknown as NonNullable<OpenClawConfig["channels"]>["discord"],
         },
       };
       await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf-8");
@@ -1492,7 +1492,7 @@ describe("config io write", () => {
         channels: {
           discord: {
             dm: { policy: "pairing" } as Record<string, unknown>,
-          } as unknown as OpenClawConfig["channels"]["discord"],
+          } as unknown as NonNullable<OpenClawConfig["channels"]>["discord"],
         },
       };
 
