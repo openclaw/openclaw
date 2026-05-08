@@ -23,7 +23,6 @@ function requireMediaProvider(
   providerId: string,
 ): MediaUnderstandingProvider {
   const provider = getMediaUnderstandingProvider(providerId, registry);
-  expect(provider).toBeDefined();
   if (!provider) {
     throw new Error(`expected media-understanding provider ${providerId}`);
   }

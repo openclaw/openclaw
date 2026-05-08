@@ -69,14 +69,11 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 3000, totalTokens: 300, cost: 0.3 }),
     ];
     const result = computeFilteredUsage(baseUsage, points, 1000, 2000);
-    expect(result).toMatchObject({
+    const filtered = expectFilteredUsage(result);
+    expect(filtered).toMatchObject({
       totalTokens: 300, // 100 + 200
     });
-    expect(result).toBeDefined();
-    if (!result) {
-      throw new Error("expected filtered usage aggregate");
-    }
-    expect(result.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
+    expect(filtered.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
   });
 
   it("handles reversed range (end < start)", () => {
