@@ -13,37 +13,13 @@ import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
-
-type ToolDefinitionAdapterModule = typeof import("./pi-tool-definition-adapter.js");
-type PiToolsAbortModule = typeof import("./pi-tools.abort.js");
-type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
-
-type ToClientToolDefinitions = ToolDefinitionAdapterModule["toClientToolDefinitions"];
-type ToToolDefinitions = ToolDefinitionAdapterModule["toToolDefinitions"];
-type WrapToolWithAbortSignal = PiToolsAbortModule["wrapToolWithAbortSignal"];
-type BeforeToolCallTesting = BeforeToolCallModule["__testing"];
-type ConsumeAdjustedParamsForToolCall = BeforeToolCallModule["consumeAdjustedParamsForToolCall"];
-type WrapToolWithBeforeToolCallHook = BeforeToolCallModule["wrapToolWithBeforeToolCallHook"];
-
-let toClientToolDefinitions!: ToClientToolDefinitions;
-let toToolDefinitions!: ToToolDefinitions;
-let wrapToolWithAbortSignal!: WrapToolWithAbortSignal;
-let beforeToolCallTesting!: BeforeToolCallTesting;
-let consumeAdjustedParamsForToolCall!: ConsumeAdjustedParamsForToolCall;
-let wrapToolWithBeforeToolCallHook!: WrapToolWithBeforeToolCallHook;
-
-beforeEach(async () => {
-  if (!wrapToolWithBeforeToolCallHook) {
-    ({ toClientToolDefinitions, toToolDefinitions } =
-      await import("./pi-tool-definition-adapter.js"));
-    ({ wrapToolWithAbortSignal } = await import("./pi-tools.abort.js"));
-    ({
-      __testing: beforeToolCallTesting,
-      consumeAdjustedParamsForToolCall,
-      wrapToolWithBeforeToolCallHook,
-    } = await import("./pi-tools.before-tool-call.js"));
-  }
-});
+import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import {
+  __testing as beforeToolCallTesting,
+  consumeAdjustedParamsForToolCall,
+  wrapToolWithBeforeToolCallHook,
+} from "./pi-tools.before-tool-call.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
