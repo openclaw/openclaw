@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
@@ -87,6 +88,35 @@ describe("TranscriptSessionManager", () => {
         type: "session",
         version: 3,
         id: "session-1",
+        cwd: "/tmp/workspace",
+      },
+    ]);
+  });
+
+  it("opens virtual sqlite transcript locators without resolving them as filesystem paths", async () => {
+    await makeTempSessionFile();
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "virtual-session",
+    });
+
+    const sessionManager = openTranscriptSessionManager({
+      sessionFile,
+      sessionId: "virtual-session",
+      cwd: "/tmp/workspace",
+    });
+
+    expect(sessionManager.getSessionFile()).toBe(sessionFile);
+    expect(
+      resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile }),
+    ).toMatchObject({
+      agentId: "main",
+      sessionId: "virtual-session",
+    });
+    expect(readSessionEntries(sessionFile)).toMatchObject([
+      {
+        type: "session",
+        id: "virtual-session",
         cwd: "/tmp/workspace",
       },
     ]);

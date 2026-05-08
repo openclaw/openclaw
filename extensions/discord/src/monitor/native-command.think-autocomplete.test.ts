@@ -223,6 +223,7 @@ describe("discord native /think autocomplete", () => {
       agentId: "main",
       sessionKey: SESSION_KEY,
       entry: {
+        sessionId: "think-dm",
         updatedAt: Date.now(),
         providerOverride: "openai-codex",
         modelOverride: "gpt-5.4",
@@ -322,6 +323,7 @@ describe("discord native /think autocomplete", () => {
       agentId: "main",
       sessionKey: SESSION_KEY,
       entry: {
+        sessionId: "think-guild",
         updatedAt: Date.now(),
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-7",
