@@ -47,12 +47,12 @@ async function createCompactionSessionFixture(entry: SessionEntry) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
   tempDirs.push(tmp);
   vi.stubEnv("OPENCLAW_STATE_DIR", tmp);
-  const storePath = path.join(tmp, "agents", "main", "sessions", "sessions.json");
+  const sessionsDir = path.join(tmp, "agents", "main", "sessions");
   const sessionKey = "main";
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.mkdir(sessionsDir, { recursive: true });
   await seedMainAgentSessionRow({ sessionKey, entry });
-  return { storePath, sessionKey, sessionStore };
+  return { sessionsDir, sessionKey, sessionStore };
 }
 
 async function rotateCompactionSessionFile(params: {
@@ -63,9 +63,8 @@ async function rotateCompactionSessionFile(params: {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
   tempDirs.push(tmp);
   vi.stubEnv("OPENCLAW_STATE_DIR", tmp);
-  const storePath = path.join(tmp, "agents", "main", "sessions", "sessions.json");
+  const sessionsDir = path.join(tmp, "agents", "main", "sessions");
   const sessionKey = "main";
-  const sessionsDir = path.dirname(storePath);
   await fs.mkdir(sessionsDir, { recursive: true });
   const entry = {
     sessionId: "s1",
@@ -439,7 +438,7 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
 describe("incrementCompactionCount", () => {
   it("increments compaction count", async () => {
     const entry = { sessionId: "s1", updatedAt: Date.now(), compactionCount: 2 } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     const count = await incrementCompactionCount({
       sessionEntry: entry,
@@ -461,7 +460,7 @@ describe("incrementCompactionCount", () => {
       inputTokens: 170_000,
       outputTokens: 10_000,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -485,7 +484,7 @@ describe("incrementCompactionCount", () => {
       compactionCount: 0,
       totalTokens: 180_000,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementRunCompactionCount({
       sessionEntry: entry,
@@ -512,7 +511,7 @@ describe("incrementCompactionCount", () => {
       compactionCount: 0,
       totalTokens: 180_000,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementRunCompactionCount({
       sessionEntry: entry,
@@ -540,7 +539,7 @@ describe("incrementCompactionCount", () => {
       totalTokens: 180_000,
       totalTokensFresh: true,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -589,7 +588,7 @@ describe("incrementCompactionCount", () => {
 
   it("increments compaction count by an explicit amount", async () => {
     const entry = { sessionId: "s1", updatedAt: Date.now(), compactionCount: 2 } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     const count = await incrementCompactionCount({
       sessionEntry: entry,
@@ -610,7 +609,7 @@ describe("incrementCompactionCount", () => {
       updatedAt: Date.now(),
       compactionCount: 1,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { sessionsDir, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -620,7 +619,7 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = readStoredMainAgentSessionRows();
-    const expectedSessionDir = await fs.realpath(path.dirname(storePath));
+    const expectedSessionDir = await fs.realpath(sessionsDir);
     expect(stored[sessionKey].sessionId).toBe("new-session-id");
     expect(stored[sessionKey].sessionFile).toBe(
       path.join(expectedSessionDir, "new-session-id.jsonl"),
@@ -635,7 +634,7 @@ describe("incrementCompactionCount", () => {
       updatedAt: Date.now(),
       compactionCount: 0,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -657,8 +656,8 @@ describe("incrementCompactionCount", () => {
       updatedAt: Date.now(),
       compactionCount: 0,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
-    const rotatedSessionFile = path.join(path.dirname(storePath), "rotated-same-id.jsonl");
+    const { sessionsDir, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const rotatedSessionFile = path.join(sessionsDir, "rotated-same-id.jsonl");
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -681,7 +680,7 @@ describe("incrementCompactionCount", () => {
       compactionCount: 0,
       totalTokens: 180_000,
     } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const { sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,
