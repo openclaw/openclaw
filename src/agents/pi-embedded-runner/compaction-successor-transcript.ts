@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import {
   createSqliteSessionTranscriptLocator,
   isSqliteSessionTranscriptLocator,
@@ -52,6 +51,9 @@ export async function rotateTranscriptAfterCompaction(params: {
   if (!sessionFile) {
     return { rotated: false, reason: "missing session file" };
   }
+  if (!isSqliteSessionTranscriptLocator(sessionFile)) {
+    return { rotated: false, reason: "transcript not in SQLite" };
+  }
 
   const branch = params.sessionManager.getBranch();
   const latestCompactionIndex = findLatestCompactionIndex(branch);
@@ -62,10 +64,14 @@ export async function rotateTranscriptAfterCompaction(params: {
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
   const timestamp = (params.now?.() ?? new Date()).toISOString();
   const sessionId = randomUUID();
+  const sourceScope = resolveSourceTranscriptScope({
+    agentId: params.agentId,
+    transcriptPath: sessionFile,
+  });
   const successorTranscriptPath = resolveSuccessorTranscriptPath({
     transcriptPath: sessionFile,
     sessionId,
-    timestamp,
+    agentId: sourceScope.agentId,
   });
   const successorEntries = buildSuccessorEntries({
     allEntries: params.sessionManager.getEntries(),
@@ -82,10 +88,6 @@ export async function rotateTranscriptAfterCompaction(params: {
     timestamp,
     cwd: params.sessionManager.getCwd(),
     parentSession: sessionFile,
-  });
-  const sourceScope = resolveSourceTranscriptScope({
-    agentId: params.agentId,
-    transcriptPath: sessionFile,
   });
   replaceSqliteSessionTranscriptEvents({
     agentId: sourceScope.agentId,
@@ -360,20 +362,13 @@ function buildSuccessorHeader(params: {
 function resolveSuccessorTranscriptPath(params: {
   transcriptPath: string;
   sessionId: string;
-  timestamp: string;
+  agentId: string;
 }): string {
-  if (isSqliteSessionTranscriptLocator(params.transcriptPath)) {
-    const existing = resolveSqliteSessionTranscriptScopeForPath({
-      transcriptPath: params.transcriptPath,
-    });
-    return createSqliteSessionTranscriptLocator({
-      agentId: existing?.agentId,
-      sessionId: params.sessionId,
-    });
-  }
-  const fileTimestamp = params.timestamp.replace(/[:.]/g, "-");
-  return path.join(
-    path.dirname(params.transcriptPath),
-    `${fileTimestamp}_${params.sessionId}.jsonl`,
-  );
+  const existing = resolveSqliteSessionTranscriptScopeForPath({
+    transcriptPath: params.transcriptPath,
+  });
+  return createSqliteSessionTranscriptLocator({
+    agentId: params.agentId || existing?.agentId || DEFAULT_AGENT_ID,
+    sessionId: params.sessionId,
+  });
 }
