@@ -28,6 +28,7 @@ import {
   resolveDmGroupAccessWithLists,
   evaluateSupplementalContextVisibility,
 } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
@@ -150,6 +151,10 @@ type IMessageInboundDispatchDecision = {
   // Used for allowlist checks for control commands.
   effectiveDmAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
+  // Forwarded as ctxPayload.GroupSystemPrompt for group messages. Resolved
+  // from `channels.imessage.groups.<chat_id>.systemPrompt` (or the `"*"`
+  // wildcard) at gate time. Always undefined for DMs.
+  groupSystemPrompt?: string;
 };
 
 type IMessageInboundDecision =
@@ -526,6 +531,19 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "no mention" };
   }
 
+  // Per-chat_id `systemPrompt` wins; fall back to the `groups["*"]` wildcard
+  // entry when the matched group has no explicit prompt. Mirrors the per-group
+  // systemPrompt pattern already supported by Telegram, IRC, Discord, Slack,
+  // GoogleChat, and the retired BlueBubbles channel.
+  const groupSystemPrompt = isGroup
+    ? (normalizeOptionalString(
+        (groupListPolicy.groupConfig as { systemPrompt?: unknown } | undefined)?.systemPrompt,
+      ) ??
+      normalizeOptionalString(
+        (groupListPolicy.defaultConfig as { systemPrompt?: unknown } | undefined)?.systemPrompt,
+      ))
+    : undefined;
+
   return {
     kind: "dispatch",
     isGroup,
@@ -544,6 +562,7 @@ export function resolveIMessageInboundDecision(params: {
     commandAuthorized,
     effectiveDmAllowFrom,
     effectiveGroupAllowFrom,
+    groupSystemPrompt,
   };
 }
 
@@ -665,6 +684,7 @@ export function buildIMessageInboundContext(params: {
     ChatType: decision.isGroup ? "group" : "direct",
     ConversationLabel: fromLabel,
     GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
+    GroupSystemPrompt: decision.isGroup ? decision.groupSystemPrompt : undefined,
     GroupMembers: decision.isGroup
       ? (params.message.participants ?? []).filter(Boolean).join(", ")
       : undefined,
