@@ -231,9 +231,11 @@ Internal hooks can intercept this step via `agent:bootstrap` to mutate or replac
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).
 
 Workspace [capability descriptors](/concepts/workspace-capabilities) under
-`capabilities/*.md` are not part of the fixed bootstrap set by default. Link
-important descriptors from `TOOLS.md` or use an intentional bootstrap/prompt hook
-when the workspace needs agents to discover those local procedures.
+`capabilities/*.md` are not part of the fixed bootstrap set by default. To make these
+descriptors discoverable without bloating the context window, follow the **Discovery Convention**:
+keep a concise `capabilities/index.md` that lists available local procedures and link
+it from `TOOLS.md` or `AGENTS.md`. Agents are instructed to check this index before
+assuming a local task is unsupported.
 
 If you want to make the agent sound less generic, start with
 [SOUL.md Personality Guide](/concepts/soul).

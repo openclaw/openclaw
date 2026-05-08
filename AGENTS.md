@@ -8,6 +8,7 @@ Skills own workflows; root owns hard policy and routing.
 - Repo: `https://github.com/openclaw/openclaw`
 - Replies: repo-root refs only: `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
 - Docs/user-visible work: `pnpm docs:list`, then read relevant docs only.
+- Capability Discovery: Check `capabilities/index.md` for local workspace integrations (Bridge, Mail, CAD, etc.) before concluding a task is unsupported.
 - Fix/triage answers need source, tests, current/shipped behavior, and dependency contract proof.
 - Reviews/answers: high confidence required. Default to exhaustive relevant codebase search/read, including owners, callers, siblings, tests, docs, and upstream/dependency contracts before verdict. Diff-only review is insufficient.
 - Review default: read the whole changed function/module plus callers, callees, sibling implementations, adjacent tests, scoped docs, and dependency/Codex contracts before saying `good`, `bad`, `best fix`, `proof sufficient`, or posting a comment. If challenged, keep reading first; do not defend the earlier verdict until the missing path is checked.
