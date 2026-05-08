@@ -754,7 +754,9 @@ describe("searchMemoryWiki", () => {
       "sessions/child-session.jsonl",
       "MEMORY.md",
     ]);
-    expect(results.some((result) => result.path.includes("sibling-session"))).toBe(false);
+    expect(results.map((result) => result.path)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("sibling-session")]),
+    );
   });
 
   it("filters session memory hits for session-bound non-sandboxed callers", async () => {
@@ -808,7 +810,9 @@ describe("searchMemoryWiki", () => {
       "sessions/child-session.jsonl",
       "MEMORY.md",
     ]);
-    expect(results.some((result) => result.path.includes("sibling-session"))).toBe(false);
+    expect(results.map((result) => result.path)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("sibling-session")]),
+    );
   });
 
   it("requires appConfig for session-bound shared memory searches", async () => {
