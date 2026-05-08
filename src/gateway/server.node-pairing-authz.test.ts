@@ -136,12 +136,13 @@ async function expectRePairingRequest(params: {
       deviceIdentity: pairedNode.identity,
       commands: params.reconnectCommands,
     });
+    const connectedControlWs = controlWs;
 
     let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
     await vi.waitFor(async () => {
       const list = await rpcReq<{
         nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-      }>(controlWs, "node.list", {});
+      }>(connectedControlWs, "node.list", {});
       lastNodes = list.payload?.nodes ?? [];
       const node = lastNodes.find(
         (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
