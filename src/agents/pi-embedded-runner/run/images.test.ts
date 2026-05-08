@@ -80,7 +80,7 @@ describe("detectImageReferences", () => {
       1,
     );
 
-    expect(refs.some((r) => r.type === "path")).toBe(true);
+    expect(refs.map((ref) => ref.type)).toContain("path");
   });
 
   it("does not leak parser state between calls", () => {
@@ -267,8 +267,7 @@ describe("loadImageFromRef", () => {
         },
       );
 
-      expect(image).not.toBeNull();
-      expect(image?.type).toBe("image");
+      expect(image).toMatchObject({ type: "image" });
       expect(image?.data.length).toBeGreaterThan(0);
     } finally {
       await fs.rm(sandboxParent, { recursive: true, force: true });
@@ -310,7 +309,7 @@ describe("detectAndLoadPromptImages", () => {
     expect(result.detectedRefs).toHaveLength(0);
   });
 
-  it("preserves attachment order when offloaded refs and inline images are mixed", async () => {
+  it("preserves attachment order when offloaded refs and inline images are mixed", () => {
     const merged = mergePromptAttachmentImages({
       imageOrder: ["offloaded", "inline"],
       existingImages: [{ type: "image", data: "small-b", mimeType: "image/png" }],

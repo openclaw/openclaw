@@ -97,22 +97,20 @@ export async function handleAssistantFailover(params: {
   };
 
   if (decision.action === "rotate_profile") {
-    if (params.lastProfileId) {
-      const reason = params.timedOut ? "timeout" : params.assistantProfileFailureReason;
-      await params.maybeMarkAuthProfileFailure({
-        profileId: params.lastProfileId,
-        reason,
-        modelId: params.modelId,
-      });
-      if (params.timedOut && !params.isProbeSession) {
-        params.warn(`Profile ${params.lastProfileId} timed out. Trying next account...`);
+    const failedProfileId = params.lastProfileId;
+    const failureReason = params.timedOut ? "timeout" : params.assistantProfileFailureReason;
+    const markFailedProfile = () => {
+      if (!failedProfileId || !failureReason || failureReason === "timeout") {
+        return;
       }
-      if (params.cloudCodeAssistFormatError) {
-        params.warn(
-          `Profile ${params.lastProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
-        );
-      }
-    }
+      params
+        .maybeMarkAuthProfileFailure({
+          profileId: failedProfileId,
+          reason: failureReason,
+          modelId: params.modelId,
+        })
+        .catch((err) => params.warn(`deferred profile failure mark failed: ${String(err)}`));
+    };
 
     if (params.failoverReason === "overloaded") {
       overloadProfileRotations += 1;
@@ -124,6 +122,7 @@ export async function handleAssistantFailover(params: {
         params.warn(
           `overload profile rotation cap reached for ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
         );
+        markFailedProfile();
         params.logAssistantFailoverDecision("fallback_model", { status });
         return {
           action: "throw",
@@ -152,6 +151,15 @@ export async function handleAssistantFailover(params: {
     }
 
     const rotated = await params.advanceAuthProfile();
+    markFailedProfile();
+    if (params.timedOut && !params.isProbeSession && failedProfileId) {
+      params.warn(`Profile ${failedProfileId} timed out. Trying next account...`);
+    }
+    if (params.cloudCodeAssistFormatError && failedProfileId) {
+      params.warn(
+        `Profile ${failedProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
+      );
+    }
     if (rotated) {
       params.logAssistantFailoverDecision("rotate_profile");
       await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
@@ -189,6 +197,10 @@ export async function handleAssistantFailover(params: {
     const status =
       resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
     params.logAssistantFailoverDecision("fallback_model", { status });
+    const shouldSuspend =
+      Boolean(params.sessionKey) &&
+      (decision.reason === "rate_limit" || decision.reason === "billing");
+
     return {
       action: "throw",
       overloadProfileRotations,
@@ -199,6 +211,7 @@ export async function handleAssistantFailover(params: {
         profileId: params.lastProfileId,
         status,
         rawError: params.lastAssistant?.errorMessage?.trim(),
+        suspend: shouldSuspend,
       }),
     };
   }
@@ -230,6 +243,9 @@ export async function handleAssistantFailover(params: {
       const reason = resolveSurfaceErrorReason(decision.reason, params);
       const status =
         resolveFailoverStatus(reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
+      const shouldSuspend =
+        Boolean(params.sessionKey) && (reason === "rate_limit" || reason === "billing");
+
       return {
         action: "throw",
         overloadProfileRotations,
@@ -240,6 +256,7 @@ export async function handleAssistantFailover(params: {
           profileId: params.lastProfileId,
           status,
           rawError: params.lastAssistant?.errorMessage?.trim(),
+          suspend: shouldSuspend,
         }),
       };
     }

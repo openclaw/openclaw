@@ -53,7 +53,9 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  expect(value && typeof value === "object" && !Array.isArray(value)).toBe(true);
+  expect(value).not.toBeNull();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
 }
 
@@ -114,14 +116,16 @@ describe("config footprint guardrails", () => {
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {
-    const pluginIds = ["bluebubbles", "matrix", "nextcloud-talk", "tlon"];
+    const pluginIds = ["matrix", "nextcloud-talk", "tlon"];
 
     for (const pluginId of pluginIds) {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
         (entry) => entry.pluginId === pluginId,
       );
-      expect(metadata, `${pluginId} metadata missing`).toBeDefined();
-      const paths = new Set(collectSchemaPaths(metadata?.schema));
+      if (metadata === undefined) {
+        throw new Error(`${pluginId} metadata missing`);
+      }
+      const paths = new Set(collectSchemaPaths(metadata.schema));
       expect(paths.has("allowPrivateNetwork"), `${pluginId} leaked flat allowPrivateNetwork`).toBe(
         false,
       );

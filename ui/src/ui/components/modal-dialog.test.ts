@@ -112,21 +112,24 @@ describe("openclaw-modal-dialog", () => {
     const { dialog } = await renderModal();
     const first = container.querySelector<HTMLButtonElement>("#first-action");
     const last = container.querySelector<HTMLButtonElement>("#last-action");
-    expect(first).not.toBeNull();
-    expect(last).not.toBeNull();
+    expect(first?.id).toBe("first-action");
+    expect(last?.id).toBe("last-action");
+    if (!first || !last) {
+      throw new Error("expected modal focus trap actions");
+    }
 
-    last!.focus();
+    last.focus();
     const tab = new KeyboardEvent("keydown", {
       key: "Tab",
       bubbles: true,
       cancelable: true,
       composed: true,
     });
-    last!.dispatchEvent(tab);
+    last.dispatchEvent(tab);
     expect(tab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(first);
 
-    first!.focus();
+    first.focus();
     const shiftTab = new KeyboardEvent("keydown", {
       key: "Tab",
       shiftKey: true,
@@ -134,7 +137,7 @@ describe("openclaw-modal-dialog", () => {
       cancelable: true,
       composed: true,
     });
-    first!.dispatchEvent(shiftTab);
+    first.dispatchEvent(shiftTab);
     expect(shiftTab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(last);
     expect(dialog.open).toBe(true);

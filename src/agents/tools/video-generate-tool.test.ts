@@ -309,7 +309,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }
@@ -549,8 +549,10 @@ describe("createVideoGenerateTool", () => {
         taskId: "task-123",
       },
     });
-    expect(typeof scheduledWork).toBe("function");
-    await scheduledWork?.();
+    if (!scheduledWork) {
+      throw new Error("expected scheduled video generation work");
+    }
+    await scheduledWork();
     expect(saveSpy).not.toHaveBeenCalled();
     expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -587,7 +589,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }

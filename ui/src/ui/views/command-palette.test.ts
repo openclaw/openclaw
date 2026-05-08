@@ -141,31 +141,27 @@ describe("command palette", () => {
     await renderPalette({ query: "overview", activeIndex: 0 });
 
     const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
-    expect(dialog).not.toBeNull();
-    expect(dialog!.open).toBe(true);
-    expect(dialog!.hasAttribute("role")).toBe(false);
-    expect(dialog!.hasAttribute("aria-modal")).toBe(false);
-    expect(dialog!.getAttribute("aria-labelledby")).toBe("cmd-palette-label");
+    expect(dialog?.open).toBe(true);
+    expect(dialog?.hasAttribute("role")).toBe(false);
+    expect(dialog?.hasAttribute("aria-modal")).toBe(false);
+    expect(dialog?.getAttribute("aria-labelledby")).toBe("cmd-palette-label");
 
     const label = container.querySelector<HTMLLabelElement>("#cmd-palette-label");
     const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
     const listbox = container.querySelector<HTMLElement>("#cmd-palette-listbox");
     expect(label?.textContent).toBe("Type a command…");
     expect(label?.getAttribute("for")).toBe("cmd-palette-input");
-    expect(input).not.toBeNull();
-    expect(input!.getAttribute("role")).toBe("combobox");
-    expect(input!.getAttribute("aria-autocomplete")).toBe("list");
-    expect(input!.getAttribute("aria-expanded")).toBe("true");
-    expect(input!.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(input!.getAttribute("aria-activedescendant")).toBe("cmd-palette-option-nav-overview");
+    expect(input?.getAttribute("role")).toBe("combobox");
+    expect(input?.getAttribute("aria-autocomplete")).toBe("list");
+    expect(input?.getAttribute("aria-expanded")).toBe("true");
+    expect(input?.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+    expect(input?.getAttribute("aria-activedescendant")).toBe("cmd-palette-option-nav-overview");
     expect(document.activeElement).toBe(input);
 
-    expect(listbox).not.toBeNull();
-    expect(listbox!.getAttribute("role")).toBe("listbox");
-    const option = listbox!.querySelector<HTMLElement>("#cmd-palette-option-nav-overview");
-    expect(option).not.toBeNull();
-    expect(option!.getAttribute("role")).toBe("option");
-    expect(option!.getAttribute("aria-selected")).toBe("true");
+    expect(listbox?.getAttribute("role")).toBe("listbox");
+    const option = listbox?.querySelector<HTMLElement>("#cmd-palette-option-nav-overview");
+    expect(option?.getAttribute("role")).toBe("option");
+    expect(option?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("traps Tab on the combobox and restores focus on Escape", async () => {
@@ -177,7 +173,6 @@ describe("command palette", () => {
 
     await renderPalette({ onToggle });
     const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
-    expect(input).not.toBeNull();
     expect(document.activeElement).toBe(input);
 
     const tab = new KeyboardEvent("keydown", {
@@ -185,7 +180,7 @@ describe("command palette", () => {
       bubbles: true,
       cancelable: true,
     });
-    input!.dispatchEvent(tab);
+    input?.dispatchEvent(tab);
     expect(tab.defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(input);
 
@@ -194,7 +189,7 @@ describe("command palette", () => {
       bubbles: true,
       cancelable: true,
     });
-    input!.dispatchEvent(escape);
+    input?.dispatchEvent(escape);
     expect(escape.defaultPrevented).toBe(true);
     expect(onToggle).toHaveBeenCalledTimes(1);
 
@@ -208,17 +203,17 @@ describe("command palette", () => {
     await renderPalette({ onToggle });
     const dialog = container.querySelector<HTMLDialogElement>("dialog.cmd-palette-overlay");
     const input = container.querySelector<HTMLInputElement>("#cmd-palette-input");
-    expect(dialog).not.toBeNull();
-    expect(input).not.toBeNull();
+    expect(dialog?.open).toBe(true);
+    expect(input?.id).toBe("cmd-palette-input");
 
-    input!.dispatchEvent(
+    input?.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Escape",
         bubbles: true,
         cancelable: true,
       }),
     );
-    dialog!.dispatchEvent(new Event("cancel", { cancelable: true }));
+    dialog?.dispatchEvent(new Event("cancel", { cancelable: true }));
 
     expect(onToggle).toHaveBeenCalledTimes(1);
   });

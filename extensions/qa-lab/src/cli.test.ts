@@ -126,8 +126,10 @@ describe("qa cli registration", () => {
 
   it("registers discovered and built-in live transport subcommands", () => {
     const qa = program.commands.find((command) => command.name() === "qa");
-    expect(qa).toBeDefined();
-    expect(qa?.commands.map((command) => command.name())).toEqual(
+    if (!qa) {
+      throw new Error("expected qa command");
+    }
+    expect(qa.commands.map((command) => command.name())).toEqual(
       expect.arrayContaining([
         TEST_QA_RUNNER.commandName,
         "telegram",
@@ -382,7 +384,7 @@ describe("qa cli registration", () => {
     const optionNames = telegram?.options.map((option) => option.long) ?? [];
 
     expect(optionNames).toEqual(
-      expect.arrayContaining(["--credential-source", "--credential-role"]),
+      expect.arrayContaining(["--credential-source", "--credential-role", "--list-scenarios"]),
     );
   });
 
@@ -432,10 +434,21 @@ describe("qa cli registration", () => {
       fastMode: false,
       allowFailures: false,
       scenarioIds: [],
+      listScenarios: false,
       sutAccountId: "sut",
       credentialSource: undefined,
       credentialRole: undefined,
     });
+  });
+
+  it("forwards --list-scenarios for telegram runs", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "telegram", "--list-scenarios"]);
+
+    expect(runQaTelegramCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listScenarios: true,
+      }),
+    );
   });
 
   it("forwards --allow-failures for telegram runs", async () => {

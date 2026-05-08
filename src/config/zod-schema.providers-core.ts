@@ -540,10 +540,27 @@ const DiscordVoiceAutoJoinSchema = z
   })
   .strict();
 
+const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
+const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
+const DiscordVoiceRealtimeSchema = z
+  .object({
+    provider: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    voice: z.string().min(1).optional(),
+    instructions: z.string().min(1).optional(),
+    toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
+    consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
+    debounceMs: z.number().int().positive().max(10_000).optional(),
+    providers: z.record(z.string(), z.record(z.string(), z.unknown()).optional()).optional(),
+  })
+  .strict();
+
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
+    mode: z.enum(["stt-tts", "talk-buffer", "bidi"]).optional(),
     model: z.string().min(1).optional(),
+    realtime: DiscordVoiceRealtimeSchema.optional(),
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),
@@ -1350,6 +1367,23 @@ export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   }
 });
 
+const IMessageActionSchema = z
+  .object({
+    reactions: z.boolean().optional(),
+    edit: z.boolean().optional(),
+    unsend: z.boolean().optional(),
+    reply: z.boolean().optional(),
+    sendWithEffect: z.boolean().optional(),
+    renameGroup: z.boolean().optional(),
+    setGroupIcon: z.boolean().optional(),
+    addParticipant: z.boolean().optional(),
+    removeParticipant: z.boolean().optional(),
+    leaveGroup: z.boolean().optional(),
+    sendAttachment: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const IMessageAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -1363,6 +1397,7 @@ export const IMessageAccountSchemaBase = z
       .string()
       .refine(isSafeScpRemoteHost, "expected SSH host or user@host (no spaces/options)")
       .optional(),
+    actions: IMessageActionSchema,
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
@@ -1382,10 +1417,13 @@ export const IMessageAccountSchemaBase = z
       .array(z.string().refine(isValidInboundPathRootPattern, "expected absolute path root"))
       .optional(),
     mediaMaxMb: z.number().int().positive().optional(),
+    probeTimeoutMs: z.number().int().positive().optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    sendReadReceipts: z.boolean().optional(),
+    coalesceSameSenderDms: z.boolean().optional(),
     groups: z
       .record(
         z.string(),

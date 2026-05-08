@@ -428,7 +428,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "ubuntu",
       "windows",
     ]);
-    expect(matrix.include.every((entry) => entry.suite === "packaged-fresh")).toBe(true);
+    expect(matrix.include.map((entry) => entry.suite)).toEqual([
+      "packaged-fresh",
+      "packaged-fresh",
+      "packaged-fresh",
+    ]);
   });
 
   it("rejects unsupported cross-OS suite filter tokens", () => {
@@ -985,7 +989,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("accepts a git main dev-channel update status payload", () => {
-    expect(() =>
+    expect(
       verifyDevUpdateStatus(
         JSON.stringify({
           update: {
@@ -999,11 +1003,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           },
         }),
       ),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("accepts a git dev-channel payload for a requested non-main branch", () => {
-    expect(() =>
+    expect(
       verifyDevUpdateStatus(
         JSON.stringify({
           update: {
@@ -1019,11 +1023,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         }),
         { ref: "codex/cross-os-release-checks-full-native-e2e" },
       ),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("accepts a git dev-channel payload pinned to a prepared source sha", () => {
-    expect(() =>
+    expect(
       verifyDevUpdateStatus(
         JSON.stringify({
           update: {
@@ -1039,11 +1043,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         }),
         { ref: "08753a1d793c040b101c8a26c43445dbbab14995" },
       ),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("accepts uppercase requested commit shas when update status reports lowercase", () => {
-    expect(() =>
+    expect(
       verifyDevUpdateStatus(
         JSON.stringify({
           update: {
@@ -1058,7 +1062,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         }),
         { ref: "08753A1D793C040B101C8A26C43445DBBAB14995" },
       ),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("rejects update status payloads that are not on dev/main git", () => {

@@ -383,7 +383,9 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    expect(container.querySelector(".md-preview-dialog__reader.sidebar-markdown")).not.toBeNull();
+    expect(container.querySelectorAll(".md-preview-dialog__reader.sidebar-markdown")).toHaveLength(
+      1,
+    );
     expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
       "USER.md",
     );

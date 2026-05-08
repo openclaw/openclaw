@@ -487,7 +487,9 @@ describe("dreaming view", () => {
     const labels = [...container.querySelectorAll(".dreams-diary__day-chip")].map((node) =>
       node.textContent?.replace(/\s+/g, "").trim(),
     );
-    expect(labels.filter(Boolean).some((label) => /^\d+\/\d+$/.test(label ?? ""))).toBe(true);
+    expect(labels.filter((label): label is string => Boolean(label))).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^\d+\/\d+$/)]),
+    );
     setDreamSubTab("scene");
   });
 
@@ -495,7 +497,7 @@ describe("dreaming view", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("dreams");
     const emptyContainer = renderInto(buildProps({ dreamDiaryContent: null }));
-    expect(emptyContainer.querySelector(".dreams-diary__empty")).not.toBeNull();
+    expect(emptyContainer.querySelectorAll(".dreams-diary__empty")).toHaveLength(1);
     expect(emptyContainer.querySelector(".dreams-diary__empty-text")?.textContent).toContain(
       "No dreams yet",
     );

@@ -212,6 +212,14 @@ const PluginEntrySchema = z
       })
       .strict()
       .optional(),
+    llm: z
+      .object({
+        allowModelOverride: z.boolean().optional(),
+        allowedModels: z.array(z.string()).optional(),
+        allowAgentIdOverride: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     config: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
@@ -903,6 +911,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            preserveFunnel: z.boolean().optional(),
           })
           .strict()
           .optional(),

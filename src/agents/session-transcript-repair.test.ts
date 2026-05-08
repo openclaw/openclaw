@@ -209,7 +209,7 @@ describe("sanitizeToolUseResultPairing", () => {
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
-    expect(out.some((m) => m.role === "toolResult")).toBe(false);
+    expect(out.filter((m) => m.role === "toolResult")).toEqual([]);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
@@ -323,7 +323,7 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 });
 
-describe("sanitizeToolCallInputs", () => {
+describe("sanitizeToolCallInputs legacy block filtering", () => {
   it("drops malformed snake_case tool call blocks", () => {
     const input = castAgentMessages([
       {
@@ -346,7 +346,7 @@ describe("sanitizeToolCallInputs", () => {
   });
 });
 
-describe("sanitizeToolCallInputs", () => {
+describe("sanitizeToolCallInputs allowed-name filtering", () => {
   function sanitizeAssistantContent(
     content: unknown[],
     options?: Parameters<typeof sanitizeToolCallInputs>[1],

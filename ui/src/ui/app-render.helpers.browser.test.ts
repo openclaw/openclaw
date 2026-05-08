@@ -182,10 +182,14 @@ describe("chat header controls (browser)", () => {
 
     const sessionRows = container.querySelectorAll(".chat-controls__session-row");
     expect(sessionRows).toHaveLength(1);
-    expect(container.querySelector('select[data-chat-agent-filter="true"]')).not.toBeNull();
-    expect(container.querySelector('select[data-chat-session-select="true"]')).not.toBeNull();
-    expect(container.querySelector('select[data-chat-model-select="true"]')).not.toBeNull();
-    expect(container.querySelector('select[data-chat-thinking-select="true"]')).not.toBeNull();
+    expect(
+      Array.from(container.querySelectorAll("select")).map((select) => select.dataset),
+    ).toEqual([
+      expect.objectContaining({ chatAgentFilter: "true" }),
+      expect.objectContaining({ chatSessionSelect: "true" }),
+      expect.objectContaining({ chatModelSelect: "true" }),
+      expect.objectContaining({ chatThinkingSelect: "true" }),
+    ]);
   });
 
   it("renders the mobile dropdown from state instead of mutating DOM classes", async () => {
@@ -200,8 +204,6 @@ describe("chat header controls (browser)", () => {
 
     const toggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
     const dropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
-    expect(toggle).not.toBeNull();
-    expect(dropdown).not.toBeNull();
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(toggle?.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
     expect(dropdown?.id).toBe("chat-mobile-controls-dropdown");

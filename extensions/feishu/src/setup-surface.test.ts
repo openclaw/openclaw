@@ -88,7 +88,7 @@ describe("feishu setup wizard", () => {
     probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
   });
 
-  it("does not throw when config appId/appSecret are SecretRef objects", async () => {
+  it("prompts over SecretRef appId/appSecret config objects", async () => {
     const text = vi
       .fn()
       .mockResolvedValueOnce("cli_from_prompt")
@@ -101,21 +101,24 @@ describe("feishu setup wizard", () => {
       ) as never,
     });
 
-    await expect(
-      runSetupWizardConfigure({
-        configure: feishuConfigure,
-        cfg: {
-          channels: {
-            feishu: {
-              appId: { source: "env", id: "FEISHU_APP_ID", provider: "default" },
-              appSecret: { source: "env", id: "FEISHU_APP_SECRET", provider: "default" },
-            },
+    const result = await runSetupWizardConfigure({
+      configure: feishuConfigure,
+      cfg: {
+        channels: {
+          feishu: {
+            appId: { source: "env", id: "FEISHU_APP_ID", provider: "default" },
+            appSecret: { source: "env", id: "FEISHU_APP_SECRET", provider: "default" },
           },
-        } as never,
-        prompter,
-        runtime: createNonExitingRuntimeEnv(),
-      }),
-    ).resolves.toBeTruthy();
+        },
+      } as never,
+      prompter,
+      runtime: createNonExitingRuntimeEnv(),
+    });
+
+    expect(result.cfg.channels?.feishu).toMatchObject({
+      appId: "cli_from_prompt",
+      appSecret: "secret_from_prompt",
+    });
   });
 });
 

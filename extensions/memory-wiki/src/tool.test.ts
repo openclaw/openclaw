@@ -3,7 +3,9 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { createWikiApplyTool } from "./tool.js";
 
 function asSchemaObject(value: unknown): Record<string, unknown> {
-  expect(value).toEqual(expect.any(Object));
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+  expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
 }
 

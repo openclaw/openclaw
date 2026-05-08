@@ -81,6 +81,11 @@ the maintainer-only release runbook.
    dispatches all publishable plugin packages to npm and the same set to
    ClawHub in parallel, and then promotes the prepared OpenClaw npm preflight
    artifact with the matching dist-tag as soon as plugin npm publish succeeds.
+   After the OpenClaw npm publish child succeeds, it creates or updates the
+   matching GitHub release/prerelease page from the complete matching
+   `CHANGELOG.md` section. Stable releases published to npm `latest` become the
+   GitHub latest release; stable maintenance releases kept on npm `beta` are
+   created with GitHub `latest=false`.
    ClawHub publishing may still be running while OpenClaw npm publishes, but the
    release publish workflow prints the child run IDs immediately. By default it
    does not wait for ClawHub after dispatching it, so OpenClaw npm availability
@@ -100,11 +105,13 @@ the maintainer-only release runbook.
     `OpenClaw Release Publish`, reusing the successful preflight artifact via
     `preflight_run_id`; stable macOS release readiness also requires the
     packaged `.zip`, `.dmg`, `.dSYM.zip`, and updated `appcast.xml` on `main`.
+    The private macOS publish workflow publishes the signed appcast to public
+    `main` automatically after release assets verify; if branch protection blocks
+    the direct push, it opens or updates an appcast PR.
 11. After publish, run the npm post-publish verifier, optional standalone
     published-npm Telegram E2E when you need post-publish channel proof,
-    dist-tag promotion when needed, GitHub release/prerelease notes from the
-    complete matching `CHANGELOG.md` section, and the release announcement
-    steps.
+    dist-tag promotion when needed, verify the generated GitHub release page,
+    and run the release announcement steps.
 
 ## Release preflight
 
@@ -268,7 +275,9 @@ Validation` or from the `main`/release workflow ref so workflow logic and
   not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
-  - `appcast.xml` on `main` must point at the new stable zip after publish
+  - `appcast.xml` on `main` must point at the new stable zip after publish; the
+    private macOS publish workflow commits it automatically, or opens an appcast
+    PR when direct push is blocked
   - the packaged app must keep a non-debug bundle id, a non-empty Sparkle feed
     URL, and a `CFBundleVersion` at or above the canonical Sparkle build floor
     for that release version

@@ -25,7 +25,7 @@ describe("movePathWithCopyFallback", () => {
           }),
         ).rejects.toThrow("Hardlinked source file is not allowed");
 
-        await expect(fs.stat(sourceFile)).resolves.toBeTruthy();
+        await expect(fs.readFile(sourceFile, "utf8")).resolves.toBe("hello");
         await expect(fs.stat(targetDir)).rejects.toMatchObject({ code: "ENOENT" });
       });
     },
