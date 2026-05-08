@@ -53,6 +53,39 @@ describe("createReplyDispatcher", () => {
     expect(deliver.mock.calls[0]?.[0]?.text).toBe("No further response from me.");
   });
 
+  it("does not rewrite exact NO_REPLY final payloads after a tool reply was queued", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    };
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      silentReplyContext: {
+        cfg,
+        sessionKey: "agent:main:telegram:direct:123",
+        surface: "telegram",
+      },
+    });
+
+    expect(dispatcher.sendToolResult({ text: "already sent through message tool" })).toBe(true);
+    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+
+    await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]?.text).toBe("already sent through message tool");
+  });
+
   it("preserves exact NO_REPLY final payloads for direct sessions where rewrite is disabled", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const cfg: OpenClawConfig = {

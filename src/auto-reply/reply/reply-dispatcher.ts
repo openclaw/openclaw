@@ -128,6 +128,7 @@ function resolveSilentFinalPayload(params: {
   kind: ReplyDispatchKind;
   payload: ReplyPayload;
   silentReplyContext?: ReplyDispatcherOptions["silentReplyContext"];
+  hasPriorDeliverableReply?: boolean;
 }): ReplyPayload | null | undefined {
   if (params.kind !== "final") {
     return undefined;
@@ -147,6 +148,15 @@ function resolveSilentFinalPayload(params: {
   });
   if (resolvedSettings.policy === "allow") {
     return undefined;
+  }
+  if (params.hasPriorDeliverableReply) {
+    silentReplyLogger.debug("skipping exact NO_REPLY final payload after prior delivery", {
+      hasSessionKey: Boolean(context.sessionKey),
+      surface: context.surface,
+      conversationType: context.conversationType,
+      resolvedPolicy: resolvedSettings.policy,
+    });
+    return null;
   }
   if (resolvedSettings.rewrite) {
     silentReplyLogger.debug("rewriting exact NO_REPLY final payload before delivery", {
@@ -185,6 +195,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   let completeCalled = false;
   // Track whether we've sent a block reply (for human delay - skip delay on first block).
   let sentFirstBlock = false;
+  // A final NO_REPLY after an already queued tool/block reply means "no extra answer",
+  // not "send a visible fallback reply".
+  let hasPriorDeliverableReply = false;
   // Serialize outbound replies to preserve tool/block/final order.
   const queuedCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
@@ -214,6 +227,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       kind,
       payload,
       silentReplyContext: options.silentReplyContext,
+      hasPriorDeliverableReply,
     });
     const normalized =
       silentFinalPayload ??
@@ -237,6 +251,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     }
     queuedCounts[kind] += 1;
     pending += 1;
+    if (kind !== "final") {
+      hasPriorDeliverableReply = true;
+    }
 
     // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
