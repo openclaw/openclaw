@@ -472,7 +472,7 @@ describe("createMSTeamsApp – federated certificate credentials", () => {
       clientId: "fed-app-id",
       tenantId: "fed-tenant",
     });
-    const tokenProvider = appInstances[0].token;
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
     if (!tokenProvider) {
       throw new Error("expected federated app to expose token provider");
     }
@@ -521,7 +521,7 @@ describe("createMSTeamsApp – federated managed identity", () => {
     };
     await createMSTeamsApp(creds, sdk);
     expect(appInstances[0]).toMatchObject({ clientId: "mi-app-id", tenantId: "mi-tenant" });
-    const tokenProvider = appInstances[0].token;
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
     if (!tokenProvider) {
       throw new Error("expected managed-identity app to expose token provider");
     }
@@ -538,7 +538,7 @@ describe("createMSTeamsApp – federated managed identity", () => {
       useManagedIdentity: true,
     };
     await createMSTeamsApp(creds, sdk);
-    const tokenProvider = appInstances[0].token;
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
     if (!tokenProvider) {
       throw new Error("expected managed-identity app to expose token provider");
     }

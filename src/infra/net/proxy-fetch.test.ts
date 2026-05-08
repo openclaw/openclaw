@@ -339,6 +339,7 @@ describe("resolveProxyFetchFromEnv", () => {
         HTTP_PROXY: "http://fallback.test:3128",
       }),
     );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({
       httpProxy: "http://fallback.test:3128",
       httpsProxy: "http://fallback.test:3128",
@@ -354,6 +355,7 @@ describe("resolveProxyFetchFromEnv", () => {
         https_proxy: "http://lower.test:1080",
       }),
     );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://lower.test:1080" });
   });
 
@@ -366,6 +368,7 @@ describe("resolveProxyFetchFromEnv", () => {
         http_proxy: "http://lower-http.test:1080",
       }),
     );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({
       httpProxy: "http://lower-http.test:1080",
       httpsProxy: "http://lower-http.test:1080",
@@ -382,6 +385,7 @@ describe("resolveProxyFetchFromEnv", () => {
         ALL_PROXY: "socks5://all-proxy.test:1080",
       }),
     );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({
       httpProxy: "socks5://all-proxy.test:1080",
       httpsProxy: "socks5://all-proxy.test:1080",

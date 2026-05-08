@@ -50,10 +50,11 @@ describe("cron main job passes heartbeat target=last", () => {
     runHeartbeatOnce: ReturnType<typeof vi.fn<RunHeartbeatOnce>>,
   ) {
     const callArgs = runHeartbeatOnce.mock.calls[0]?.[0];
-    if (!callArgs?.heartbeat) {
+    const heartbeat = callArgs?.heartbeat;
+    if (!callArgs || !heartbeat) {
       throw new Error("expected runHeartbeatOnce call with heartbeat config");
     }
-    return callArgs;
+    return { ...callArgs, heartbeat };
   }
 
   async function runSingleTick(cron: CronService) {

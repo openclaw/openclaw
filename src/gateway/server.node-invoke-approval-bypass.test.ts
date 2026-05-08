@@ -47,7 +47,7 @@ async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> 
   expect(hasInvoke()).toBe(false);
 }
 
-function requireNonEmptyString(value: string | undefined, label: string): string {
+function requireNonEmptyString(value: string | null | undefined, label: string): string {
   if (!value) {
     throw new Error(`expected ${label}`);
   }

@@ -80,7 +80,9 @@ describe("dual-kind memory registration gate", () => {
       },
     });
 
-    expect(requireMemoryRuntime().resolveMemoryBackendConfig()).toEqual({ backend: "builtin" });
+    expect(
+      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
+    ).toEqual({ backend: "builtin" });
     expect(
       registry.registry.diagnostics.filter(
         (d) => d.pluginId === "dual-plugin" && d.level === "warn",
@@ -102,7 +104,9 @@ describe("dual-kind memory registration gate", () => {
       },
     });
 
-    expect(requireMemoryRuntime().resolveMemoryBackendConfig()).toEqual({ backend: "builtin" });
+    expect(
+      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
+    ).toEqual({ backend: "builtin" });
   });
 
   it("allows selected dual-kind plugins to register the unified memory capability", () => {
@@ -128,6 +132,8 @@ describe("dual-kind memory registration gate", () => {
     expect(getMemoryCapabilityRegistration()).toMatchObject({
       pluginId: "dual-plugin",
     });
-    expect(requireMemoryRuntime().resolveMemoryBackendConfig()).toEqual({ backend: "builtin" });
+    expect(
+      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
+    ).toEqual({ backend: "builtin" });
   });
 });

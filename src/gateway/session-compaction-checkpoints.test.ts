@@ -77,7 +77,7 @@ describe("session-compaction-checkpoints", () => {
       await cleanupCompactionCheckpointSnapshot(snapshot);
 
       expect(fsSync.existsSync(snapshot!.sessionFile)).toBe(false);
-      expect(fsSync.existsSync(sessionFile!)).toBe(true);
+      expect(fsSync.existsSync(sessionFile)).toBe(true);
     } finally {
       copyFileSyncSpy.mockRestore();
       sessionManagerOpenSpy.mockRestore();

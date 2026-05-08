@@ -211,8 +211,8 @@ describe("sessions_spawn tool", () => {
     });
     const schema = tool.parameters as {
       properties?: {
-        thread?: unknown;
-        mode?: { enum?: string[] };
+        thread?: { description?: string; enum?: string[]; type?: string };
+        mode?: { description?: string; enum?: string[]; type?: string };
       };
     };
 
@@ -237,8 +237,8 @@ describe("sessions_spawn tool", () => {
     });
     const schema = tool.parameters as {
       properties?: {
-        thread?: unknown;
-        mode?: { enum?: string[] };
+        thread?: { description?: string; enum?: string[]; type?: string };
+        mode?: { description?: string; enum?: string[]; type?: string };
       };
     };
 

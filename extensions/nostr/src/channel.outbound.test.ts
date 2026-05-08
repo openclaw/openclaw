@@ -135,6 +135,7 @@ describe("nostr outbound cfg threading", () => {
     if (!adapter?.send?.text) {
       throw new Error("expected Nostr message adapter with text sender");
     }
+    const sendText = adapter.send.text;
     expect(adapter.send.media).toBeUndefined();
 
     await verifyChannelMessageAdapterCapabilityProofs({
@@ -142,7 +143,7 @@ describe("nostr outbound cfg threading", () => {
       adapter,
       proofs: {
         text: async () => {
-          const result = await adapter.send.text({
+          const result = await sendText({
             cfg: createCfg() as OpenClawConfig,
             to: "NPUB123",
             text: "hello",
@@ -152,7 +153,7 @@ describe("nostr outbound cfg threading", () => {
           expect(result.receipt.parts[0]?.kind).toBe("text");
         },
         messageSendingHooks: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(sendText).toBeTypeOf("function");
         },
       },
     });

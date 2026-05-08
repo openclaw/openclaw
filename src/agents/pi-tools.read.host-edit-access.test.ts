@@ -67,7 +67,7 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       // By resolving silently the subsequent readFile call surfaces the real
       // "Path escapes workspace root" / "outside-workspace" error instead.
       await expect(
-        mocks.operations!.access(path.join(workspaceDir, "escape", "secret.txt")),
+        mocks.operations.access(path.join(workspaceDir, "escape", "secret.txt")),
       ).resolves.toBeUndefined();
     },
   );

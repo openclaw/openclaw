@@ -205,7 +205,11 @@ describe("commands.list handler", () => {
 
   it("maps native commands with category, scope, and args", () => {
     const { payload } = callHandler();
-    const { commands } = payload as { commands: Array<Record<string, unknown>> };
+    const { commands } = payload as {
+      commands: Array<
+        Record<string, unknown> & { name: string; args?: Array<Record<string, unknown>> }
+      >;
+    };
     const model = requireCommand(commands, "model");
     expect(model).toMatchObject({
       name: "model",
@@ -217,7 +221,7 @@ describe("commands.list handler", () => {
       scope: "both",
       acceptsArgs: true,
     });
-    const args = model.args as Array<Record<string, unknown>>;
+    const args = model.args ?? [];
     expect(args).toHaveLength(1);
     expect(args[0].choices).toEqual([
       { value: "gpt-5.4", label: "GPT-5.4" },

@@ -47,10 +47,12 @@ describe("tlon channel message adapter", () => {
     if (!adapter?.send?.text || !adapter.send.media) {
       throw new Error("expected tlon channel message adapter with text and media senders");
     }
+    const sendText = adapter.send.text;
+    const sendMedia = adapter.send.media;
 
     const proveText = async () => {
       mocks.sendText.mockClear();
-      const result = await adapter.send.text({
+      const result = await sendText({
         cfg,
         to: "chat/~nec/general",
         text: "hello",
@@ -70,7 +72,7 @@ describe("tlon channel message adapter", () => {
 
     const proveMedia = async () => {
       mocks.sendMedia.mockClear();
-      const result = await adapter.send.media({
+      const result = await sendMedia({
         cfg,
         to: "chat/~nec/general",
         text: "image",
@@ -92,7 +94,7 @@ describe("tlon channel message adapter", () => {
 
     const proveReplyThread = async () => {
       mocks.sendText.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send!.text!({
         cfg,
         to: "chat/~nec/general",
         text: "threaded",
@@ -112,14 +114,14 @@ describe("tlon channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "tlonMessageAdapter",
-      adapter: adapter!,
+      adapter: adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
         replyTo: proveReplyThread,
         thread: proveReplyThread,
         messageSendingHooks: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(adapter.send!.text).toBeTypeOf("function");
         },
       },
     });

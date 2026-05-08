@@ -244,17 +244,17 @@ describe("backup commands", () => {
         path.posix.join(
           buildBackupArchiveRoot(nowMs),
           "payload",
-          encodeAbsolutePathForBackupArchive(stateAsset!.sourcePath),
+          encodeAbsolutePathForBackupArchive(stateAsset.sourcePath),
         ),
       );
 
-      const remappedWorkspaceEntry = { path: workspaceAsset!.sourcePath };
+      const remappedWorkspaceEntry = { path: workspaceAsset.sourcePath };
       onWriteEntry(remappedWorkspaceEntry);
       expect(remappedWorkspaceEntry.path).toBe(
         path.posix.join(
           buildBackupArchiveRoot(nowMs),
           "payload",
-          encodeAbsolutePathForBackupArchive(workspaceAsset!.sourcePath),
+          encodeAbsolutePathForBackupArchive(workspaceAsset.sourcePath),
         ),
       );
     } finally {

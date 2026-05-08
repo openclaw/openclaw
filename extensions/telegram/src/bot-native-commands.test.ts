@@ -21,7 +21,6 @@ let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands
 let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
 
 type CommandBotHarness = ReturnType<typeof createCommandBot>;
-type CommandHandler = (ctx: unknown) => Promise<void>;
 type PlugCommandHarnessParams = {
   botHarness?: CommandBotHarness;
   cfg?: OpenClawConfig;

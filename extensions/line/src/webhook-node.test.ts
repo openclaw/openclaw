@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
@@ -29,6 +30,20 @@ function createRes() {
 
 const SECRET = "secret";
 
+type RuntimeEnvMock = RuntimeEnv & {
+  error: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
+  exit: ReturnType<typeof vi.fn<(code: number) => void>>;
+  log: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
+};
+
+function createRuntimeMock(): RuntimeEnvMock {
+  return {
+    error: vi.fn<(...args: unknown[]) => void>(),
+    exit: vi.fn<(code: number) => void>(),
+    log: vi.fn<(...args: unknown[]) => void>(),
+  };
+}
+
 function createMiddlewareRes() {
   const res = {
     status: vi.fn(),
@@ -42,7 +57,7 @@ function createMiddlewareRes() {
 
 function createPostWebhookTestHarness(rawBody: string, secret = "secret") {
   const bot = { handleWebhook: vi.fn(async () => {}) };
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const runtime = createRuntimeMock();
   const handler = createLineNodeWebhookHandler({
     channelSecret: secret,
     bot,
@@ -71,11 +86,7 @@ async function invokeWebhook(params: {
   headers?: Record<string, string>;
   onEvents?: ReturnType<typeof vi.fn>;
   autoSign?: boolean;
-  runtime?: {
-    log: ReturnType<typeof vi.fn>;
-    error: ReturnType<typeof vi.fn>;
-    exit: ReturnType<typeof vi.fn>;
-  };
+  runtime?: RuntimeEnv;
 }) {
   const onEventsMock = params.onEvents ?? vi.fn(async () => {});
   const middleware = createLineWebhookMiddleware({
@@ -138,7 +149,7 @@ async function invokeNodePostContract(params: {
       throw params.failWith;
     }
   });
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const runtime = createRuntimeMock();
   const handler = createLineNodeWebhookHandler({
     channelSecret: SECRET,
     bot: { handleWebhook: dispatched },
@@ -167,7 +178,7 @@ async function invokeMiddlewarePostContract(params: {
   rawBody: string;
   signed: boolean;
 }) {
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const runtime = createRuntimeMock();
   const onEvents = vi.fn(async () => {
     if (params.failWith) {
       throw params.failWith;
@@ -182,6 +193,7 @@ async function invokeMiddlewarePostContract(params: {
   });
   return {
     body: res.json.mock.calls.at(-1)?.[0],
+    contentType: undefined,
     dispatched,
     runtimeError: runtime.error,
     status: res.status.mock.calls.at(-1)?.[0],
@@ -288,7 +300,7 @@ describe("LINE webhook shared POST contract", () => {
 describe("createLineNodeWebhookHandler", () => {
   it("returns 200 for GET", async () => {
     const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeMock();
     const handler = createLineNodeWebhookHandler({
       channelSecret: "secret",
       bot,
@@ -305,7 +317,7 @@ describe("createLineNodeWebhookHandler", () => {
 
   it("returns 204 for HEAD", async () => {
     const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeMock();
     const handler = createLineNodeWebhookHandler({
       channelSecret: "secret",
       bot,
@@ -333,7 +345,7 @@ describe("createLineNodeWebhookHandler", () => {
 
   it("rejects unsigned POST requests before reading the body", async () => {
     const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeMock();
     const readBody = vi.fn(async () => JSON.stringify({ events: [{ type: "message" }] }));
     const handler = createLineNodeWebhookHandler({
       channelSecret: "secret",
@@ -353,7 +365,7 @@ describe("createLineNodeWebhookHandler", () => {
   it("uses strict pre-auth limits for signed POST requests", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     const bot = { handleWebhook: vi.fn(async () => {}) };
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeMock();
     const readBody = vi.fn(async (_req: IncomingMessage, maxBytes: number, timeoutMs?: number) => {
       expect(maxBytes).toBe(64 * 1024);
       expect(timeoutMs).toBe(5_000);
@@ -414,7 +426,7 @@ describe("createLineNodeWebhookHandler", () => {
       ),
     };
     const onRequestAuthenticated = vi.fn();
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntimeMock();
     const handler = createLineNodeWebhookHandler({
       channelSecret: SECRET,
       bot,

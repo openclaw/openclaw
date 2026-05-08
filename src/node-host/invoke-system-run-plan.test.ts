@@ -833,7 +833,7 @@ describe("hardenApprovedExecutionPaths", () => {
               throw new Error("unreachable");
             }
             const mutableFileOperand = prepared.plan.mutableFileOperand;
-            if (mutableFileOperand === undefined) {
+            if (mutableFileOperand == null) {
               throw new Error("expected mutable file operand snapshot");
             }
             fs.writeFileSync(fixture.scriptPath, 'console.log("PWNED");\n');
