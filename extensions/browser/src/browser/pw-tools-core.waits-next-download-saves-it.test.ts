@@ -216,6 +216,7 @@ describe("pw-tools-core", () => {
         const targetParent = path.join(rootDir, "race");
         const outsideDir = path.join(tempDir, "outside");
         const targetPath = path.join(targetParent, "file.bin");
+        const outsideTargetPath = path.join(outsideDir, "file.bin");
         await fs.mkdir(targetParent, { recursive: true });
         await fs.mkdir(outsideDir);
 
@@ -252,6 +253,7 @@ describe("pw-tools-core", () => {
         await expect(p).rejects.toThrow(/path alias|outside workspace|directory changed/i);
         expect(parentSwappedBeforeFinalize).toBe(true);
         expect(saveAs).toHaveBeenCalledOnce();
+        await expect(fs.access(outsideTargetPath)).rejects.toThrow();
         await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
       });
     },
