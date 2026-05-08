@@ -1169,28 +1169,57 @@ export async function runHeartbeatOnce(opts: {
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  // ALWAYS-ON instrumentation (openclaw-5xv): emit a single WARN line for
+  // every skip path in runHeartbeatOnce so investigations can identify the
+  // skip reason for any agent on any wake from logs alone. Pure observability;
+  // no behavior change. See ~/.openclaw-tank/contexts/openclaw-5xv.md.
+  const logRunOnceSkip = (reason: string, extra?: Record<string, unknown>) => {
+    log.warn("heartbeat: runOnce skipped", {
+      agentId,
+      reason,
+      intent: opts.intent ?? "(none)",
+      source: opts.source ?? "(none)",
+      wakeReason: opts.reason ?? "(none)",
+      sessionKey: opts.sessionKey ?? "(none)",
+      ...extra,
+    });
+  };
   if (!areHeartbeatsEnabled()) {
+    logRunOnceSkip("disabled", { gate: "areHeartbeatsEnabled" });
     return { status: "skipped", reason: "disabled" };
   }
   if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+    logRunOnceSkip("disabled", { gate: "isHeartbeatEnabledForAgent" });
     return { status: "skipped", reason: "disabled" };
   }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+    logRunOnceSkip("disabled", { gate: "resolveHeartbeatIntervalMs" });
     return { status: "skipped", reason: "disabled" };
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
   if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
+    logRunOnceSkip("quiet-hours");
     return { status: "skipped", reason: "quiet-hours" };
   }
 
   const getSize = opts.deps?.getQueueSize ?? getQueueSize;
   const getSnapshots = opts.deps?.getCommandLaneSnapshots ?? getCommandLaneSnapshots;
   if (getSize(CommandLane.Main) > 0) {
+    logRunOnceSkip(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, {
+      gate: "main-lane",
+      mainLaneSize: getSize(CommandLane.Main),
+    });
     return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
   if (hasActiveCronJobs() || hasQueuedWorkInLanes(HEARTBEAT_ALWAYS_BUSY_LANES, getSize)) {
+    logRunOnceSkip(HEARTBEAT_SKIP_CRON_IN_PROGRESS, {
+      gate: "cron",
+      hasActiveCronJobs: hasActiveCronJobs(),
+      cronLaneSize: getSize(CommandLane.Cron),
+      cronNestedLaneSize: getSize(CommandLane.CronNested),
+    });
     emitHeartbeatEvent({
       status: "skipped",
       reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS,
@@ -1200,6 +1229,11 @@ export async function runHeartbeatOnce(opts: {
   }
 
   if (heartbeat?.skipWhenBusy === true && hasOptInBusyLaneWork(getSize, getSnapshots)) {
+    logRunOnceSkip(HEARTBEAT_SKIP_LANES_BUSY, {
+      gate: "opt-in-busy-lanes",
+      subagentLaneSize: getSize(CommandLane.Subagent),
+      nestedLaneSize: getSize(CommandLane.Nested),
+    });
     emitHeartbeatEvent({
       status: "skipped",
       reason: HEARTBEAT_SKIP_LANES_BUSY,
@@ -1223,6 +1257,11 @@ export async function runHeartbeatOnce(opts: {
     recentSessionEntry?.updatedAt &&
     startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
   ) {
+    logRunOnceSkip(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, {
+      gate: "pendingFinalDelivery",
+      sessionUpdatedAt: recentSessionEntry?.updatedAt,
+      ageSinceUpdateMs: startedAt - (recentSessionEntry?.updatedAt ?? 0),
+    });
     return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
@@ -1237,6 +1276,7 @@ export async function runHeartbeatOnce(opts: {
     nowMs: startedAt,
   });
   if (preflight.skipReason) {
+    logRunOnceSkip(preflight.skipReason, { gate: "preflight" });
     emitHeartbeatEvent({
       status: "skipped",
       reason: preflight.skipReason,
@@ -1251,6 +1291,11 @@ export async function runHeartbeatOnce(opts: {
   // re-schedule this wake automatically.  See #14396 (closed without merge).
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey);
   if (getSize(sessionLaneKey) > 0) {
+    logRunOnceSkip(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, {
+      gate: "session-lane",
+      sessionLaneKey,
+      sessionLaneSize: getSize(sessionLaneKey),
+    });
     emitHeartbeatEvent({
       status: "skipped",
       reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
@@ -2026,6 +2071,23 @@ export function startHeartbeatRunner(opts: {
         });
         agent.floodLoggedSinceLastRun = true;
       }
+    } else if (decision.defer) {
+      // ALWAYS-ON instrumentation (openclaw-5xv): non-flood defer reasons
+      // (not-due, min-spacing) used to fire silently. Logging them at WARN
+      // lets investigations identify which cooldown gate is keeping an agent
+      // from running. Pure observability.
+      log.warn("heartbeat: wake deferred", {
+        agentId: agent.agentId,
+        reason: decision.reason,
+        intent,
+        wakeReason: reason ?? "(none)",
+        nowMs: now,
+        nextDueMs: agent.nextDueMs,
+        notDueForMs: agent.nextDueMs - now,
+        lastRunStartedAtMs: agent.lastRunStartedAtMs ?? null,
+        sinceLastRunMs:
+          agent.lastRunStartedAtMs !== undefined ? now - agent.lastRunStartedAtMs : null,
+      });
     }
     return decision;
   };
@@ -2270,9 +2332,16 @@ export function startHeartbeatRunner(opts: {
         }
       }
 
+      // ALWAYS-ON instrumentation (openclaw-5xv): collect each agent's
+      // outcome during the broadcast fan-out and emit a single summary line
+      // at the end. Pure observability; the per-agent logs above already
+      // exist for detail. The summary line is the grep-friendly entry point
+      // ("why didn't tank's heartbeat run on this cycle?").
+      const broadcastResults = new Map<string, string>();
       for (const agent of state.agents.values()) {
         const deferral = evaluateWakeDeferral(agent, now, reason, intent);
         if (deferral.defer) {
+          broadcastResults.set(agent.agentId, `deferred:${deferral.reason}`);
           continue;
         }
 
@@ -2298,6 +2367,7 @@ export function startHeartbeatRunner(opts: {
             source: params.source,
           });
           advanceAgentSchedule(agent, now, reason);
+          broadcastResults.set(agent.agentId, "threw");
           continue;
         }
         if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
@@ -2305,6 +2375,14 @@ export function startHeartbeatRunner(opts: {
           // lane is busy and the wake layer will retry the same reason shortly
           // (DEFAULT_RETRY_MS = 1 s). Recording here would convert the retry
           // into a false `not-due`/`min-spacing` defer.
+          broadcastResults.set(agent.agentId, `retryable-busy:${res.reason}`);
+          // Emit summary before early return so the partial picture is captured.
+          log.warn("heartbeat: broadcast wake completed (early return)", {
+            wakeReason: reason ?? "(none)",
+            intent,
+            source: params.source,
+            results: Object.fromEntries(broadcastResults),
+          });
           retryableBusySkip = true;
           return res;
         }
@@ -2315,6 +2393,12 @@ export function startHeartbeatRunner(opts: {
         }
         if (res.status === "ran") {
           ran = true;
+          broadcastResults.set(agent.agentId, "ran");
+        } else {
+          broadcastResults.set(
+            agent.agentId,
+            res.status === "skipped" ? `skipped:${res.reason}` : res.status,
+          );
         }
 
         const defaultSessionKey = resolveHeartbeatSession(
@@ -2364,6 +2448,14 @@ export function startHeartbeatRunner(opts: {
         }
       }
 
+      // ALWAYS-ON instrumentation (openclaw-5xv): one summary line per
+      // broadcast wake. Quick visual: `results={main:..., tank:..., ...}`.
+      log.warn("heartbeat: broadcast wake completed", {
+        wakeReason: reason ?? "(none)",
+        intent,
+        source: params.source,
+        results: Object.fromEntries(broadcastResults),
+      });
       if (ran) {
         return { status: "ran", durationMs: Date.now() - startedAt };
       }
