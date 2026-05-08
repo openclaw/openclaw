@@ -554,14 +554,15 @@ openclaw doctor --fix
 ```
 
 `openclaw doctor --fix` invokes the same state migration implementation after
-ordinary config preflight. Runtime startup must not import legacy files.
+ordinary config preflight and creates a verified backup before import. Runtime
+startup must not import legacy files.
 
 Migration properties:
 
 - One migration pass discovers all legacy file and sidecar database sources and
   produces a plan before mutating anything.
-- A pre-migration backup archive is created unless explicitly disabled by a
-  dangerous force flag.
+- A pre-migration backup archive is created. The standalone migrate command can
+  skip it only with an explicit dangerous force flag.
 - Imports are idempotent and keyed by source path, mtime, size, hash, and target
   table.
 - Successful source files are removed or archived after the target database has
