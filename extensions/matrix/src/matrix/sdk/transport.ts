@@ -117,6 +117,8 @@ async function fetchWithMatrixGuardedRedirects(params: {
   const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    url: params.url,
+    operation: "matrix fetch with redirects",
   });
 
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
