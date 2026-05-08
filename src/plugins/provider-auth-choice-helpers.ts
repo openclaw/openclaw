@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -124,8 +125,9 @@ export function applyDefaultModel(
   model: string,
   opts?: { preserveExistingPrimary?: boolean },
 ): OpenClawConfig {
+  const normalizedModel = normalizeAgentModelRefForConfig(model);
   const models = { ...cfg.agents?.defaults?.models };
-  models[model] = models[model] ?? {};
+  models[normalizedModel] = models[normalizedModel] ?? {};
 
   const existingModel = cfg.agents?.defaults?.model;
   const existingPrimary =
@@ -145,7 +147,10 @@ export function applyDefaultModel(
           ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
             ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
             : undefined),
-          primary: opts?.preserveExistingPrimary === true ? (existingPrimary ?? model) : model,
+          primary:
+            opts?.preserveExistingPrimary === true
+              ? (existingPrimary ?? normalizedModel)
+              : normalizedModel,
         },
       },
     },

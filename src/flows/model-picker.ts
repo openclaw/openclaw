@@ -21,6 +21,7 @@ import {
 import { loadStaticManifestCatalogRowsForList } from "../commands/models/list.manifest-catalog.js";
 import { formatTokenK } from "../commands/models/shared.js";
 import {
+  normalizeAgentModelRefForConfig,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
@@ -122,7 +123,7 @@ function normalizeModelKeys(values: string[]): string[] {
   const seen = new Set<string>();
   const next: string[] = [];
   for (const raw of values) {
-    const value = raw.trim();
+    const value = normalizeAgentModelRefForConfig(raw);
     if (!value || seen.has(value)) {
       continue;
     }
@@ -370,7 +371,7 @@ async function promptManualModel(params: {
   if (!model) {
     return {};
   }
-  return { model };
+  return { model: normalizeAgentModelRefForConfig(model) };
 }
 
 function buildModelProviderFilterOptions(
@@ -852,7 +853,7 @@ export async function promptDefaultModel(
     return providerPluginResult;
   }
 
-  const model = selectedValue;
+  const model = normalizeAgentModelRefForConfig(selectedValue);
   const { runProviderModelSelectedHook } = await loadResolvedModelPickerRuntime();
   await runProviderModelSelectedHook({
     config: cfg,
