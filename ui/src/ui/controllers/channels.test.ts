@@ -95,7 +95,7 @@ describe("loadChannels", () => {
 
       expect(state.channelsLoading).toBe(false);
       expect(state.channelsSnapshot).toBe(next);
-      expect(state.channelsLastSuccess).toEqual(expect.any(Number));
+      expect(state.channelsLastSuccess).toBeGreaterThan(10);
     } finally {
       vi.useRealTimers();
     }
