@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
@@ -62,6 +62,13 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("gaxios");
+  vi.resetModules();
 });
 
 describe("googlechat google auth runtime", () => {
@@ -371,7 +378,7 @@ describe("googlechat google auth runtime", () => {
     expect(second.interceptors.response.add).toHaveBeenCalledOnce();
   });
 
-  it("normalizes Google auth request headers before upstream interceptors run", async () => {
+  it("normalizes Google auth request headers before upstream interceptors run", () => {
     const config = {
       headers: { "x-test": "1" },
       url: new URL("https://www.googleapis.com/oauth2/v1/certs"),

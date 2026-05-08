@@ -72,6 +72,13 @@ function createModelDefaultsConfig(params: {
   } as OpenClawConfig;
 }
 
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 describe("gateway session utils", () => {
   afterEach(() => {
     resetConfigRuntimeState();
@@ -86,11 +93,13 @@ describe("gateway session utils", () => {
   test("session lists apply a bounded default and expose truncation metadata", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
-      Array.from({ length: 105 }, (_value, index) => [
+      Array.from({ length: 101 }, (_value, index) => [
         `session-${index}`,
         {
           sessionId: `session-${index}`,
           updatedAt: 1_000 - index,
+          modelProvider: "openai",
+          model: "gpt-5.4",
         } satisfies SessionEntry,
       ]),
     );
@@ -104,7 +113,7 @@ describe("gateway session utils", () => {
 
     expect(listed.sessions).toHaveLength(100);
     expect(listed.count).toBe(100);
-    expect(listed.totalCount).toBe(105);
+    expect(listed.totalCount).toBe(101);
     expect(listed.limitApplied).toBe(100);
     expect(listed.hasMore).toBe(true);
     expect(listed.sessions[0]?.key).toBe("session-0");
@@ -310,7 +319,7 @@ describe("gateway session utils", () => {
     expect(resolveThinkingProfile).toHaveBeenCalled();
   });
 
-  test("session list thinking cache preserves case-distinct model catalog entries", async () => {
+  test("session list thinking cache preserves case-distinct model catalog entries", () => {
     const cfg = createModelDefaultsConfig({ primary: "custom/CaseModel" });
     const modelCatalog = [
       {
@@ -1257,6 +1266,12 @@ describe("listSessionsFromStore selected model display", () => {
         store[`agent:main:${sessionId}`] = {
           sessionId,
           updatedAt: now - i,
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          totalTokens: 1,
+          totalTokensFresh: true,
+          contextTokens: 1,
+          estimatedCostUsd: 0,
         } as SessionEntry;
         fs.writeFileSync(
           path.join(tmpDir, `${sessionId}.jsonl`),
@@ -1301,43 +1316,47 @@ describe("listSessionsFromStore selected model display", () => {
       expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
       expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
       expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
-      expect(listed.sessions[0]?.thinkingDefault).toBeDefined();
+      expect(listed.sessions[0]?.thinkingDefault).toBe("off");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("caps transcript title and last-message hydration for bulk list responses", () => {
+  test("caps transcript title and last-message hydration for bulk list responses", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-cap-"));
     try {
       const storePath = path.join(tmpDir, "sessions.json");
       const store: Record<string, SessionEntry> = {};
       const now = Date.now();
-      for (let i = 0; i < 105; i += 1) {
+      for (let i = 0; i < 101; i += 1) {
         const sessionId = `sess-${i}`;
         store[`agent:main:${sessionId}`] = {
           sessionId,
           updatedAt: now - i,
+          modelProvider: "openai",
+          model: "gpt-5.4",
         } as SessionEntry;
-        fs.writeFileSync(
-          path.join(tmpDir, `${sessionId}.jsonl`),
-          [
-            JSON.stringify({ type: "session", version: 1, id: sessionId }),
-            JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
-            JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
-          ].join("\n"),
-          "utf-8",
-        );
+        if (i === 0 || i === 99 || i === 100) {
+          fs.writeFileSync(
+            path.join(tmpDir, `${sessionId}.jsonl`),
+            [
+              JSON.stringify({ type: "session", version: 1, id: sessionId }),
+              JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
+              JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
+            ].join("\n"),
+            "utf-8",
+          );
+        }
       }
 
-      const result = listSessionsFromStore({
+      const result = await listSessionsFromStoreAsync({
         cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
         storePath,
         store,
-        opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 105 },
+        opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 101 },
       });
 
-      expect(result.sessions).toHaveLength(105);
+      expect(result.sessions).toHaveLength(101);
       expect(result.sessions[0]?.derivedTitle).toBe("title 0");
       expect(result.sessions[0]?.lastMessagePreview).toBe("last 0");
       expect(result.sessions[99]?.derivedTitle).toBe("title 99");
@@ -1761,10 +1780,9 @@ describe("deriveSessionTitle", () => {
     } as SessionEntry;
     const longMsg =
       "This is a very long message that exceeds sixty characters and should be truncated appropriately";
-    const result = deriveSessionTitle(entry, longMsg);
-    expect(result).toBeDefined();
-    expect(result!.length).toBeLessThanOrEqual(60);
-    expect(result!.endsWith("…")).toBe(true);
+    const result = requireString(deriveSessionTitle(entry, longMsg), "truncated session title");
+    expect(result.length).toBeLessThanOrEqual(60);
+    expect(result.endsWith("…")).toBe(true);
   });
 
   test("truncates at word boundary when possible", () => {
@@ -1773,10 +1791,9 @@ describe("deriveSessionTitle", () => {
       updatedAt: Date.now(),
     } as SessionEntry;
     const longMsg = "This message has many words and should be truncated at a word boundary nicely";
-    const result = deriveSessionTitle(entry, longMsg);
-    expect(result).toBeDefined();
-    expect(result!.endsWith("…")).toBe(true);
-    expect(result!.includes("  ")).toBe(false);
+    const result = requireString(deriveSessionTitle(entry, longMsg), "word-boundary session title");
+    expect(result.endsWith("…")).toBe(true);
+    expect(result.includes("  ")).toBe(false);
   });
 
   test("falls back to sessionId prefix with date", () => {

@@ -24,7 +24,7 @@ describe("qa-bus state", () => {
     expect(snapshot.messages.map((message) => message.id)).toEqual([inbound.id, outbound.id]);
   });
 
-  it("creates threads and mutates message state", async () => {
+  it("creates threads and mutates message state", () => {
     const state = createQaBusState();
 
     const thread = state.createThread({

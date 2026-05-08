@@ -1,7 +1,7 @@
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageAccount } from "./accounts.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
@@ -25,6 +25,16 @@ vi.mock("node:child_process", async () => {
     ...actual,
     spawn: (...args: unknown[]) => spawnMock(...args),
   };
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+afterAll(() => {
+  vi.doUnmock("node:child_process");
+  vi.resetModules();
 });
 
 describe("createIMessageRpcClient", () => {
@@ -156,6 +166,24 @@ describe("probeIMessage", () => {
     expect(result.ok).toBe(false);
     expect(result.fatal).toBe(true);
     expect(result.error).toMatch(/rpc/i);
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("fails fast for default local imsg probes on non-mac hosts", async () => {
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg", platform: "linux" });
+
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toMatch(/macOS/i);
+    expect(result.error).toMatch(/SSH wrapper/i);
+    expect(setupRuntime.detectBinary).not.toHaveBeenCalled();
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 

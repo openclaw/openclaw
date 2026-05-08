@@ -367,7 +367,7 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       sidebarContent: null,
       sidebarError: null,
       splitRatio: 0.6,
-      canvasHostUrl: null,
+      canvasPluginSurfaceUrl: null,
       embedSandboxMode: "scripts",
       allowExternalEmbedUrls: false,
       assistantName: "Val",
@@ -581,12 +581,17 @@ describe("chat slash menu accessibility", () => {
       : null;
     const status = container.querySelector<HTMLElement>("#chat-slash-active-announcement");
 
-    expect(nextActiveId).toBeTruthy();
+    if (!nextActiveId) {
+      throw new Error("Expected command navigation to set aria-activedescendant");
+    }
     expect(nextActiveId).not.toBe(initialActiveId);
     expect(activeOption?.getAttribute("aria-selected")).toBe("true");
     expect(status?.getAttribute("aria-live")).toBe("polite");
-    expect(status?.textContent?.trim()).toBeTruthy();
-    expect(status?.textContent).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
+    const announcementText = status?.textContent?.trim();
+    if (!announcementText) {
+      throw new Error("Expected command navigation to update the live announcement");
+    }
+    expect(announcementText).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
   });
 
   it("wires fixed argument suggestions with command-and-argument option ids", () => {
@@ -617,11 +622,12 @@ describe("chat slash menu accessibility", () => {
 
     inputDraft(container, "/");
     container = renderChatView({ draft, onDraftChange });
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.getAttribute("aria-activedescendant"),
-    ).toBeTruthy();
+    const activeDescendant = container
+      .querySelector<HTMLTextAreaElement>("textarea")
+      ?.getAttribute("aria-activedescendant");
+    if (!activeDescendant) {
+      throw new Error("Expected slash suggestions to set aria-activedescendant");
+    }
 
     inputDraft(container, "plain message");
     container = renderChatView({ draft, onDraftChange });
@@ -790,7 +796,7 @@ describe("chat welcome", () => {
 });
 
 describe("chat session controls", () => {
-  it("filters chat sessions by agent and switches to that agent's recent session", async () => {
+  it("filters chat sessions by agent and switches to that agent's recent session", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
     state.sessionKey = "agent:alpha:main";
@@ -838,7 +844,7 @@ describe("chat session controls", () => {
     expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
   });
 
-  it("falls back to the selected agent's main session when no sessions exist yet", async () => {
+  it("falls back to the selected agent's main session when no sessions exist yet", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
     state.sessionKey = "agent:alpha:main";
@@ -1041,7 +1047,7 @@ describe("chat session controls", () => {
       [...(thinkingSelect?.options ?? [])]
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("maximum");
+    ).toBe("Override: maximum");
   });
 
   it("labels chat thinking default from the active session row", () => {
@@ -1058,8 +1064,8 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
-    expect(thinkingSelect?.title).toBe("Default (adaptive)");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
   });
 
   it("always renders full thinking labels", () => {
@@ -1089,14 +1095,14 @@ describe("chat session controls", () => {
 
     expect(container.querySelector('select[data-chat-thinking-select-compact="true"]')).toBeNull();
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.title).toBe("Default (high)");
+    expect(thinkingSelect?.title).toBe("Inherited: high");
     expect([...thinkingSelect!.options].map((option) => option.textContent?.trim())).toEqual([
-      "Default (high)",
-      "off",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
+      "Inherited: high",
+      "Off",
+      "Override: low",
+      "Override: medium",
+      "Override: high",
+      "Override: xhigh",
     ]);
   });
 
@@ -1113,7 +1119,7 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
-    expect(thinkingSelect?.title).toBe("Default (adaptive)");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
   });
 });

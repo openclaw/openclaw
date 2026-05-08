@@ -379,6 +379,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
   });
 
+  it("keeps matrix resolution independent of package dependency imports", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const topLevelImports = source.slice(0, source.indexOf("const SCRIPT_PATH"));
+
+    expect(topLevelImports).not.toContain("package-dist-inventory");
+    expect(source).toContain("function assertNoLegacyPluginDependencyStagingDebris(packageRoot)");
+  });
+
   it("filters the cross-OS runner matrix to a focused OS suite", () => {
     const matrix = resolveRunnerMatrix({
       mode: "both",
@@ -420,7 +428,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "ubuntu",
       "windows",
     ]);
-    expect(matrix.include.every((entry) => entry.suite === "packaged-fresh")).toBe(true);
+    expect(matrix.include.map((entry) => entry.suite)).toEqual([
+      "packaged-fresh",
+      "packaged-fresh",
+      "packaged-fresh",
+    ]);
   });
 
   it("rejects unsupported cross-OS suite filter tokens", () => {

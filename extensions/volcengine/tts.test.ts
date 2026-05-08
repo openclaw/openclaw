@@ -36,6 +36,14 @@ function clearTtsEnv() {
   delete process.env.VOLCENGINE_TTS_TOKEN;
 }
 
+function restoreOptionalEnv(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
 describe("Volcengine speech provider", () => {
   const provider = buildVolcengineSpeechProvider();
 
@@ -72,21 +80,11 @@ describe("Volcengine speech provider", () => {
     try {
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
     } finally {
-      if (oldBytePlusKey) {
-        process.env.BYTEPLUS_API_KEY = oldBytePlusKey;
-      }
-      if (oldSeedKey) {
-        process.env.BYTEPLUS_SEED_SPEECH_API_KEY = oldSeedKey;
-      }
-      if (oldApiKey) {
-        process.env.VOLCENGINE_TTS_API_KEY = oldApiKey;
-      }
-      if (oldAppId) {
-        process.env.VOLCENGINE_TTS_APPID = oldAppId;
-      }
-      if (oldToken) {
-        process.env.VOLCENGINE_TTS_TOKEN = oldToken;
-      }
+      restoreOptionalEnv("BYTEPLUS_API_KEY", oldBytePlusKey);
+      restoreOptionalEnv("BYTEPLUS_SEED_SPEECH_API_KEY", oldSeedKey);
+      restoreOptionalEnv("VOLCENGINE_TTS_API_KEY", oldApiKey);
+      restoreOptionalEnv("VOLCENGINE_TTS_APPID", oldAppId);
+      restoreOptionalEnv("VOLCENGINE_TTS_TOKEN", oldToken);
     }
   });
 
@@ -101,27 +99,11 @@ describe("Volcengine speech provider", () => {
     try {
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     } finally {
-      if (oldBytePlusKey) {
-        process.env.BYTEPLUS_API_KEY = oldBytePlusKey;
-      }
-      if (oldSeedKey) {
-        process.env.BYTEPLUS_SEED_SPEECH_API_KEY = oldSeedKey;
-      } else {
-        delete process.env.BYTEPLUS_SEED_SPEECH_API_KEY;
-      }
-      if (oldApiKey) {
-        process.env.VOLCENGINE_TTS_API_KEY = oldApiKey;
-      }
-      if (oldAppId) {
-        process.env.VOLCENGINE_TTS_APPID = oldAppId;
-      } else {
-        delete process.env.VOLCENGINE_TTS_APPID;
-      }
-      if (oldToken) {
-        process.env.VOLCENGINE_TTS_TOKEN = oldToken;
-      } else {
-        delete process.env.VOLCENGINE_TTS_TOKEN;
-      }
+      restoreOptionalEnv("BYTEPLUS_API_KEY", oldBytePlusKey);
+      restoreOptionalEnv("BYTEPLUS_SEED_SPEECH_API_KEY", oldSeedKey);
+      restoreOptionalEnv("VOLCENGINE_TTS_API_KEY", oldApiKey);
+      restoreOptionalEnv("VOLCENGINE_TTS_APPID", oldAppId);
+      restoreOptionalEnv("VOLCENGINE_TTS_TOKEN", oldToken);
     }
   });
 
@@ -129,7 +111,7 @@ describe("Volcengine speech provider", () => {
     const voices = await provider.listVoices!({});
     expect(voices.length).toBeGreaterThan(0);
     expect(voices[0]).toMatchObject({ locale: "en-US" });
-    expect(voices[0].gender).toBeDefined();
+    expect(voices[0].gender).toMatch(/^(female|male)$/u);
   });
 
   it("sends the documented Seed Speech API key payload and returns voice-note Opus metadata", async () => {

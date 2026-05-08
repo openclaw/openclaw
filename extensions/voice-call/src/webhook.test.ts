@@ -219,7 +219,11 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       await server.start();
       expect(mocks.getRealtimeTranscriptionProvider).not.toHaveBeenCalled();
       expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null);
-      expect(server.getMediaStreamHandler()).toBeTruthy();
+      expect(server.getMediaStreamHandler()).toMatchObject({
+        handleUpgrade: expect.any(Function),
+        sendAudio: expect.any(Function),
+        closeAll: expect.any(Function),
+      });
     } finally {
       await server.stop();
     }
@@ -1282,8 +1286,7 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     const config = createConfig();
     const server = new VoiceCallWebhookServer(config, manager, provider);
 
-    // Should not throw
-    await server.stop();
+    await expect(server.stop()).resolves.toBeUndefined();
   });
 });
 

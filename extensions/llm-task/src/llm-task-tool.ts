@@ -1,11 +1,13 @@
 import path from "node:path";
-import Ajv from "ajv";
+import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
-
-const AjvCtor = Ajv as unknown as typeof import("ajv").default;
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -40,6 +42,44 @@ function stripDuplicateProviderPrefix(provider: string | undefined, model: strin
   }
   const prefix = `${p}/`;
   return m.startsWith(prefix) ? m.slice(prefix.length) : m;
+}
+
+function resolveLlmTaskModelRef(params: {
+  api: OpenClawPluginApi;
+  provider?: string;
+  rawModel?: string;
+}): { provider?: string; model?: string } {
+  const defaultProvider =
+    normalizeOptionalString(params.provider) ??
+    normalizeOptionalString(params.api.runtime.agent.defaults.provider);
+  const rawModel = normalizeOptionalString(params.rawModel);
+  if (!rawModel || !defaultProvider) {
+    return {
+      provider: params.provider,
+      model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    };
+  }
+
+  const cfg = params.api.config;
+  const aliasIndex = cfg
+    ? buildModelAliasIndex({
+        cfg,
+        defaultProvider,
+      })
+    : undefined;
+  const resolved = resolveModelRefFromString({
+    cfg,
+    raw: rawModel,
+    defaultProvider,
+    aliasIndex,
+  });
+  if (!resolved) {
+    return {
+      provider: params.provider,
+      model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    };
+  }
+  return resolved.ref;
 }
 
 type PluginCfg = {
@@ -117,7 +157,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
 
-      const provider =
+      const requestedProvider =
         (typeof params.provider === "string" && params.provider.trim()) ||
         (typeof pluginCfg.defaultProvider === "string" && pluginCfg.defaultProvider.trim()) ||
         primaryProvider ||
@@ -128,7 +168,12 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         (typeof pluginCfg.defaultModel === "string" && pluginCfg.defaultModel.trim()) ||
         primaryModel ||
         undefined;
-      const model = stripDuplicateProviderPrefix(provider, rawModel);
+      const { provider: resolvedProvider, model } = resolveLlmTaskModelRef({
+        api,
+        provider: requestedProvider,
+        rawModel,
+      });
+      const provider = resolvedProvider;
 
       const authProfileId =
         (typeof params.authProfileId === "string" && params.authProfileId.trim()) ||
@@ -249,17 +294,14 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
           const schema = params.schema;
           if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-            const ajv = new AjvCtor({ allErrors: true, strict: false });
-            const validate = ajv.compile(schema);
-            const ok = validate(parsed);
-            if (!ok) {
-              const msg =
-                validate.errors
-                  ?.map(
-                    (e: { instancePath?: string; message?: string }) =>
-                      `${e.instancePath || "<root>"} ${e.message || "invalid"}`,
-                  )
-                  .join("; ") ?? "invalid";
+            const validation = validateJsonSchemaValue({
+              schema: schema as JsonSchemaObject,
+              cacheKey: "llm-task.result",
+              value: parsed,
+              cache: false,
+            });
+            if (!validation.ok) {
+              const msg = validation.errors.map((error) => error.text).join("; ") || "invalid";
               throw new Error(`LLM JSON did not match schema: ${msg}`);
             }
           }
