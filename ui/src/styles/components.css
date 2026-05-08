@@ -4041,6 +4041,13 @@ td.data-table-key-col {
   font-size: 13px;
 }
 
+.exec-approval-command-span {
+  border-radius: 3px;
+  padding: 0 2px;
+  background: color-mix(in srgb, #f97316 34%, transparent);
+  color: var(--fg);
+}
+
 .exec-approval-meta {
   margin-top: 12px;
   display: grid;
