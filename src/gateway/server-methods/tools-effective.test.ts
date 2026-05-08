@@ -131,7 +131,6 @@ describe("tools.effective handler", () => {
       canonicalKey: "missing-session",
       entry: undefined,
       legacyKey: undefined,
-      storePath: "/tmp/sessions.json",
     } as never);
     const { respond, invoke } = createInvokeParams({ sessionKey: "missing-session" });
     await invoke();
