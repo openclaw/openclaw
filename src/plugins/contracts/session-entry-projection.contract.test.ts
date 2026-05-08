@@ -5,7 +5,12 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import {
+  deleteSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../../config/sessions/store.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { cleanupReplacedPluginHostRegistry, runPluginHostCleanup } from "../host-hook-cleanup.js";
@@ -16,6 +21,26 @@ import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
+
+function readSessionRows(agentId = "main"): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
+async function mutateSessionRows(
+  mutator: (store: Record<string, SessionEntry>) => Promise<void> | void,
+  agentId = "main",
+): Promise<void> {
+  const store = readSessionRows(agentId);
+  await mutator(store);
+  for (const { sessionKey } of listSessionEntries({ agentId })) {
+    deleteSessionEntry({ agentId, sessionKey });
+  }
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    upsertSessionEntry({ agentId, sessionKey, entry });
+  }
+}
 
 describe("plugin session extension SessionEntry projection", () => {
   beforeEach(() => {
@@ -55,15 +80,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -78,7 +102,7 @@ describe("plugin session extension SessionEntry projection", () => {
             value: { state: "executing", title: "Deploy approval", internal: 7 },
           });
           expect(patchResult.ok).toBe(true);
-          const afterPatch = loadSessionStore(storePath);
+          const afterPatch = readSessionRows();
           expect(
             (afterPatch["agent:main:main"] as unknown as Record<string, unknown>).approvalSnapshot,
           ).toEqual({ state: "executing", title: "Deploy approval" });
@@ -91,7 +115,7 @@ describe("plugin session extension SessionEntry projection", () => {
             unset: true,
           });
           expect(unsetResult.ok).toBe(true);
-          const afterUnset = loadSessionStore(storePath);
+          const afterUnset = readSessionRows();
           expect(
             (afterUnset["agent:main:main"] as unknown as Record<string, unknown>).approvalSnapshot,
           ).toBeUndefined();
@@ -137,15 +161,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-projector-fail-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -162,7 +185,7 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ ok: true });
           expect(
-            (loadSessionStore(storePath)["agent:main:main"] as unknown as Record<string, unknown>)
+            (readSessionRows()["agent:main:main"] as unknown as Record<string, unknown>)
               .approvalSnapshot,
           ).toEqual({ state: "ready" });
 
@@ -175,7 +198,7 @@ describe("plugin session extension SessionEntry projection", () => {
               value: { state: "bad", fail: "throw" },
             }),
           ).resolves.toMatchObject({ ok: true });
-          const afterThrow = loadSessionStore(storePath)["agent:main:main"] as unknown as Record<
+          const afterThrow = readSessionRows()["agent:main:main"] as unknown as Record<
             string,
             unknown
           >;
@@ -196,7 +219,7 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ ok: true });
           expect(
-            (loadSessionStore(storePath)["agent:main:main"] as unknown as Record<string, unknown>)
+            (readSessionRows()["agent:main:main"] as unknown as Record<string, unknown>)
               .approvalSnapshot,
           ).toEqual({ state: "ready-again" });
 
@@ -209,7 +232,7 @@ describe("plugin session extension SessionEntry projection", () => {
               value: { state: "async-bad", fail: "promise" },
             }),
           ).resolves.toMatchObject({ ok: true });
-          const afterPromise = loadSessionStore(storePath)["agent:main:main"] as unknown as Record<
+          const afterPromise = readSessionRows()["agent:main:main"] as unknown as Record<
             string,
             unknown
           >;
@@ -379,15 +402,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-cleanup-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -412,7 +434,7 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ failures: [] });
 
-          const stored = loadSessionStore(storePath);
+          const stored = readSessionRows();
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.pluginExtensions).toBeUndefined();
           expect(entry.approvalSnapshot).toBeUndefined();
@@ -447,15 +469,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-active-cleanup-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -479,7 +500,7 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ failures: [] });
 
-          const stored = loadSessionStore(storePath);
+          const stored = readSessionRows();
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.pluginExtensions).toBeUndefined();
           expect(entry.approvalSnapshot).toBeUndefined();
@@ -526,15 +547,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-restart-cleanup-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -558,7 +578,7 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ failures: [] });
 
-          const stored = loadSessionStore(storePath);
+          const stored = readSessionRows();
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toBeUndefined();
           expect(entry.pluginExtensionSlotKeys).toBeUndefined();
@@ -620,15 +640,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-restart-mixed-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -661,7 +680,7 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ failures: [] });
 
-          const stored = loadSessionStore(storePath);
+          const stored = readSessionRows();
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toEqual({ state: "waiting" });
           expect(entry.legacyApprovalSnapshot).toBeUndefined();
@@ -720,15 +739,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-restart-preserve-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -752,7 +770,7 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ failures: [] });
 
-          const stored = loadSessionStore(storePath);
+          const stored = readSessionRows();
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toEqual({ state: "waiting" });
           expect(entry.pluginExtensionSlotKeys).toEqual({
@@ -782,15 +800,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-metadata-cleanup-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -816,7 +833,7 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ failures: [] });
 
-          const stored = loadSessionStore(storePath);
+          const stored = readSessionRows();
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toBeUndefined();
           expect(entry.pluginExtensionSlotKeys).toBeUndefined();
@@ -872,15 +889,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-policy-read-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -965,15 +981,14 @@ describe("plugin session extension SessionEntry projection", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-noop-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
-    const tempConfig = { session: { store: storePath } };
+    const tempConfig = { session: {} };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       process.env.OPENCLAW_STATE_DIR = stateDir;
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-id",
               updatedAt: Date.now(),
@@ -987,7 +1002,7 @@ describe("plugin session extension SessionEntry projection", () => {
             value: { state: "executing" },
           });
           expect(result.ok).toBe(true);
-          const stored = loadSessionStore(storePath);
+          const stored = readSessionRows();
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toBeUndefined();
         },
