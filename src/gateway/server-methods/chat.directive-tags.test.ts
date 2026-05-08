@@ -81,6 +81,16 @@ const mockState = vi.hoisted(() => ({
   deleteMediaBufferCalls: [] as Array<{ id: string; subdir?: string }>,
 }));
 
+function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
+  const entries: Array<Record<string, unknown>> = [];
+  for (const line of fs.readFileSync(transcriptPath, "utf-8").split("\n")) {
+    if (line.length > 0) {
+      entries.push(JSON.parse(line) as Record<string, unknown>);
+    }
+  }
+  return entries;
+}
+
 const bindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn((_ref: unknown) => null as { targetSessionKey?: string } | null),
 }));
@@ -782,11 +792,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // Agent-run delivery is a live projection; Pi message_end owns persisted
     // assistant transcript entries, including stale media/text final payloads.
     expect(assistantUpdates).toEqual([]);
-    const transcriptLines = fs
-      .readFileSync(mockState.transcriptPath, "utf-8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
     const assistantEntries = transcriptLines.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
@@ -833,11 +839,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // Normal agent-run final text must not be mirrored into JSONL by WebChat;
     // Pi persists the model-visible assistant turn from message_end.
     expect(assistantUpdates).toEqual([]);
-    const transcriptLines = fs
-      .readFileSync(mockState.transcriptPath, "utf-8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
     const assistantEntries = transcriptLines.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
