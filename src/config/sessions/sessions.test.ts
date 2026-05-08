@@ -1,9 +1,8 @@
-import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { createSuiteTempRootTracker, withTempDirSync } from "../../test-helpers/temp-dir.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
@@ -47,7 +46,7 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
   });
 
-  it("falls back to derived path when sessionFile is outside known agent sessions dirs", () => {
+  it("ignores legacy sessionFile paths even when a sessions dir is provided", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
     const resolved = resolveSessionFilePath(
@@ -55,7 +54,7 @@ describe("session path safety", () => {
       { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
       { sessionsDir },
     );
-    expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+    expect(resolved).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));
   });
 
   it("derives session file options from an explicit sessions dir", () => {
@@ -77,47 +76,6 @@ describe("session path safety", () => {
         sessionFile: "/tmp/openclaw/agents/main/sessions/legacy.jsonl",
       }),
     ).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));
-  });
-
-  it("accepts symlink-alias session paths that resolve under the sessions dir", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    withTempDirSync({ prefix: "openclaw-symlink-session-" }, (tmpDir) => {
-      const realRoot = path.join(tmpDir, "real-state");
-      const aliasRoot = path.join(tmpDir, "alias-state");
-      const sessionsDir = path.join(realRoot, "agents", "main", "sessions");
-      fs.mkdirSync(sessionsDir, { recursive: true });
-      fs.symlinkSync(realRoot, aliasRoot, "dir");
-      const viaAlias = path.join(aliasRoot, "agents", "main", "sessions", "sess-1.jsonl");
-      const resolved = resolveSessionFilePath("sess-1", { sessionFile: viaAlias }, { sessionsDir });
-      expect(fs.realpathSync(path.dirname(resolved))).toBe(fs.realpathSync(sessionsDir));
-      expect(path.basename(resolved)).toBe("sess-1.jsonl");
-    });
-  });
-
-  it("falls back when sessionFile is a symlink that escapes sessions dir", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    withTempDirSync({ prefix: "openclaw-symlink-escape-" }, (tmpDir) => {
-      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-      const outsideDir = path.join(tmpDir, "outside");
-      fs.mkdirSync(sessionsDir, { recursive: true });
-      fs.mkdirSync(outsideDir, { recursive: true });
-      const outsideFile = path.join(outsideDir, "escaped.jsonl");
-      fs.writeFileSync(outsideFile, "");
-      const symlinkPath = path.join(sessionsDir, "escaped.jsonl");
-      fs.symlinkSync(outsideFile, symlinkPath, "file");
-
-      const resolved = resolveSessionFilePath(
-        "sess-1",
-        { sessionFile: symlinkPath },
-        { sessionsDir },
-      );
-      expect(fs.realpathSync(path.dirname(resolved))).toBe(fs.realpathSync(sessionsDir));
-      expect(path.basename(resolved)).toBe("sess-1.jsonl");
-    });
   });
 });
 
@@ -709,7 +667,6 @@ describe("resolveAndPersistSessionFile", () => {
       sessionKey,
       sessionEntry: sessionStore[sessionKey],
       agentId: "main",
-      sessionsDir: fixture.sessionsDir(),
     });
 
     expect(result.sessionFile).toBe(expectedNextSessionFile);
