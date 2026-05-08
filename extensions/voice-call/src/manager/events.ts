@@ -25,6 +25,16 @@ type EventContext = Pick<
   | "onCallAnswered"
 >;
 
+export type ProcessEventResult = {
+  processed: boolean;
+  speech?: {
+    final: boolean;
+    accepted: boolean;
+    transcript: string;
+    resolvedTranscriptWaiter: boolean;
+  };
+};
+
 function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
   const { inboundPolicy: policy, allowFrom } = config;
 
@@ -106,10 +116,10 @@ function createWebhookCall(params: {
   return callRecord;
 }
 
-export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
+export function processEvent(ctx: EventContext, event: NormalizedEvent): ProcessEventResult {
   const dedupeKey = event.dedupeKey || event.id;
   if (ctx.processedEventIds.has(dedupeKey)) {
-    return;
+    return { processed: false };
   }
 
   let call = findCall({
@@ -134,11 +144,11 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         console.warn(
           `[voice-call] Inbound call rejected by policy but no provider to hang up (providerCallId: ${pid}, from: ${event.from}); call will time out on provider side.`,
         );
-        return;
+        return { processed: false };
       }
       ctx.processedEventIds.add(dedupeKey);
       if (ctx.rejectedProviderCallIds.has(pid)) {
-        return;
+        return { processed: false };
       }
       ctx.rejectedProviderCallIds.add(pid);
       const callId = event.callId ?? pid;
@@ -154,7 +164,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
         });
-      return;
+      return { processed: true };
     }
 
     call = createWebhookCall({
@@ -170,7 +180,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   }
 
   if (!call) {
-    return;
+    return { processed: false };
   }
 
   if (event.providerCallId && event.providerCallId !== call.providerCallId) {
@@ -190,6 +200,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     ctx.processedEventIds.add(dedupeKey);
     call.processedEventIds.push(dedupeKey);
   }
+
+  let resolvedTranscriptWaiter = false;
 
   switch (event.type) {
     case "call.initiated":
@@ -248,8 +260,19 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           console.warn(
             `[voice-call] Ignoring speech event with mismatched turn token for ${call.callId}`,
           );
-          break;
+          const result: ProcessEventResult = {
+            processed: true,
+            speech: {
+              final: true,
+              accepted: false,
+              transcript: event.transcript,
+              resolvedTranscriptWaiter: false,
+            },
+          };
+          persistCallRecord(ctx.storePath, call);
+          return result;
         }
+        resolvedTranscriptWaiter = hadWaiter;
         addTranscriptEntry(call, "user", event.transcript);
       }
       transitionState(call, "listening");
@@ -266,7 +289,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         endReason: event.reason,
         endedAt: event.timestamp,
       });
-      return;
+      return { processed: true };
 
     case "call.error":
       if (!event.retryable) {
@@ -277,7 +300,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           endedAt: event.timestamp,
           transcriptRejectReason: `Call error: ${event.error}`,
         });
-        return;
+        return { processed: true };
       }
       // Keep retryable provider errors replayable so a redelivery can still
       // drive later recovery or terminal handling for the same event key.
@@ -285,4 +308,16 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   }
 
   persistCallRecord(ctx.storePath, call);
+  if (event.type === "call.speech") {
+    return {
+      processed: true,
+      speech: {
+        final: event.isFinal,
+        accepted: true,
+        transcript: event.transcript,
+        resolvedTranscriptWaiter: event.isFinal ? resolvedTranscriptWaiter : false,
+      },
+    };
+  }
+  return { processed: true };
 }

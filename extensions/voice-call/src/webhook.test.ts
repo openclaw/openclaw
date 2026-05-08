@@ -1380,6 +1380,122 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
   });
 });
 
+describe("VoiceCallWebhookServer provider speech webhooks", () => {
+  const createSpeechProvider = (event: NormalizedEvent): VoiceCallProvider => ({
+    ...provider,
+    verifyWebhook: () => ({ ok: true, verifiedRequestKey: `verified:${event.id}` }),
+    parseWebhookEvent: () => ({
+      events: [event],
+      statusCode: 200,
+    }),
+  });
+
+  const createSpeechManager = (
+    call: CallRecord,
+    result: ReturnType<CallManager["processEvent"]>,
+  ): CallManager => {
+    const processEvent = vi.fn(() => result);
+    return {
+      getActiveCalls: () => [call],
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      endCall: vi.fn(async () => ({ success: true })),
+      processEvent,
+    } as unknown as CallManager;
+  };
+
+  it("auto-responds to accepted final provider speech for inbound calls", async () => {
+    const call = createCall(Date.now() - 1_000);
+    call.callId = "call-inbound";
+    call.direction = "inbound";
+    call.state = "listening";
+    const speechEvent: NormalizedEvent = {
+      id: "evt-provider-speech",
+      type: "call.speech",
+      callId: call.callId,
+      providerCallId: call.providerCallId,
+      timestamp: Date.now(),
+      transcript: "can you help me",
+      isFinal: true,
+    };
+    const manager = createSpeechManager(call, {
+      processed: true,
+      speech: {
+        final: true,
+        accepted: true,
+        transcript: speechEvent.transcript,
+        resolvedTranscriptWaiter: false,
+      },
+    });
+    const server = new VoiceCallWebhookServer(
+      createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } }),
+      manager,
+      createSpeechProvider(speechEvent),
+    );
+    const handleInboundResponse = vi.fn(async () => {});
+    (
+      server as unknown as {
+        handleInboundResponse: (callId: string, transcript: string) => Promise<void>;
+      }
+    ).handleInboundResponse = handleInboundResponse;
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookForm(server, baseUrl, "CallSid=provider-call-1");
+
+      expect(response.status).toBe(200);
+      expect(handleInboundResponse).toHaveBeenCalledWith("call-inbound", "can you help me");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("does not auto-respond when provider speech resolves a pending continueCall waiter", async () => {
+    const call = createCall(Date.now() - 1_000);
+    call.callId = "call-outbound";
+    call.direction = "outbound";
+    call.metadata = { mode: "conversation" };
+    const speechEvent: NormalizedEvent = {
+      id: "evt-waiter-speech",
+      type: "call.speech",
+      callId: call.callId,
+      providerCallId: call.providerCallId,
+      timestamp: Date.now(),
+      transcript: "turn answer",
+      isFinal: true,
+    };
+    const manager = createSpeechManager(call, {
+      processed: true,
+      speech: {
+        final: true,
+        accepted: true,
+        transcript: speechEvent.transcript,
+        resolvedTranscriptWaiter: true,
+      },
+    });
+    const server = new VoiceCallWebhookServer(
+      createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } }),
+      manager,
+      createSpeechProvider(speechEvent),
+    );
+    const handleInboundResponse = vi.fn(async () => {});
+    (
+      server as unknown as {
+        handleInboundResponse: (callId: string, transcript: string) => Promise<void>;
+      }
+    ).handleInboundResponse = handleInboundResponse;
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookForm(server, baseUrl, "CallSid=provider-call-1");
+
+      expect(response.status).toBe(200);
+      expect(handleInboundResponse).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe("VoiceCallWebhookServer barge-in suppression during initial message", () => {
   const createTwilioProvider = (
     clearTtsQueue: ReturnType<typeof vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>>,

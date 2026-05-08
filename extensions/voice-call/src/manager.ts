@@ -5,7 +5,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CallManagerContext } from "./manager/context.js";
-import { processEvent as processManagerEvent } from "./manager/events.js";
+import { processEvent as processManagerEvent, type ProcessEventResult } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
   continueCall as continueCallWithContext,
@@ -345,8 +345,8 @@ export class CallManager {
   /**
    * Process a webhook event.
    */
-  processEvent(event: NormalizedEvent): void {
-    processManagerEvent(this.getContext(), event);
+  processEvent(event: NormalizedEvent): ProcessEventResult {
+    return processManagerEvent(this.getContext(), event);
   }
 
   private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {

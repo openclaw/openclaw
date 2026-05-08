@@ -853,11 +853,43 @@ export class VoiceCallWebhookServer {
   private processParsedEvents(events: NormalizedEvent[]): void {
     for (const event of events) {
       try {
-        this.manager.processEvent(event);
+        const result = this.manager.processEvent(event);
+        this.handleParsedSpeechAutoResponse(event, result);
       } catch (err) {
         console.error(`[voice-call] Error processing event ${event.type}:`, err);
       }
     }
+  }
+
+  private handleParsedSpeechAutoResponse(
+    event: NormalizedEvent,
+    result: ReturnType<CallManager["processEvent"]> | undefined,
+  ): void {
+    if (
+      event.type !== "call.speech" ||
+      !event.isFinal ||
+      !result?.processed ||
+      !result.speech?.accepted ||
+      result.speech.resolvedTranscriptWaiter
+    ) {
+      return;
+    }
+    const transcript = result.speech.transcript.trim();
+    if (!transcript) {
+      return;
+    }
+    const call = this.manager.getCall(event.callId);
+    if (!call) {
+      return;
+    }
+    const callMode = call.metadata?.mode as string | undefined;
+    const shouldRespond = call.direction === "inbound" || callMode === "conversation";
+    if (!shouldRespond) {
+      return;
+    }
+    this.handleInboundResponse(call.callId, result.speech.transcript).catch((err) => {
+      console.warn("[voice-call] Failed to auto-respond:", err);
+    });
   }
 
   private writeWebhookResponse(res: http.ServerResponse, payload: WebhookResponsePayload): void {
