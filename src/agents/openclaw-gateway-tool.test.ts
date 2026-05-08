@@ -286,6 +286,42 @@ describe("gateway tool", () => {
     });
   });
 
+  it("passes config.patch through when changing tools.web.search.maxResults", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: { tools: { web: { search: { maxResults: 5 } } } } };
+      }
+      if (method === "config.patch") {
+        return {
+          ok: true,
+          noop: false,
+          path: "/tmp/openclaw.json",
+          config: { tools: { web: { search: { maxResults: 10 } } } },
+        };
+      }
+      return { ok: true };
+    });
+    const sessionKey = "agent:main:telegram:dm:123";
+    const tool = requireGatewayTool(sessionKey);
+
+    const raw = "{ tools: { web: { search: { maxResults: 10 } } } }";
+    const result = await tool.execute("call-web-maxresults-patch", {
+      action: "config.patch",
+      raw,
+    });
+
+    expect(result.details).toEqual({
+      ok: true,
+      result: { ok: true, noop: false, path: "/tmp/openclaw.json" },
+    });
+    expectConfigMutationCall({
+      callGatewayTool: vi.mocked(callGatewayTool),
+      action: "config.patch",
+      raw,
+      sessionKey,
+    });
+  });
+
   it("rejects config.patch when it changes exec approval settings", async () => {
     const tool = requireGatewayTool();
 

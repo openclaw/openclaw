@@ -57,6 +57,10 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   // or privilege boundary. Let agents repair silent group/channel rooms.
   "messages.visibleReplies",
   "messages.groupChat.visibleReplies",
+  // Web search result count is a non-sensitive UX tuning knob (schema: 1-10 positive int).
+  // Omitting it from this list forces the operator to restart the gateway to change it,
+  // even though the field carries no auth or privilege implications.
+  "tools.web.search.maxResults",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
