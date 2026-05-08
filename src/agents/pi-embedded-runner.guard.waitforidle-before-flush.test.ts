@@ -142,7 +142,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
   it("immediately clears pending tool results without waiting when timeoutMs is 0 or less", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
-    
+
     // Agent that never resolves idle
     const idle = deferred<void>();
     const waitForIdleSpy = vi.fn(() => idle.promise);
@@ -172,7 +172,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
       timeoutMs: -100,
       clearPendingOnTimeout: true,
     });
-    
+
     // Verify waitForIdle was still bypassed
     expect(waitForIdleSpy).not.toHaveBeenCalled();
     expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "assistant"]);
