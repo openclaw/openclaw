@@ -10,6 +10,7 @@ const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".js", ".mjs"]);
 
 const legacyStoreMarkers = [
   { label: "sessions.json", pattern: /\bsessions\.json\b/u },
+  { label: "legacy transcript lock file", pattern: /\.jsonl\.lock\b/u },
   { label: "cron jobs JSON", pattern: /\bjobs\.json\b/u },
   { label: "cron jobs state JSON", pattern: /\bjobs-state\.json\b/u },
   { label: "cron run JSONL log", pattern: /\bcron[/\\]runs[/\\][A-Za-z0-9._-]+\.jsonl\b/u },

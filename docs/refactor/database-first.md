@@ -1021,7 +1021,14 @@ is newer than the backup.
       rows for source-level audit and future skip/backfill decisions.
     - Make apply idempotent. Re-running after a partial import should either
       skip an already imported source or merge by stable key.
+      Done: session indexes, transcripts, delivery queues, plugin state, task
+      ledgers, and agent-owned global SQLite rows import through stable keys or
+      upsert/replace semantics, so reruns merge without duplicating durable
+      rows.
     - Failed imports must keep the original source file in place.
+      Done: failed transcript imports now leave the original JSONL source at
+      its detected path, and `migration_sources` records the source as
+      `warning` with `removed_source=0` for the next doctor/migrate run.
 
 ## Performance Rules
 
@@ -1038,6 +1045,10 @@ is newer than the backup.
 - Store large artifacts as BLOBs or chunked BLOB rows, not base64 JSON.
 - Keep `kv` entries small and scoped.
 - Add SQL cleanup for TTL/expiration instead of filesystem pruning.
+  Done for database-owned runtime stores: media, plugin state, plugin blobs,
+  persistent dedupe, and agent cache all expire through SQLite rows. Remaining
+  filesystem cleanup is limited to temporary materializations or explicit
+  removal commands.
 
 ## Static Bans
 

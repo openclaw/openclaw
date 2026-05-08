@@ -26,6 +26,7 @@ type MigrationSourceRow = {
   migration_kind: string;
   source_path: string;
   target_table: string;
+  status: string;
   source_sha256: string | null;
   removed_source: number;
 };
@@ -493,6 +494,54 @@ describe("state migrations", () => {
     await expect(fs.stat(path.join(sessionQueueDir, "session-1.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("keeps failed legacy transcript imports in place for rerun", async () => {
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
+    const sourcePath = path.join(stateDir, "sessions", "trace.jsonl");
+    await fs.writeFile(sourcePath, '{"type":"message","text":"missing session header"}\n', "utf8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(`Failed importing transcript ${sourcePath}`),
+        `Left legacy sessions in place at ${path.join(stateDir, "sessions")}: trace.jsonl`,
+      ]),
+    );
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain("missing session header");
+    await expect(fs.stat(path.join(stateDir, "sessions.legacy-1234"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const database = openOpenClawStateDatabase({ env });
+    const rows = database.db
+      .prepare(
+        `
+          SELECT source_path, target_table, status, removed_source
+          FROM migration_sources
+          WHERE source_path = ?
+        `,
+      )
+      .all(sourcePath) as MigrationSourceRow[];
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        source_path: sourcePath,
+        target_table: "agent.transcript_events",
+        status: "warning",
+        removed_source: 0,
+      }),
+    ]);
   });
 
   it("imports the legacy ACPX gateway instance id into SQLite plugin state", async () => {

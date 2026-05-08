@@ -182,6 +182,11 @@ function recordLegacyMigrationSources(params: {
     if (!source.sourcePath || !source.targetTable) {
       continue;
     }
+    const status = resolveLegacyMigrationSourceStatus({
+      env: params.env,
+      source,
+      runStatus: params.status,
+    });
     recordOpenClawStateMigrationSource({
       env: params.env,
       runId: params.runId,
@@ -189,7 +194,7 @@ function recordLegacyMigrationSources(params: {
       sourceKey: legacyMigrationSourceKey(source),
       sourcePath: source.sourcePath,
       targetTable: source.targetTable,
-      status: params.status,
+      status,
       importedAt: params.importedAt,
       removedSource: !fileExists(source.sourcePath),
       sourceSha256: source.sha256,
@@ -198,6 +203,28 @@ function recordLegacyMigrationSources(params: {
       report: source as unknown as Record<string, unknown>,
     });
   }
+}
+
+function resolveLegacyMigrationSourceStatus(params: {
+  env: NodeJS.ProcessEnv;
+  source: MigrationSourceReport;
+  runStatus: "completed" | "failed" | "warning";
+}): "completed" | "failed" | "warning" {
+  if (params.runStatus !== "warning") {
+    return params.runStatus;
+  }
+  if (params.source.sourceTable && isGlobalAgentOwnedSqliteLegacyTable(params.source.sourceTable)) {
+    return detectGlobalAgentOwnedSqliteLegacyTables(params.env).includes(params.source.sourceTable)
+      ? "warning"
+      : "completed";
+  }
+  if (params.source.targetPath && fileExists(params.source.targetPath)) {
+    return "completed";
+  }
+  if (params.source.sourcePath && !fileExists(params.source.sourcePath)) {
+    return "completed";
+  }
+  return "warning";
 }
 
 function statFileSource(params: {
@@ -2358,7 +2385,6 @@ export async function detectLegacyStateMigrations(params: {
 
 async function migrateLegacySessions(
   detected: LegacyStateDetection,
-  now: () => number,
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -2518,13 +2544,11 @@ async function migrateLegacySessions(
   removeDirIfEmpty(detected.sessions.legacyDir);
   const legacyLeft = safeReadDir(detected.sessions.legacyDir).filter((e) => e.isFile());
   if (legacyLeft.length > 0) {
-    const backupDir = `${detected.sessions.legacyDir}.legacy-${now()}`;
-    try {
-      fs.renameSync(detected.sessions.legacyDir, backupDir);
-      warnings.push(`Left legacy sessions at ${backupDir}`);
-    } catch {
-      // ignore
-    }
+    warnings.push(
+      `Left legacy sessions in place at ${detected.sessions.legacyDir}: ${legacyLeft
+        .map((entry) => entry.name)
+        .join(", ")}`,
+    );
   }
 
   return { changes, warnings };
@@ -2883,7 +2907,7 @@ export async function runLegacyStateMigrations(params: {
   const startedAt = now();
   const sources = collectLegacyMigrationSources(detected);
   try {
-    const sessions = await migrateLegacySessions(detected, now);
+    const sessions = await migrateLegacySessions(detected);
     const agentDir = await migrateLegacyAgentDir(detected, now);
     const channelPlans = await migrateChannelLegacyStatePlans(detected);
     const globalAgentRows = migrateGlobalAgentOwnedSqliteTables({ env: detected.env });
