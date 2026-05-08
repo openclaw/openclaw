@@ -484,8 +484,12 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager({ mode: "full" });
-    expect(releaseUpdate).not.toBeNull();
-    (releaseUpdate as (() => void) | null)?.();
+    (
+      releaseUpdate ??
+      (() => {
+        throw new Error("Expected qmd update release callback");
+      })
+    )();
     await manager?.close();
   });
 
@@ -2468,8 +2472,8 @@ describe("QmdMemoryManager", () => {
       isMcporterCommand(call[0]),
     );
     expect(mcporterCalls.length).toBeGreaterThan(0);
-    expect(mcporterCalls.some((call: unknown[]) => (call[1] as string[])[0] === "daemon")).toBe(
-      false,
+    expect(mcporterCalls.map((call: unknown[]) => (call[1] as string[])[0])).not.toContain(
+      "daemon",
     );
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("cold-start"));
 
@@ -3396,8 +3400,9 @@ describe("QmdMemoryManager", () => {
     });
 
     expect(results).toHaveLength(4);
-    expect(results.some((entry) => entry.source === "memory")).toBe(true);
-    expect(results.some((entry) => entry.source === "sessions")).toBe(true);
+    expect(results.map((entry) => entry.source)).toEqual(
+      expect.arrayContaining(["memory", "sessions"]),
+    );
     await manager.close();
   });
 
@@ -4990,11 +4995,14 @@ describe("QmdMemoryManager", () => {
 });
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }

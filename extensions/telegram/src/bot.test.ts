@@ -50,10 +50,13 @@ const EYES_EMOJI = "\u{1F440}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
 
 function createSignal() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected Telegram bot signal resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -1766,7 +1769,8 @@ describe("createTelegramBot", () => {
         mediaRef: "telegram:file/root-photo-1",
       }),
     ]);
-    expect(payload.ReplyChain?.[1]?.mediaPath).toBeTruthy();
+    expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
+    expect(payload.ReplyChain?.[1]?.mediaPath).not.toBe("");
     expect(getFileSpy).toHaveBeenCalledWith("root-photo-1");
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });

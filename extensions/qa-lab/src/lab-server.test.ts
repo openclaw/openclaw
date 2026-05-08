@@ -35,6 +35,15 @@ const captureMock = vi.hoisted(() => {
         return acc;
       }, {}),
     ).map(([value, count]) => ({ value, count }));
+  const countMatching = <T>(values: T[], predicate: (value: T) => boolean) => {
+    let count = 0;
+    for (const value of values) {
+      if (predicate(value)) {
+        count += 1;
+      }
+    }
+    return count;
+  };
 
   const store = {
     upsertSession(session: Record<string, unknown>) {
@@ -46,7 +55,7 @@ const captureMock = vi.hoisted(() => {
     listSessions(limit: number) {
       return sessions.slice(0, limit).map((session) =>
         Object.assign({}, session, {
-          eventCount: events.filter((event) => event.sessionId === session.id).length,
+          eventCount: countMatching(events, (event) => event.sessionId === session.id),
         }),
       );
     },
@@ -59,7 +68,7 @@ const captureMock = vi.hoisted(() => {
       return {
         sessionId,
         totalEvents: selected.length,
-        unlabeledEventCount: metas.filter((meta) => !meta.provider && !meta.model).length,
+        unlabeledEventCount: countMatching(metas, (meta) => !meta.provider && !meta.model),
         providers: countValues(metas.map((meta) => meta.provider as string | undefined)),
         apis: countValues(metas.map((meta) => meta.api as string | undefined)),
         models: countValues(metas.map((meta) => meta.model as string | undefined)),
@@ -673,7 +682,7 @@ describe("qa-lab server", () => {
     const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
       messages: Array<{ direction: string }>;
     };
-    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toHaveLength(0);
+    expect(snapshot.messages.some((message) => message.direction === "outbound")).toBe(false);
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {

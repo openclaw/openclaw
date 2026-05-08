@@ -52,11 +52,11 @@ describe("resolveTsdownBuildInvocation", () => {
       throw new Error("locked");
     });
 
-    expect(() =>
+    expect(
       pruneSourceCheckoutBundledPluginNodeModules({
         cwd: process.cwd(),
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(warn).toHaveBeenCalledWith(
       "tsdown: could not prune bundled plugin source node_modules: Error: locked",

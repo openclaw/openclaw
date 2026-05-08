@@ -51,7 +51,10 @@ describe("opencode provider plugin", () => {
       name: "OpenCode Zen Provider",
     });
     const provider = requireRegisteredProvider(providers, "opencode");
-    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    const resolveThinkingProfile = provider.resolveThinkingProfile;
+    if (!resolveThinkingProfile) {
+      throw new Error("Expected OpenCode provider resolveThinkingProfile");
+    }
 
     expect(
       resolveThinkingProfile({

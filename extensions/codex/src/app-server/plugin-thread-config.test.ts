@@ -261,7 +261,9 @@ describe("Codex plugin thread config", () => {
       pluginName: "google-calendar",
     });
     expect(config.diagnostics).toEqual([]);
-    expect(request.mock.calls.filter(([method]) => method === "app/list")).toHaveLength(1);
+    expect(
+      request.mock.calls.reduce((count, [method]) => count + (method === "app/list" ? 1 : 0), 0),
+    ).toBe(1);
   });
 
   it("does not expose plugin apps missing from the app inventory snapshot", async () => {
@@ -391,10 +393,8 @@ describe("Codex plugin thread config", () => {
     });
     expect(config.diagnostics).toEqual([]);
     expect(request.mock.calls.map(([method]) => method)).toContain("plugin/install");
-    expect(request.mock.calls.filter(([method]) => method === "app/list").length).toBeGreaterThan(
-      0,
-    );
-    expect(appListParams.some((params) => params.forceRefetch)).toBe(true);
+    expect(request.mock.calls.some(([method]) => method === "app/list")).toBe(true);
+    expect(appListParams.map((params) => params.forceRefetch)).toContain(true);
   });
 
   it("surfaces critical post-install refresh failures and keeps plugin apps disabled", async () => {

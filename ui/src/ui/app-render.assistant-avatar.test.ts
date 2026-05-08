@@ -254,7 +254,7 @@ describe("renderApp assistant avatar routing", () => {
     expect(quickSettingsProps.current?.security.execPolicy).toBe("full");
   });
 
-  it("does not throw when stale cron state contains a job without a payload", () => {
+  it("renders stale cron state containing a job without a payload", () => {
     expect(() =>
       renderApp(
         createState({

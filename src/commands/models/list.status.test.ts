@@ -585,7 +585,9 @@ describe("modelsStatusCommand auth overview", () => {
       await modelsStatusCommand({ json: true }, aliasRuntime as never);
       const aliasPayload = JSON.parse(String((aliasRuntime.log as Mock).mock.calls[0]?.[0]));
       const providers = aliasPayload.auth.providers as Array<{ provider: string }>;
-      expect(providers.filter((provider) => provider.provider === "zai")).toHaveLength(1);
+      expect(
+        providers.reduce((count, provider) => count + (provider.provider === "zai" ? 1 : 0), 0),
+      ).toBe(1);
       expect(providers.map((provider) => provider.provider)).not.toContain("z.ai");
     } finally {
       if (originalLoadConfig) {

@@ -153,6 +153,28 @@ describe("acp translator stable lifecycle handlers", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
+  it("captures ACP client capabilities during initialize", async () => {
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway());
+
+    expect(agent.supportsClientReadTextFile()).toBe(false);
+    expect(agent.supportsClientWriteTextFile()).toBe(false);
+    expect(agent.supportsClientTerminal()).toBe(false);
+
+    await agent.initialize({
+      ...createInitializeRequest(),
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: false },
+        terminal: true,
+      },
+      clientInfo: { name: "test-client", version: "1.2.3" },
+    } as InitializeRequest);
+
+    expect(agent.supportsClientReadTextFile()).toBe(true);
+    expect(agent.supportsClientWriteTextFile()).toBe(false);
+    expect(agent.supportsClientTerminal()).toBe(true);
+    expect(agent.getClientInfo()).toEqual({ name: "test-client", version: "1.2.3" });
+  });
+
   it("lists Gateway sessions through the stable handler with opaque cursors and cwd filtering", async () => {
     const allRows = [
       createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
@@ -187,7 +209,8 @@ describe("acp translator stable lifecycle handlers", () => {
       "agent:main:a2",
     ]);
     expect(first.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
-    expect(first.nextCursor).toEqual(expect.any(String));
+    expect(first.nextCursor).toBeTypeOf("string");
+    expect(first.nextCursor).not.toBe("");
     expect(second.sessions.map((session) => session.sessionId)).toEqual([
       "agent:main:a3",
       "agent:main:a4",
@@ -254,7 +277,8 @@ describe("acp translator stable lifecycle handlers", () => {
     });
 
     const unfiltered = await agent.listSessions(createListSessionsRequest({ limit: 1 }));
-    expect(unfiltered.nextCursor).toEqual(expect.any(String));
+    expect(unfiltered.nextCursor).toBeTypeOf("string");
+    expect(unfiltered.nextCursor).not.toBe("");
     await expect(
       agent.listSessions(
         createListSessionsRequest({ cwd: "/work/a", cursor: unfiltered.nextCursor }),
@@ -264,7 +288,8 @@ describe("acp translator stable lifecycle handlers", () => {
     const filtered = await agent.listSessions(
       createListSessionsRequest({ cwd: "/work/a", limit: 1 }),
     );
-    expect(filtered.nextCursor).toEqual(expect.any(String));
+    expect(filtered.nextCursor).toBeTypeOf("string");
+    expect(filtered.nextCursor).not.toBe("");
     await expect(
       agent.listSessions(createListSessionsRequest({ cursor: filtered.nextCursor })),
     ).rejects.toThrow(/cursor does not match the cwd filter/i);
@@ -311,7 +336,14 @@ describe("acp translator stable lifecycle handlers", () => {
     const result = await agent.resumeSession(createResumeSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.configOptions).toEqual(expect.any(Array));
+    expect(result.configOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "thought_level",
+          currentValue: "adaptive",
+        }),
+      ]),
+    );
     expect(sessionStore.getSession("agent:main:work")?.sessionKey).toBe("agent:main:work");
     expect(request).not.toHaveBeenCalledWith("sessions.get", expect.anything());
     expect(sessionUpdate).toHaveBeenCalledWith({

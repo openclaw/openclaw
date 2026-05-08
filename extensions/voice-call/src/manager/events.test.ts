@@ -332,7 +332,7 @@ describe("processEvent (functional)", () => {
     expect(answeredCallId).toBe("call-2");
   });
 
-  it("when hangup throws, logs and does not throw", () => {
+  it("removes active call even when hangup rejects", () => {
     const provider = createProvider({
       hangupCall: async (): Promise<void> => {
         throw new Error("provider down");
@@ -348,7 +348,7 @@ describe("processEvent (functional)", () => {
       from: "+15553333333",
     });
 
-    expect(() => processEvent(ctx, event)).not.toThrow();
+    processEvent(ctx, event);
     expect(ctx.activeCalls.size).toBe(0);
   });
 

@@ -74,7 +74,10 @@ describe("cli program (nodes media)", () => {
     runtime.error.mockClear();
 
     await expect(parseProgram.parseAsync(args, { from: "user" })).rejects.toThrow(/exit/i);
-    expect(runtime.error.mock.calls.some(([msg]) => expectedError.test(String(msg)))).toBe(true);
+    const matchingErrors = runtime.error.mock.calls
+      .map(([msg]) => String(msg))
+      .filter((msg) => expectedError.test(msg));
+    expect(matchingErrors.length).toBeGreaterThan(0);
   }
 
   async function runAndExpectUrlPayloadMediaFile(params: {

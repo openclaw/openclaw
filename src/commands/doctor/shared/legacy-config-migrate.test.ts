@@ -19,6 +19,13 @@ function migrateLegacyConfigForTest(raw: unknown): {
     : { config: next as OpenClawConfig, changes };
 }
 
+function expectMigrationChangesToIncludeFragments(changes: string[], fragments: string[]): void {
+  const unmatchedFragments = fragments.filter((fragment) =>
+    changes.every((change) => !change.includes(fragment)),
+  );
+  expect({ changes, unmatchedFragments }).toMatchObject({ unmatchedFragments: [] });
+}
+
 describe("legacy session maintenance migrate", () => {
   it("removes deprecated session.maintenance.rotateBytes", () => {
     const res = migrateLegacyConfigForTest({
@@ -649,8 +656,11 @@ describe("legacy migrate heartbeat config", () => {
     });
 
     expect(res.changes).toContain("Removed empty top-level heartbeat.");
-    expect(res.config).not.toBeNull();
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+    expect(res.config).toEqual(expect.any(Object));
+    if (res.config === null) {
+      throw new Error("Expected migrated config");
+    }
+    expect((res.config as { heartbeat?: unknown }).heartbeat).toBeUndefined();
   });
 });
 
@@ -666,8 +676,10 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
-    expect(res.changes.some((c) => c.includes("bind=lan"))).toBe(true);
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "gateway.controlUi.allowedOrigins",
+      "bind=lan",
+    ]);
   });
 
   it("seeds allowedOrigins using configured port", () => {
@@ -734,7 +746,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
+    expectMigrationChangesToIncludeFragments(res.changes, ["gateway.controlUi.allowedOrigins"]);
   });
 
   it("does not migrate loopback bind — returns null", () => {

@@ -294,7 +294,8 @@ describeLaunchdIntegration("launchd integration", () => {
     });
     const events = await fs.readFile(eventsPath, "utf8");
     const lines = events.trim().split(/\r?\n/).filter(Boolean);
-    expect(lines.filter((line) => line.startsWith("start "))).toHaveLength(1);
-    expect(lines.some((line) => /^(SIGHUP|SIGINT|SIGTERM) /.test(line))).toBe(false);
+    expect(lines.reduce((count, line) => count + (line.startsWith("start ") ? 1 : 0), 0)).toBe(1);
+    const signalLines = lines.filter((line) => /^(SIGHUP|SIGINT|SIGTERM) /.test(line));
+    expect(signalLines).toEqual([]);
   }, 60_000);
 });

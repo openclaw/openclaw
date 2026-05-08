@@ -979,7 +979,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     const sessionFiles = await fs.readdir(sessionsDir);
-    expect(sessionFiles.some((name) => name.startsWith("orphan.jsonl.deleted."))).toBe(true);
+    expect(sessionFiles).toContainEqual(expect.stringMatching(/^orphan\.jsonl\.deleted\./));
     expect(sessionFiles).toContain("still-live.jsonl");
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("dreaming cleanup scrubbed"));
   });
@@ -1021,10 +1021,13 @@ describe("generateAndAppendDreamNarrative", () => {
 describe("runDetachedDreamNarrative", () => {
   type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
   function deferred<T>(): Deferred<T> {
-    let resolve!: (v: T) => void;
+    let resolve: ((v: T) => void) | undefined;
     const promise = new Promise<T>((r) => {
       resolve = r;
     });
+    if (!resolve) {
+      throw new Error("Expected dream narrative deferred resolver to be initialized");
+    }
     return { promise, resolve };
   }
 

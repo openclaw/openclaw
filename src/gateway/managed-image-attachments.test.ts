@@ -73,7 +73,7 @@ async function createNoisyPngBuffer(width: number, height: number): Promise<Buff
 }
 
 function requireAttachmentIdFromUrl(url: unknown): string {
-  expect(url).toEqual(expect.any(String));
+  expect(url).toBeTypeOf("string");
   const attachmentId = String(url).split("/").at(-2);
   if (!attachmentId) {
     throw new Error(`expected attachment id in URL ${String(url)}`);

@@ -661,7 +661,7 @@ describe("handleChatManualRefresh", () => {
       }),
     });
     try {
-      let resolveRefresh!: () => void;
+      let resolveRefresh: (() => void) | undefined;
       refreshChatMock.mockReturnValueOnce(
         new Promise<void>((resolve) => {
           resolveRefresh = resolve;
@@ -679,6 +679,9 @@ describe("handleChatManualRefresh", () => {
       await Promise.resolve();
 
       expect(state.scrollToBottom).not.toHaveBeenCalled();
+      if (!resolveRefresh) {
+        throw new Error("Expected chat refresh resolver to be initialized");
+      }
       resolveRefresh();
       await run;
 

@@ -288,7 +288,7 @@ describe("thread binding lifecycle", () => {
         webhookToken: "tok-1",
         introText: "intro",
       });
-      expect(binding).not.toBeNull();
+      expect(binding).toEqual(expect.any(Object));
       hoisted.sendMessageDiscord.mockClear();
       hoisted.sendWebhookMessageDiscord.mockClear();
 
@@ -327,7 +327,7 @@ describe("thread binding lifecycle", () => {
         webhookId: "wh-1",
         webhookToken: "tok-1",
       });
-      expect(binding).not.toBeNull();
+      expect(binding).toEqual(expect.any(Object));
       hoisted.sendMessageDiscord.mockClear();
 
       await vi.advanceTimersByTimeAsync(120_000);
@@ -656,7 +656,7 @@ describe("thread binding lifecycle", () => {
 
       vi.setSystemTime(new Date("2026-02-20T00:00:30.000Z"));
       const touched = manager.touchThread({ threadId: "thread-1", persist: false });
-      expect(touched).not.toBeNull();
+      expect(touched).toEqual(expect.any(Object));
 
       const record = requireBinding(manager, "thread-1");
       expect(record.lastActivityAt).toBe(new Date("2026-02-20T00:00:30.000Z").getTime());
@@ -746,7 +746,7 @@ describe("thread binding lifecycle", () => {
       targetSessionKey: "agent:main:subagent:child-1",
       agentId: "main",
     });
-    expect(first).not.toBeNull();
+    expect(first).toEqual(expect.any(Object));
     expect(hoisted.restPost).toHaveBeenCalledTimes(1);
 
     manager.unbindThread({
@@ -761,9 +761,10 @@ describe("thread binding lifecycle", () => {
       targetSessionKey: "agent:main:subagent:child-2",
       agentId: "main",
     });
-    expect(second).not.toBeNull();
-    expect(second?.webhookId).toBe("wh-created");
-    expect(second?.webhookToken).toBe("tok-created");
+    expect(second).toMatchObject({
+      webhookId: "wh-created",
+      webhookToken: "tok-created",
+    });
     expect(hoisted.restPost).toHaveBeenCalledTimes(1);
   });
 
@@ -796,7 +797,7 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(childBinding).not.toBeNull();
+    expect(childBinding).toEqual(expect.any(Object));
     expect(hoisted.createThreadDiscord).toHaveBeenCalledTimes(1);
     expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
       "parent-1",
@@ -836,8 +837,7 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(childBinding).not.toBeNull();
-    expect(childBinding?.channelId).toBe("parent-1");
+    expect(childBinding).toMatchObject({ channelId: "parent-1" });
     expect(hoisted.restGet).toHaveBeenCalledTimes(1);
     expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
       "parent-1",
@@ -879,7 +879,7 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(childBinding).not.toBeNull();
+    expect(childBinding).toEqual(expect.any(Object));
     const firstClientArgs = hoisted.createDiscordRestClient.mock.calls[0]?.[0] as
       | { accountId?: string; token?: string }
       | undefined;
@@ -929,7 +929,7 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(bound).not.toBeNull();
+    expect(bound).toEqual(expect.any(Object));
     const usedRefreshedCfg = hoisted.createDiscordRestClient.mock.calls.some((call) => {
       if (call?.[1] === refreshedCfg) {
         return true;
@@ -986,7 +986,7 @@ describe("thread binding lifecycle", () => {
       agentId: "main",
     });
 
-    expect(bound).not.toBeNull();
+    expect(bound).toEqual(expect.any(Object));
     expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
       "parent-runtime",
       expect.objectContaining({ autoArchiveMinutes: 60 }),

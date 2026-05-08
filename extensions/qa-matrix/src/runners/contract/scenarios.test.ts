@@ -938,8 +938,8 @@ describe("matrix live qa scenarios", () => {
     const topology = scenarioTesting.buildMatrixQaTopologyForScenarios({
       defaultRoomName: "OpenClaw Matrix QA run",
       scenarios: [
-        MATRIX_QA_SCENARIOS.find((scenario) => scenario.id === "matrix-e2ee-basic-reply")!,
-        MATRIX_QA_SCENARIOS.find((scenario) => scenario.id === "matrix-e2ee-thread-follow-up")!,
+        requireMatrixQaScenario("matrix-e2ee-basic-reply"),
+        requireMatrixQaScenario("matrix-e2ee-thread-follow-up"),
       ],
     });
 
