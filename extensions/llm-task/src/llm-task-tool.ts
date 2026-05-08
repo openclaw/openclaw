@@ -1,12 +1,16 @@
-import path from "node:path";
-import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
+import { randomUUID } from "node:crypto";
+import {
+  buildModelAliasIndex,
+  resolveDefaultAgentId,
+  resolveModelRefFromString,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { createSqliteSessionTranscriptLocator } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
-import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 
 function stripCodeFences(s: string): string {
@@ -252,66 +256,64 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const fullPrompt = `${system}\n\nTASK:\n${prompt}\n\nINPUT_JSON:\n${inputJson}\n`;
 
-      return await withTempWorkspace(
-        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-llm-task-" },
-        async ({ dir: tmpDir }) => {
-          const sessionId = `llm-task-${Date.now()}`;
-          const sessionFile = path.join(tmpDir, "session.json");
+      const sessionId = `llm-task-${randomUUID()}`;
+      const sessionFile = createSqliteSessionTranscriptLocator({
+        agentId: api.config ? resolveDefaultAgentId(api.config) : undefined,
+        sessionId,
+      });
 
-          const result = await api.runtime.agent.runEmbeddedPiAgent({
-            sessionId,
-            sessionFile,
-            workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
-            config: api.config,
-            prompt: fullPrompt,
-            timeoutMs,
-            runId: `llm-task-${Date.now()}`,
-            provider,
-            model,
-            authProfileId,
-            authProfileIdSource: authProfileId ? "user" : "auto",
-            thinkLevel,
-            streamParams,
-            disableTools: true,
-          });
+      const result = await api.runtime.agent.runEmbeddedPiAgent({
+        sessionId,
+        sessionFile,
+        workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
+        config: api.config,
+        prompt: fullPrompt,
+        timeoutMs,
+        runId: sessionId,
+        provider,
+        model,
+        authProfileId,
+        authProfileIdSource: authProfileId ? "user" : "auto",
+        thinkLevel,
+        streamParams,
+        disableTools: true,
+      });
 
-          const text = collectText(
-            typeof result === "object" && result !== null && "payloads" in result
-              ? (result as { payloads?: Array<{ text?: string; isError?: boolean }> }).payloads
-              : undefined,
-          );
-          if (!text) {
-            throw new Error("LLM returned empty output");
-          }
-
-          const raw = stripCodeFences(text);
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(raw);
-          } catch {
-            throw new Error("LLM returned invalid JSON");
-          }
-
-          const schema = params.schema;
-          if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-            const validation = validateJsonSchemaValue({
-              schema: schema as JsonSchemaObject,
-              cacheKey: "llm-task.result",
-              value: parsed,
-              cache: false,
-            });
-            if (!validation.ok) {
-              const msg = validation.errors.map((error) => error.text).join("; ") || "invalid";
-              throw new Error(`LLM JSON did not match schema: ${msg}`);
-            }
-          }
-
-          return {
-            content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }],
-            details: { json: parsed, provider, model },
-          };
-        },
+      const text = collectText(
+        typeof result === "object" && result !== null && "payloads" in result
+          ? (result as { payloads?: Array<{ text?: string; isError?: boolean }> }).payloads
+          : undefined,
       );
+      if (!text) {
+        throw new Error("LLM returned empty output");
+      }
+
+      const raw = stripCodeFences(text);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new Error("LLM returned invalid JSON");
+      }
+
+      const schema = params.schema;
+      if (schema && typeof schema === "object" && !Array.isArray(schema)) {
+        const validation = validateJsonSchemaValue({
+          schema: schema as JsonSchemaObject,
+          cacheKey: "llm-task.result",
+          value: parsed,
+          cache: false,
+        });
+        if (!validation.ok) {
+          const msg = validation.errors.map((error) => error.text).join("; ") || "invalid";
+          throw new Error(`LLM JSON did not match schema: ${msg}`);
+        }
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }],
+        details: { json: parsed, provider, model },
+      };
     },
   };
 }

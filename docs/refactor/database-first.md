@@ -204,6 +204,9 @@ The remaining cleanup is mostly consolidation and deletion:
   transcript locators instead of creating temporary `session.jsonl` files.
   `SessionManager.open()` preserves those locators instead of resolving them as
   filesystem paths.
+- `llm-task` helper runs and hidden commitment extraction also use SQLite
+  transcript locators, so these model-only helper sessions no longer create
+  temporary JSON/JSONL transcript files.
 - Parent transcript fork decisions and fork creation no longer accept
   `storePath` or `sessionsDir`; they use `{agentId, sessionId}` SQLite
   transcript scope and derive any retained path metadata from the parent

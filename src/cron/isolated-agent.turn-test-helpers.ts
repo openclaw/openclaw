@@ -71,7 +71,7 @@ export const DEFAULT_AGENT_TURN_PAYLOAD: CronJob["payload"] = {
 export const GMAIL_MODEL = "openrouter/meta-llama/llama-3.3-70b:free";
 
 type RunCronTurnOptions = {
-  cfgOverrides?: Parameters<typeof makeCfg>[2];
+  cfgOverrides?: Parameters<typeof makeCfg>[1];
   deps?: CliDeps;
   delivery?: CronJob["delivery"];
   jobPayload?: CronJob["payload"];
