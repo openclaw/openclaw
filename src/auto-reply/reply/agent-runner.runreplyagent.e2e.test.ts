@@ -1,9 +1,11 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { listSessionEntries, upsertSessionEntry } from "../../config/sessions/store.js";
 import type { TypingMode } from "../../config/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -112,13 +114,17 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  vi.unstubAllEnvs();
+});
+
 function createMinimalRun(params?: {
   opts?: GetReplyOptions;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
-  storePath?: string;
   typingMode?: TypingMode;
   blockStreamingEnabled?: boolean;
   isActive?: boolean;
@@ -188,7 +194,6 @@ function createMinimalRun(params?: {
         sessionEntry: params?.sessionEntry,
         sessionStore: params?.sessionStore,
         sessionKey,
-        storePath: params?.storePath,
         sessionCtx,
         defaultModel: "anthropic/claude-opus-4-6",
         resolvedVerboseLevel: params?.resolvedVerboseLevel ?? "off",
@@ -293,16 +298,16 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
-  async function createSessionStoreFile(entry: SessionEntry) {
+  async function createSessionRows(entry: SessionEntry) {
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-pending-"));
-    const storePath = join(dir, "sessions.json");
-    await writeFile(storePath, JSON.stringify({ main: entry }), "utf8");
-    return storePath;
+    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+    upsertSessionEntry({ agentId: "main", sessionKey: "main", entry });
   }
 
-  async function readStoredMainSession(storePath: string): Promise<SessionEntry> {
-    const raw = await readFile(storePath, "utf8");
-    return JSON.parse(raw).main as SessionEntry;
+  function readStoredMainSession(): SessionEntry {
+    return Object.fromEntries(
+      listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    ).main;
   }
 
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
@@ -311,7 +316,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       updatedAt: Date.now(),
     };
     const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    await createSessionRows(sessionEntry);
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "private final" }],
       meta: {},
@@ -322,12 +327,11 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      storePath,
     });
 
     await run();
 
-    const stored = await readStoredMainSession(storePath);
+    const stored = readStoredMainSession();
     expect(stored.pendingFinalDelivery).toBeUndefined();
     expect(stored.pendingFinalDeliveryText).toBeUndefined();
   });
@@ -339,7 +343,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       sendPolicy: "deny",
     };
     const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    await createSessionRows(sessionEntry);
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "denied final" }],
       meta: {},
@@ -349,12 +353,11 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      storePath,
     });
 
     await run();
 
-    const stored = await readStoredMainSession(storePath);
+    const stored = readStoredMainSession();
     expect(stored.pendingFinalDelivery).toBeUndefined();
     expect(stored.pendingFinalDeliveryText).toBeUndefined();
   });
@@ -365,7 +368,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       updatedAt: Date.now(),
     };
     const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    await createSessionRows(sessionEntry);
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hidden reasoning", isReasoning: true }, { text: "visible final" }],
       meta: {},
@@ -375,12 +378,11 @@ describe("runReplyAgent pending final delivery capture", () => {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      storePath,
     });
 
     await run();
 
-    const stored = await readStoredMainSession(storePath);
+    const stored = readStoredMainSession();
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("visible final");
   });
@@ -1179,12 +1181,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
     const payload = Array.isArray(res) ? res[0] : res;
     expect(payload).toMatchObject({
-      text: expect.stringContaining("conversation is too large"),
+      text: expect.stringContaining("Context limit exceeded"),
     });
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("/new");
+    expect(payload.text).toContain("agents.defaults.compaction.reserveTokensFloor");
   });
 
   it("surfaces overflow fallback when embedded payload text is whitespace-only", async () => {
@@ -1203,12 +1205,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
     const payload = Array.isArray(res) ? res[0] : res;
     expect(payload).toMatchObject({
-      text: expect.stringContaining("conversation is too large"),
+      text: expect.stringContaining("Context limit exceeded"),
     });
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("/new");
+    expect(payload.text).toContain("agents.defaults.compaction.reserveTokensFloor");
   });
 
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {
