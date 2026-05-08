@@ -210,7 +210,13 @@ async function expectAllowFromCacheInvalidationWithReadSpy(params: {
 }
 
 function countFileReads(spy: { mock: { calls: unknown[][] } }, filePath: string): number {
-  return spy.mock.calls.filter(([candidate]) => candidate === filePath).length;
+  let count = 0;
+  for (const [candidate] of spy.mock.calls) {
+    if (candidate === filePath) {
+      count++;
+    }
+  }
+  return count;
 }
 
 async function seedDefaultAccountAllowFromFixture(stateDir: string) {
