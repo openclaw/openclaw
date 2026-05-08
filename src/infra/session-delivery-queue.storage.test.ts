@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -6,7 +7,6 @@ import {
   enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
-  resolveSessionDeliveryQueueDir,
 } from "./session-delivery-queue.js";
 
 describe("session-delivery queue storage", () => {
@@ -72,7 +72,7 @@ describe("session-delivery queue storage", () => {
 
       await loadPendingSessionDeliveries(tempDir);
 
-      await expect(fs.access(resolveSessionDeliveryQueueDir(tempDir))).rejects.toMatchObject({
+      await expect(fs.access(path.join(tempDir, "session-delivery-queue"))).rejects.toMatchObject({
         code: "ENOENT",
       });
     });

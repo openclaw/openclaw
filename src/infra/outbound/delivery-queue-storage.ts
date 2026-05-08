@@ -1,7 +1,5 @@
-import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
-import { resolveStateDir } from "../../config/paths.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -21,7 +19,6 @@ import type { OutboundMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
-const QUEUE_DIRNAME = "delivery-queue";
 const QUEUE_NAME = "outbound-delivery";
 
 export type QueuedRenderedMessageBatchPlan = {
@@ -71,11 +68,6 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   lastError?: string;
   platformSendStartedAt?: number;
   recoveryState?: "send_attempt_started" | "unknown_after_send";
-}
-
-export function resolveQueueDir(stateDir?: string): string {
-  const base = stateDir ?? resolveStateDir();
-  return path.join(base, QUEUE_DIRNAME);
 }
 
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
@@ -171,10 +163,8 @@ function persistQueueEntry(entry: QueuedDelivery, stateDir?: string): void {
   }, databaseOptions(stateDir));
 }
 
-/** Ensure the queue directory (and failed/ subdirectory) exist. */
-export async function ensureQueueDir(stateDir?: string): Promise<string> {
+function ensureDeliveryQueueStorage(stateDir?: string): void {
   openOpenClawStateDatabase(databaseOptions(stateDir));
-  return resolveQueueDir(stateDir);
 }
 
 /** Persist a delivery entry before attempting send. Returns the entry ID. */
@@ -182,7 +172,7 @@ export async function enqueueDelivery(
   params: QueuedDeliveryPayload,
   stateDir?: string,
 ): Promise<string> {
-  await ensureQueueDir(stateDir);
+  ensureDeliveryQueueStorage(stateDir);
   const id = generateSecureUuid();
   const entry: QueuedDelivery = {
     id,
@@ -276,7 +266,6 @@ export async function markDeliveryPlatformOutcomeUnknown(
   persistQueueEntry(entry, stateDir);
 }
 
-/** Load a single pending delivery entry by ID from the queue directory. */
 export async function loadPendingDelivery(
   id: string,
   stateDir?: string,
@@ -292,7 +281,6 @@ export async function loadPendingDelivery(
   return normalized.entry;
 }
 
-/** Load all pending delivery entries from the queue. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(stateDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
