@@ -79,6 +79,38 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("honors explicit store env without mutating process state", async () => {
+    await withOpenClawTestState(
+      { label: "plugin-state-explicit-env-a", applyEnv: false },
+      async (stateA) => {
+        await withOpenClawTestState(
+          { label: "plugin-state-explicit-env-b", applyEnv: false },
+          async (stateB) => {
+            const storeA = createPluginStateKeyedStore<{ owner: string }>("discord", {
+              namespace: "explicit-env",
+              maxEntries: 10,
+              env: stateA.env,
+            });
+            const storeB = createPluginStateKeyedStore<{ owner: string }>("discord", {
+              namespace: "explicit-env",
+              maxEntries: 10,
+              env: stateB.env,
+            });
+
+            await storeA.register("shared", { owner: "a" });
+            await storeB.register("shared", { owner: "b" });
+
+            await expect(storeA.lookup("shared")).resolves.toEqual({ owner: "a" });
+            await expect(storeB.lookup("shared")).resolves.toEqual({ owner: "b" });
+            expect(resolvePluginStateSqlitePath(stateA.env)).not.toBe(
+              resolvePluginStateSqlitePath(stateB.env),
+            );
+          },
+        );
+      },
+    );
+  });
+
   it("upserts values and refreshes deterministic entry ordering", async () => {
     await withPluginStateTestState(async () => {
       vi.useFakeTimers();

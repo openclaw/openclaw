@@ -3,6 +3,7 @@ export {
   readEffectiveTools,
   readRawQaSessionEntries,
   readSkillStatus,
+  setQaActiveMemorySessionDisabled,
   seedQaSessionTranscript,
 } from "./suite-runtime-agent-session.js";
 export {
