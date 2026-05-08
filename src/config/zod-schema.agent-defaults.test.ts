@@ -176,6 +176,21 @@ describe("agent defaults schema", () => {
     expect(agent.heartbeat?.skipWhenBusy).toBe(true);
   });
 
+  it("accepts ambient heartbeat mode and message budgets on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      heartbeat: { mode: "ambient", maxMessages: 2 },
+    })!;
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      heartbeat: { mode: "ambient", maxMessages: 1 },
+    });
+
+    expect(defaults.heartbeat?.mode).toBe("ambient");
+    expect(defaults.heartbeat?.maxMessages).toBe(2);
+    expect(agent.heartbeat?.mode).toBe("ambient");
+    expect(agent.heartbeat?.maxMessages).toBe(1);
+  });
+
   it("accepts per-agent TTS overrides", () => {
     const agent = AgentEntrySchema.parse({
       id: "reader",

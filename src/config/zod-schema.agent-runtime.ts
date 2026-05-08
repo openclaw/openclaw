@@ -22,6 +22,7 @@ import { sensitive } from "./zod-schema.sensitive.js";
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
+    mode: z.union([z.literal("heartbeat"), z.literal("ambient")]).optional(),
     activeHours: z
       .object({
         start: z.string().optional(),
@@ -40,6 +41,7 @@ export const HeartbeatSchema = z
     prompt: z.string().optional(),
     includeSystemPromptSection: z.boolean().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
+    maxMessages: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     lightContext: z.boolean().optional(),
