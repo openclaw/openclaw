@@ -10,6 +10,16 @@ import {
   runCliRespawnPlan,
 } from "./entry.respawn.js";
 
+type CliRespawnPlan = NonNullable<ReturnType<typeof buildCliRespawnPlan>>;
+
+function expectCliRespawnPlan(plan: ReturnType<typeof buildCliRespawnPlan>): CliRespawnPlan {
+  expect(plan).toEqual(expect.any(Object));
+  if (plan === null) {
+    throw new Error("Expected CLI respawn plan");
+  }
+  return plan;
+}
+
 describe("buildCliRespawnPlan", () => {
   it("returns null when respawn policy skips the argv", () => {
     expect(
@@ -30,12 +40,12 @@ describe("buildCliRespawnPlan", () => {
       autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
     });
 
-    expect(plan).not.toBeNull();
-    expect(plan?.command).toBe(process.execPath);
-    expect(plan?.argv[0]).toBe(EXPERIMENTAL_WARNING_FLAG);
-    expect(plan?.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
-    expect(plan?.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
-    expect(plan?.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.command).toBe(process.execPath);
+    expect(respawnPlan.argv[0]).toBe(EXPERIMENTAL_WARNING_FLAG);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
+    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
   });
 
   it.each(["tui", "terminal", "chat"] as const)(
@@ -48,11 +58,11 @@ describe("buildCliRespawnPlan", () => {
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
       });
 
-      expect(plan).not.toBeNull();
-      expect(plan?.argv).toEqual(["openclaw", command]);
-      expect(plan?.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
-      expect(plan?.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
-      expect(plan?.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+      const respawnPlan = expectCliRespawnPlan(plan);
+      expect(respawnPlan.argv).toEqual(["openclaw", command]);
+      expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+      expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
+      expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
     },
   );
 
