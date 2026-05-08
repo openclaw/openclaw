@@ -484,8 +484,10 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager({ mode: "full" });
-    expect(releaseUpdate).not.toBeNull();
-    (releaseUpdate as (() => void) | null)?.();
+    if (releaseUpdate === null) {
+      throw new Error("Expected qmd update release callback");
+    }
+    releaseUpdate();
     await manager?.close();
   });
 
