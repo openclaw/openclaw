@@ -1429,7 +1429,7 @@ describe("update-cli", () => {
         await updateCommand({ dryRun: true });
       },
       assert: () => {
-        expect(vi.mocked(defaultRuntime.exit).mock.calls.some((call) => call[0] === 1)).toBe(false);
+        expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
         expect(runGatewayUpdate).not.toHaveBeenCalled();
       },
     },
@@ -3298,9 +3298,11 @@ describe("update-cli", () => {
       .mocked(defaultRuntime.error)
       .mock.calls.some((call) => String(call[0]).includes("Downgrade confirmation required."));
     expect(downgradeMessageSeen).toBe(shouldExit);
-    expect(vi.mocked(defaultRuntime.exit).mock.calls.some((call) => call[0] === 1)).toBe(
-      shouldExit,
-    );
+    if (shouldExit) {
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    } else {
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    }
     expect(vi.mocked(runGatewayUpdate).mock.calls.length > 0).toBe(false);
     expect(
       vi
