@@ -260,7 +260,6 @@ describe("getSessionSnapshot", () => {
       await withTempDir("openclaw-snapshot-", async (root) => {
         const previousStateDir = process.env.OPENCLAW_STATE_DIR;
         process.env.OPENCLAW_STATE_DIR = root;
-        const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
         const sessionKey = "agent:main:whatsapp:dm:s1";
 
         try {

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebChannelStatus } from "./auto-reply/types.js";
@@ -187,15 +188,26 @@ export function installWebAutoReplyTestHomeHooks() {
 
 export async function makeSessionStore(
   entries: Record<string, unknown> = {},
-): Promise<{ storePath: string; cleanup: () => Promise<void> }> {
+): Promise<{ cleanup: () => Promise<void> }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(storePath, JSON.stringify(entries));
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = dir;
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: entry as never,
+    });
+  }
   const cleanup = async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     await rmDirWithRetries(dir);
   };
   return {
-    storePath,
     cleanup,
   };
 }
