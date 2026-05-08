@@ -37,6 +37,7 @@ const legacyStoreMarkers = [
   { label: "subagent registry JSON", pattern: /\bsubagents[/\\]runs\.json\b/u },
   { label: "OpenRouter model cache JSON", pattern: /\bopenrouter-models\.json\b/u },
   { label: "exec approvals JSON", pattern: /\bexec-approvals\.json\b/u },
+  { label: "workspace setup JSON", pattern: /\bworkspace-state\.json\b/u },
   { label: "ACPX process leases JSON", pattern: /\bprocess-leases\.json\b/u },
   { label: "ACPX gateway instance id file", pattern: /\bgateway-instance-id\b/u },
   { label: "gateway restart sentinel JSON", pattern: /\brestart-sentinel\.json\b/u },

@@ -115,7 +115,8 @@ The branch already has a real shared SQLite base:
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
   run artifact, and scoped cache stores for workers.
 - Workspace bootstrap completion markers now live in shared SQLite KV keyed by
-  resolved workspace path instead of `.openclaw/workspace-state.json`.
+  resolved workspace path instead of `.openclaw/workspace-state.json`; runtime
+  no longer reads or rewrites the legacy workspace marker.
 - Exec approvals now live in shared SQLite KV (`exec.approvals/current`).
   Doctor imports legacy `~/.openclaw/exec-approvals.json`; runtime writes no
   longer create or rewrite that file.

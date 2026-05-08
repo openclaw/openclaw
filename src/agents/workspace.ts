@@ -31,8 +31,6 @@ export const DEFAULT_USER_FILENAME = "USER.md";
 export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
-const WORKSPACE_STATE_DIRNAME = ".openclaw";
-const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_SETUP_STATE_SCOPE = "workspace.setup-state";
 const WORKSPACE_STATE_VERSION = 1;
 const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
@@ -311,7 +309,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
 }
 
 function resolveWorkspaceStatePath(dir: string): string {
-  return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
+  return path.join(dir, ".openclaw", "setup-state");
 }
 
 function resolveWorkspaceStateKey(dir: string): string {
@@ -335,18 +333,7 @@ function parseWorkspaceSetupStateValue(value: unknown): WorkspaceSetupState | nu
   };
 }
 
-function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
-  try {
-    return parseWorkspaceSetupStateValue(JSON.parse(raw) as unknown);
-  } catch {
-    return null;
-  }
-}
-
-async function readWorkspaceSetupState(
-  statePath: string,
-  opts?: { persistLegacyMigration?: boolean },
-): Promise<WorkspaceSetupState> {
+async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetupState> {
   const dir = path.dirname(path.dirname(statePath));
   const key = resolveWorkspaceStateKey(dir);
   const sqliteState = parseWorkspaceSetupStateValue(
@@ -355,23 +342,9 @@ async function readWorkspaceSetupState(
   if (sqliteState) {
     return sqliteState;
   }
-  try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = parseWorkspaceSetupState(raw);
-    if (opts?.persistLegacyMigration && parsed) {
-      await writeWorkspaceSetupState(statePath, parsed);
-      await fs.rm(statePath, { force: true }).catch(() => {});
-    }
-    return parsed ?? { version: WORKSPACE_STATE_VERSION };
-  } catch (err) {
-    const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
-      throw err;
-    }
-    return {
-      version: WORKSPACE_STATE_VERSION,
-    };
-  }
+  return {
+    version: WORKSPACE_STATE_VERSION,
+  };
 }
 
 async function readWorkspaceSetupStateForDir(dir: string): Promise<WorkspaceSetupState> {
@@ -411,9 +384,7 @@ export async function reconcileWorkspaceBootstrapCompletion(
   const resolvedDir = resolveUserPath(dir);
   const statePath = resolveWorkspaceStatePath(resolvedDir);
   const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const state = await readWorkspaceSetupState(statePath, {
-    persistLegacyMigration: true,
-  });
+  const state = await readWorkspaceSetupState(statePath);
   return await reconcileWorkspaceBootstrapCompletionState({
     dir: resolvedDir,
     bootstrapPath,
@@ -561,9 +532,7 @@ export async function ensureAgentWorkspace(params?: {
     await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
   }
 
-  let state = await readWorkspaceSetupState(statePath, {
-    persistLegacyMigration: true,
-  });
+  let state = await readWorkspaceSetupState(statePath);
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };

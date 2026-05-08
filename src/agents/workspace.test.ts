@@ -49,8 +49,6 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
   });
 });
 
-const WORKSPACE_STATE_PATH_SEGMENTS = [".openclaw", "workspace-state.json"] as const;
-
 async function readWorkspaceState(dir: string): Promise<{
   version: number;
   bootstrapSeededAt?: string;
@@ -213,26 +211,6 @@ describe("ensureAgentWorkspace", () => {
     });
     const state = await readWorkspaceState(tempDir);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
-  });
-
-  it("migrates legacy onboardingCompletedAt markers to setupCompletedAt", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });
-    await fs.writeFile(
-      path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS),
-      JSON.stringify({
-        version: 1,
-        onboardingCompletedAt: "2026-03-15T02:30:00.000Z",
-      }),
-    );
-
-    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-
-    const state = await readWorkspaceState(tempDir);
-    expect(state.setupCompletedAt).toBe("2026-03-15T02:30:00.000Z");
-    await expect(
-      fs.stat(path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS)),
-    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reports bootstrap pending while BOOTSTRAP.md exists and setup is incomplete", async () => {
