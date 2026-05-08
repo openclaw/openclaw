@@ -2,7 +2,7 @@ import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/suba
 import { getSessionEntry } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   formatDurationCompact,
@@ -59,18 +59,15 @@ type SessionEntryResolution = {
 };
 
 export function resolveSessionEntryForKey(params: {
-  cfg: OpenClawConfig;
   key: string;
   cache: Map<string, SessionEntry | undefined>;
 }): SessionEntryResolution {
   const parsed = parseAgentSessionKey(params.key);
-  const agentId = parsed?.agentId;
-  if (!agentId) {
-    return { entry: undefined };
-  }
-  if (!params.cache.has(params.key)) {
+  const agentId = parsed?.agentId ?? DEFAULT_AGENT_ID;
+  const cacheKey = `${agentId}\0${params.key}`;
+  if (!params.cache.has(cacheKey)) {
     params.cache.set(
-      params.key,
+      cacheKey,
       getSessionEntry({
         agentId,
         sessionKey: params.key,
@@ -78,7 +75,7 @@ export function resolveSessionEntryForKey(params: {
     );
   }
   return {
-    entry: params.cache.get(params.key),
+    entry: params.cache.get(cacheKey),
   };
 }
 
@@ -236,7 +233,6 @@ export function buildSubagentList(params: {
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
     const sessionEntry = resolveSessionEntryForKey({
-      cfg: params.cfg,
       key: entry.childSessionKey,
       cache,
     }).entry;

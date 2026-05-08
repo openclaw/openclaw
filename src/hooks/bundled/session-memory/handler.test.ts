@@ -8,7 +8,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { getRecentTranscriptContent } from "./transcript.js";
+import { findPreviousTranscriptPath, getRecentTranscriptContent } from "./transcript.js";
 
 // Avoid calling the embedded Pi agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -87,12 +87,14 @@ function parseMockSessionContent(content: string): unknown[] {
 
 function seedSessionTranscript(params: {
   sessionId: string;
+  sessionFile: string;
   content: string;
   agentId?: string;
 }): void {
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId ?? "main",
     sessionId: params.sessionId,
+    transcriptPath: params.sessionFile,
     events: parseMockSessionContent(params.content),
     now: () => 1_770_000_000_000,
   });
@@ -100,7 +102,7 @@ function seedSessionTranscript(params: {
 
 async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
-  previousSessionEntry: { sessionId: string };
+  previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
   sessionKey?: string;
@@ -141,9 +143,13 @@ async function runNewWithPreviousSession(params: {
   action?: "new" | "reset";
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
+  const sessionsDir = path.join(tempDir, "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
 
+  const sessionFile = path.join(sessionsDir, "test-session.jsonl");
   seedSessionTranscript({
     sessionId: "test-123",
+    sessionFile,
     content: params.sessionContent,
   });
 
@@ -159,6 +165,7 @@ async function runNewWithPreviousSession(params: {
     action: params.action,
     previousSessionEntry: {
       sessionId: "test-123",
+      sessionFile,
     },
   });
   return { tempDir, files, memoryContent };
@@ -184,32 +191,50 @@ function expectDatedMemoryFile(files: string[], slug: string) {
   expect(day ? isAsciiDigits(day) : false).toBe(true);
 }
 
-async function createSessionMemoryWorkspace(): Promise<{ tempDir: string }> {
+async function createSessionMemoryWorkspace(params?: {
+  activeSession?: { name: string; content: string };
+}): Promise<{ tempDir: string; sessionsDir: string; activeSessionFile?: string }> {
   const tempDir = await createCaseWorkspace("workspace");
-  return { tempDir };
+  const sessionsDir = path.join(tempDir, "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+
+  if (!params?.activeSession) {
+    return { tempDir, sessionsDir };
+  }
+
+  const activeSessionFile = path.join(sessionsDir, params.activeSession.name);
+  seedSessionTranscript({
+    sessionId: path.basename(params.activeSession.name, ".jsonl"),
+    sessionFile: activeSessionFile,
+    content: params.activeSession.content,
+  });
+  return { tempDir, sessionsDir, activeSessionFile };
 }
 
 async function writeSessionTranscript(params: {
   sessionId?: string;
+  name: string;
   content: string;
-}): Promise<{ tempDir: string; sessionId: string }> {
-  const { tempDir } = await createSessionMemoryWorkspace();
-  const sessionId = params.sessionId ?? "test-session";
+}): Promise<{ tempDir: string; sessionsDir: string; sessionFile: string }> {
+  const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
+  const sessionFile = path.join(sessionsDir, params.name);
   seedSessionTranscript({
-    sessionId,
+    sessionId: params.sessionId ?? path.basename(params.name, ".jsonl"),
+    sessionFile,
     content: params.content,
   });
-  return { tempDir, sessionId };
+  return { tempDir, sessionsDir, sessionFile };
 }
 
 async function readSessionTranscript(params: {
   sessionContent: string;
   messageCount?: number;
 }): Promise<string | null> {
-  const { sessionId } = await writeSessionTranscript({
+  const { sessionFile } = await writeSessionTranscript({
+    name: "test-session.jsonl",
     content: params.sessionContent,
   });
-  return getRecentTranscriptContent({ agentId: "main", sessionId }, params.messageCount);
+  return getRecentTranscriptContent(sessionFile, params.messageCount);
 }
 
 function expectMemoryConversation(params: {
@@ -275,7 +300,7 @@ describe("session-memory hook", () => {
   });
 
   it("creates memory file with session content on /new command", async () => {
-    // Create mock transcript rows with user/assistant messages.
+    // Create a mock session file with user/assistant messages
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Hello there" },
       { role: "assistant", content: "Hi! How can I help?" },
@@ -359,9 +384,13 @@ describe("session-memory hook", () => {
 
   it("does not block reset command handling on opt-in model slug generation", async () => {
     const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
 
+    const sessionFile = path.join(sessionsDir, "test-session.jsonl");
     seedSessionTranscript({
       sessionId: "test-123",
+      sessionFile,
       content: createMockSessionContent([
         { role: "user", content: "Investigate slow WhatsApp reset" },
         { role: "assistant", content: "Checking reset hooks" },
@@ -401,6 +430,7 @@ describe("session-memory hook", () => {
           } satisfies OpenClawConfig,
           previousSessionEntry: {
             sessionId: "test-123",
+            sessionFile,
           },
         });
 
@@ -489,9 +519,13 @@ describe("session-memory hook", () => {
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");
+    const naviSessionsDir = path.join(naviWorkspace, "sessions");
+    await fs.mkdir(naviSessionsDir, { recursive: true });
 
+    const sessionFile = path.join(naviSessionsDir, "navi-session.jsonl");
     seedSessionTranscript({
       sessionId: "navi-session",
+      sessionFile,
       content: createMockSessionContent([
         { role: "user", content: "Remember this under Navi" },
         { role: "assistant", content: "Stored in the bound workspace" },
@@ -510,6 +544,7 @@ describe("session-memory hook", () => {
       workspaceDirOverride: naviWorkspace,
       previousSessionEntry: {
         sessionId: "navi-session",
+        sessionFile,
       },
     });
 
@@ -622,24 +657,31 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Fourth message");
   });
 
-  it("reads the canonical SQLite transcript by session identity", async () => {
-    const { tempDir } = await createSessionMemoryWorkspace();
+  it("recovers canonical transcript when previousSessionEntry.sessionFile is missing", async () => {
+    const { sessionsDir } = await createSessionMemoryWorkspace();
 
-    const sessionId = "sqlite-session-identity";
+    const sessionId = "missing-session-file";
     seedSessionTranscript({
       sessionId,
+      sessionFile: path.join(sessionsDir, `${sessionId}.jsonl`),
       content: createMockSessionContent([
-        { role: "user", content: "Recovered from SQLite session identity" },
+        { role: "user", content: "Recovered with missing sessionFile pointer" },
         { role: "assistant", content: "Recovered by sessionId fallback" },
       ]),
     });
 
-    const memoryContent = await getRecentTranscriptContent({ agentId: "main", sessionId });
-    expect(memoryContent).toContain("user: Recovered from SQLite session identity");
+    const previousTranscriptPath = await findPreviousTranscriptPath({
+      sessionsDir,
+      sessionId,
+    });
+    expect(previousTranscriptPath).toBe(path.join(sessionsDir, `${sessionId}.jsonl`));
+
+    const memoryContent = await getRecentTranscriptContent(previousTranscriptPath!);
+    expect(memoryContent).toContain("user: Recovered with missing sessionFile pointer");
     expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
   });
 
-  it("handles empty transcripts gracefully", async () => {
+  it("handles empty session files gracefully", async () => {
     // Should not throw
     const { files } = await runNewWithPreviousSession({ sessionContent: "" });
     expect(files.length).toBe(1);
@@ -648,9 +690,13 @@ describe("session-memory hook", () => {
   it("uses agent-specific workspace when workspaceDir is provided for non-default agent (gateway path regression)", async () => {
     const defaultWorkspace = await createCaseWorkspace("workspace-default");
     const customAgentWorkspace = await createCaseWorkspace("workspace-custom-agent");
+    const sessionsDir = path.join(customAgentWorkspace, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
 
+    const sessionFile = path.join(sessionsDir, "custom-agent-session.jsonl");
     seedSessionTranscript({
       sessionId: "custom-agent-session",
+      sessionFile,
       content: createMockSessionContent([
         { role: "user", content: "Custom agent conversation" },
         { role: "assistant", content: "Stored in agent workspace" },
@@ -674,6 +720,7 @@ describe("session-memory hook", () => {
       workspaceDirOverride: customAgentWorkspace,
       previousSessionEntry: {
         sessionId: "custom-agent-session",
+        sessionFile,
       },
     });
 
@@ -684,7 +731,7 @@ describe("session-memory hook", () => {
     await expectPathMissing(path.join(defaultWorkspace, "memory"));
   });
 
-  it("handles transcripts with fewer messages than requested", async () => {
+  it("handles session files with fewer messages than requested", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Only message 1" },
       { role: "assistant", content: "Only message 2" },

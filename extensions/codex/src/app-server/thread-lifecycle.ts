@@ -55,7 +55,7 @@ function resolveCodexAppServerBindingIdentity(
 ): CodexAppServerBindingIdentity {
   return {
     sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
+    sessionFile: params.sessionFile,
   };
 }
 
@@ -169,7 +169,7 @@ export async function startOrResumeThread(params: {
           bindingIdentity,
           {
             sessionKey: params.params.sessionKey,
-            sessionId: params.params.sessionId,
+            sessionFile: params.params.sessionFile,
             threadId: response.thread.id,
             cwd: params.cwd,
             authProfileId: boundAuthProfileId,
@@ -240,7 +240,7 @@ export async function startOrResumeThread(params: {
       bindingIdentity,
       {
         sessionKey: params.params.sessionKey,
-        sessionId: params.params.sessionId,
+        sessionFile: params.params.sessionFile,
         threadId: response.thread.id,
         cwd: params.cwd,
         authProfileId: params.params.authProfileId,
@@ -263,7 +263,7 @@ export async function startOrResumeThread(params: {
     schemaVersion: 1,
     threadId: response.thread.id,
     sessionKey: params.params.sessionKey,
-    sessionId: params.params.sessionId,
+    sessionFile: params.params.sessionFile,
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,

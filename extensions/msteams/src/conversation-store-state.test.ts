@@ -15,7 +15,7 @@ describe("msteams conversation store (sqlite-backed)", () => {
     setMSTeamsRuntime(msteamsRuntimeStub);
   });
 
-  it("filters expired entries while preserving migrated rows without lastSeenAt", async () => {
+  it("filters and prunes expired entries while preserving legacy entries without lastSeenAt", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
 
     const env: NodeJS.ProcessEnv = {
@@ -65,10 +65,10 @@ describe("msteams conversation store (sqlite-backed)", () => {
     expect(await store.get("19:old@thread.tacv2")).toBeNull();
     const legacyConversation = await store.get("19:legacy@thread.tacv2");
     if (!legacyConversation) {
-      throw new Error("expected migrated Teams conversation");
+      throw new Error("expected migrated legacy Teams conversation");
     }
     if (!legacyConversation.conversation) {
-      throw new Error("expected migrated Teams conversation payload");
+      throw new Error("expected migrated legacy Teams conversation payload");
     }
     expect(legacyConversation.conversation.id).toBe("19:legacy@thread.tacv2");
 
@@ -82,6 +82,7 @@ describe("msteams conversation store (sqlite-backed)", () => {
       "19:legacy@thread.tacv2",
       "19:new@thread.tacv2",
     ]);
+    expect(fs.existsSync(path.join(stateDir, "msteams-conversations.json"))).toBe(false);
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
   });
 });

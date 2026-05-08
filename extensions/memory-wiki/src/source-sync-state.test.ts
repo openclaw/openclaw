@@ -5,10 +5,8 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { afterEach, describe, expect, it } from "vitest";
 import {
   importMemoryWikiLegacySourceSyncState,
-  resolveMemoryWikiLegacySourceSyncStatePath,
-} from "./doctor-legacy-source-sync-state.js";
-import {
   readMemoryWikiSourceSyncState,
+  resolveMemoryWikiLegacySourceSyncStatePath,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
 

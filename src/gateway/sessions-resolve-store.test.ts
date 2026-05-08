@@ -8,15 +8,46 @@ import { resolveSessionKeyFromResolveParams } from "./sessions-resolve.js";
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   const freshUpdatedAt = () => Date.now();
 
+  it("resolves legacy main-alias matches by sessionId and label for the configured default agent", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-alias-", async () => {
+      const cfg = {
+        session: { mainKey: "main" },
+        agents: { list: [{ id: "ops", default: true }] },
+      } satisfies OpenClawConfig;
+      upsertSessionEntry({
+        agentId: "ops",
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "sess-default-alias",
+          label: "default-alias",
+          updatedAt: freshUpdatedAt(),
+        },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { sessionId: "sess-default-alias" },
+        }),
+      ).resolves.toEqual({ ok: true, key: "agent:ops:main" });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { label: "default-alias" },
+        }),
+      ).resolves.toEqual({ ok: true, key: "agent:ops:main" });
+    });
+  });
+
   it("does not resolve another agent store when agentId is scoped", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-agent-scope-", async () => {
       const cfg: OpenClawConfig = {
         agents: { list: [{ id: "main", default: true }, { id: "work" }] },
       };
-      upsertSessionEntry({
-        agentId: "work",
-        sessionKey: "agent:work:target",
-        entry: {
+      const workStorePath = resolveStorePath(cfg.session?.store, { agentId: "work" });
+      await saveSessionStore(workStorePath, {
+        "agent:work:target": {
           sessionId: "sess-shared",
           label: "shared-label",
           updatedAt: freshUpdatedAt(),
@@ -57,19 +88,15 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         agents: { list: [{ id: "main", default: true }, { id: "work" }] },
       };
       const updatedAt = freshUpdatedAt();
-      upsertSessionEntry({
-        agentId: "main",
-        sessionKey: "main-target",
-        entry: {
+      await saveSessionStore(resolveStorePath(cfg.session?.store, { agentId: "main" }), {
+        "main-target": {
           sessionId: "sess-shared",
           label: "shared-label",
           updatedAt,
         },
       });
-      upsertSessionEntry({
-        agentId: "work",
-        sessionKey: "work-target",
-        entry: {
+      await saveSessionStore(resolveStorePath(cfg.session?.store, { agentId: "work" }), {
+        "work-target": {
           sessionId: "sess-shared",
           label: "shared-label",
           updatedAt,

@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -136,6 +138,7 @@ async function writeMainSessionEntry(params: {
   lastChannel?: string;
   lastTo?: string;
 }) {
+  await useTempSessionStorePath();
   await seedGatewaySessionEntries({
     entries: {
       main: {
@@ -173,6 +176,10 @@ async function sendAgentWsRequestAndWaitFinal(
   );
   sendAgentWsRequest(socket, params);
   return await finalP;
+}
+
+async function useTempSessionStorePath() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
 }
 
 describe("gateway server agent", () => {
@@ -227,6 +234,7 @@ describe("gateway server agent", () => {
   );
 
   test("agent preserves CLI session binding metadata when refreshing session state", async () => {
+    await useTempSessionStorePath();
     await seedGatewaySessionEntries({
       entries: {
         main: {
@@ -234,6 +242,9 @@ describe("gateway server agent", () => {
           updatedAt: Date.now(),
           modelProvider: "claude-cli",
           model: "claude-opus-4-6",
+          cliSessionIds: {
+            "claude-cli": "cli-session-123",
+          },
           cliSessionBindings: {
             "claude-cli": {
               sessionId: "cli-session-123",
@@ -242,6 +253,7 @@ describe("gateway server agent", () => {
               mcpResumeHash: "mcp-resume-hash",
             },
           },
+          claudeCliSessionId: "cli-session-123",
         },
       },
     });
@@ -263,6 +275,10 @@ describe("gateway server agent", () => {
         mcpResumeHash: "mcp-resume-hash",
       },
     });
+    expect(stored?.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(stored?.claudeCliSessionId).toBe("cli-session-123");
   });
 
   test("agent accepts built-in channel alias (imsg)", async () => {
@@ -437,6 +453,8 @@ describe("gateway server agent", () => {
 
   test("write-scoped callers cannot reset conversations via agent", async () => {
     await withGatewayServer(async ({ port }) => {
+      await useTempSessionStorePath();
+
       await seedGatewaySessionEntries({
         entries: {
           main: {

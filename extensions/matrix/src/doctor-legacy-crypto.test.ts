@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,16 +9,15 @@ const legacyCryptoInspectorAvailability = vi.hoisted(() => ({
   available: true,
 }));
 
-vi.mock("./doctor-legacy-crypto-inspector-availability.js", () => ({
+vi.mock("./legacy-crypto-inspector-availability.js", () => ({
   isMatrixLegacyCryptoInspectorAvailable: () => legacyCryptoInspectorAvailability.available,
 }));
 
 import {
   MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
   readMatrixLegacyCryptoMigrationState,
-} from "./doctor-legacy-crypto-migration-state.js";
-import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./doctor-legacy-crypto.js";
-import { readMatrixRecoveryKey } from "./matrix/sdk/recovery-key-state.js";
+} from "./legacy-crypto-migration-state.js";
+import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import { resolveMatrixAccountStorageRoot } from "./storage-paths.js";
 import {
   MATRIX_DEFAULT_ACCESS_TOKEN,
@@ -119,9 +118,12 @@ describe("matrix legacy encrypted-state migration", () => {
       expect(result.migrated).toBe(true);
       expect(result.warnings).toStrictEqual([]);
 
-      const recovery = readMatrixRecoveryKey({ storageKey: rootDir });
-      expect(recovery?.privateKeyBase64).toBe("YWJjZA==");
-      expect(fs.existsSync(path.join(rootDir, "recovery-key.json"))).toBe(false);
+      const recovery = JSON.parse(
+        fs.readFileSync(path.join(rootDir, "recovery-key.json"), "utf8"),
+      ) as {
+        privateKeyBase64: string;
+      };
+      expect(recovery.privateKeyBase64).toBe("YWJjZA==");
     });
   });
 
@@ -159,7 +161,7 @@ describe("matrix legacy encrypted-state migration", () => {
 
       expect(result.migrated).toBe(true);
       expect(result.warnings).toContain(
-        'Legacy Matrix encrypted state for account "default" contains 5 room key(s) that were never backed up. Backed-up keys can be restored during doctor migration or manually with a recovery key, but local-only encrypted history may remain unavailable after upgrade.',
+        'Legacy Matrix encrypted state for account "default" contains 5 room key(s) that were never backed up. Backed-up keys can be restored automatically, but local-only encrypted history may remain unavailable after upgrade.',
       );
       expect(result.warnings).toContain(
         'Legacy Matrix encrypted state for account "default" cannot be fully converted automatically because the old rust crypto store does not expose all local room keys for export.',
@@ -204,10 +206,7 @@ describe("matrix legacy encrypted-state migration", () => {
       });
 
       expect(result.migrated).toBe(true);
-      expect(readMatrixRecoveryKey({ storageKey: rootDir })).toMatchObject({
-        privateKeyBase64: "b3Bz",
-      });
-      expect(fs.existsSync(path.join(rootDir, "recovery-key.json"))).toBe(false);
+      expect(fs.existsSync(path.join(rootDir, "recovery-key.json"))).toBe(true);
     });
   });
 

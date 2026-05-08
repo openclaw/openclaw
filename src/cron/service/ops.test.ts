@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { importLegacyCronStoreToSqlite } from "../../commands/doctor/legacy/cron-store.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
@@ -8,7 +11,7 @@ import { run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 import { runMissedJobs } from "./timer.js";
 
-const { logger, makeStoreKey } = setupCronServiceSuite({
+const { logger, makeStorePath, makeStoreKey } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
 
@@ -208,32 +211,58 @@ describe("cron service ops seam coverage", () => {
   });
 
   it("start persists load-time updatedAtMs repairs to SQLite state only", async () => {
-    const { storeKey } = await makeStoreKey();
+    const { storePath } = await makeStorePath();
     const now = Date.parse("2026-04-09T08:00:00.000Z");
     const createdAtMs = now - 86_400_000;
-    const persistedAtMs = Date.now();
     const nextRunAtMs = Date.parse("2026-04-10T09:00:00.000Z");
     const jobId = "future-sidecar-repair";
-    await writeCronStoreSnapshot({
-      storeKey,
-      jobs: [
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
         {
-          id: jobId,
-          name: "future state repair",
-          enabled: true,
-          createdAtMs,
-          updatedAtMs: undefined,
-          schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "daily" },
-          state: { nextRunAtMs },
-        } as unknown as CronJob,
-      ],
-    });
+          version: 1,
+          jobs: [
+            {
+              id: jobId,
+              name: "future sidecar repair",
+              enabled: true,
+              createdAtMs,
+              schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "daily" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            [jobId]: {
+              state: { nextRunAtMs },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await importLegacyCronStoreToSqlite({ legacyStorePath: storePath, storeKey: storePath });
 
     const state = createCronServiceState({
-      storeKey,
+      storeKey: storePath,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
@@ -245,10 +274,11 @@ describe("cron service ops seam coverage", () => {
     try {
       await start(state);
 
-      const persisted = await loadCronStore(storeKey);
+      const persisted = await loadCronStore(storePath);
 
-      expect(persisted.jobs[0]?.updatedAtMs).toBe(persistedAtMs);
+      expect(persisted.jobs[0]?.updatedAtMs).toBe(createdAtMs);
       expect(persisted.jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
+      await expect(fs.stat(storePath)).rejects.toThrow();
     } finally {
       stop(state);
     }
@@ -299,8 +329,7 @@ describe("cron service ops seam coverage", () => {
 
       await run(state, "isolated-timeout");
 
-      expectTaskRun({
-        runId: `cron:isolated-timeout:${now}`,
+      expect(findTaskByRunId(`cron:isolated-timeout:${now}`)).toMatchObject({
         runtime: "cron",
         status: "timed_out",
         sourceId: "isolated-timeout",
@@ -326,11 +355,10 @@ describe("cron service ops seam coverage", () => {
       });
 
     await expectDueIsolatedManualRunProgresses(storeKey, now);
-    expectWarnedJob({
-      field: "jobId",
-      value: "isolated-timeout",
-      message: "cron: failed to create task ledger record",
-    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "isolated-timeout" }),
+      "cron: failed to create task ledger record",
+    );
 
     createTaskRecordSpy.mockRestore();
   });
@@ -351,11 +379,10 @@ describe("cron service ops seam coverage", () => {
 
       try {
         await expectDueIsolatedManualRunProgresses(storeKey, now);
-        expectWarnedJob({
-          field: "jobStatus",
-          value: "ok",
-          message: "cron: failed to update task ledger record",
-        });
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ jobStatus: "ok" }),
+          "cron: failed to update task ledger record",
+        );
       } finally {
         updateTaskRecordSpy.mockRestore();
       }

@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
@@ -27,6 +28,14 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
+async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
+  const raw = await fs.readFile(filePath, "utf-8");
+  return raw
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as TranscriptEntry);
+}
+
 function messageText(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -43,8 +52,10 @@ function messageText(content: unknown): string {
     .join("");
 }
 
-async function verifyRuntimeContextTranscriptShape() {
-  const entries: TranscriptEntry[] = [];
+async function verifyRuntimeContextTranscriptShape(root: string) {
+  const sessionFile = path.join(root, ".openclaw", "agents", "main", "sessions", "runtime.jsonl");
+  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+  const sessionManager = SessionManager.open(sessionFile);
   const effectivePrompt = [
     "visible ask",
     "",
@@ -68,29 +79,27 @@ async function verifyRuntimeContextTranscriptShape() {
     session: {
       sendCustomMessage: async (message, options) => {
         assert(options?.deliverAs === "nextTurn", "runtime context was not queued for next turn");
-        entries.push({
-          type: "custom_message",
-          customType: message.customType,
-          content: message.content,
-          display: message.display,
-        });
+        sessionManager.appendCustomMessageEntry(
+          message.customType,
+          message.content,
+          message.display,
+          message.details,
+        );
       },
     },
   });
-  entries.push({
-    type: "message",
-    message: {
-      role: "user",
-      content: promptSubmission.prompt,
-    },
+  sessionManager.appendMessage({
+    role: "user",
+    content: promptSubmission.prompt,
+    timestamp: Date.now(),
   });
-  entries.push({
-    type: "message",
-    message: {
-      role: "assistant",
-      content: "done",
-    },
+  sessionManager.appendMessage({
+    role: "assistant",
+    content: "done",
+    timestamp: Date.now() + 1,
   });
+
+  const entries = await readJsonl(sessionFile);
   const customEntry = entries.find((entry) => entry.type === "custom_message");
   assert(customEntry, "hidden runtime custom message was not persisted");
   assert(customEntry.customType === "openclaw.runtime-context", "unexpected custom message type");
@@ -112,7 +121,7 @@ async function verifyRuntimeContextTranscriptShape() {
 
 async function seedBrokenLegacySessionForDoctorMigration(stateDir: string): Promise<string> {
   const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-  const legacyTranscriptJsonl = path.join(sessionsDir, "broken.jsonl");
+  const sessionFile = path.join(sessionsDir, "broken.jsonl");
   await fs.mkdir(sessionsDir, { recursive: true });
   const entries = [
     { type: "session", version: 3, id: "broken-session" },
@@ -157,7 +166,7 @@ async function seedBrokenLegacySessionForDoctorMigration(stateDir: string): Prom
     },
   ];
   await fs.writeFile(
-    legacyTranscriptJsonl,
+    sessionFile,
     `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     "utf-8",
   );
@@ -179,13 +188,13 @@ async function seedBrokenLegacySessionForDoctorMigration(stateDir: string): Prom
     ),
     "utf-8",
   );
-  return legacyTranscriptJsonl;
+  return sessionFile;
 }
 
 async function verifyDoctorRepair(root: string) {
   const stateDir = path.join(root, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const legacyTranscriptJsonl = await seedBrokenLegacySessionForDoctorMigration(stateDir);
+  const sessionFile = await seedBrokenLegacySessionForDoctorMigration(stateDir);
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false } }, null, 2));
 
@@ -216,19 +225,14 @@ async function verifyDoctorRepair(root: string) {
     result.status === 0,
     `doctor --fix failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
-  await fs.access(legacyTranscriptJsonl).then(
+  await fs.access(sessionFile).then(
     () => {
       throw new Error("doctor left legacy transcript JSONL after SQLite import");
     },
     () => undefined,
   );
   const { loadSqliteSessionTranscriptEvents } =
-    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as {
-      loadSqliteSessionTranscriptEvents: (scope: {
-        agentId: string;
-        sessionId: string;
-      }) => Array<{ event: unknown }>;
-    };
+    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as typeof import("../../src/config/sessions/transcript-store.sqlite.js");
   const entries = loadSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "broken-session",
@@ -253,7 +257,7 @@ async function main() {
   process.env.OPENCLAW_STATE_DIR = path.join(root, ".openclaw");
   process.env.OPENCLAW_CONFIG_PATH = path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json");
   try {
-    await verifyRuntimeContextTranscriptShape();
+    await verifyRuntimeContextTranscriptShape(root);
     await verifyDoctorRepair(root);
     console.log("session runtime context Docker E2E passed");
   } finally {

@@ -1,3 +1,10 @@
+import fs from "node:fs";
+import { tryReadJsonSync } from "../infra/json-files.js";
+import {
+  deleteOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
@@ -7,16 +14,21 @@ import { hashJson } from "./installed-plugin-index-hash.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-index-invalidation.js";
 import {
-  deletePersistedInstalledPluginIndexFromSqliteSync,
+  INSTALLED_PLUGIN_INDEX_KV_KEY,
+  INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+  parseInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
-  writePersistedInstalledPluginIndexToSqliteSync,
+  resolveInstalledPluginIndexStateDbOptions,
 } from "./installed-plugin-index-persisted-read.js";
 import {
   resolveCompatRegistryVersion,
   resolveInstalledPluginIndexPolicyHash,
 } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-options.js";
+import {
+  resolveInstalledPluginIndexStorePath,
+  type InstalledPluginIndexStoreOptions,
+} from "./installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -30,7 +42,10 @@ export {
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-persisted-read.js";
-export type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-options.js";
+export {
+  resolveInstalledPluginIndexStorePath,
+  type InstalledPluginIndexStoreOptions,
+} from "./installed-plugin-index-store-path.js";
 
 export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
 
@@ -50,27 +65,104 @@ function withInstalledPluginIndexWarning(index: InstalledPluginIndex): Installed
 export async function writePersistedInstalledPluginIndex(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
-): Promise<void> {
-  writePersistedInstalledPluginIndexToSqliteSync(withInstalledPluginIndexWarning(index), options);
+): Promise<string> {
+  const filePath = resolveInstalledPluginIndexStorePath(options);
+  writeOpenClawStateKvJson(
+    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+    INSTALLED_PLUGIN_INDEX_KV_KEY,
+    withInstalledPluginIndexWarning(index) as unknown as OpenClawStateJsonValue,
+    resolveInstalledPluginIndexStateDbOptions(options),
+  );
   clearCurrentPluginMetadataSnapshotState();
+  return filePath;
 }
 
 export function writePersistedInstalledPluginIndexSync(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
-): void {
-  writePersistedInstalledPluginIndexToSqliteSync(withInstalledPluginIndexWarning(index), options);
+): string {
+  const filePath = resolveInstalledPluginIndexStorePath(options);
+  writeOpenClawStateKvJson(
+    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+    INSTALLED_PLUGIN_INDEX_KV_KEY,
+    withInstalledPluginIndexWarning(index) as unknown as OpenClawStateJsonValue,
+    resolveInstalledPluginIndexStateDbOptions(options),
+  );
   clearCurrentPluginMetadataSnapshotState();
+  return filePath;
 }
 
 export function deletePersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): boolean {
-  const removed = deletePersistedInstalledPluginIndexFromSqliteSync(options);
+  if (options.filePath) {
+    try {
+      fs.unlinkSync(resolveInstalledPluginIndexStorePath(options));
+      clearCurrentPluginMetadataSnapshotState();
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw err;
+      }
+      return false;
+    }
+  }
+  const removed = deleteOpenClawStateKvJson(
+    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+    INSTALLED_PLUGIN_INDEX_KV_KEY,
+    resolveInstalledPluginIndexStateDbOptions(options),
+  );
   if (removed) {
     clearCurrentPluginMetadataSnapshotState();
   }
   return removed;
+}
+
+export function legacyInstalledPluginIndexFileExists(
+  options: InstalledPluginIndexStoreOptions = {},
+): boolean {
+  try {
+    return fs.existsSync(resolveInstalledPluginIndexStorePath(options));
+  } catch {
+    return false;
+  }
+}
+
+export type ImportLegacyInstalledPluginIndexResult = {
+  imported: boolean;
+  plugins: number;
+  installRecords: number;
+  removedSource: boolean;
+};
+
+export function importLegacyInstalledPluginIndexFileToSqlite(
+  options: InstalledPluginIndexStoreOptions = {},
+): ImportLegacyInstalledPluginIndexResult {
+  const filePath = resolveInstalledPluginIndexStorePath(options);
+  const parsed = parseInstalledPluginIndex(tryReadJsonSync(filePath));
+  if (!parsed) {
+    return { imported: false, plugins: 0, installRecords: 0, removedSource: false };
+  }
+  writeOpenClawStateKvJson(
+    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+    INSTALLED_PLUGIN_INDEX_KV_KEY,
+    withInstalledPluginIndexWarning(parsed) as unknown as OpenClawStateJsonValue,
+    resolveInstalledPluginIndexStateDbOptions({ env: options.env, stateDir: options.stateDir }),
+  );
+  let removedSource = false;
+  try {
+    fs.unlinkSync(filePath);
+    removedSource = true;
+  } catch {
+    removedSource = false;
+  }
+  clearCurrentPluginMetadataSnapshotState();
+  return {
+    imported: true,
+    plugins: parsed.plugins.length,
+    installRecords: Object.keys(parsed.installRecords ?? {}).length,
+    removedSource,
+  };
 }
 
 function hasPolicyRefreshTargets(

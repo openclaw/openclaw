@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createDiscordNativeApprovalAdapter,
@@ -5,6 +8,7 @@ import {
   shouldHandleDiscordApprovalRequest,
 } from "./approval-native.js";
 
+const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
 const NATIVE_APPROVAL_CFG = {
   commands: {
     ownerAllowFrom: ["discord:555555555"],
@@ -20,6 +24,10 @@ const NATIVE_DELIVERY_CFG = {
     },
   },
 } as const;
+
+function writeStore(store: Record<string, unknown>) {
+  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+}
 
 describe("createDiscordNativeApprovalAdapter", () => {
   it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
@@ -160,7 +168,18 @@ describe("createDiscordNativeApprovalAdapter", () => {
     expect(target).toBeNull();
   });
 
-  it("ignores raw turn-source ids for Discord DM sessions", async () => {
+  it("ignores session-store turn targets for Discord DM sessions", async () => {
+    writeStore({
+      "agent:main:discord:dm:123456789": {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        origin: { provider: "discord", to: "123456789", accountId: "main" },
+        lastChannel: "discord",
+        lastTo: "123456789",
+        lastAccountId: "main",
+      },
+    });
+
     const adapter = createDiscordNativeApprovalAdapter();
     const target = await adapter.native?.resolveOriginTarget?.({
       cfg: {

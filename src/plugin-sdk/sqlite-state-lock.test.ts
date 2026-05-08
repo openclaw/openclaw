@@ -1,11 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withOpenClawStateLock } from "./sqlite-state-lock.js";
 
@@ -16,8 +12,6 @@ const FAST_RETRY = {
   maxTimeout: 1,
   randomize: false,
 } as const;
-
-type StateLockTestDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 
 describe("withOpenClawStateLock", () => {
   afterEach(() => {
@@ -57,17 +51,7 @@ describe("withOpenClawStateLock", () => {
       releaseFirst();
       await Promise.all([first, second]);
       expect(order).toEqual(["first-enter", "first-exit", "second-enter"]);
-      const database = openOpenClawStateDatabase({ path: dbPath });
-      const db = getNodeSqliteKysely<StateLockTestDatabase>(database.db);
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("state_leases")
-          .select("owner")
-          .where("scope", "=", "runtime.lock")
-          .where("lease_key", "=", "shared"),
-      );
-      expect(row).toBeUndefined();
+      expect(readOpenClawStateKvJson("runtime.lock", "shared", { path: dbPath })).toBeUndefined();
     });
   });
 });

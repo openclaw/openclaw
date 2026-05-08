@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { listSessionEntries } from "../../config/sessions/store.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
@@ -35,7 +36,6 @@ function resolveFastSessionKey(params: {
   ctx: MsgContext;
   sessionScope: SessionScope;
   mainKey?: string;
-  agentId: string;
 }): string {
   const { ctx } = params;
   const nativeCommandTarget =
@@ -43,7 +43,7 @@ function resolveFastSessionKey(params: {
   if (nativeCommandTarget) {
     return nativeCommandTarget;
   }
-  return resolveSessionKey(params.sessionScope, ctx, params.mainKey, params.agentId);
+  return resolveSessionKey(params.sessionScope, ctx, params.mainKey);
 }
 
 function markReplyConfigRuntimeMode(
@@ -211,7 +211,6 @@ export function initFastReplySessionState(params: {
     ctx,
     sessionScope,
     mainKey: cfg.session?.mainKey,
-    agentId,
   });
   const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
     listSessionEntries({ agentId }).map(({ sessionKey: key, entry }) => [key, entry]),
@@ -237,9 +236,14 @@ export function initFastReplySessionState(params: {
     ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
     : (ctx.BodyForAgent ?? ctx.Body ?? "");
   const now = Date.now();
+  const sessionFile =
+    !resetTriggered && existingEntry?.sessionFile
+      ? existingEntry.sessionFile
+      : resolveSessionTranscriptPath(sessionId, agentId);
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
+    sessionFile,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,

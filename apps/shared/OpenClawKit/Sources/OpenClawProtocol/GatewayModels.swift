@@ -114,6 +114,7 @@ public struct HelloOk: Codable, Sendable {
     public let server: [String: AnyCodable]
     public let features: [String: AnyCodable]
     public let snapshot: Snapshot
+    public let canvashosturl: String?
     public let pluginsurfaceurls: [String: AnyCodable]?
     public let auth: [String: AnyCodable]
     public let policy: [String: AnyCodable]
@@ -124,7 +125,8 @@ public struct HelloOk: Codable, Sendable {
         server: [String: AnyCodable],
         features: [String: AnyCodable],
         snapshot: Snapshot,
-        pluginsurfaceurls: [String: AnyCodable]?,
+        canvashosturl: String? = nil,
+        pluginsurfaceurls: [String: AnyCodable]? = nil,
         auth: [String: AnyCodable],
         policy: [String: AnyCodable])
     {
@@ -133,6 +135,7 @@ public struct HelloOk: Codable, Sendable {
         self.server = server
         self.features = features
         self.snapshot = snapshot
+        self.canvashosturl = canvashosturl
         self.pluginsurfaceurls = pluginsurfaceurls
         self.auth = auth
         self.policy = policy
@@ -144,6 +147,7 @@ public struct HelloOk: Codable, Sendable {
         case server
         case features
         case snapshot
+        case canvashosturl = "canvasHostUrl"
         case pluginsurfaceurls = "pluginSurfaceUrls"
         case auth
         case policy
@@ -5593,7 +5597,6 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let severity: String?
     public let toolname: String?
     public let toolcallid: String?
-    public let alloweddecisions: [String]?
     public let agentid: String?
     public let sessionkey: String?
     public let turnsourcechannel: String?
@@ -5610,7 +5613,6 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         severity: String?,
         toolname: String?,
         toolcallid: String?,
-        alloweddecisions: [String]?,
         agentid: String?,
         sessionkey: String?,
         turnsourcechannel: String?,
@@ -5626,7 +5628,6 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.severity = severity
         self.toolname = toolname
         self.toolcallid = toolcallid
-        self.alloweddecisions = alloweddecisions
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.turnsourcechannel = turnsourcechannel
@@ -5644,7 +5645,6 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case severity
         case toolname = "toolName"
         case toolcallid = "toolCallId"
-        case alloweddecisions = "allowedDecisions"
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case turnsourcechannel = "turnSourceChannel"

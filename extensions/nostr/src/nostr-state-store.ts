@@ -1,6 +1,6 @@
 import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;

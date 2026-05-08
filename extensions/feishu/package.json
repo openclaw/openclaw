@@ -30,7 +30,7 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
-      "doctorLegacyState": true
+      "legacyStateMigrations": true
     },
     "channel": {
       "id": "feishu",

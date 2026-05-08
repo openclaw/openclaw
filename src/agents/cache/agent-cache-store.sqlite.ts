@@ -172,7 +172,7 @@ export function readSqliteAgentCacheEntry(
   const database = openOpenClawAgentDatabase(toDatabaseOptions(options));
   const db = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
   const row =
-    executeSqliteQueryTakeFirstSync(
+    executeSqliteQueryTakeFirstSync<AgentCacheRow>(
       database.db,
       db
         .selectFrom("cache_entries")
@@ -193,7 +193,7 @@ export function listSqliteAgentCacheEntries(
   const now = options.now?.() ?? Date.now();
   const database = openOpenClawAgentDatabase(toDatabaseOptions(options));
   const db = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
-  return executeSqliteQuerySync(
+  return executeSqliteQuerySync<AgentCacheRow>(
     database.db,
     db
       .selectFrom("cache_entries")

@@ -3,14 +3,14 @@ import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entr
 export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
   features: {
-    doctorLegacyState: true,
+    legacyStateMigrations: true,
   },
   plugin: {
     specifier: "./setup-plugin-api.js",
     exportName: "discordSetupPlugin",
   },
-  doctorLegacyState: {
-    specifier: "./doctor-legacy-state-api.js",
+  legacyStateMigrations: {
+    specifier: "./legacy-state-migrations-api.js",
     exportName: "detectDiscordLegacyStateMigrations",
   },
 });

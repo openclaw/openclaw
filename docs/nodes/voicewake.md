@@ -18,13 +18,12 @@ OpenClaw treats **wake words as a single global list** owned by the **Gateway**.
 Wake words are stored in the gateway global SQLite database:
 
 - `~/.openclaw/state/openclaw.sqlite`
-- table: `voicewake_triggers`
-- routing tables: `voicewake_routing_config` and `voicewake_routing_routes`
+- KV scope/key: `voicewake` / `triggers`
 
-Wake trigger rows store one normalized trigger per position:
+Shape:
 
 ```json
-[{ "position": 0, "trigger": "openclaw", "updatedAtMs": 1730000000000 }]
+{ "triggers": ["openclaw", "claude", "computer"], "updatedAtMs": 1730000000000 }
 ```
 
 Legacy `~/.openclaw/settings/voicewake.json` and

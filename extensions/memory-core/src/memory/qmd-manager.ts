@@ -9,6 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
   isPathInside,
+  root,
   resolveAgentContextLimits,
   resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
@@ -17,13 +18,16 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
+  buildSessionTranscriptEntry,
   deriveQmdScopeChannel,
   deriveQmdScopeChatType,
   isQmdScopeAllowed,
+  listSessionTranscriptsForAgent,
   parseQmdQueryJson,
   resolveCliSpawnInvocation,
   runCliCommand,
   type QmdQueryResult,
+  type SessionTranscriptEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildMemoryReadResult,
@@ -38,20 +42,17 @@ import {
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySearchResult,
-  type MemorySessionTranscriptScope,
   type MemorySource,
   type MemorySyncProgressUpdate,
   type ResolvedMemoryBackendConfig,
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { createPluginBlobSyncStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withOpenClawStateLock } from "openclaw/plugin-sdk/sqlite-state-lock";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 
@@ -76,15 +77,6 @@ const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const QMD_UPDATE_QUEUE_KEY = Symbol.for("openclaw.qmdUpdateQueueState");
-const QMD_INDEX_BLOB_NAMESPACE = "qmd-index";
-
-type QmdIndexBlobMetadata = {
-  version: 1;
-  agentId: string;
-  stateDirHash: string;
-  persistedAt: string;
-  sizeBytes: number;
-};
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   ".cache",
@@ -112,28 +104,6 @@ function isDefaultMemoryPath(relPath: string): boolean {
     return true;
   }
   return normalized.startsWith("memory/");
-}
-
-function sanitizeCollectionNameSegment(input: string): string {
-  const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
-  const trimmed = lower.replace(/^-+|-+$/g, "");
-  return trimmed || "collection";
-}
-
-function hashQmdStateDir(stateDir: string): string {
-  return crypto
-    .createHash("sha256")
-    .update(path.resolve(stateDir), "utf8")
-    .digest("hex")
-    .slice(0, 16);
-}
-
-function createQmdIndexBlobStore(stateDir: string) {
-  return createPluginBlobSyncStore<QmdIndexBlobMetadata>("memory-core", {
-    namespace: QMD_INDEX_BLOB_NAMESPACE,
-    maxEntries: 1_000,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
 }
 
 function buildQmdProcessPath(rawPath: string | undefined): string {
@@ -230,6 +200,12 @@ type CollectionRoot = {
   kind: MemorySource;
 };
 
+type SessionExporterConfig = {
+  dir: string;
+  retentionMs?: number;
+  collectionName: string;
+};
+
 type ListedCollection = {
   path?: string;
   pattern?: string;
@@ -239,7 +215,7 @@ type ManagedCollection = {
   name: string;
   path: string;
   pattern: string;
-  kind: "memory" | "custom";
+  kind: "memory" | "custom" | "sessions";
 };
 
 type QmdManagerMode = "full" | "status" | "cli";
@@ -320,12 +296,11 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly workspaceDir: string;
   private readonly contextLimits: ReturnType<typeof resolveAgentContextLimits>;
   private readonly stateDir: string;
-  private readonly stateDirHash: string;
+  private readonly agentStateDir: string;
   private readonly qmdDir: string;
   private readonly xdgConfigHome: string;
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
-  private readonly indexBlobKey: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   private readonly managedCollectionNames: string[];
@@ -335,7 +310,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     string,
     { rel: string; abs: string; source: MemorySource }
   >();
+  private readonly exportedSessionState = new Map<
+    string,
+    {
+      hash: string;
+      mtimeMs: number;
+      target: string;
+    }
+  >();
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
+  private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
   private embedTimer: NodeJS.Timeout | null = null;
   private watcher: FSWatcher | null = null;
@@ -370,18 +354,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.workspaceDir = params.runtimeConfig.workspaceDir;
     this.contextLimits = params.runtimeConfig.contextLimits;
     this.stateDir = resolveStateDir(process.env, os.homedir);
-    this.stateDirHash = hashQmdStateDir(this.stateDir);
-    this.indexBlobKey = `${this.stateDirHash}:${sanitizeCollectionNameSegment(this.agentId)}`;
-    this.qmdDir = path.join(
-      resolvePreferredOpenClawTmpDir(),
-      "memory-core",
-      "qmd",
-      this.stateDirHash,
-      sanitizeCollectionNameSegment(this.agentId),
-    );
+    this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
+    this.qmdDir = path.join(this.agentStateDir, "qmd");
     this.syncSettings = params.runtimeConfig.syncSettings;
-    // QMD needs XDG base dirs at runtime, but OpenClaw treats them as temp
-    // materializations. The durable QMD index is snapshotted into SQLite.
+    // QMD uses XDG base dirs for its internal state.
+    // Collections are managed via `qmd collection add` and stored inside the index DB.
     // - config:  $XDG_CONFIG_HOME (contexts, etc.)
     // - cache:   $XDG_CACHE_HOME/qmd/index.sqlite
     this.xdgConfigHome = path.join(this.qmdDir, "xdg-config");
@@ -401,6 +378,26 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.closeSignal = new Promise<void>((resolve) => {
       this.resolveCloseSignal = resolve;
     });
+    this.sessionExporter = this.qmd.sessions.enabled
+      ? {
+          dir: this.qmd.sessions.exportDir ?? path.join(this.qmdDir, "sessions"),
+          retentionMs: this.qmd.sessions.retentionDays
+            ? this.qmd.sessions.retentionDays * 24 * 60 * 60 * 1000
+            : undefined,
+          collectionName: this.pickSessionCollectionName(),
+        }
+      : null;
+    if (this.sessionExporter) {
+      this.qmd.collections = [
+        ...this.qmd.collections,
+        {
+          name: this.sessionExporter.collectionName,
+          path: this.sessionExporter.dir,
+          pattern: "**/*.md",
+          kind: "sessions",
+        },
+      ];
+    }
     this.managedCollectionNames = this.computeManagedCollectionNames();
   }
 
@@ -414,7 +411,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     await fs.mkdir(this.xdgConfigHome, { recursive: true });
     await fs.mkdir(this.xdgCacheHome, { recursive: true });
     await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
-    await this.restoreQmdIndexFromState();
+    if (this.sessionExporter) {
+      await fs.mkdir(this.sessionExporter.dir, { recursive: true });
+    }
+
     // QMD stores its ML models under $XDG_CACHE_HOME/qmd/models/.  Because we
     // override XDG_CACHE_HOME to isolate the index per-agent, qmd would not
     // find models installed at the default location (~/.cache/qmd/models/) and
@@ -424,7 +424,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.symlinkSharedModels();
 
     await this.ensureCollections();
-    await this.persistQmdIndexToState("collections");
     if (mode === "cli") {
       log.info(
         `qmd manager initialized for agent "${this.agentId}" mode=cli collections=${this.qmd.collections.length} durationMs=${Date.now() - startTime}`,
@@ -491,8 +490,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.collectionRoots.clear();
     this.sources.clear();
     for (const collection of this.qmd.collections) {
-      this.collectionRoots.set(collection.name, { path: collection.path, kind: "memory" });
-      this.sources.add("memory");
+      const kind: MemorySource = collection.kind === "sessions" ? "sessions" : "memory";
+      this.collectionRoots.set(collection.name, { path: collection.path, kind });
+      this.sources.add(kind);
     }
   }
 
@@ -747,7 +747,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private deriveLegacyCollectionName(scopedName: string): string | null {
-    const agentSuffix = `-${sanitizeCollectionNameSegment(this.agentId)}`;
+    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
     if (!scopedName.endsWith(agentSuffix)) {
       return null;
     }
@@ -778,7 +778,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private async ensureCollectionPath(collection: {
     path: string;
     pattern: string;
-    kind: "memory" | "custom";
+    kind: "memory" | "custom" | "sessions";
   }): Promise<void> {
     if (!this.isDirectoryGlobPattern(collection.pattern)) {
       return;
@@ -1288,15 +1288,13 @@ export class QmdMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (
-      params?.sessionTranscriptScopes?.some(
-        (scope) => scope.agentId.trim() && scope.sessionId.trim(),
-      )
+      params?.sessionTranscripts?.some((sessionTranscript) => sessionTranscript.trim().length > 0)
     ) {
-      log.debug("qmd sync ignoring targeted session transcript hint; running regular update");
+      log.debug("qmd sync ignoring targeted sessionTranscripts hint; running regular update");
     }
     if (params?.progress) {
       params.progress({ completed: 0, total: 1, label: "Updating QMD index…" });
@@ -1505,6 +1503,9 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (this.closed) {
           return;
         }
+        if (this.sessionExporter) {
+          await this.exportSessions();
+        }
         await this.runQmdUpdateWithRetry(reason);
         this.dirty = false;
       });
@@ -1529,7 +1530,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (this.closed) {
         return;
       }
-      await this.persistQmdIndexToState(reason);
       this.lastUpdateAt = Date.now();
       this.docPathCache.clear();
       log.info(
@@ -1548,6 +1548,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const watchPaths = new Set<string>();
     for (const collection of this.qmd.collections) {
+      if (collection.kind === "sessions") {
+        continue;
+      }
       watchPaths.add(this.resolveCollectionWatchPath(collection));
     }
     if (watchPaths.size === 0) {
@@ -1799,54 +1802,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     while (!this.closed && this.queuedForcedRuns > 0) {
       this.queuedForcedRuns -= 1;
       await this.runUpdate(`${reason}:queued`, true, { fromForcedQueue: true });
-    }
-  }
-
-  private async restoreQmdIndexFromState(): Promise<void> {
-    const entry = createQmdIndexBlobStore(this.stateDir).lookup(this.indexBlobKey);
-    if (!entry) {
-      return;
-    }
-    await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
-    await Promise.all([
-      fs.rm(this.indexPath, { force: true }),
-      fs.rm(`${this.indexPath}-wal`, { force: true }),
-      fs.rm(`${this.indexPath}-shm`, { force: true }),
-    ]);
-    await fs.writeFile(this.indexPath, entry.blob, { mode: 0o600 });
-  }
-
-  private async persistQmdIndexToState(reason: string): Promise<void> {
-    try {
-      const stat = await fs.stat(this.indexPath);
-      if (!stat.isFile()) {
-        return;
-      }
-      const { DatabaseSync } = requireNodeSqlite();
-      const db = new DatabaseSync(this.indexPath);
-      try {
-        db.exec("PRAGMA busy_timeout = 30000");
-        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      } finally {
-        db.close();
-      }
-      const blob = await fs.readFile(this.indexPath);
-      createQmdIndexBlobStore(this.stateDir).register(
-        this.indexBlobKey,
-        {
-          version: 1,
-          agentId: this.agentId,
-          stateDirHash: this.stateDirHash,
-          persistedAt: new Date().toISOString(),
-          sizeBytes: blob.byteLength,
-        },
-        blob,
-      );
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return;
-      }
-      log.warn(`failed to persist qmd index to SQLite (${reason}): ${String(err)}`);
     }
   }
 
@@ -2258,11 +2213,92 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.db = new DatabaseSync(this.indexPath, { readOnly: true });
     // busy_timeout is per-connection; set it on every open so concurrent
     // processes retry instead of failing immediately with SQLITE_BUSY.
-    // Use a lower value than the memory write path because this read-only
+    // Use a lower value than the write path (5 s) because this read-only
     // connection runs synchronous queries on the main thread via DatabaseSync.
     // In WAL mode readers rarely block, so 1 s is a safe upper bound.
     this.db.exec("PRAGMA busy_timeout = 1000");
     return this.db;
+  }
+
+  private async exportSessions(): Promise<void> {
+    if (!this.sessionExporter) {
+      return;
+    }
+    const exportDir = this.sessionExporter.dir;
+    await fs.mkdir(exportDir, { recursive: true });
+    const exportRoot = await root(exportDir);
+    const files = await listSessionTranscriptsForAgent(this.agentId);
+    const keep = new Set<string>();
+    const tracked = new Set<string>();
+    const cutoff = this.sessionExporter.retentionMs
+      ? Date.now() - this.sessionExporter.retentionMs
+      : null;
+    for (const sessionTranscript of files) {
+      const entry = await buildSessionTranscriptEntry(sessionTranscript);
+      if (!entry) {
+        continue;
+      }
+      if (cutoff && entry.mtimeMs < cutoff) {
+        continue;
+      }
+      const targetName = `${path.basename(sessionTranscript, ".jsonl")}.md`;
+      const target = path.join(exportDir, targetName);
+      tracked.add(sessionTranscript);
+      const state = this.exportedSessionState.get(sessionTranscript);
+      if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
+        await exportRoot.write(targetName, this.renderSessionMarkdown(entry), {
+          encoding: "utf-8",
+        });
+      }
+      this.exportedSessionState.set(sessionTranscript, {
+        hash: entry.hash,
+        mtimeMs: entry.mtimeMs,
+        target,
+      });
+      keep.add(target);
+    }
+    const exported = await exportRoot.list(".").catch(() => []);
+    for (const name of exported) {
+      if (!name.endsWith(".md")) {
+        continue;
+      }
+      const full = path.join(exportDir, name);
+      if (!keep.has(full)) {
+        await exportRoot.remove(name).catch(() => undefined);
+      }
+    }
+    for (const [sessionTranscript, state] of this.exportedSessionState) {
+      if (!tracked.has(sessionTranscript) || !isPathInside(exportDir, state.target)) {
+        this.exportedSessionState.delete(sessionTranscript);
+      }
+    }
+  }
+
+  private renderSessionMarkdown(entry: SessionTranscriptEntry): string {
+    const header = `# Session ${path.basename(entry.absPath, path.extname(entry.absPath))}`;
+    const body = entry.content?.trim().length ? entry.content.trim() : "(empty)";
+    return `${header}\n\n${body}\n`;
+  }
+
+  private pickSessionCollectionName(): string {
+    const existing = new Set(this.qmd.collections.map((collection) => collection.name));
+    const base = `sessions-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    if (!existing.has(base)) {
+      return base;
+    }
+    let counter = 2;
+    let candidate = `${base}-${counter}`;
+    while (existing.has(candidate)) {
+      counter += 1;
+      candidate = `${base}-${counter}`;
+    }
+    return candidate;
+  }
+
+  private sanitizeCollectionNameSegment(input: string): string {
+    const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
+    const trimmed = lower.replace(/^-+|-+$/g, "");
+    return trimmed || "agent";
   }
 
   private async resolveDocLocation(

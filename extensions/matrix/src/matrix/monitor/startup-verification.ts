@@ -57,12 +57,12 @@ function buildStartupVerificationKey(auth: MatrixAuth): string {
 async function readStartupVerificationState(params: {
   auth: MatrixAuth;
   env?: NodeJS.ProcessEnv;
-  stateRootDir?: string;
+  stateFilePath?: string;
 }): Promise<MatrixStartupVerificationState | null> {
   const value = await withMatrixSqliteStateEnvAsync(
     {
       env: params.env,
-      stateRootDir: params.stateRootDir,
+      storagePath: params.stateFilePath,
     },
     () => startupVerificationStore.lookup(buildStartupVerificationKey(params.auth)),
   );
@@ -72,12 +72,12 @@ async function readStartupVerificationState(params: {
 async function clearStartupVerificationState(params: {
   auth: MatrixAuth;
   env?: NodeJS.ProcessEnv;
-  stateRootDir?: string;
+  stateFilePath?: string;
 }): Promise<void> {
   await withMatrixSqliteStateEnvAsync(
     {
       env: params.env,
-      stateRootDir: params.stateRootDir,
+      storagePath: params.stateFilePath,
     },
     () => startupVerificationStore.delete(buildStartupVerificationKey(params.auth)),
   ).catch(() => {});
@@ -86,13 +86,13 @@ async function clearStartupVerificationState(params: {
 async function writeStartupVerificationState(params: {
   auth: MatrixAuth;
   env?: NodeJS.ProcessEnv;
-  stateRootDir?: string;
+  stateFilePath?: string;
   state: MatrixStartupVerificationState;
 }): Promise<void> {
   await withMatrixSqliteStateEnvAsync(
     {
       env: params.env,
-      stateRootDir: params.stateRootDir,
+      storagePath: params.stateFilePath,
     },
     () =>
       startupVerificationStore.register(
@@ -175,7 +175,7 @@ export async function ensureMatrixStartupVerification(params: {
   accountConfig: Pick<MatrixConfig, "startupVerification" | "startupVerificationCooldownHours">;
   env?: NodeJS.ProcessEnv;
   nowMs?: number;
-  stateRootDir?: string;
+  stateFilePath?: string;
 }): Promise<MatrixStartupVerificationOutcome> {
   if (params.auth.encryption !== true || !params.client.crypto) {
     return { kind: "unsupported" };

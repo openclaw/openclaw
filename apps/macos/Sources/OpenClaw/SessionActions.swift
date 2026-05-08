@@ -28,7 +28,7 @@ enum SessionActions {
     static func deleteSession(key: String) async throws {
         _ = try await ControlChannel.shared.request(
             method: "sessions.delete",
-            params: ["key": AnyHashable(key)])
+            params: ["key": AnyHashable(key), "deleteTranscript": AnyHashable(true)])
     }
 
     static func compactSession(key: String, maxLines: Int = 400) async throws {
@@ -57,4 +57,5 @@ enum SessionActions {
         alert.alertStyle = .warning
         alert.runModal()
     }
+
 }

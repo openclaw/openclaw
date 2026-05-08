@@ -8,6 +8,7 @@ const crossAgentStore = {
   "agent:peer:only": {
     sessionId: "w1",
     updatedAt: 1,
+    sessionTranscript: "/tmp/sessions/w1.jsonl",
   },
 };
 let combinedSessionEntries: typeof crossAgentStore | Record<string, never> = crossAgentStore;
@@ -34,7 +35,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
     const hits: MemorySearchResult[] = [
       {
-        path: "transcript:main:u1",
+        path: "sessions/u1.jsonl",
         source: "sessions",
         score: 1,
         snippet: "x",
@@ -76,7 +77,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
     const hits: MemorySearchResult[] = [
       {
-        path: "transcript:peer:w1",
+        path: "sessions/w1.jsonl",
         source: "sessions",
         score: 1,
         snippet: "a",
@@ -84,7 +85,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
         endLine: 2,
       },
       {
-        path: "transcript:peer:w1",
+        path: "sessions/w1.jsonl",
         source: "sessions",
         score: 0.9,
         snippet: "b",
@@ -104,7 +105,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
 
   it("allows cross-agent session hits when visibility=all and agent-to-agent is enabled", async () => {
     const hit: MemorySearchResult = {
-      path: "transcript:peer:w1",
+      path: "sessions/w1.jsonl",
       source: "sessions",
       score: 1,
       snippet: "x",
@@ -128,7 +129,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
 
   it("denies cross-agent session hits when agent-to-agent is disabled", async () => {
     const hit: MemorySearchResult = {
-      path: "transcript:peer:w1",
+      path: "sessions/w1.jsonl",
       source: "sessions",
       score: 1,
       snippet: "x",

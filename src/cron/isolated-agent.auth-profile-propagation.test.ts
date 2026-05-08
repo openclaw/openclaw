@@ -1,8 +1,7 @@
 import "./isolated-agent.mocks.js";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { savePersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
-import type { AuthProfileSecretsStore } from "../agents/auth-profiles/types.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { createCliDeps } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -40,12 +39,16 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
 
   it("passes authProfileId to runEmbeddedPiAgent when auth profiles exist", async () => {
     await withTempCronHome(async (home) => {
-      await seedMainRouteSession(home, { lastChannel: "webchat", lastTo: "" });
+      await seedMainRouteSession(home, { lastProvider: "webchat", lastTo: "" });
 
-      // 2. Seed SQLite auth profiles for the main agent.
+      // 2. Write auth-profiles.json in the agent directory
+      //    resolveAgentDir returns <stateDir>/agents/main/agent
+      //    stateDir = <home>/.openclaw
       const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
-      savePersistedAuthProfileSecretsStore(
-        {
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
           version: 1,
           profiles: {
             "openrouter:default": {
@@ -57,9 +60,8 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
           order: {
             openrouter: ["openrouter:default"],
           },
-        } as AuthProfileSecretsStore,
-        agentDir,
-        { env: { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") } },
+        }),
+        "utf-8",
       );
 
       // 3. Mock runEmbeddedPiAgent to return ok

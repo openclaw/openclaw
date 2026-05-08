@@ -1,6 +1,5 @@
 import { getSessionEntry, upsertSessionEntry } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   normalizeStoredOverrideModel,
@@ -32,7 +31,7 @@ function readLiveSessionEntry(params: {
 }
 
 export function resolveLiveSessionModelSelection(params: {
-  cfg?: OpenClawConfig | undefined;
+  cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
   agentId?: string;
   defaultProvider: string;
@@ -154,7 +153,7 @@ export function shouldTrackPersistedLiveSessionModelSelection(
  * user-initiated `/model` switches and system-initiated fallback rotations.
  */
 export function shouldSwitchToLiveModel(params: {
-  cfg?: OpenClawConfig | undefined;
+  cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
   agentId?: string;
   defaultProvider: string;
@@ -211,7 +210,7 @@ export function shouldSwitchToLiveModel(params: {
  * subsequent retry iterations do not re-trigger the switch.
  */
 export async function clearLiveModelSwitchPending(params: {
-  cfg?: OpenClawConfig | undefined;
+  cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
   agentId?: string;
 }): Promise<void> {

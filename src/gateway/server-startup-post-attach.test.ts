@@ -2,12 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
+import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { deleteOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => {
@@ -44,7 +45,7 @@ const hoisted = vi.hoisted(() => {
     model: "gpt-5.4",
   }));
   const resolveEmbeddedAgentRuntime = vi.fn(() => "pi");
-  const ensureOpenClawModelCatalog = vi.fn(async () => undefined);
+  const ensureOpenClawModelsJson = vi.fn(async () => undefined);
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
@@ -70,7 +71,7 @@ const hoisted = vi.hoisted(() => {
     isCliProvider,
     resolveConfiguredModelRef,
     resolveEmbeddedAgentRuntime,
-    ensureOpenClawModelCatalog,
+    ensureOpenClawModelsJson,
   };
 });
 
@@ -169,7 +170,7 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelCatalog: hoisted.ensureOpenClawModelCatalog,
+  ensureOpenClawModelsJson: hoisted.ensureOpenClawModelsJson,
 }));
 
 vi.mock("./server-tailscale.js", () => ({
@@ -235,10 +236,10 @@ function firstGatewayStartCall(
 }
 
 describe("startGatewayPostAttachRuntime", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
-    await clearRestartSentinel();
+    deleteOpenClawStateKvJson("gateway.restart-sentinel", "current", { env: process.env });
     hoisted.startPluginServices.mockClear();
     hoisted.startGmailWatcherWithLogs.mockClear();
     hoisted.loadInternalHooks.mockClear();
@@ -267,8 +268,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.resolveConfiguredModelRef.mockClear();
     hoisted.resolveEmbeddedAgentRuntime.mockReset();
     hoisted.resolveEmbeddedAgentRuntime.mockReturnValue("pi");
-    hoisted.ensureOpenClawModelCatalog.mockReset();
-    hoisted.ensureOpenClawModelCatalog.mockResolvedValue(undefined);
+    hoisted.ensureOpenClawModelsJson.mockReset();
+    hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -598,7 +599,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("prewarms the model catalog in the configured default agent dir", async () => {
+  it("prewarms models.json in the configured default agent dir", async () => {
     const cfg = {
       agents: {
         defaults: { model: "openai/gpt-5.4" },
@@ -615,8 +616,8 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(hoisted.resolveDefaultAgentDir).toHaveBeenCalledWith(cfg);
-    expect(hoisted.ensureOpenClawModelCatalog).toHaveBeenCalledTimes(1);
-    const ensureCall = hoisted.ensureOpenClawModelCatalog.mock.calls[0] as unknown as
+    expect(hoisted.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+    const ensureCall = hoisted.ensureOpenClawModelsJson.mock.calls[0] as unknown as
       | [
           unknown,
           string,

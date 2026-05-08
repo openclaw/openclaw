@@ -4,10 +4,7 @@ import {
   createSubsystemLogger,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type {
-  MemorySessionTranscriptScope,
-  MemorySyncProgressUpdate,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const log = createSubsystemLogger("memory");
 
@@ -24,7 +21,7 @@ export type MemoryReadonlyRecoveryState = {
   runSync: (params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
   openDatabase: () => DatabaseSync;
@@ -88,7 +85,7 @@ export async function runMemorySyncWithReadonlyRecovery(
   params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   },
 ): Promise<void> {
@@ -132,18 +129,17 @@ export function enqueueMemoryTargetedSessionSync(
     sync: (params?: {
       reason?: string;
       force?: boolean;
-      sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+      sessionTranscripts?: string[];
       progress?: (update: MemorySyncProgressUpdate) => void;
     }) => Promise<void>;
   },
-  sessionTranscriptScopes?: MemorySessionTranscriptScope[],
+  sessionTranscripts?: string[],
 ): Promise<void> {
   const queuedSessionTranscripts = state.getQueuedSessionTranscripts();
-  for (const scope of sessionTranscriptScopes ?? []) {
-    const agentId = scope.agentId.trim();
-    const sessionId = scope.sessionId.trim();
-    if (agentId && sessionId) {
-      queuedSessionTranscripts.add(`${agentId}\0${sessionId}`);
+  for (const sessionTranscript of sessionTranscripts ?? []) {
+    const trimmed = sessionTranscript.trim();
+    if (trimmed) {
+      queuedSessionTranscripts.add(trimmed);
     }
   }
   if (queuedSessionTranscripts.size === 0) {
@@ -159,10 +155,7 @@ export function enqueueMemoryTargetedSessionSync(
             state.getQueuedSessionTranscripts().clear();
             await state.sync({
               reason: "queued-session-transcripts",
-              sessionTranscriptScopes: pendingSessionTranscripts.flatMap((key) => {
-                const [agentId, sessionId, ...rest] = key.split("\0");
-                return agentId && sessionId && rest.length === 0 ? [{ agentId, sessionId }] : [];
-              }),
+              sessionTranscripts: pendingSessionTranscripts,
             });
           }
         } finally {
@@ -178,7 +171,6 @@ export function _createMemorySyncControlConfigForTests(
   workspaceDir: string,
   indexPath: string,
 ): OpenClawConfig {
-  void indexPath;
   return {
     agents: {
       defaults: {
@@ -186,7 +178,7 @@ export function _createMemorySyncControlConfigForTests(
         memorySearch: {
           provider: "openai",
           model: "mock-embed",
-          store: { vector: { enabled: false } },
+          store: { path: indexPath, vector: { enabled: false } },
           cache: { enabled: false },
           query: { minScore: 0, hybrid: { enabled: false } },
           sync: { watch: false, onSessionStart: false, onSearch: false },

@@ -1,7 +1,7 @@
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
@@ -38,22 +38,6 @@ export function startAcpSpawnParentStreamRelay(params: {
   parentSessionKey: string;
   childSessionKey: string;
   agentId: string;
-  /**
-   * Optional `session.mainKey` from the runtime config. Used to remap
-   * cron-run parent session keys to the agent's main queue when relaying
-   * events. Caller passes the spawn-time `cfg.session?.mainKey`; pass-through
-   * of `undefined` falls back to the literal "main" default. Long-running
-   * relays keep using that start-time value if config changes while the child
-   * session is still streaming.
-   */
-  mainKey?: string;
-  /**
-   * Optional `session.scope` from the runtime config. Required so global-scope
-   * agents route cron-run events to the "global" queue instead of agent-main.
-   * Snapshotted with `mainKey` for the same start-time routing reason.
-   */
-  sessionScope?: "per-sender" | "global";
-  logPath?: string;
   deliveryContext?: DeliveryContext;
   surfaceUpdates?: boolean;
   streamFlushMs?: number;
@@ -118,16 +102,11 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     requestHeartbeat(
-      scopedHeartbeatWakeOptions(
-        parentSessionKey,
-        {
-          source: "acp-spawn",
-          intent: "event",
-          reason: "acp:spawn:stream",
-        },
-        params.mainKey,
-        params.sessionScope,
-      ),
+      scopedHeartbeatWakeOptions(parentSessionKey, {
+        source: "acp-spawn",
+        intent: "event",
+        reason: "acp:spawn:stream",
+      }),
     );
   };
   const emit = (text: string, contextKey: string) => {
@@ -140,7 +119,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     enqueueSystemEvent(cleaned, {
-      sessionKey: resolveEventSessionKey(parentSessionKey, params.mainKey, params.sessionScope),
+      sessionKey: parentSessionKey,
       contextKey,
       deliveryContext: params.deliveryContext,
       trusted: false,

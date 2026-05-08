@@ -26,7 +26,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { readSqliteSessionRoutingInfo } from "../../config/sessions/session-entries.sqlite.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -462,18 +462,12 @@ export async function dispatchReplyFromConfig(
       ) ?? "off",
   });
   const replyRoute = resolveEffectiveReplyRoute({ ctx, entry: sessionRowEntry.entry });
-  // Restore route thread context only from the active turn or typed SQLite
-  // conversation metadata. Do not read thread ids from the normalized session
-  // entry shadow: stale origin/thread fields can be folded into compatibility
-  // route fields during row normalization.
-  const typedRouteThreadId =
-    acpDispatchSessionKey && sessionAgentId
-      ? readSqliteSessionRoutingInfo({
-          agentId: sessionAgentId,
-          sessionKey: acpDispatchSessionKey,
-        })?.conversationThreadId
-      : undefined;
-  const routeThreadId = ctx.MessageThreadId ?? typedRouteThreadId;
+  // Restore route thread context only from the active turn or the thread-scoped session key.
+  // Do not read thread ids from the normalised SQLite session row here: `origin.threadId` can
+  // be folded back into lastThreadId/deliveryContext during row normalisation and resurrect a
+  // stale route after thread delivery was intentionally cleared.
+  const routeThreadId =
+    ctx.MessageThreadId ?? parseSessionThreadInfoFast(acpDispatchSessionKey).threadId;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionRowEntry.entry?.ttsAuto);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);

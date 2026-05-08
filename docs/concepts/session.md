@@ -93,9 +93,7 @@ All session state is owned by the **gateway**. UI clients query the gateway for
 session data.
 
 - **Store:** `~/.openclaw/state/openclaw.sqlite` for global state plus `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` for agent-owned rows. Legacy `sessions.json` indexes are imported by `openclaw doctor --fix`.
-- **Transcripts:** SQLite `transcript_events` rows in the per-agent database.
-  JSONL transcript files are legacy doctor-import input only; runtime code must
-  not create, select, or bridge through transcript files or locators.
+- **Transcripts:** SQLite `transcript_events` rows in the per-agent database. JSONL transcript files are import/export/debug shape, not runtime storage.
 
 The session store keeps separate lifecycle timestamps:
 
@@ -116,9 +114,9 @@ or import session rows, and session store reads do not run cleanup during
 startup. Legacy `session.maintenance` settings are handled only by
 `openclaw doctor --fix`, which removes them from older config files.
 
-Use `openclaw doctor --fix` to import remaining legacy session files into
-SQLite. If a migrated row still lacks corresponding SQLite transcript rows after
-doctor runs, reset or delete that session explicitly.
+Use `openclaw doctor --fix` to import remaining legacy session files. If a row
+still references a transcript that no longer exists after doctor runs, reset or
+delete that session explicitly.
 
 ## Inspecting sessions
 

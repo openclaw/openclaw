@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
@@ -63,6 +64,7 @@ export async function createMatrixClient(params: {
     : null;
 
   if (storagePaths) {
+    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     writeStorageMeta({
       storagePaths,
       homeserver,
@@ -83,19 +85,9 @@ export async function createMatrixClient(params: {
     encryption: params.encryption,
     localTimeoutMs: params.localTimeoutMs,
     initialSyncLimit: params.initialSyncLimit,
-    storageRootDir: storagePaths?.rootDir,
-    recoveryKeyRef: storagePaths
-      ? {
-          stateDir: storagePaths.stateDir,
-          storageKey: storagePaths.recoveryKeyStorageKey,
-        }
-      : undefined,
-    idbSnapshotRef: storagePaths
-      ? {
-          stateDir: storagePaths.stateDir,
-          storageKey: storagePaths.idbSnapshotStorageKey,
-        }
-      : undefined,
+    storagePath: storagePaths?.storagePath,
+    recoveryKeyPath: storagePaths?.recoveryKeyPath,
+    idbSnapshotPath: storagePaths?.idbSnapshotPath,
     cryptoDatabasePrefix,
     autoBootstrapCrypto: params.autoBootstrapCrypto,
     ssrfPolicy:

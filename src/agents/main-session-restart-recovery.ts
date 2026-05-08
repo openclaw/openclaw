@@ -11,7 +11,7 @@ import {
   upsertSessionEntry,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
+import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
@@ -212,17 +212,12 @@ async function recoverStore(params: {
 
     let messages: unknown[];
     try {
-      messages = await readSessionMessagesAsync(
-        {
-          agentId: resolveAgentIdFromSessionKey(sessionKey),
-          sessionId: entry.sessionId,
-        },
-        {
-          mode: "recent",
-          maxMessages: 20,
-          maxBytes: 256 * 1024,
-        },
-      );
+      messages = await readSessionMessagesAsync(entry.sessionId, entry.sessionFile, {
+        agentId: resolveAgentIdFromSessionKey(sessionKey),
+        mode: "recent",
+        maxMessages: 20,
+        maxBytes: 256 * 1024,
+      });
     } catch (err) {
       log.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
       result.failed++;

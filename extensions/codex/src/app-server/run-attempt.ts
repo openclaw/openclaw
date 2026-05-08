@@ -41,6 +41,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   buildCodexAppInventoryCacheKey,
   defaultCodexAppInventoryCache,
@@ -465,7 +466,7 @@ export async function runCodexAppServerAttempt(
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const startupBinding = await readCodexAppServerBinding({
     sessionKey: sandboxSessionKey,
-    sessionId: params.sessionId,
+    sessionFile: params.sessionFile,
   });
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??
@@ -528,13 +529,14 @@ export async function runCodexAppServerAttempt(
       runId: params.runId,
     },
   });
-  const hadTranscript = hasSqliteSessionTranscriptEvents({
+  const hadSessionFile = hasSqliteSessionTranscriptEvents({
     agentId: sessionAgentId,
     sessionId: params.sessionId,
   });
   let historyMessages =
     (await readMirroredSessionHistoryMessages({
       agentId: sessionAgentId,
+      sessionFile: params.sessionFile,
       sessionId: params.sessionId,
     })) ?? [];
   const hookContext = {
@@ -549,11 +551,11 @@ export async function runCodexAppServerAttempt(
   };
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
-      hadTranscript,
+      hadSessionFile,
       contextEngine: activeContextEngine,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
-      transcriptScope: { agentId: sessionAgentId, sessionId: params.sessionId },
+      sessionFile: params.sessionFile,
       runtimeContext: buildHarnessContextEngineRuntimeContext({
         attempt: runtimeParams,
         workspaceDir: effectiveWorkspace,
@@ -567,6 +569,7 @@ export async function runCodexAppServerAttempt(
     historyMessages =
       (await readMirroredSessionHistoryMessages({
         agentId: sessionAgentId,
+        sessionFile: params.sessionFile,
         sessionId: params.sessionId,
       })) ?? historyMessages;
   }
@@ -840,7 +843,7 @@ export async function runCodexAppServerAttempt(
     throw error;
   }
   trajectoryRecorder?.recordEvent("session.started", {
-    sessionId: params.sessionId,
+    sessionFile: params.sessionFile,
     threadId: thread.threadId,
     authProfileId: startupAuthProfileId,
     workspaceDir: effectiveWorkspace,
@@ -1696,6 +1699,7 @@ export async function runCodexAppServerAttempt(
       const finalMessages =
         (await readMirroredSessionHistoryMessages({
           agentId: sessionAgentId,
+          sessionFile: params.sessionFile,
           sessionId: params.sessionId,
         })) ?? historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
@@ -1705,7 +1709,7 @@ export async function runCodexAppServerAttempt(
         yieldAborted: Boolean(result.yieldDetected),
         sessionIdUsed: params.sessionId,
         sessionKey: sandboxSessionKey,
-        transcriptScope: { agentId: sessionAgentId, sessionId: params.sessionId },
+        sessionFile: params.sessionFile,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
         tokenBudget: params.contextTokenBudget,
@@ -2736,12 +2740,13 @@ function readString(record: JsonObject, key: string): string | undefined {
 
 async function readMirroredSessionHistoryMessages(scope: {
   agentId: string;
+  sessionFile: string;
   sessionId: string;
 }): Promise<AgentMessage[] | undefined> {
   const messages = await readCodexMirroredSessionHistoryMessages(scope);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      sessionId: scope.sessionId,
+      sessionFile: scope.sessionFile,
     });
   }
   return messages;
@@ -3001,8 +3006,9 @@ async function mirrorTranscriptBestEffort(params: {
 }): Promise<void> {
   try {
     await mirrorCodexAppServerTranscript({
+      sessionFile: params.params.sessionFile,
       sessionId: params.params.sessionId,
-      agentId: params.agentId ?? "main",
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
       // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged

@@ -1,7 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   defaultVoiceWakeTriggers,
+  importLegacyVoiceWakeConfigFileToSqlite,
+  legacyVoiceWakeConfigFileExists,
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "./voicewake.js";
@@ -33,6 +37,35 @@ describe("voicewake config", () => {
     await withTempDir("openclaw-voicewake-", async (baseDir) => {
       const emptySaved = await setVoiceWakeTriggers(["", "   "], baseDir);
       expect(emptySaved.triggers).toEqual(defaultVoiceWakeTriggers());
+    });
+  });
+
+  it("imports legacy JSON through the migration path", async () => {
+    await withTempDir("openclaw-voicewake-", async (baseDir) => {
+      await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
+      await fs.writeFile(
+        path.join(baseDir, "settings", "voicewake.json"),
+        JSON.stringify({
+          triggers: ["  wake ", "", 42, null],
+          updatedAtMs: -1,
+        }),
+        "utf8",
+      );
+
+      await expect(loadVoiceWakeConfig(baseDir)).resolves.toEqual({
+        triggers: defaultVoiceWakeTriggers(),
+        updatedAtMs: 0,
+      });
+      await expect(legacyVoiceWakeConfigFileExists(baseDir)).resolves.toBe(true);
+      await expect(importLegacyVoiceWakeConfigFileToSqlite(baseDir)).resolves.toEqual({
+        imported: true,
+        triggers: 1,
+      });
+      await expect(loadVoiceWakeConfig(baseDir)).resolves.toEqual({
+        triggers: ["wake"],
+        updatedAtMs: 0,
+      });
+      await expect(legacyVoiceWakeConfigFileExists(baseDir)).resolves.toBe(false);
     });
   });
 });

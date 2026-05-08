@@ -2,26 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
-  hasPendingPluginInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
-  readPendingPluginInstallRecords,
   recordPluginInstallInRecords,
   removePluginInstallRecordFromRecords,
+  resolveInstalledPluginIndexRecordsStorePath,
   withoutPluginInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndexSync,
-} from "./installed-plugin-index-store.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
@@ -64,14 +58,6 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
   return actual;
 }
 
-function requireInstalledPluginIndex(index: InstalledPluginIndex | null): InstalledPluginIndex {
-  expect(index).not.toBeNull();
-  if (!index) {
-    throw new Error("Expected installed plugin index");
-  }
-  return index;
-}
-
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
@@ -99,9 +85,17 @@ describe("plugin index install records store", () => {
       },
     );
 
-    const persisted = requireInstalledPluginIndex(
-      await readPersistedInstalledPluginIndex({ stateDir }),
-    );
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    expect(indexPath).toBe(path.join(stateDir, "plugins", "installs.json"));
+    expect(fs.existsSync(indexPath)).toBe(false);
+    const persisted = readOpenClawStateKvJson("installed_plugin_index", "current", {
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    }) as {
+      version?: number;
+      generatedAtMs?: number;
+      installRecords?: Record<string, unknown>;
+      plugins?: Array<{ pluginId?: string; installRecordHash?: string }>;
+    };
     expect(persisted.version).toBe(1);
     expect(persisted.generatedAtMs).toBe(1777118400000);
     expectRecordFields(persisted.installRecords?.twitch, {
@@ -139,9 +133,10 @@ describe("plugin index install records store", () => {
       },
     );
 
-    const persisted = requireInstalledPluginIndex(
-      await readPersistedInstalledPluginIndex({ stateDir }),
-    );
+    expect(fs.existsSync(resolveInstalledPluginIndexRecordsStorePath({ stateDir }))).toBe(false);
+    const persisted = readOpenClawStateKvJson("installed_plugin_index", "current", {
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    }) as { installRecords?: Record<string, unknown>; plugins?: unknown[] };
     expectRecordFields(persisted.installRecords?.missing, {
       source: "npm",
       spec: "missing-plugin@1.0.0",
@@ -182,6 +177,27 @@ describe("plugin index install records store", () => {
     });
   });
 
+  it("ignores legacy persisted records until doctor imports the plugin index", async () => {
+    const stateDir = makeStateDir();
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(
+      indexPath,
+      JSON.stringify({
+        installRecords: {
+          legacy: {
+            source: "npm",
+            spec: "legacy@1.0.0",
+            installPath: path.join(stateDir, "plugins", "legacy"),
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({});
+  });
+
   it("recovers managed npm plugin records when the persisted ledger is empty", async () => {
     const stateDir = makeStateDir();
     const discordDir = writeManagedNpmPlugin({
@@ -196,6 +212,10 @@ describe("plugin index install records store", () => {
       pluginId: "codex",
       version: "2026.5.2",
     });
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(indexPath, JSON.stringify({ installRecords: {}, plugins: [] }), "utf8");
+
     const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
     expectRecordFields(loaded.codex, {
       source: "npm",
@@ -360,46 +380,32 @@ describe("plugin index install records store", () => {
   });
 
   it("strips transient install records from config writes", () => {
-    const config = {
-      plugins: {
-        entries: {
-          twitch: { enabled: true },
+    expect(
+      withoutPluginInstallRecords({
+        plugins: {
+          entries: {
+            twitch: { enabled: true },
+          },
+          installs: {
+            twitch: { source: "npm", spec: "twitch@1.0.0" },
+          },
         },
-        installs: {
-          twitch: { source: "npm", spec: "twitch@1.0.0" },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(readPendingPluginInstallRecords(config)).toEqual({
-      twitch: { source: "npm", spec: "twitch@1.0.0" },
-    });
-    expect(hasPendingPluginInstallRecords(config)).toBe(true);
-    expect(withoutPluginInstallRecords(config)).toEqual({
+      }),
+    ).toEqual({
       plugins: {
         entries: {
           twitch: { enabled: true },
         },
       },
     });
-    expect(hasPendingPluginInstallRecords({ plugins: { entries: {} } })).toBe(false);
   });
 
   it("ignores invalid persisted plugin index files", async () => {
     const stateDir = makeStateDir();
-    writePersistedInstalledPluginIndexSync(
-      {
-        version: 999 as InstalledPluginIndex["version"],
-        hostContractVersion: "2026.4.25",
-        compatRegistryVersion: "compat-v1",
-        migrationVersion: 1,
-        policyHash: "policy-v1",
-        generatedAtMs: 1777118400000,
-        installRecords: {},
-        plugins: [],
-        diagnostics: [],
-      },
-      { stateDir },
+    fs.mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
+    fs.writeFileSync(
+      resolveInstalledPluginIndexRecordsStorePath({ stateDir }),
+      JSON.stringify({ version: 999, records: {} }),
     );
 
     await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toBeNull();

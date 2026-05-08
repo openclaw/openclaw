@@ -1,31 +1,35 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { promisify } from "node:util";
-import { formatCliCommand } from "../../../cli/command-format.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveCronRunLogPruneOptions } from "../../../cron/run-log.js";
-import { resolveCronStoreKey, loadCronStore, saveCronStore } from "../../../cron/store.js";
-import type { CronJob } from "../../../cron/types.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../../shared/string-coerce.js";
-import { note } from "../../../terminal/note.js";
-import { shortenHomePath } from "../../../utils.js";
-import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
-import {
-  countStaleDreamingJobs,
-  migrateLegacyDreamingPayloadShape,
-} from "./cron-dreaming-payload-migration.js";
-import { importLegacyCronRunLogFilesToSqlite, legacyCronRunLogFilesExist } from "./cron-run-log.js";
-import { normalizeStoredCronJobs } from "./cron-store-migration.js";
+  importLegacyCronRunLogFilesToSqlite,
+  legacyCronRunLogFilesExist,
+  resolveCronRunLogPruneOptions,
+} from "../cron/run-log.js";
 import {
   importLegacyCronStateFileToSqlite,
   legacyCronStoreFileExists,
   legacyCronStateFileExists,
   loadLegacyCronStoreForMigration,
-  resolveLegacyCronStorePath,
-} from "./cron-store.js";
+  resolveCronStorePath,
+  loadCronStore,
+  saveCronStore,
+} from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { note } from "../terminal/note.js";
+import { shortenHomePath } from "../utils.js";
+import {
+  countStaleDreamingJobs,
+  migrateLegacyDreamingPayloadShape,
+} from "./doctor-cron-dreaming-payload-migration.js";
+import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
+import type { DoctorPrompter, DoctorOptions } from "./doctor-prompter.js";
 
 type CronDoctorOutcome = {
   changed: boolean;
@@ -222,15 +226,13 @@ export async function maybeRepairLegacyCronStore(params: {
   options: DoctorOptions;
   prompter: Pick<DoctorPrompter, "confirm">;
 }) {
-  const configuredLegacyStorePath = (params.cfg.cron as { store?: string } | undefined)?.store;
-  const legacyStorePath = resolveLegacyCronStorePath(configuredLegacyStorePath);
-  const storeKey = resolveCronStoreKey();
-  const hasLegacyStoreFile = legacyCronStoreFileExists(legacyStorePath);
-  const hasLegacyStateSidecar = legacyCronStateFileExists(legacyStorePath);
-  const hasLegacyRunLogs = await legacyCronRunLogFilesExist(legacyStorePath);
+  const storePath = resolveCronStorePath(params.cfg.cron?.store);
+  const hasLegacyStoreFile = legacyCronStoreFileExists(storePath);
+  const hasLegacyStateSidecar = legacyCronStateFileExists(storePath);
+  const hasLegacyRunLogs = await legacyCronRunLogFilesExist(storePath);
   const store =
-    (hasLegacyStoreFile ? await loadLegacyCronStoreForMigration(legacyStorePath) : null) ??
-    (await loadCronStore(storeKey));
+    (hasLegacyStoreFile ? await loadLegacyCronStoreForMigration(storePath) : null) ??
+    (await loadCronStore(storePath));
   const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   if (rawJobs.length === 0 && !hasLegacyStoreFile && !hasLegacyStateSidecar && !hasLegacyRunLogs) {
     return;
@@ -255,10 +257,10 @@ export async function maybeRepairLegacyCronStore(params: {
     previewLines.push("- Job definitions still live in legacy `cron/jobs.json`");
   }
   if (hasLegacyStateSidecar) {
-    previewLines.push("- Legacy runtime state is still present in `jobs-state.json`");
+    previewLines.push("- Runtime state still lives in the legacy `jobs-state.json` sidecar");
   }
   if (hasLegacyRunLogs) {
-    previewLines.push("- Legacy run history is still present in `cron/runs/*.jsonl` files");
+    previewLines.push("- Run history still lives in legacy `cron/runs/*.jsonl` files");
   }
   if (previewLines.length === 0) {
     return;
@@ -266,7 +268,7 @@ export async function maybeRepairLegacyCronStore(params: {
 
   note(
     [
-      `Legacy cron job storage detected at ${shortenHomePath(legacyStorePath)}.`,
+      `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`,
       ...previewLines,
       `Repair with ${formatCliCommand("openclaw doctor --fix")} to normalize the store and import runtime state into SQLite before the next scheduler run.`,
     ].join("\n"),
@@ -286,27 +288,24 @@ export async function maybeRepairLegacyCronStore(params: {
     legacyWebhook,
   });
   const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
-  const hasUnresolvedNotifyFallback = notifyMigration.warnings.length > 0;
   const changed =
-    !hasUnresolvedNotifyFallback &&
-    (normalized.mutated ||
-      notifyMigration.changed ||
-      dreamingMigration.changed ||
-      hasLegacyStoreFile);
-  const hasLegacyImportWork = hasLegacyStateSidecar || hasLegacyRunLogs;
-  if (!changed && !hasLegacyImportWork && notifyMigration.warnings.length === 0) {
+    normalized.mutated ||
+    notifyMigration.changed ||
+    dreamingMigration.changed ||
+    hasLegacyStoreFile;
+  if (!changed && notifyMigration.warnings.length === 0) {
     return;
   }
 
   if (changed) {
-    await saveCronStore(storeKey, {
+    await saveCronStore(storePath, {
       version: 1,
       jobs: rawJobs as unknown as CronJob[],
     });
     if (hasLegacyStoreFile) {
-      await fs.rm(legacyStorePath, { force: true }).catch(() => undefined);
+      await fs.rm(storePath, { force: true }).catch(() => undefined);
     }
-    note(`Cron store normalized at ${shortenHomePath(legacyStorePath)}.`, "Doctor changes");
+    note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
     if (dreamingMigration.rewrittenCount > 0) {
       note(
         `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
@@ -316,7 +315,7 @@ export async function maybeRepairLegacyCronStore(params: {
   }
 
   const stateImport = hasLegacyStateSidecar
-    ? await importLegacyCronStateFileToSqlite({ legacyStorePath, storeKey })
+    ? await importLegacyCronStateFileToSqlite(storePath)
     : { imported: false, importedJobs: 0 };
   if (stateImport.imported) {
     note(
@@ -327,8 +326,7 @@ export async function maybeRepairLegacyCronStore(params: {
 
   if (hasLegacyRunLogs) {
     const runLogImport = await importLegacyCronRunLogFilesToSqlite({
-      legacyStorePath,
-      storeKey,
+      storePath,
       opts: resolveCronRunLogPruneOptions(params.cfg.cron?.runLog),
     });
     if (runLogImport.files > 0) {

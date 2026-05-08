@@ -19,7 +19,7 @@ const readJson = (file) => {
 };
 
 const pluginRecordSnapshot = () => {
-  const records = readInstalledPluginRecords();
+  const records = readInstalledPluginRecords({ allowLegacyFile: true });
   const record = records["lossless-claw"] ?? records["@example/lossless-claw"];
   if (!record) {
     throw new Error("missing plugin install record");

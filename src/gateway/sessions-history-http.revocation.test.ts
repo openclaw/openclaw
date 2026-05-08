@@ -3,12 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 let transcriptUpdateHandler:
-  | ((update: {
-      agentId?: string;
-      sessionId?: string;
-      message?: unknown;
-      messageId?: string;
-    }) => void)
+  | ((update: { sessionFile?: string; message?: unknown; messageId?: string }) => void)
   | undefined;
 let authRevoked = false;
 let gatewayConfig: {
@@ -31,6 +26,7 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   getSessionEntry: () => ({
     sessionId: "session-1",
+    sessionFile: "/tmp/session-1.jsonl",
   }),
   listSessionEntries: () => [],
 }));
@@ -91,10 +87,16 @@ vi.mock("./http-utils.js", () => ({
 vi.mock("./session-utils.js", () => ({
   resolveGatewaySessionDatabaseTarget: () => ({
     databasePath: "/tmp/openclaw-agent.sqlite",
+    storeKeys: ["agent:main"],
     canonicalKey: "agent:main",
     agentId: "main",
   }),
+  resolveFreshestSessionEntryFromStoreKeys: () => ({
+    sessionId: "session-1",
+    sessionFile: "/tmp/session-1.jsonl",
+  }),
   readSessionMessagesAsync: async () => [],
+  resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
 vi.mock("./session-history-state.js", () => ({
@@ -193,8 +195,7 @@ describe("session history SSE auth revocation", () => {
     authRevoked = true;
 
     transcriptUpdateHandler?.({
-      agentId: "main",
-      sessionId: "session-1",
+      sessionFile: "/tmp/session-1.jsonl",
       message: { role: "assistant", content: [{ type: "text", text: "post-revocation secret" }] },
       messageId: "m-1",
     });
@@ -231,8 +232,7 @@ describe("session history SSE auth revocation", () => {
     };
 
     transcriptUpdateHandler?.({
-      agentId: "main",
-      sessionId: "session-1",
+      sessionFile: "/tmp/session-1.jsonl",
       message: { role: "assistant", content: [{ type: "text", text: "stale-proxy event" }] },
       messageId: "m-2",
     });
@@ -270,8 +270,7 @@ describe("session history SSE auth revocation", () => {
     };
 
     transcriptUpdateHandler?.({
-      agentId: "main",
-      sessionId: "other-session",
+      sessionFile: "/tmp/other-session.jsonl",
       message: { role: "assistant", content: [{ type: "text", text: "other session" }] },
       messageId: "m-3",
     });

@@ -13,7 +13,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
-import { getMediaMaterializationDir, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { getMediaDir, getMediaMaterializationDir, MEDIA_MAX_BYTES } from "../../media/store.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -219,14 +219,16 @@ async function isAllowedSourcePath(params: {
   if (inboundReference) {
     return true;
   }
+  const mediaDir = getMediaDir();
   const materializedMediaDir = getMediaMaterializationDir();
+  const canonicalMediaDir = await fs.realpath(mediaDir).catch(() => mediaDir);
   const canonicalMaterializedMediaDir = await fs
     .realpath(materializedMediaDir)
     .catch(() => materializedMediaDir);
   if (
     !isInboundPathAllowed({
       filePath: params.source,
-      roots: [materializedMediaDir, canonicalMaterializedMediaDir],
+      roots: [mediaDir, canonicalMediaDir, materializedMediaDir, canonicalMaterializedMediaDir],
     })
   ) {
     logVerbose(`Blocking attempt to stage media from outside media directory: ${params.source}`);
@@ -236,8 +238,12 @@ async function isAllowedSourcePath(params: {
     const canonicalSource = await fs.realpath(params.source).catch(() => params.source);
     await assertSandboxPath({
       filePath: canonicalSource,
-      cwd: canonicalMaterializedMediaDir,
-      root: canonicalMaterializedMediaDir,
+      cwd: canonicalSource.startsWith(canonicalMaterializedMediaDir)
+        ? canonicalMaterializedMediaDir
+        : canonicalMediaDir,
+      root: canonicalSource.startsWith(canonicalMaterializedMediaDir)
+        ? canonicalMaterializedMediaDir
+        : canonicalMediaDir,
     });
     return true;
   } catch {

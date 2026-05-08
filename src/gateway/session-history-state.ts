@@ -277,6 +277,7 @@ export class SessionHistorySseState {
         },
         {
           ...resolveSessionHistoryTailReadOptions(this.limit),
+          agentId: this.target.agentId,
         },
       );
       return {
@@ -292,6 +293,7 @@ export class SessionHistorySseState {
           sessionId: this.target.sessionId,
         },
         {
+          agentId: this.target.agentId,
           mode: "full",
           reason: "session history cursor pagination",
         },

@@ -1,13 +1,12 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import type { Insertable, Selectable } from "kysely";
+import type { Insertable } from "kysely";
+import { z } from "zod";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { sqliteNullableNumber, sqliteNullableText } from "../../infra/sqlite-row-values.js";
-import { asFiniteNumber } from "../../shared/number-coercion.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -15,7 +14,14 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { SANDBOX_STATE_DIR } from "./constants.js";
+import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
+import {
+  SANDBOX_BROWSER_REGISTRY_PATH,
+  SANDBOX_BROWSERS_DIR,
+  SANDBOX_CONTAINERS_DIR,
+  SANDBOX_REGISTRY_PATH,
+  SANDBOX_STATE_DIR,
+} from "./constants.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
@@ -48,11 +54,45 @@ type SandboxBrowserRegistry = {
   entries: SandboxBrowserRegistryEntry[];
 };
 
+type RegistryEntry = {
+  containerName: string;
+};
+
 type RegistryEntryPayload = RegistryEntry & Record<string, unknown>;
 
-type SandboxRegistryKind = "containers" | "browsers";
+type RegistryFile = {
+  entries: RegistryEntryPayload[];
+};
 
-type RegistryEntry = SandboxRegistryEntry | SandboxBrowserRegistryEntry;
+type LegacyRegistryKind = "containers" | "browsers";
+
+type LegacyRegistryTarget = {
+  kind: LegacyRegistryKind;
+  registryPath: string;
+  shardedDir: string;
+};
+
+export type LegacySandboxRegistryInspection = LegacyRegistryTarget & {
+  exists: boolean;
+  valid: boolean;
+  entries: number;
+};
+
+export type LegacySandboxRegistryMigrationResult = LegacyRegistryTarget & {
+  status: "missing" | "migrated" | "removed-empty" | "quarantined-invalid";
+  entries: number;
+  quarantinePath?: string;
+};
+
+const RegistryEntrySchema = z
+  .object({
+    containerName: z.string(),
+  })
+  .passthrough();
+
+const RegistryFileSchema = z.object({
+  entries: z.array(RegistryEntrySchema),
+});
 
 function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegistryEntry {
   return {
@@ -61,6 +101,23 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
     runtimeLabel: entry.runtimeLabel?.trim() || entry.containerName,
     configLabelKind: entry.configLabelKind?.trim() || "Image",
   };
+}
+
+async function readLegacyRegistryFile(registryPath: string): Promise<RegistryFile | null> {
+  try {
+    const raw = await fs.readFile(registryPath, "utf-8");
+    const parsed = safeParseJsonWithSchema(RegistryFileSchema, raw) as RegistryFile | null;
+    return parsed;
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return { entries: [] };
+    }
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Failed to read sandbox registry file: ${registryPath}`, { cause: error });
+  }
 }
 
 export async function readRegistry(): Promise<SandboxRegistry> {
@@ -79,65 +136,22 @@ function sandboxRegistryDbOptions(): OpenClawStateDatabaseOptions {
   };
 }
 
+type SandboxRegistryRow = {
+  container_name: string;
+  entry_json: string;
+};
+
 type SandboxRegistryEntriesTable = OpenClawStateKyselyDatabase["sandbox_registry_entries"];
 type SandboxRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "sandbox_registry_entries">;
-type SandboxRegistryRow = Selectable<SandboxRegistryEntriesTable>;
 
-function requiredText(value: string | null): string | null {
-  return normalizeOptionalString(value) ?? null;
-}
-
-function requiredNumber(value: number | null): number | null {
-  return asFiniteNumber(value) ?? null;
-}
-
-function rowToContainerRegistryEntry(row: SandboxRegistryRow): SandboxRegistryEntry | null {
-  const sessionKey = requiredText(row.session_key);
-  const image = requiredText(row.image);
-  const createdAtMs = requiredNumber(row.created_at_ms);
-  const lastUsedAtMs = requiredNumber(row.last_used_at_ms);
-  if (!sessionKey || !image || createdAtMs === null || lastUsedAtMs === null) {
+function parseRegistryEntry(row: SandboxRegistryRow): RegistryEntry | null {
+  try {
+    const parsed = JSON.parse(row.entry_json) as unknown;
+    const entry = RegistryEntrySchema.safeParse(parsed);
+    return entry.success && entry.data.containerName === row.container_name ? entry.data : null;
+  } catch {
     return null;
   }
-  return {
-    containerName: row.container_name,
-    sessionKey,
-    createdAtMs,
-    lastUsedAtMs,
-    image,
-    ...(row.backend_id ? { backendId: row.backend_id } : {}),
-    ...(row.runtime_label ? { runtimeLabel: row.runtime_label } : {}),
-    ...(row.config_label_kind ? { configLabelKind: row.config_label_kind } : {}),
-    ...(row.config_hash ? { configHash: row.config_hash } : {}),
-  };
-}
-
-function rowToBrowserRegistryEntry(row: SandboxRegistryRow): SandboxBrowserRegistryEntry | null {
-  const sessionKey = requiredText(row.session_key);
-  const image = requiredText(row.image);
-  const createdAtMs = requiredNumber(row.created_at_ms);
-  const lastUsedAtMs = requiredNumber(row.last_used_at_ms);
-  const cdpPort = requiredNumber(row.cdp_port);
-  if (!sessionKey || !image || createdAtMs === null || lastUsedAtMs === null || cdpPort === null) {
-    return null;
-  }
-  return {
-    containerName: row.container_name,
-    sessionKey,
-    createdAtMs,
-    lastUsedAtMs,
-    image,
-    cdpPort,
-    ...(row.config_hash ? { configHash: row.config_hash } : {}),
-    ...(row.no_vnc_port === null ? {} : { noVncPort: row.no_vnc_port }),
-  };
-}
-
-function rowToRegistryEntry(
-  kind: SandboxRegistryKind,
-  row: SandboxRegistryRow,
-): RegistryEntry | null {
-  return kind === "containers" ? rowToContainerRegistryEntry(row) : rowToBrowserRegistryEntry(row);
 }
 
 function getSandboxRegistryKysely(database: OpenClawStateDatabase) {
@@ -145,22 +159,12 @@ function getSandboxRegistryKysely(database: OpenClawStateDatabase) {
 }
 
 function bindRegistryEntry(
-  kind: SandboxRegistryKind,
+  kind: LegacyRegistryKind,
   entry: RegistryEntryPayload,
 ): Insertable<SandboxRegistryEntriesTable> {
   return {
     registry_kind: kind,
     container_name: entry.containerName,
-    session_key: sqliteNullableText(entry.sessionKey),
-    backend_id: sqliteNullableText(entry.backendId),
-    runtime_label: sqliteNullableText(entry.runtimeLabel),
-    image: sqliteNullableText(entry.image),
-    created_at_ms: sqliteNullableNumber(entry.createdAtMs),
-    last_used_at_ms: sqliteNullableNumber(entry.lastUsedAtMs),
-    config_label_kind: sqliteNullableText(entry.configLabelKind),
-    config_hash: sqliteNullableText(entry.configHash),
-    cdp_port: sqliteNullableNumber(entry.cdpPort),
-    no_vnc_port: sqliteNullableNumber(entry.noVncPort),
     entry_json: JSON.stringify(entry),
     updated_at: Date.now(),
   };
@@ -168,22 +172,22 @@ function bindRegistryEntry(
 
 function getRegistryEntry(
   database: OpenClawStateDatabase,
-  kind: SandboxRegistryKind,
+  kind: LegacyRegistryKind,
   containerName: string,
 ): RegistryEntry | null {
-  const row = executeSqliteQueryTakeFirstSync(
+  const row = executeSqliteQueryTakeFirstSync<SandboxRegistryRow>(
     database.db,
     getSandboxRegistryKysely(database)
       .selectFrom("sandbox_registry_entries")
-      .selectAll()
+      .select(["container_name", "entry_json"])
       .where("registry_kind", "=", kind)
       .where("container_name", "=", containerName),
   );
-  return row ? rowToRegistryEntry(kind, row) : null;
+  return row ? parseRegistryEntry(row) : null;
 }
 
 function readRegistryEntryByKind(
-  kind: SandboxRegistryKind,
+  kind: LegacyRegistryKind,
   containerName: string,
 ): RegistryEntry | null {
   return getRegistryEntry(
@@ -193,25 +197,25 @@ function readRegistryEntryByKind(
   );
 }
 
-function readRegistryEntries<T extends RegistryEntry>(kind: SandboxRegistryKind): T[] {
+function readRegistryEntries<T extends RegistryEntry>(kind: LegacyRegistryKind): T[] {
   const database = openOpenClawStateDatabase(sandboxRegistryDbOptions());
-  const rows = executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync<SandboxRegistryRow>(
     database.db,
     getSandboxRegistryKysely(database)
       .selectFrom("sandbox_registry_entries")
-      .selectAll()
+      .select(["container_name", "entry_json"])
       .where("registry_kind", "=", kind)
       .orderBy("container_name", "asc"),
   ).rows;
   return rows.flatMap((row) => {
-    const entry = rowToRegistryEntry(kind, row);
+    const entry = parseRegistryEntry(row);
     return entry ? [entry as T] : [];
   });
 }
 
 function upsertRegistryEntry(
   database: OpenClawStateDatabase,
-  kind: SandboxRegistryKind,
+  kind: LegacyRegistryKind,
   entry: RegistryEntryPayload,
 ): void {
   executeSqliteQuerySync(
@@ -221,21 +225,178 @@ function upsertRegistryEntry(
       .values(bindRegistryEntry(kind, entry))
       .onConflict((conflict) =>
         conflict.columns(["registry_kind", "container_name"]).doUpdateSet({
-          session_key: (eb) => eb.ref("excluded.session_key"),
-          backend_id: (eb) => eb.ref("excluded.backend_id"),
-          runtime_label: (eb) => eb.ref("excluded.runtime_label"),
-          image: (eb) => eb.ref("excluded.image"),
-          created_at_ms: (eb) => eb.ref("excluded.created_at_ms"),
-          last_used_at_ms: (eb) => eb.ref("excluded.last_used_at_ms"),
-          config_label_kind: (eb) => eb.ref("excluded.config_label_kind"),
-          config_hash: (eb) => eb.ref("excluded.config_hash"),
-          cdp_port: (eb) => eb.ref("excluded.cdp_port"),
-          no_vnc_port: (eb) => eb.ref("excluded.no_vnc_port"),
           entry_json: (eb) => eb.ref("excluded.entry_json"),
           updated_at: (eb) => eb.ref("excluded.updated_at"),
         }),
       ),
   );
+}
+
+async function quarantineLegacyRegistry(registryPath: string): Promise<string> {
+  const quarantinePath = `${registryPath}.invalid-${Date.now()}`;
+  await fs.rename(registryPath, quarantinePath).catch(async (error) => {
+    const code = (error as { code?: string } | null)?.code;
+    if (code !== "ENOENT") {
+      await fs.rm(registryPath, { force: true });
+    }
+  });
+  return quarantinePath;
+}
+
+async function legacyShardPaths(dir: string): Promise<string[]> {
+  try {
+    const names = await fs.readdir(dir);
+    return names
+      .filter((name) => name.endsWith(".json"))
+      .toSorted()
+      .map((name) => path.join(dir, name));
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function readLegacyShardFile(shardPath: string): Promise<RegistryEntryPayload | null> {
+  try {
+    const raw = await fs.readFile(shardPath, "utf-8");
+    return safeParseJsonWithSchema(RegistryEntrySchema, raw) as RegistryEntryPayload | null;
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function inspectMonolithicLegacyRegistry(target: LegacyRegistryTarget): Promise<{
+  exists: boolean;
+  valid: boolean;
+  entries: RegistryEntryPayload[];
+}> {
+  try {
+    await fs.access(target.registryPath);
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "ENOENT") {
+      return { exists: false, valid: true, entries: [] };
+    }
+    throw error;
+  }
+
+  const registry = await readLegacyRegistryFile(target.registryPath);
+  return {
+    exists: true,
+    valid: Boolean(registry),
+    entries: registry?.entries ?? [],
+  };
+}
+
+async function inspectShardedLegacyRegistry(target: LegacyRegistryTarget): Promise<{
+  exists: boolean;
+  valid: boolean;
+  entries: RegistryEntryPayload[];
+  invalidPath?: string;
+}> {
+  const shardPaths = await legacyShardPaths(target.shardedDir);
+  const entries: RegistryEntryPayload[] = [];
+  for (const shardPath of shardPaths) {
+    const entry = await readLegacyShardFile(shardPath);
+    if (!entry) {
+      return { exists: true, valid: false, entries, invalidPath: shardPath };
+    }
+    entries.push(entry);
+  }
+  return { exists: shardPaths.length > 0, valid: true, entries };
+}
+
+async function migrateTargetIfNeeded(
+  target: LegacyRegistryTarget,
+): Promise<LegacySandboxRegistryMigrationResult> {
+  const monolithic = await inspectMonolithicLegacyRegistry(target);
+  if (!monolithic.valid) {
+    const quarantinePath = await quarantineLegacyRegistry(target.registryPath);
+    return { ...target, status: "quarantined-invalid", entries: 0, quarantinePath };
+  }
+  const sharded = await inspectShardedLegacyRegistry(target);
+  if (!sharded.valid) {
+    const quarantinePath = sharded.invalidPath
+      ? await quarantineLegacyRegistry(sharded.invalidPath)
+      : undefined;
+    return { ...target, status: "quarantined-invalid", entries: 0, quarantinePath };
+  }
+
+  if (!monolithic.exists && !sharded.exists) {
+    return { ...target, status: "missing", entries: 0 };
+  }
+
+  const entries = [...monolithic.entries, ...sharded.entries];
+  if (entries.length === 0) {
+    await fs.rm(target.registryPath, { force: true });
+    await fs.rm(`${target.registryPath}.lock`, { force: true });
+    await fs.rm(target.shardedDir, { recursive: true, force: true });
+    return { ...target, status: "removed-empty", entries: 0 };
+  }
+
+  runOpenClawStateWriteTransaction((database) => {
+    for (const entry of entries) {
+      if (!getRegistryEntry(database, target.kind, entry.containerName)) {
+        upsertRegistryEntry(database, target.kind, entry);
+      }
+    }
+  }, sandboxRegistryDbOptions());
+
+  await fs.rm(target.registryPath, { force: true });
+  await fs.rm(`${target.registryPath}.lock`, { force: true });
+  await fs.rm(target.shardedDir, { recursive: true, force: true });
+  return { ...target, status: "migrated", entries: entries.length };
+}
+
+function legacyRegistryTargets(): LegacyRegistryTarget[] {
+  return [
+    {
+      kind: "containers",
+      registryPath: SANDBOX_REGISTRY_PATH,
+      shardedDir: SANDBOX_CONTAINERS_DIR,
+    },
+    {
+      kind: "browsers",
+      registryPath: SANDBOX_BROWSER_REGISTRY_PATH,
+      shardedDir: SANDBOX_BROWSERS_DIR,
+    },
+  ];
+}
+
+export async function inspectLegacySandboxRegistryFiles(): Promise<
+  LegacySandboxRegistryInspection[]
+> {
+  const inspections: LegacySandboxRegistryInspection[] = [];
+  for (const target of legacyRegistryTargets()) {
+    const monolithic = await inspectMonolithicLegacyRegistry(target);
+    const sharded = monolithic.valid
+      ? await inspectShardedLegacyRegistry(target)
+      : { exists: false, valid: true, entries: [] };
+    inspections.push({
+      ...target,
+      exists: monolithic.exists || sharded.exists,
+      valid: monolithic.valid && sharded.valid,
+      entries: monolithic.entries.length + sharded.entries.length,
+    });
+  }
+  return inspections;
+}
+
+export async function migrateLegacySandboxRegistryFiles(): Promise<
+  LegacySandboxRegistryMigrationResult[]
+> {
+  const results: LegacySandboxRegistryMigrationResult[] = [];
+  for (const target of legacyRegistryTargets()) {
+    results.push(await migrateTargetIfNeeded(target));
+  }
+  return results;
 }
 
 export async function readRegistryEntry(

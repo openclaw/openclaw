@@ -5,11 +5,7 @@ import net from "node:net";
 import path from "node:path";
 import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   __testing,
@@ -17,10 +13,8 @@ import {
   GatewayLockError,
   type GatewayLockOptions,
 } from "./gateway-lock.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
-type GatewayLockTestDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-lock-" });
 let fixtureRoot = "";
@@ -60,6 +54,14 @@ function expectGatewayLock(lock: Awaited<ReturnType<typeof acquireGatewayLock>>)
   }
   expect(typeof lock.release).toBe("function");
   return lock;
+}
+
+function resolveLockPath(env: NodeJS.ProcessEnv) {
+  const stateDir = resolveStateDir(env);
+  const configPath = resolveConfigPath(env, stateDir);
+  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
+  const lockDir = resolveTestLockDir();
+  return { lockPath: path.join(lockDir, `gateway.${hash}.lock`), configPath };
 }
 
 function makeProcStat(pid: number, startTime: number) {
@@ -189,24 +191,6 @@ describe("gateway lock", () => {
     const env = await makeEnv();
     const lock = await acquireForTest(env, { timeoutMs: 50 });
     const acquiredLock = expectGatewayLock(lock);
-    const { lockKey } = resolveLockIdentity(env);
-    const database = openOpenClawStateDatabase({ env });
-    const db = getNodeSqliteKysely<GatewayLockTestDatabase>(database.db);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("state_leases")
-        .select(["scope", "lease_key", "owner", "expires_at", "payload_json"])
-        .where("scope", "=", "gateway_locks")
-        .where("lease_key", "=", lockKey),
-    );
-    expect(row).toMatchObject({
-      scope: "gateway_locks",
-      lease_key: lockKey,
-      owner: expect.any(String),
-      expires_at: expect.any(Number),
-      payload_json: expect.any(String),
-    });
 
     const pending = acquireForTest(env, {
       timeoutMs: 15,

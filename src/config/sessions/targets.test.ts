@@ -1,5 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -7,29 +8,28 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import type { OpenClawConfig } from "../config.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveAgentSessionDatabaseTargetsSync,
-  resolveAllAgentSessionDatabaseTargets,
-  resolveAllAgentSessionDatabaseTargetsSync,
   resolveSessionDatabaseTargets,
 } from "./targets.js";
-
-function createAgentConfig(defaultAgentId = "ops"): OpenClawConfig {
-  return {
-    session: {},
-    agents: {
-      list: [{ id: defaultAgentId, default: true }],
-    },
-  };
-}
 
 function createEnv(home: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+    OPENCLAW_STATE_DIR: `${home}/.openclaw`,
   };
 }
+
+function withTempStateHome<T>(callback: (home: string) => T): T {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-targets-"));
+  return callback(home);
+}
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+});
 
 function expectedTarget(params: {
   agentId: string;
@@ -44,32 +44,9 @@ function expectedTarget(params: {
   };
 }
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
-
 describe("resolveSessionDatabaseTargets", () => {
-  it("resolves all configured agent databases", async () => {
-    await withTempHome(async (home) => {
-      const env = createEnv(home);
-      const cfg: OpenClawConfig = {
-        session: {},
-        agents: {
-          list: [{ id: "main", default: true }, { id: "work" }],
-        },
-      };
-
-      const targets = resolveSessionDatabaseTargets(cfg, { allAgents: true }, { env });
-      expect(targets).toEqual([
-        expectedTarget({ agentId: "main", env }),
-        expectedTarget({ agentId: "work", env }),
-      ]);
-    });
-  });
-
-  it("keeps per-agent database targets when session settings are shared", async () => {
-    await withTempHome(async (home) => {
+  it("resolves configured agent databases", async () => {
+    await withTempStateHome(async (home) => {
       const env = createEnv(home);
       const cfg: OpenClawConfig = {
         session: {},
@@ -79,20 +56,14 @@ describe("resolveSessionDatabaseTargets", () => {
       };
 
       expect(resolveSessionDatabaseTargets(cfg, { allAgents: true }, { env })).toEqual([
-        {
-          agentId: "main",
-          databasePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
-        },
-        {
-          agentId: "work",
-          databasePath: resolveOpenClawAgentSqlitePath({ agentId: "work", env }),
-        },
+        expectedTarget({ agentId: "main", env }),
+        expectedTarget({ agentId: "work", env }),
       ]);
     });
   });
 
-  it("includes SQLite-registered agents for --all-agents", async () => {
-    await withTempHome(async (home) => {
+  it("includes SQLite-registered agents for all-agent selection", async () => {
+    await withTempStateHome(async (home) => {
       const env = createEnv(home);
       const cfg: OpenClawConfig = {
         agents: {
@@ -108,7 +79,7 @@ describe("resolveSessionDatabaseTargets", () => {
     });
   });
 
-  it("rejects unknown agent ids", () => {
+  it("rejects unknown explicit agent ids", () => {
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "work" }],
@@ -128,51 +99,22 @@ describe("resolveSessionDatabaseTargets", () => {
 });
 
 describe("resolveAgentSessionDatabaseTargetsSync", () => {
-  it("resolves configured and default targets for one requested agent", async () => {
-    await withTempHome(async (home) => {
+  it("resolves the requested per-agent database target", async () => {
+    await withTempStateHome(async (home) => {
       const env = createEnv(home);
-      const cfg = createAgentConfig("main");
 
-      expect(resolveAgentSessionDatabaseTargetsSync(cfg, "codex", { env })).toEqual([
+      expect(resolveAgentSessionDatabaseTargetsSync({}, "codex", { env })).toEqual([
         expectedTarget({ agentId: "codex", env }),
       ]);
     });
   });
 
-  it("includes a SQLite-registered target", async () => {
-    await withTempHome(async (home) => {
+  it("uses a registered database path for the requested agent", async () => {
+    await withTempStateHome(async (home) => {
       const env = createEnv(home);
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [{ id: "main", default: true }],
-        },
-      };
       const registered = openOpenClawAgentDatabase({ agentId: "retired", env });
 
-      expect(resolveAgentSessionDatabaseTargetsSync(cfg, "retired", { env })).toEqual([
-        expectedTarget({ agentId: "retired", env, databasePath: registered.path }),
-      ]);
-    });
-  });
-});
-
-describe("resolveAllAgentSessionDatabaseTargets", () => {
-  it("includes configured agents and SQLite-registered agents", async () => {
-    await withTempHome(async (home) => {
-      const env = createEnv(home);
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [{ id: "ops", default: true }],
-        },
-      };
-      const registered = openOpenClawAgentDatabase({ agentId: "retired", env });
-
-      await expect(resolveAllAgentSessionDatabaseTargets(cfg, { env })).resolves.toEqual([
-        expectedTarget({ agentId: "ops", env }),
-        expectedTarget({ agentId: "retired", env, databasePath: registered.path }),
-      ]);
-      expect(resolveAllAgentSessionDatabaseTargetsSync(cfg, { env })).toEqual([
-        expectedTarget({ agentId: "ops", env }),
+      expect(resolveAgentSessionDatabaseTargetsSync({}, "retired", { env })).toEqual([
         expectedTarget({ agentId: "retired", env, databasePath: registered.path }),
       ]);
     });

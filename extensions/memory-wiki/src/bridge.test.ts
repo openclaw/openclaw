@@ -134,6 +134,9 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(
       sourcePages.reduce((count, name) => count + (name.startsWith("bridge-") ? 1 : 0), 0),
     ).toBe(3);
+    await expect(
+      fs.stat(path.join(vaultDir, ".openclaw-wiki", "source-sync.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
 
     const memoryPage = await fs.readFile(path.join(vaultDir, first.pagePaths[0] ?? ""), "utf8");
     expect(memoryPage).toContain("sourceType: memory-bridge");

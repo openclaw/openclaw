@@ -30,7 +30,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
+import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -239,8 +239,9 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
 };
 
-const readUsageFromSessionTranscript = (
+const readUsageFromSessionLog = (
   sessionId?: string,
+  sessionEntry?: SessionEntry,
   agentId?: string,
   sessionKey?: string,
 ):
@@ -254,6 +255,7 @@ const readUsageFromSessionTranscript = (
       model?: string;
     }
   | undefined => {
+  // Session-file-shaped paths are stable transcript identities; content is read from SQLite.
   if (!sessionId) {
     return undefined;
   }
@@ -262,7 +264,9 @@ const readUsageFromSessionTranscript = (
     const resolvedAgentId =
       agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
     const snapshot = readRecentSessionUsageFromTranscript(
-      { agentId: resolvedAgentId, sessionId },
+      sessionId,
+      sessionEntry?.sessionFile,
+      resolvedAgentId,
       256 * 1024,
     );
     if (!snapshot) {
@@ -428,7 +432,7 @@ function resolveChannelModelNote(params: {
   entry?: SessionEntry;
   selectedProvider: string;
   selectedModel: string;
-  parentConversationId?: string;
+  parentSessionKey?: string;
 }): string | undefined {
   if (!params.config || !params.entry) {
     return undefined;
@@ -441,12 +445,12 @@ function resolveChannelModelNote(params: {
   }
   const channelOverride = resolveChannelModelOverride({
     cfg: params.config,
-    channel: params.entry.channel ?? params.entry.lastChannel,
+    channel: params.entry.channel ?? params.entry.origin?.provider,
     groupId: params.entry.groupId,
-    groupChatType: params.entry.chatType,
+    groupChatType: params.entry.chatType ?? params.entry.origin?.chatType,
     groupChannel: params.entry.groupChannel,
     groupSubject: params.entry.subject,
-    parentConversationId: params.parentConversationId,
+    parentSessionKey: params.parentSessionKey,
   });
   if (!channelOverride) {
     return undefined;
@@ -568,8 +572,9 @@ export function buildStatusMessage(args: StatusArgs): string {
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionTranscript(
+    const logUsage = readUsageFromSessionLog(
       entry?.sessionId,
+      entry,
       args.agentId,
       args.sessionKey,
     );
@@ -643,6 +648,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     entry,
     selectedProvider,
     selectedModel,
+    parentSessionKey: args.parentSessionKey,
   });
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
@@ -764,7 +770,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     .filter(Boolean)
     .join(" • ");
 
-  const isGroupSession = entry?.chatType === "group" || entry?.chatType === "channel";
+  const isGroupSession =
+    entry?.chatType === "group" ||
+    entry?.chatType === "channel" ||
+    Boolean(args.sessionKey?.includes(":group:")) ||
+    Boolean(args.sessionKey?.includes(":channel:"));
   const groupActivationValue = isGroupSession
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;

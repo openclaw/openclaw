@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
+const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_PLUGIN_ID = "matrix";
 const MATRIX_INBOUND_DEDUPE_NAMESPACE = "inbound-dedupe";
 const MATRIX_STORAGE_META_NAMESPACE = "storage-meta";
@@ -64,12 +65,12 @@ function withOpenClawStateDir<T>(stateDir: string, fn: () => Promise<T>): Promis
   });
 }
 
-function resolveMatrixSyncStoreKey(rootDir: string): string {
-  return createHash("sha256").update(path.resolve(rootDir), "utf8").digest("hex").slice(0, 32);
+function resolveMatrixSyncStoreKey(storagePath: string): string {
+  return createHash("sha256").update(path.resolve(storagePath), "utf8").digest("hex").slice(0, 32);
 }
 
-function inferStateDirFromMatrixStorageRoot(rootDir: string): string | null {
-  const parts = path.resolve(rootDir).split(path.sep);
+function inferStateDirFromMatrixStoragePath(storagePath: string): string | null {
+  const parts = path.resolve(storagePath).split(path.sep);
   const matrixIndex = parts.lastIndexOf("matrix");
   if (matrixIndex <= 0) {
     return null;
@@ -84,9 +85,9 @@ function readPersistedMatrixSyncCursor(
   return typeof nextBatch === "string" && nextBatch.trim() ? nextBatch : null;
 }
 
-export async function rewriteMatrixSyncStoreCursor(params: { cursor: string; rootDir: string }) {
+export async function rewriteMatrixSyncStoreCursor(params: { cursor: string; pathname: string }) {
   const rewrite = async () => {
-    const key = resolveMatrixSyncStoreKey(params.rootDir);
+    const key = resolveMatrixSyncStoreKey(params.pathname);
     const persisted = await matrixSyncStore.lookup(key);
     if (!persisted?.savedSync) {
       throw new Error("Matrix sync store did not contain a persisted sync cursor");
@@ -99,18 +100,12 @@ export async function rewriteMatrixSyncStoreCursor(params: { cursor: string; roo
       },
     });
   };
-  const stateDir = inferStateDirFromMatrixStorageRoot(params.rootDir);
+  const stateDir = inferStateDirFromMatrixStoragePath(params.pathname);
   if (stateDir) {
     await withOpenClawStateDir(stateDir, rewrite);
     return;
   }
   await rewrite();
-}
-
-export async function deleteMatrixSyncStore(params: { rootDir: string; stateDir: string }) {
-  await withOpenClawStateDir(params.stateDir, () =>
-    matrixSyncStore.delete(resolveMatrixSyncStoreKey(params.rootDir)),
-  );
 }
 
 async function scoreMatrixStateFile(params: {
@@ -134,6 +129,7 @@ async function scoreMatrixStateFile(params: {
 async function resolveBestMatrixStateFile(params: {
   accountId?: string;
   context: MatrixQaScenarioContext;
+  filename: string;
   stateDir: string;
   userId?: string;
 }) {
@@ -148,15 +144,16 @@ async function resolveBestMatrixStateFile(params: {
     if (!resolvedRoot.startsWith(stateRoot)) {
       return [];
     }
-    return [{ metadata: entry.value, rootDir: resolvedRoot }];
+    const pathname = path.join(resolvedRoot, params.filename);
+    return [{ metadata: entry.value, pathname }];
   });
   if (candidates.length === 0) {
     return null;
   }
   const scored = await Promise.all(
     candidates.map(async (candidate) => ({
-      rootDir: candidate.rootDir,
-      persisted: await matrixSyncStore.lookup(resolveMatrixSyncStoreKey(candidate.rootDir)),
+      pathname: candidate.pathname,
+      persisted: await matrixSyncStore.lookup(resolveMatrixSyncStoreKey(candidate.pathname)),
       score: await scoreMatrixStateFile({
         context: params.context,
         metadata: candidate.metadata,
@@ -166,7 +163,7 @@ async function resolveBestMatrixStateFile(params: {
     })),
   );
   const withCursor = scored.filter((entry) => readPersistedMatrixSyncCursor(entry.persisted));
-  withCursor.sort((a, b) => b.score - a.score || a.rootDir.localeCompare(b.rootDir));
+  withCursor.sort((a, b) => b.score - a.score || a.pathname.localeCompare(b.pathname));
   return withCursor[0] ?? null;
 }
 
@@ -183,15 +180,16 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
     const candidate = await withOpenClawStateDir(params.stateDir, () =>
       resolveBestMatrixStateFile({
         context: params.context,
+        filename: MATRIX_SYNC_STORE_FILENAME,
         stateDir: params.stateDir,
         ...(params.accountId ? { accountId: params.accountId } : {}),
         ...(params.userId ? { userId: params.userId } : {}),
       }),
     );
-    lastPath = candidate?.rootDir ?? null;
+    lastPath = candidate?.pathname ?? null;
     const cursor = readPersistedMatrixSyncCursor(candidate?.persisted);
     if (candidate && cursor) {
-      return { cursor, rootDir: candidate.rootDir };
+      return { cursor, pathname: candidate.pathname };
     }
     await sleep(MATRIX_STATE_POLL_INTERVAL_MS);
   }

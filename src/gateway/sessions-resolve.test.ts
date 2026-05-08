@@ -4,6 +4,7 @@ import { ErrorCodes } from "./protocol/index.js";
 
 const hoisted = vi.hoisted(() => ({
   sessionRowsMock: vi.fn(),
+  filterAndSortSessionEntriesMock: vi.fn(),
   listSessionEntriesMock: vi.fn(),
   listSessionsFromStoreMock: vi.fn(),
   resolveGatewaySessionDatabaseTargetMock: vi.fn(),
@@ -21,20 +22,32 @@ vi.mock("../agents/agent-scope.js", async () => {
   };
 });
 
-vi.mock("../config/sessions.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+vi.mock("../config/sessions/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/sessions/store.js")>(
+    "../config/sessions/store.js",
+  );
   return {
     ...actual,
     listSessionEntries: hoisted.listSessionEntriesMock,
   };
 });
 
-vi.mock("./session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
+vi.mock("./session-utils.js", () => {
+  const resolveDeletedAgentIdFromSessionKey = (_cfg: unknown, key: string) => {
+    const match = /^agent:([^:]+):/.exec(key);
+    const agentId = match?.[1];
+    if (!agentId) {
+      return null;
+    }
+    if (agentId === "main" && key !== "agent:main:main") {
+      return hoisted.listAgentIdsMock().includes("main") ? null : "main";
+    }
+    return hoisted.listAgentIdsMock().includes(agentId) ? null : agentId;
+  };
   return {
-    ...actual,
+    filterAndSortSessionEntries: hoisted.filterAndSortSessionEntriesMock,
     listSessionsFromStore: hoisted.listSessionsFromStoreMock,
+    resolveDeletedAgentIdFromSessionKey,
     resolveGatewaySessionDatabaseTarget: hoisted.resolveGatewaySessionDatabaseTargetMock,
     loadCombinedSessionEntriesForGateway: hoisted.loadCombinedSessionEntriesForGatewayMock,
   };
@@ -44,11 +57,11 @@ const { resolveSessionKeyFromResolveParams } = await import("./sessions-resolve.
 
 describe("resolveSessionKeyFromResolveParams", () => {
   const canonicalKey = "agent:main:canon";
-  const legacyKey = "agent:main:legacy";
   const databasePath = "/tmp/openclaw-agent.sqlite";
 
   beforeEach(() => {
     hoisted.sessionRowsMock.mockReset();
+    hoisted.filterAndSortSessionEntriesMock.mockReset();
     hoisted.listSessionEntriesMock.mockReset();
     hoisted.listSessionsFromStoreMock.mockReset();
     hoisted.resolveGatewaySessionDatabaseTargetMock.mockReset();
@@ -66,6 +79,9 @@ describe("resolveSessionKeyFromResolveParams", () => {
         sessionKey,
         entry,
       })),
+    );
+    hoisted.filterAndSortSessionEntriesMock.mockImplementation(
+      ({ store }: { store: Record<string, SessionEntry> }) => Object.entries(store),
     );
   });
 
@@ -118,6 +134,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     const deletedAgentKey = "agent:deleted-agent:main";
     hoisted.resolveGatewaySessionDatabaseTargetMock.mockReturnValue({
       canonicalKey: deletedAgentKey,
+      storeKeys: [deletedAgentKey],
       databasePath,
     });
     hoisted.sessionRowsMock.mockReturnValue({
@@ -144,6 +161,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     const staleMainKey = "agent:main:guildchat:direct:u1";
     hoisted.resolveGatewaySessionDatabaseTargetMock.mockReturnValue({
       canonicalKey: staleMainKey,
+      storeKeys: [staleMainKey],
       databasePath,
     });
     hoisted.sessionRowsMock.mockReturnValue({

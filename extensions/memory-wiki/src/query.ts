@@ -17,7 +17,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
-import { readMemoryWikiCompiledDigestBundle } from "./digest-state.js";
 import {
   parseWikiMarkdown,
   toWikiPageSummary,
@@ -28,6 +27,8 @@ import {
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
+const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
+const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
 const RELATED_BLOCK_PATTERN =
   /<!-- openclaw:wiki:related:start -->[\s\S]*?<!-- openclaw:wiki:related:end -->/g;
 const MARKDOWN_FRONTMATTER_PATTERN = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -285,8 +286,10 @@ function parseClaimsDigest(raw: string): QueryDigestClaim[] {
 }
 
 async function readQueryDigestBundle(rootDir: string): Promise<QueryDigestBundle | null> {
-  const { agentDigest: agentDigestRaw, claimsDigest: claimsDigestRaw } =
-    await readMemoryWikiCompiledDigestBundle(rootDir);
+  const [agentDigestRaw, claimsDigestRaw] = await Promise.all([
+    fs.readFile(path.join(rootDir, AGENT_DIGEST_PATH), "utf8").catch(() => null),
+    fs.readFile(path.join(rootDir, CLAIMS_DIGEST_PATH), "utf8").catch(() => null),
+  ]);
   if (!agentDigestRaw && !claimsDigestRaw) {
     return null;
   }
@@ -992,11 +995,16 @@ function assertSessionVisibilityAppConfig(params: {
   }
 }
 
-const SESSION_MEMORY_PATH_PREFIXES = ["transcript:"] as const;
+const SESSION_MEMORY_PATH_PREFIXES = ["sessions/", "qmd/sessions/", "qmd/sessions-"] as const;
+const SESSION_MEMORY_ROOT_PATHS = ["qmd/sessions"] as const;
 
-// Keep these opaque keys aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
+// Keep these path shapes aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
 export function isSessionMemoryPath(relPath: string): boolean {
-  return SESSION_MEMORY_PATH_PREFIXES.some((prefix) => relPath.startsWith(prefix));
+  const normalized = relPath.replace(/\\/g, "/");
+  return (
+    SESSION_MEMORY_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
+    SESSION_MEMORY_ROOT_PATHS.some((rootPath) => normalized === rootPath)
+  );
 }
 
 function shouldSearchWiki(config: ResolvedMemoryWikiConfig): boolean {
@@ -1247,7 +1255,7 @@ async function createSessionMemoryPathVisibilityChecker(params: {
       return false;
     }
     const keys = resolveTranscriptStemToSessionKeys({
-      entries: combinedSessionEntries,
+      store: combinedSessionEntries,
       stem,
     });
     return keys.some((key) => guard.check(key).allowed);

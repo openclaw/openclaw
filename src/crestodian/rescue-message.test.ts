@@ -268,9 +268,7 @@ describe("Crestodian rescue message", () => {
       agents?: { defaults?: { model?: { primary?: string } } };
     };
     expect(currentConfig.agents?.defaults?.model?.primary).toBe("openai/gpt-5.2");
-    const audit = (await readLatestCrestodianAuditEntryForTests()) as {
-      details?: { rescue?: boolean; channel?: string; senderId?: string };
-    };
+    const audit = await readLatestCrestodianAuditEntryForTests();
     expect(audit.details?.rescue).toBe(true);
     expect(audit.details?.channel).toBe("whatsapp");
     expect(audit.details?.senderId).toBe("user:owner");
@@ -290,10 +288,7 @@ describe("Crestodian rescue message", () => {
     );
 
     expect(deps.runGatewayRestart).toHaveBeenCalledTimes(1);
-    const audit = (await readLatestCrestodianAuditEntryForTests()) as {
-      operation?: string;
-      details?: { rescue?: boolean; channel?: string; senderId?: string };
-    };
+    const audit = await readLatestCrestodianAuditEntryForTests();
     expect(audit.operation).toBe("gateway.restart");
     expect(audit.details?.rescue).toBe(true);
     expect(audit.details?.channel).toBe("whatsapp");
@@ -329,16 +324,7 @@ describe("Crestodian rescue message", () => {
     });
     expect(agentRuntime).toBeTypeOf("object");
     expect(agentOptions).toEqual({ hasFlags: true });
-    const audit = (await readLatestCrestodianAuditEntryForTests()) as {
-      operation?: string;
-      details?: {
-        rescue?: boolean;
-        channel?: string;
-        senderId?: string;
-        agentId?: string;
-        workspace?: string;
-      };
-    };
+    const audit = await readLatestCrestodianAuditEntryForTests();
     expect(audit.operation).toBe("agents.create");
     expect(audit.details?.rescue).toBe(true);
     expect(audit.details?.channel).toBe("whatsapp");

@@ -30,7 +30,6 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "session-status-test-empty-plugin-metadata",
   plugins: [],
 }));
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -908,7 +907,8 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toMatch(UUID_RE);
+    expect(saved.sessionId).toBeTypeOf("string");
+    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 
   it("materializes a valid persisted session entry when the default implicit current fallback mutates model state", async () => {
@@ -933,7 +933,8 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toMatch(UUID_RE);
+    expect(saved.sessionId).toBeTypeOf("string");
+    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
   });
 
   it("does not synthesize a current fallback for unknown non-literal session keys", async () => {
@@ -1417,12 +1418,15 @@ describe("session_status tool", () => {
     }
   });
 
-  it("uses typed lastChannel when resolving queue settings", async () => {
+  it("uses typed session channel when resolving queue settings", async () => {
     resetSessionStore({
       main: {
         sessionId: "status-last-channel",
         updatedAt: 10,
-        lastChannel: "quietchat",
+        channel: "quietchat",
+        deliveryContext: {
+          channel: "quietchat",
+        },
       },
     });
 
@@ -1432,7 +1436,10 @@ describe("session_status tool", () => {
 
     const queueArg = mockCallArg(resolveQueueSettingsMock) as Record<string, unknown>;
     expect(queueArg.channel).toBe("quietchat");
-    expectRecordFields(queueArg.sessionEntry, { lastChannel: "quietchat" });
+    expectRecordFields(queueArg.sessionEntry, {
+      channel: "quietchat",
+      deliveryContext: { channel: "quietchat" },
+    });
   });
 
   it("resolves sessionId inputs", async () => {

@@ -11,7 +11,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { resolveBundledPluginWorkspaceSourcePath } from "../plugins/bundled-plugin-metadata.js";
 import { pluginCommands } from "../plugins/command-registry-state.js";
-import { writePluginBindingApprovalsSnapshot } from "../plugins/conversation-binding.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import {
   pinActivePluginChannelRegistry,
@@ -19,6 +18,7 @@ import {
   resetPluginRuntimeStateForTest,
 } from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
@@ -294,10 +294,10 @@ async function writePluginBindingApproval(params: {
   accountId: string;
 }): Promise<void> {
   const openclawDir = path.join(params.homeDir, ".openclaw");
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = openclawDir;
-  try {
-    writePluginBindingApprovalsSnapshot({
+  writeOpenClawStateKvJson(
+    "plugin_binding_approvals",
+    "current",
+    {
       version: 1,
       approvals: [
         {
@@ -309,14 +309,9 @@ async function writePluginBindingApproval(params: {
           approvedAt: Date.now(),
         },
       ],
-    });
-  } finally {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-  }
+    },
+    { env: { ...process.env, OPENCLAW_STATE_DIR: openclawDir } },
+  );
 }
 
 async function writeGatewayConfig(params: {

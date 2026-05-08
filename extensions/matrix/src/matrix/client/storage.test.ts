@@ -62,7 +62,7 @@ describe("matrix client storage paths", () => {
 
   function expectFallbackMigrationSnapshot(env: NodeJS.ProcessEnv): void {
     expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledTimes(1);
-    const [params] = maybeCreateMatrixMigrationSnapshotMock.mock.calls.at(0) ?? [];
+    const [params] = maybeCreateMatrixMigrationSnapshotMock.mock.calls[0] ?? [];
     expect(params).toEqual({
       env,
       log: {
@@ -216,6 +216,144 @@ describe("matrix client storage paths", () => {
     );
     expect(storagePaths.recoveryKeyStorageKey).toBe(storagePaths.rootDir);
     expect(storagePaths.idbSnapshotStorageKey).toBe(storagePaths.rootDir);
+  });
+
+  it("falls back to migrating the older flat matrix storage layout", async () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveDefaultStoragePaths();
+    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const env = createMigrationEnv(stateDir);
+
+    await maybeMigrateLegacyStorage({
+      storagePaths,
+      env,
+    });
+
+    expectFallbackMigrationSnapshot(env);
+    expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(false);
+    expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"legacy":true}');
+    expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
+  });
+
+  it("continues migrating whichever legacy artifact is still missing", async () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveDefaultStoragePaths();
+    const legacyRoot = writeLegacyMatrixStorage(stateDir);
+    const env = createMigrationEnv(stateDir);
+    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+    fs.writeFileSync(storagePaths.storagePath, '{"new":true}');
+
+    await maybeMigrateLegacyStorage({
+      storagePaths,
+      env,
+    });
+
+    expectFallbackMigrationSnapshot(env);
+    expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
+    expect(fs.existsSync(path.join(legacyRoot, "crypto"))).toBe(false);
+    expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
+  });
+
+  it("refuses to migrate legacy storage when the snapshot step fails", async () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveDefaultStoragePaths();
+    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const env = createMigrationEnv(stateDir);
+    maybeCreateMatrixMigrationSnapshotMock.mockRejectedValueOnce(new Error("snapshot failed"));
+
+    await expect(
+      maybeMigrateLegacyStorage({
+        storagePaths,
+        env,
+      }),
+    ).rejects.toThrow("snapshot failed");
+    expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(true);
+    expect(fs.existsSync(storagePaths.storagePath)).toBe(false);
+  });
+
+  it("rolls back moved legacy storage when the crypto move fails", async () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveDefaultStoragePaths();
+    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const env = createMigrationEnv(stateDir);
+    const realRenameSync = fs.renameSync.bind(fs);
+    const renameSync = vi.spyOn(fs, "renameSync");
+    renameSync.mockImplementation((sourcePath, targetPath) => {
+      if (String(targetPath) === storagePaths.cryptoPath) {
+        throw new Error("disk full");
+      }
+      return realRenameSync(sourcePath, targetPath);
+    });
+
+    await expect(
+      maybeMigrateLegacyStorage({
+        storagePaths,
+        env,
+      }),
+    ).rejects.toThrow("disk full");
+    expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(true);
+    expect(fs.existsSync(storagePaths.storagePath)).toBe(false);
+    expect(fs.existsSync(path.join(legacyRoot, "crypto"))).toBe(true);
+  });
+
+  it("refuses fallback migration when multiple Matrix accounts need explicit selection", async () => {
+    const stateDir = setupStateDir({
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {},
+            work: {},
+          },
+        },
+      },
+    });
+    const storagePaths = resolveDefaultStoragePaths({ accountId: "ops" });
+    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const env = createMigrationEnv(stateDir);
+
+    await expect(
+      maybeMigrateLegacyStorage({
+        storagePaths,
+        env,
+      }),
+    ).rejects.toThrow(/defaultAccount is not set/i);
+    expect(createBackupArchiveMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(true);
+  });
+
+  it("refuses fallback migration for a non-selected Matrix account", async () => {
+    const stateDir = setupStateDir({
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          homeserver: "https://matrix.default.example.org",
+          accessToken: "default-token",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    });
+    const storagePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.default.example.org",
+      userId: "@default:example.org",
+      accessToken: "default-token",
+      env: {},
+    });
+    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const env = createMigrationEnv(stateDir);
+
+    await expect(
+      maybeMigrateLegacyStorage({
+        storagePaths,
+        env,
+      }),
+    ).rejects.toThrow(/targets account "ops"/i);
+    expect(createBackupArchiveMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(true);
   });
 
   it("keeps the canonical current-token storage root when deviceId is still unknown", () => {

@@ -1,25 +1,20 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
+  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import {
-  conversationIdentityFromMsgContext,
-  conversationIdentityFromSessionEntry,
-  type ConversationIdentity,
-} from "./conversation-identity.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   applySqliteSessionEntriesPatch,
   deleteSqliteSessionEntry,
   listSqliteSessionEntries,
-  readSqliteSessionDeliveryContext,
   readSqliteSessionEntry,
   replaceSqliteSessionEntry,
-} from "./session-entries.sqlite.js";
+} from "./store-backend.sqlite.js";
 import { normalizeSessionRowKey } from "./store-entry.js";
 import {
   mergeSessionEntry,
@@ -64,7 +59,6 @@ export function upsertSessionEntry(
   options: SessionEntryRowOptions & {
     sessionKey: string;
     entry: SessionEntry;
-    conversationIdentities?: readonly ConversationIdentity[];
   },
 ): void {
   replaceSqliteSessionEntry(options);
@@ -125,14 +119,6 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   return next;
 }
 
-function readExistingDeliveryContext(options: SessionEntryRowOptions & { sessionKey: string }) {
-  try {
-    return readSqliteSessionDeliveryContext(options);
-  } catch {
-    return undefined;
-  }
-}
-
 export function readSessionUpdatedAt(params: {
   agentId?: string;
   sessionKey: string;
@@ -163,7 +149,6 @@ export function readSessionUpdatedAt(params: {
 function resolveSessionRowOptionsFromSessionKey(params: {
   agentId?: string;
   sessionKey: string;
-  env?: NodeJS.ProcessEnv;
 }): SessionEntryRowOptions {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   if (!agentId) {
@@ -171,12 +156,11 @@ function resolveSessionRowOptionsFromSessionKey(params: {
       `Session stores are SQLite-only; cannot resolve agent for ${params.sessionKey}`,
     );
   }
-  return { agentId, env: params.env };
+  return { agentId };
 }
 
 export async function recordSessionMetaFromInbound(params: {
   agentId?: string;
-  env?: NodeJS.ProcessEnv;
   sessionKey: string;
   ctx: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
@@ -187,7 +171,6 @@ export async function recordSessionMetaFromInbound(params: {
   const rowOptions = resolveSessionRowOptionsFromSessionKey({
     agentId: params.agentId,
     sessionKey,
-    env: params.env,
   });
   const normalizedKey = normalizeSessionRowKey(sessionKey);
   const existing = getSessionEntry({ ...rowOptions, sessionKey });
@@ -215,19 +198,12 @@ export async function recordSessionMetaFromInbound(params: {
     ...rowOptions,
     sessionKey: normalizedKey,
     entry: next,
-    conversationIdentities: [
-      conversationIdentityFromMsgContext({
-        ctx,
-        groupResolution: params.groupResolution,
-      }),
-    ].filter((entry) => entry !== null),
   });
   return next;
 }
 
 export async function updateLastRoute(params: {
   agentId?: string;
-  env?: NodeJS.ProcessEnv;
   sessionKey: string;
   channel?: SessionEntry["lastChannel"];
   to?: string;
@@ -243,7 +219,6 @@ export async function updateLastRoute(params: {
   const rowOptions = resolveSessionRowOptionsFromSessionKey({
     agentId: params.agentId,
     sessionKey,
-    env: params.env,
   });
   const normalizedKey = normalizeSessionRowKey(sessionKey);
   const existing = getSessionEntry({ ...rowOptions, sessionKey });
@@ -271,10 +246,9 @@ export async function updateLastRoute(params: {
     explicitContext?.channel || explicitContext?.to || inlineContext?.channel || inlineContext?.to,
   );
   const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
-  const existingDeliveryContext = readExistingDeliveryContext({ ...rowOptions, sessionKey });
   const fallbackContext = clearThreadFromFallback
-    ? removeThreadFromDeliveryContext(existingDeliveryContext)
-    : existingDeliveryContext;
+    ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
+    : deliveryContextFromSession(existing);
   const merged = mergeDeliveryContext(mergedInput, fallbackContext);
   const normalized = normalizeSessionDeliveryFields({
     deliveryContext: {
@@ -309,15 +283,6 @@ export async function updateLastRoute(params: {
     ...rowOptions,
     sessionKey: normalizedKey,
     entry: next,
-    conversationIdentities: [
-      ctx
-        ? conversationIdentityFromMsgContext({
-            ctx,
-            deliveryContext: normalized.deliveryContext,
-            groupResolution: params.groupResolution,
-          })
-        : conversationIdentityFromSessionEntry(next),
-    ].filter((entry) => entry !== null),
   });
   return next;
 }

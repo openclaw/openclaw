@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
 import {
   classifyMediaReferenceSource,
   MediaReferenceError,
@@ -8,7 +9,7 @@ import {
   resolveInboundMediaReference,
   resolveMediaReferenceLocalPath,
 } from "./media-reference.js";
-import { getMediaMaterializationDir, saveMediaBuffer } from "./store.js";
+import { saveMediaBuffer } from "./store.js";
 
 describe("media reference helpers", () => {
   it("normalizes outbound MEDIA tags without changing canonical media URIs", () => {
@@ -63,8 +64,8 @@ describe("media reference helpers", () => {
   });
 
   it("resolves direct absolute paths only for first-level inbound media files", async () => {
+    const stateDir = resolveStateDir();
     const saved = await saveMediaBuffer(Buffer.from("png"), "image/png");
-    const materializationDir = getMediaMaterializationDir();
 
     await expect(resolveInboundMediaReference(saved.path)).resolves.toMatchObject({
       id: saved.id,
@@ -72,10 +73,10 @@ describe("media reference helpers", () => {
       sourceType: "path",
     });
     await expect(
-      resolveInboundMediaReference(path.join(materializationDir, "inbound", "nested", saved.id)),
+      resolveInboundMediaReference(path.join(stateDir, "media", "inbound", "nested", saved.id)),
     ).resolves.toBeNull();
     await expect(
-      resolveInboundMediaReference(path.join(materializationDir, "outbound", saved.id)),
+      resolveInboundMediaReference(path.join(stateDir, "media", "outbound", saved.id)),
     ).resolves.toBeNull();
   });
 
@@ -98,11 +99,11 @@ describe("media reference helpers", () => {
   });
 
   it("rejects symlinked inbound media files", async () => {
-    const mediaDir = getMediaMaterializationDir();
-    const targetDir = path.join(mediaDir, "..", "media-reference-test-target");
+    const stateDir = resolveStateDir();
+    const targetDir = path.join(stateDir, "media-reference-test-target");
     const targetPath = path.join(targetDir, "target.png");
     const id = `ref-link-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
-    const linkPath = path.join(mediaDir, "inbound", id);
+    const linkPath = path.join(stateDir, "media", "inbound", id);
     await fs.mkdir(targetDir, { recursive: true });
     await fs.mkdir(path.dirname(linkPath), { recursive: true });
     await fs.writeFile(targetPath, Buffer.from("png"));

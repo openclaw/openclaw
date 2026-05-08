@@ -9,6 +9,7 @@ import {
 } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 
 function isProfileForProvider(params: {
   cfg: OpenClawConfig;
@@ -17,24 +18,12 @@ function isProfileForProvider(params: {
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
   const entry = params.store.profiles[params.profileId];
-  if (entry) {
-    if (!entry.provider) {
-      return false;
-    }
-    return params.providers.some((provider) =>
-      isStoredCredentialCompatibleWithAuthProvider({
-        cfg: params.cfg,
-        provider,
-        credential: entry,
-      }),
-    );
+  if (!entry?.provider) {
+    return false;
   }
-  return params.providers.some((provider) =>
-    isConfiguredAwsSdkAuthProfileForProvider({
-      cfg: params.cfg,
-      provider,
-      profileId: params.profileId,
-    }),
+  const entryProviderKey = resolveProviderIdForAuth(entry.provider, { config: params.cfg });
+  return params.providers.some(
+    (provider) => resolveProviderIdForAuth(provider, { config: params.cfg }) === entryProviderKey,
   );
 }
 
@@ -83,10 +72,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const acceptedProviders =
-    params.acceptedProviderIds && params.acceptedProviderIds.length > 0
-      ? [...new Set(params.acceptedProviderIds)]
-      : [provider];
+  const acceptedProviders = [...new Set([provider, ...(params.acceptedProviderIds ?? [])])];
   const order = [
     ...new Set(
       acceptedProviders.flatMap((acceptedProvider) =>

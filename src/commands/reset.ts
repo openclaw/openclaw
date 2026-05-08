@@ -7,7 +7,7 @@ import { selectStyled } from "../terminal/prompt-select-styled.js";
 import { stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
 import {
-  listAgentRuntimeStatePaths,
+  listAgentSessionStatePaths,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -130,8 +130,8 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   if (scope === "config+creds+sessions") {
     await removePath(configPath, runtime, { dryRun, label: configPath });
     await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
-    const runtimeStatePaths = await listAgentRuntimeStatePaths(stateDir);
-    for (const target of runtimeStatePaths) {
+    const sessionPaths = await listAgentSessionStatePaths(stateDir);
+    for (const target of sessionPaths) {
       await removePath(target, runtime, { dryRun, label: target });
     }
     runtime.log(`Next: ${formatCliCommand("openclaw onboard --install-daemon")}`);

@@ -5,14 +5,14 @@ import {
   replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
 } from "../../config/sessions/transcript-store.sqlite.js";
-import { buildSessionContext } from "./session-transcript-format.js";
 import type {
   SessionContext,
   SessionEntry,
   SessionHeader,
   SessionTreeNode,
-  TranscriptEntry,
-} from "./session-transcript-types.js";
+} from "./session-transcript-contract.js";
+import { buildSessionContext } from "./session-transcript-format.js";
+import type { TranscriptEntry } from "./session-transcript-types.js";
 
 type BranchSummaryEntry = Extract<SessionEntry, { type: "branch_summary" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;

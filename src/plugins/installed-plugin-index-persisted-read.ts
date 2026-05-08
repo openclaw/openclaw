@@ -1,19 +1,13 @@
-import type { Insertable, Selectable } from "kysely";
 import { z } from "zod";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { tryReadJson, tryReadJsonSync } from "../infra/json-files.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
-import { type InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-options.js";
+import {
+  resolveInstalledPluginIndexStorePath,
+  type InstalledPluginIndexStoreOptions,
+} from "./installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -21,13 +15,8 @@ import {
   type InstalledPluginInstallRecordInfo,
 } from "./installed-plugin-index-types.js";
 
-export const INSTALLED_PLUGIN_INDEX_ROW_KEY = "current";
-
-type InstalledPluginIndexDatabase = Pick<OpenClawStateKyselyDatabase, "installed_plugin_index">;
-type InstalledPluginIndexRow = Selectable<InstalledPluginIndexDatabase["installed_plugin_index"]>;
-type InstalledPluginIndexInsert = Insertable<
-  InstalledPluginIndexDatabase["installed_plugin_index"]
->;
+export const INSTALLED_PLUGIN_INDEX_KV_SCOPE = "installed_plugin_index";
+export const INSTALLED_PLUGIN_INDEX_KV_KEY = "current";
 
 const StringArraySchema = z.array(z.string());
 
@@ -145,59 +134,6 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
   };
 }
 
-function parseStoredJson(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function rowToInstalledPluginIndex(row: InstalledPluginIndexRow): InstalledPluginIndex | null {
-  return parseInstalledPluginIndex({
-    version: row.version,
-    ...(row.warning ? { warning: row.warning } : {}),
-    hostContractVersion: row.host_contract_version,
-    compatRegistryVersion: row.compat_registry_version,
-    migrationVersion: row.migration_version,
-    policyHash: row.policy_hash,
-    generatedAtMs: row.generated_at_ms,
-    ...(row.refresh_reason ? { refreshReason: row.refresh_reason } : {}),
-    installRecords: parseStoredJson(row.install_records_json),
-    plugins: parseStoredJson(row.plugins_json),
-    diagnostics: parseStoredJson(row.diagnostics_json),
-  });
-}
-
-function installedPluginIndexToRow(
-  index: InstalledPluginIndex,
-  updatedAtMs: number,
-): InstalledPluginIndexInsert {
-  return {
-    index_key: INSTALLED_PLUGIN_INDEX_ROW_KEY,
-    version: index.version,
-    host_contract_version: index.hostContractVersion,
-    compat_registry_version: index.compatRegistryVersion,
-    migration_version: index.migrationVersion,
-    policy_hash: index.policyHash,
-    generated_at_ms: index.generatedAtMs,
-    refresh_reason: index.refreshReason ?? null,
-    install_records_json: JSON.stringify(index.installRecords ?? {}),
-    plugins_json: JSON.stringify(index.plugins),
-    diagnostics_json: JSON.stringify(index.diagnostics),
-    warning: index.warning ?? null,
-    updated_at_ms: updatedAtMs,
-  };
-}
-
-function resolveUpdatedAtMs(now: (() => Date | number) | undefined): number {
-  const value = now?.();
-  if (value instanceof Date) {
-    return value.getTime();
-  }
-  return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
-}
-
 export function resolveInstalledPluginIndexStateDbOptions(
   options: InstalledPluginIndexStoreOptions,
 ): {
@@ -214,53 +150,18 @@ export function resolveInstalledPluginIndexStateDbOptions(
   };
 }
 
-export function writePersistedInstalledPluginIndexToSqliteSync(
-  index: InstalledPluginIndex,
-  options: InstalledPluginIndexStoreOptions & { now?: () => Date | number } = {},
-): void {
-  const row = installedPluginIndexToRow(index, resolveUpdatedAtMs(options.now));
-  const { index_key: _indexKey, ...updates } = row;
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<InstalledPluginIndexDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("installed_plugin_index")
-        .values(row)
-        .onConflict((conflict) => conflict.column("index_key").doUpdateSet(updates)),
-    );
-  }, resolveInstalledPluginIndexStateDbOptions(options));
-}
-
-export function deletePersistedInstalledPluginIndexFromSqliteSync(
-  options: InstalledPluginIndexStoreOptions = {},
-): boolean {
-  return runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<InstalledPluginIndexDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .deleteFrom("installed_plugin_index")
-        .where("index_key", "=", INSTALLED_PLUGIN_INDEX_ROW_KEY),
-    );
-    return Number(result.numAffectedRows ?? 0) > 0;
-  }, resolveInstalledPluginIndexStateDbOptions(options));
-}
-
-function readPersistedInstalledPluginIndexSyncFromSqlite(
+function readPersistedInstalledPluginIndexJsonSync(
   options: InstalledPluginIndexStoreOptions,
-): InstalledPluginIndex | null {
+): unknown {
+  if (options.filePath) {
+    return tryReadJsonSync(resolveInstalledPluginIndexStorePath(options));
+  }
   try {
-    const database = openOpenClawStateDatabase(resolveInstalledPluginIndexStateDbOptions(options));
-    const db = getNodeSqliteKysely<InstalledPluginIndexDatabase>(database.db);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("installed_plugin_index")
-        .selectAll()
-        .where("index_key", "=", INSTALLED_PLUGIN_INDEX_ROW_KEY),
+    return readOpenClawStateKvJson(
+      INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+      INSTALLED_PLUGIN_INDEX_KV_KEY,
+      resolveInstalledPluginIndexStateDbOptions(options),
     );
-    return row ? rowToInstalledPluginIndex(row) : null;
   } catch {
     return null;
   }
@@ -269,11 +170,15 @@ function readPersistedInstalledPluginIndexSyncFromSqlite(
 export async function readPersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<InstalledPluginIndex | null> {
-  return readPersistedInstalledPluginIndexSyncFromSqlite(options);
+  const parsed = options.filePath
+    ? await tryReadJson<unknown>(resolveInstalledPluginIndexStorePath(options))
+    : readPersistedInstalledPluginIndexJsonSync(options);
+  return parseInstalledPluginIndex(parsed);
 }
 
 export function readPersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): InstalledPluginIndex | null {
-  return readPersistedInstalledPluginIndexSyncFromSqlite(options);
+  const parsed = readPersistedInstalledPluginIndexJsonSync(options);
+  return parseInstalledPluginIndex(parsed);
 }

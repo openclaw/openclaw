@@ -2,13 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   listCommitments,
   listDueCommitmentsForSession,
@@ -33,33 +28,6 @@ describe("commitment store delivery selection", () => {
     tmpDirs.push(tmpDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     return tmpDir;
-  }
-
-  function readCommitmentRecordJson(id: string): string {
-    const stateDatabase = openOpenClawStateDatabase();
-    const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "commitments">>(
-      stateDatabase.db,
-    );
-    return (
-      executeSqliteQueryTakeFirstSync(
-        stateDatabase.db,
-        db.selectFrom("commitments").select("record_json").where("id", "=", id),
-      )?.record_json ?? ""
-    );
-  }
-
-  function corruptCommitmentRecordJson(id: string): void {
-    const stateDatabase = openOpenClawStateDatabase();
-    const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "commitments">>(
-      stateDatabase.db,
-    );
-    executeSqliteQuerySync(
-      stateDatabase.db,
-      db
-        .updateTable("commitments")
-        .set({ record_json: '{"id":"wrong","status":"dismissed"}' })
-        .where("id", "=", id),
-    );
   }
 
   function commitment(overrides?: Partial<CommitmentRecord>): CommitmentRecord {
@@ -92,7 +60,7 @@ describe("commitment store delivery selection", () => {
 
   it("does not surface due commitments unless inferred commitments are enabled", async () => {
     await useTempStateDir();
-    await saveCommitmentStore({
+    await saveCommitmentStore(undefined, {
       version: 1,
       commitments: [commitment()],
     });
@@ -109,7 +77,7 @@ describe("commitment store delivery selection", () => {
 
   it("limits delivered commitments per agent session in a rolling day", async () => {
     await useTempStateDir();
-    await saveCommitmentStore({
+    await saveCommitmentStore(undefined, {
       version: 1,
       commitments: [
         commitment({ id: "cm_sent", status: "sent", sentAtMs: nowMs - 60_000 }),
@@ -132,7 +100,7 @@ describe("commitment store delivery selection", () => {
 
   it("expires stale pending commitments instead of leaving them hidden forever", async () => {
     await useTempStateDir();
-    await saveCommitmentStore({
+    await saveCommitmentStore(undefined, {
       version: 1,
       commitments: [
         commitment({
@@ -161,9 +129,9 @@ describe("commitment store delivery selection", () => {
     expect(store.commitments[0]?.updatedAtMs).toBe(nowMs);
   });
 
-  it("rewrites legacy source text fields when commitments are saved", async () => {
+  it("rewrites legacy source text fields when due commitments are listed", async () => {
     await useTempStateDir();
-    await saveCommitmentStore({
+    writeOpenClawStateKvJson("commitments", "store", {
       version: 1,
       commitments: [commitment()],
     });
@@ -180,57 +148,18 @@ describe("commitment store delivery selection", () => {
     const store = await loadCommitmentStore();
     expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
     expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
-    const raw = readCommitmentRecordJson("cm_interview");
+    const row = openOpenClawStateDatabase()
+      .db.prepare("SELECT record_json FROM commitments WHERE id = ?")
+      .get("cm_interview") as { record_json?: string } | undefined;
+    const raw = row?.record_json ?? "";
     expect(raw).not.toContain("I have an interview tomorrow.");
     expect(raw).not.toContain("sourceUserText");
     expect(raw).not.toContain("sourceAssistantText");
   });
 
-  it("loads commitments from typed SQLite columns, not the debug JSON copy", async () => {
-    await useTempStateDir();
-    await saveCommitmentStore({
-      version: 1,
-      commitments: [
-        commitment({
-          accountId: "primary",
-          to: "155462274",
-          threadId: "thread-1",
-          senderId: "sender-1",
-          sourceMessageId: "msg-source",
-          sourceRunId: "run-source",
-          sentAtMs: nowMs - 60_000,
-          attempts: 2,
-        }),
-      ],
-    });
-    corruptCommitmentRecordJson("cm_interview");
-
-    const store = await loadCommitmentStore();
-
-    expect(store.commitments).toHaveLength(1);
-    expect(store.commitments[0]).toMatchObject({
-      id: "cm_interview",
-      agentId: "main",
-      sessionKey,
-      channel: "telegram",
-      accountId: "primary",
-      to: "155462274",
-      threadId: "thread-1",
-      senderId: "sender-1",
-      status: "pending",
-      reason: "The user said they had an interview yesterday.",
-      suggestedText: "How did the interview go?",
-      dedupeKey: "interview:2026-04-28",
-      attempts: 2,
-      sourceMessageId: "msg-source",
-      sourceRunId: "run-source",
-      sentAtMs: nowMs - 60_000,
-    });
-  });
-
   it("lists expired commitments after expiry transition", async () => {
     await useTempStateDir();
-    await saveCommitmentStore({
+    await saveCommitmentStore(undefined, {
       version: 1,
       commitments: [
         commitment({

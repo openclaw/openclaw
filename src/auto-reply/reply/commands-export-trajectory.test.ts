@@ -16,6 +16,7 @@ const hoisted = await vi.hoisted(async () => {
         transcriptEventCount: 4,
       },
       events: [{ type: "context.compiled" }],
+      runtimeFile: "/tmp/target-store/session.trajectory.jsonl",
       supplementalFiles: ["metadata.json", "artifacts.json", "prompts.json"],
     })),
     resolveDefaultTrajectoryExportDirMock: vi.fn(
@@ -35,11 +36,13 @@ const hoisted = await vi.hoisted(async () => {
   };
 });
 
+vi.mock("../../config/sessions/paths.js", () => ({
+  resolveSessionFilePath: hoisted.resolveSessionFilePathMock,
+  resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
+}));
+
 vi.mock("../../config/sessions/store.js", () => ({
-  getSessionEntry: (params: { agentId?: string; sessionKey: string }) => {
-    const rows = hoisted.sessionRowsMock();
-    return rows[`${params.agentId ?? "main"}:${params.sessionKey}`] ?? rows[params.sessionKey];
-  },
+  getSessionEntry: (params: { sessionKey: string }) => hoisted.sessionRowsMock()[params.sessionKey],
   listSessionEntries: () =>
     Object.entries(hoisted.sessionRowsMock()).map(([sessionKey, entry]) => ({
       sessionKey,
@@ -212,12 +215,19 @@ describe("buildExportTrajectoryReply", () => {
     vi.clearAllMocks();
     hoisted.accessMock.mockImplementation(
       async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
+        if (file.toString() === "/tmp/target-store/session.jsonl") {
+          return;
+        }
         await actualAccess(file);
       },
     );
     hoisted.statMock.mockImplementation(
-      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) =>
-        await actualStat(file),
+      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
+        if (file.toString() === "/tmp/target-store/session.jsonl") {
+          return {};
+        }
+        return await actualStat(file);
+      },
     );
     hoisted.hasSqliteSessionTranscriptEventsMock.mockReturnValue(true);
   });
@@ -241,35 +251,6 @@ describe("buildExportTrajectoryReply", () => {
     expect(exportParams.sessionKey).toBe("agent:target:session");
     expect(exportParams.workspaceDir).toBe(params.workspaceDir);
     expect(String(exportParams.workspaceDir)).toContain("openclaw-export-command-");
-  });
-
-  it("prefers the prepared agent id over a session-key-derived agent", async () => {
-    hoisted.sessionRowsMock.mockReturnValue({
-      "explicit:agent:target:session": {
-        sessionId: "session-from-explicit-agent",
-        updatedAt: 2,
-      },
-      "agent:target:session": {
-        sessionId: "session-from-session-key-agent",
-        updatedAt: 1,
-      },
-    });
-
-    await buildExportTrajectoryReply({
-      ...makeParams(),
-      agentId: "explicit",
-    });
-
-    expect(hoisted.hasSqliteSessionTranscriptEventsMock).toHaveBeenCalledWith({
-      agentId: "explicit",
-      sessionId: "session-from-explicit-agent",
-    });
-    expect(hoisted.exportTrajectoryBundleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "explicit",
-        sessionId: "session-from-explicit-agent",
-      }),
-    );
   });
 
   it("keeps user-named output paths inside the workspace trajectory export directory", async () => {
@@ -311,6 +292,7 @@ describe("buildExportTrajectoryReply", () => {
     expect(reply.text).toBe(
       "❌ Session transcript has not been migrated into SQLite. Run `openclaw doctor --fix` and try again.",
     );
+    expect(reply.text).not.toContain("/tmp/target-store/session.jsonl");
     expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
   });
 

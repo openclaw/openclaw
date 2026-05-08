@@ -141,6 +141,7 @@ export function createSessionsListTool(opts?: {
         row: SessionListRow;
         titleEntry: SessionEntry;
         sessionId: string;
+        sessionFile?: string;
         agentId: string;
       }> = [];
 
@@ -187,6 +188,12 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
+        const entryOrigin =
+          entry.origin && typeof entry.origin === "object"
+            ? (entry.origin as Record<string, unknown>)
+            : undefined;
+        const originChannel =
+          typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
         const deliveryContext =
           entry.deliveryContext && typeof entry.deliveryContext === "object"
             ? (entry.deliveryContext as Record<string, unknown>)
@@ -205,11 +212,13 @@ export function createSessionsListTool(opts?: {
         const derivedChannel = deriveChannel({
           key,
           kind,
-          channel: entryChannel,
+          channel: entryChannel ?? originChannel,
           lastChannel,
         });
 
         const sessionId = readStringValue(entry.sessionId);
+        const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
+        const sessionFile = readStringValue(sessionFileRaw);
         const resolvedAgentId = resolveAgentIdFromSessionKey(key);
 
         const row: SessionListRow = {
@@ -217,6 +226,14 @@ export function createSessionsListTool(opts?: {
           agentId: resolvedAgentId,
           kind,
           channel: derivedChannel,
+          origin:
+            originChannel ||
+            (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)
+              ? {
+                  provider: originChannel,
+                  accountId: readStringValue(entryOrigin?.accountId),
+                }
+              : undefined,
           spawnedBy:
             typeof entry.spawnedBy === "string"
               ? resolveDisplaySessionKey({
@@ -297,6 +314,7 @@ export function createSessionsListTool(opts?: {
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
             sessionId,
+            ...(sessionFile ? { sessionFile } : {}),
             agentId: resolvedAgentId,
           });
         }
@@ -322,10 +340,11 @@ export function createSessionsListTool(opts?: {
               return;
             }
             const target = titleTargets[next];
-            const fields = await readSessionTitleFieldsFromTranscriptAsync({
-              agentId: target.agentId,
-              sessionId: target.sessionId,
-            });
+            const fields = await readSessionTitleFieldsFromTranscriptAsync(
+              target.sessionId,
+              target.sessionFile,
+              target.agentId,
+            );
             if (includeDerivedTitles && !target.row.derivedTitle) {
               target.row.derivedTitle = deriveSessionTitle(
                 target.titleEntry,

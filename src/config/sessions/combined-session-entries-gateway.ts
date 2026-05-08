@@ -74,7 +74,7 @@ export function loadCombinedSessionEntriesForGateway(
             databasePath: resolveOpenClawAgentSqlitePath({ agentId: normalizedAgentId }),
           };
         })
-      : resolveAllAgentSessionDatabaseTargetsSync(cfg);
+    : resolveAllAgentSessionDatabaseTargetsSync(cfg);
   const combined: Record<string, SessionEntry> = {};
   for (const target of targets) {
     const agentId = target.agentId;

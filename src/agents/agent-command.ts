@@ -218,7 +218,8 @@ type OverrideFieldClearedByDelete =
   | "authProfileOverrideCompactionCount"
   | "fallbackNoticeSelectedModel"
   | "fallbackNoticeActiveModel"
-  | "fallbackNoticeReason";
+  | "fallbackNoticeReason"
+  | "claudeCliSessionId";
 
 const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "providerOverride",
@@ -229,6 +230,7 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "fallbackNoticeSelectedModel",
   "fallbackNoticeActiveModel",
   "fallbackNoticeReason",
+  "claudeCliSessionId",
 ];
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
@@ -774,6 +776,7 @@ async function agentCommandInternal(
         await persistSessionEntry({
           sessionStore,
           sessionKey,
+          storePath,
           entry,
         });
       }
@@ -948,28 +951,30 @@ async function agentCommandInternal(
       sessionKey,
       workspaceDir,
     });
-    const { resolveSessionTranscriptTarget } = await loadTranscriptResolveRuntime();
+    const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
+    let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
-      const resolvedTranscriptTarget = await resolveSessionTranscriptTarget({
+      const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey,
+        sessionStore,
         sessionEntry,
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });
-      sessionEntry = resolvedTranscriptTarget.sessionEntry;
-      if (sessionEntry) {
-        sessionStore[sessionKey] = sessionEntry;
-      }
-    } else {
-      const resolvedTranscriptTarget = await resolveSessionTranscriptTarget({
+      sessionFile = resolvedSessionFile.sessionFile;
+      sessionEntry = resolvedSessionFile.sessionEntry;
+    }
+    if (!sessionFile) {
+      const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey: sessionKey ?? sessionId,
         sessionEntry,
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });
-      sessionEntry = resolvedTranscriptTarget.sessionEntry;
+      sessionFile = resolvedSessionFile.sessionFile;
+      sessionEntry = resolvedSessionFile.sessionEntry;
     }
 
     const startedAt = Date.now();
@@ -987,11 +992,11 @@ async function agentCommandInternal(
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
-      agentId: sessionAgentId,
       cfg,
       runId,
       sessionId,
       sessionKey,
+      sessionFile,
       provider,
       modelId: model,
       workspaceDir,
@@ -1038,6 +1043,7 @@ async function agentCommandInternal(
               sessionId,
               sessionKey,
               sessionAgentId,
+              sessionFile,
               workspaceDir,
               body,
               isFallbackRetry,
@@ -1062,11 +1068,7 @@ async function agentCommandInternal(
               sessionStore,
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
-                !isNewSession ||
-                (await attemptExecutionRuntime.sessionTranscriptHasContent({
-                  agentId: sessionAgentId,
-                  sessionId,
-                })),
+                !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
               suppressPromptPersistenceOnRetry:
                 opts.suppressPromptPersistence === true ||
                 (isFallbackRetry && currentTurnUserMessagePersisted),

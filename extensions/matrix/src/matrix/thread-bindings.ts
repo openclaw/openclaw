@@ -44,13 +44,6 @@ const threadBindingStore = createPluginStateSyncKeyedStore<MatrixThreadBindingRe
   },
 );
 
-function _normalizeDurationMs(raw: unknown, fallback: number): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return fallback;
-  }
-  return Math.max(0, Math.floor(raw));
-}
-
 function buildThreadBindingStoreKey(record: {
   accountId: string;
   conversationId: string;
@@ -114,6 +107,7 @@ function normalizeBindingRecord(
 }
 
 function loadBindingsFromSqlite(params: {
+  auth: MatrixAuth;
   accountId: string;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;

@@ -92,11 +92,10 @@ Provider and channel execution paths must use the active runtime config snapshot
 
     // Run an embedded agent turn
     const agentDir = api.runtime.agent.resolveAgentDir(cfg);
-    const sessionId = "my-plugin-task-1";
     const result = await api.runtime.agent.runEmbeddedAgent({
-      agentId,
-      sessionId,
+      sessionId: "my-plugin:task-1",
       runId: crypto.randomUUID(),
+      sessionFile: path.join(agentDir, "sessions", "my-plugin-task-1.jsonl"),
       workspaceDir: api.runtime.agent.resolveAgentWorkspaceDir(cfg),
       prompt: "Summarize the latest changes",
       timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
@@ -123,9 +122,10 @@ Provider and channel execution paths must use the active runtime config snapshot
         thinkingLevel: "high",
       }),
     });
+    const filePath = api.runtime.agent.session.resolveSessionFilePath(cfg, sessionId);
     ```
 
-    Prefer row helpers such as `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, and `upsertSessionEntry(...)` for runtime writes. They route through the SQLite session row store and preserve concurrent updates. Legacy `sessions.json` parsing belongs in doctor import code, not plugin runtime paths.
+    Prefer row helpers such as `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, and `upsertSessionEntry(...)` for runtime writes. They route through the SQLite session row store and preserve concurrent updates. Legacy `sessions.json` parsing belongs in doctor/migration code, not plugin runtime paths.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">

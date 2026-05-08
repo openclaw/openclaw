@@ -36,7 +36,7 @@
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
       "configPromotion": true,
-      "doctorLegacyState": true
+      "legacyStateMigrations": true
     },
     "channel": {
       "id": "matrix",

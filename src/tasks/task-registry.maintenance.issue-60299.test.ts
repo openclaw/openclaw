@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
-import type { CronStoreSnapshot } from "../cron/types.js";
+import type { CronStoreFile } from "../cron/types.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -55,10 +55,11 @@ function createTaskRegistryMaintenanceHarness(params: {
   tasks: TaskRecord[];
   sessionStore?: Record<string, SessionEntry>;
   getSessionEntry?: TaskRegistryMaintenanceRuntime["getSessionEntry"];
+  deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
   acpEntry?: AcpSessionStoreEntry["entry"];
   activeCronJobIds?: string[];
   activeRunIds?: string[];
-  cronStore?: CronStoreSnapshot;
+  cronStore?: CronStoreFile;
   cronRunLogEntries?: Record<string, CronRunLogEntry[]>;
   cronRuntimeAuthoritative?: boolean;
 }) {
@@ -77,23 +78,26 @@ function createTaskRegistryMaintenanceHarness(params: {
             cfg: {} as never,
             agentId: "main",
             sessionKey: "",
-            rowSessionKey: "",
+            storeSessionKey: "",
             entry: acpEntry,
-            readFailed: false,
+            storeReadFailed: false,
           } satisfies AcpSessionStoreEntry)
         : ({
             cfg: {} as never,
             agentId: "main",
             sessionKey: "",
-            rowSessionKey: "",
+            storeSessionKey: "",
             entry: undefined,
-            readFailed: false,
+            storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
     getSessionEntry:
       params.getSessionEntry ??
       (({ sessionKey }) => {
         return sessionStore[sessionKey];
       }),
+    ...(params.deriveSessionChatTypeFromKey
+      ? { deriveSessionChatTypeFromKey: params.deriveSessionChatTypeFromKey }
+      : {}),
     isCronJobActive: (jobId: string) => activeCronJobIds.has(jobId),
     getAgentRunContext: (runId: string) =>
       activeRunIds.has(runId) ? { sessionKey: "main" } : undefined,
@@ -165,9 +169,9 @@ function createTaskRegistryMaintenanceHarness(params: {
       return next;
     },
     isCronRuntimeAuthoritative: () => params.cronRuntimeAuthoritative ?? true,
-    resolveCronStoreKey: () => "test-cron-store",
+    resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
     loadCronStoreSync: () => params.cronStore ?? { version: 1, jobs: [] },
-    readCronRunLogEntriesSync: (_storeKey, opts) => cronRunLogEntries[opts?.jobId ?? ""] ?? [],
+    readCronRunLogEntriesSync: (_storePath, opts) => cronRunLogEntries[opts?.jobId ?? ""] ?? [],
   };
 
   setTaskRegistryMaintenanceRuntimeForTests(runtime);
@@ -220,50 +224,24 @@ describe("task-registry maintenance issue #60299", () => {
     expect(getSessionEntryMock).toHaveBeenCalledTimes(tasks.length);
   });
 
-  it("does not derive CLI session type from key shape", async () => {
+  it("reuses CLI channel session type derivation across duplicate stale task checks", async () => {
     const childSessionKey = "agent:main:discord:direct:user-1";
-    const task = makeStaleTask({
-      runtime: "cli",
-      taskId: "task-cli-key-shaped-session",
-      childSessionKey,
-    });
+    const tasks = Array.from({ length: 10 }, (_, index) =>
+      makeStaleTask({
+        runtime: "cli",
+        taskId: `task-cli-channel-stale-${index}`,
+        childSessionKey,
+      }),
+    );
+    const deriveSessionChatTypeMock = vi.fn(() => "direct" as const);
 
     createTaskRegistryMaintenanceHarness({
-      tasks: [task],
-      sessionStore: {
-        [childSessionKey]: {
-          sessionId: childSessionKey,
-          updatedAt: Date.now(),
-        },
-      },
+      tasks,
+      deriveSessionChatTypeFromKey: deriveSessionChatTypeMock,
     });
 
-    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
-  });
-
-  it("uses typed CLI session metadata to identify chat-backed sessions", async () => {
-    const childSessionKey = "agent:main:opaque-cli-session";
-    const task = makeStaleTask({
-      runtime: "cli",
-      sourceId: "run-typed-cli-stale",
-      runId: "run-typed-cli-stale",
-      ownerKey: "agent:main:main",
-      requesterSessionKey: childSessionKey,
-      childSessionKey,
-    });
-    const { currentTasks } = createTaskRegistryMaintenanceHarness({
-      tasks: [task],
-      sessionStore: {
-        [childSessionKey]: {
-          sessionId: childSessionKey,
-          updatedAt: Date.now(),
-          chatType: "channel",
-        },
-      },
-    });
-
-    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
-    expectTaskStatus(currentTasks, task.taskId, "lost");
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: tasks.length });
+    expect(deriveSessionChatTypeMock).toHaveBeenCalledTimes(1);
   });
 
   it("marks stale cron tasks lost once the runtime no longer tracks the job as active", async () => {

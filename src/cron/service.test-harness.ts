@@ -50,25 +50,20 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  async function makeStoreKey() {
-    const id = `case-${caseId++}`;
-    const stateDir = path.join(fixtureRoot, id, "state");
-    await fs.mkdir(stateDir, { recursive: true });
+  async function makeStorePath() {
+    const dir = path.join(fixtureRoot, `case-${caseId++}`);
+    await fs.mkdir(dir, { recursive: true });
     return {
-      storeKey: id,
-      stateDir,
+      storePath: path.join(dir, "cron", "jobs.json"),
       cleanup: async () => {},
     };
   }
 
-  return { makeStoreKey };
+  return { makeStorePath };
 }
 
-export async function writeCronStoreSnapshot(params: { storeKey: string; jobs: CronJob[] }) {
-  await saveCronStore(params.storeKey, {
-    version: 1,
-    jobs: params.jobs,
-  });
+export async function writeCronStoreSnapshot(params: { storePath: string; jobs: CronJob[] }) {
+  await saveCronStore(params.storePath, { version: 1, jobs: params.jobs });
 }
 
 export function installCronTestHooks(options: {
@@ -96,12 +91,12 @@ export function installCronTestHooks(options: {
 
 export function setupCronServiceSuite(options?: { prefix?: string; baseTimeIso?: string }) {
   const logger = createNoopLogger();
-  const { makeStoreKey } = createCronStoreHarness({ prefix: options?.prefix });
+  const { makeStorePath } = createCronStoreHarness({ prefix: options?.prefix });
   installCronTestHooks({
     logger,
     baseTimeIso: options?.baseTimeIso,
   });
-  return { logger, makeStoreKey };
+  return { logger, makeStorePath };
 }
 
 export function createFinishedBarrier() {
@@ -126,7 +121,7 @@ export function createFinishedBarrier() {
 }
 
 export function createStartedCronServiceWithFinishedBarrier(params: {
-  storeKey: string;
+  storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
 }): {
   cron: CronService;
@@ -138,7 +133,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   const requestHeartbeat = vi.fn();
   const finished = createFinishedBarrier();
   const cron = new CronService({
-    storeKey: params.storeKey,
+    storePath: params.storePath,
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
@@ -151,7 +146,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
 
 export async function withCronServiceForTest(
   params: {
-    makeStoreKey: () => Promise<{ storeKey: string; cleanup?: () => Promise<void> }>;
+    makeStorePath: () => Promise<{ storePath: string; cleanup: () => Promise<void> }>;
     logger: ReturnType<typeof createNoopLogger>;
     cronEnabled: boolean;
     runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
@@ -162,12 +157,12 @@ export async function withCronServiceForTest(
     requestHeartbeat: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ): Promise<void> {
-  const store = await params.makeStoreKey();
+  const store = await params.makeStorePath();
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const cron = new CronService({
     cronEnabled: params.cronEnabled,
-    storeKey: store.storeKey,
+    storePath: store.storePath,
     log: params.logger,
     enqueueSystemEvent,
     requestHeartbeat,
@@ -181,19 +176,19 @@ export async function withCronServiceForTest(
     await run({ cron, enqueueSystemEvent, requestHeartbeat });
   } finally {
     cron.stop();
-    await store.cleanup?.();
+    await store.cleanup();
   }
 }
 
 export function createRunningCronServiceState(params: {
-  storeKey: string;
+  storePath: string;
   log: ReturnType<typeof createNoopLogger>;
   nowMs: () => number;
   jobs: CronJob[];
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storeKey: params.storeKey,
+    storePath: params.storePath,
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),
@@ -248,8 +243,9 @@ export function createMockCronStateForJobs(params: {
     storeLoadedAtMs: nowMs,
     op: Promise.resolve(),
     warnedDisabled: false,
+    warnedMissingSessionTargetJobIds: new Set<string>(),
     deps: {
-      storeKey: "mock",
+      storePath: "/mock/path",
       cronEnabled: true,
       nowMs: () => nowMs,
       enqueueSystemEvent: () => {},

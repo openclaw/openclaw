@@ -15,7 +15,6 @@ import {
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySource,
-  type MemorySessionTranscriptScope,
   type MemorySyncProgressUpdate,
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -360,7 +359,7 @@ class BorrowedMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     await this.inner.sync?.(params);
@@ -493,7 +492,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     this.ensureOpen();

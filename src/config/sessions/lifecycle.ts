@@ -1,4 +1,9 @@
 import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  type SessionFilePathOptions,
+} from "./paths.js";
+import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
 } from "./transcript-store.sqlite.js";
@@ -6,7 +11,7 @@ import type { SessionEntry } from "./types.js";
 
 type SessionLifecycleEntry = Pick<
   SessionEntry,
-  "sessionId" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
+  "sessionId" | "sessionFile" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
 >;
 
 function resolveTimestamp(value: number | undefined): number | undefined {
@@ -27,14 +32,27 @@ function parseTimestampMs(value: unknown): number | undefined {
 export function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
+  pathOptions?: SessionFilePathOptions;
 }): number | undefined {
   const sessionId = params.entry?.sessionId?.trim();
   if (!sessionId) {
     return undefined;
   }
+  const pathOptions =
+    params.pathOptions ??
+    resolveSessionFilePathOptions({
+      agentId: params.agentId,
+    });
+  let sessionFile: string;
+  try {
+    sessionFile = resolveSessionFilePath(sessionId, params.entry, pathOptions);
+  } catch {
+    return undefined;
+  }
   const scope = resolveSqliteSessionTranscriptScope({
     agentId: params.agentId,
     sessionId,
+    transcriptPath: sessionFile,
   });
   if (!scope) {
     return undefined;
@@ -70,6 +88,7 @@ export function readSessionHeaderStartedAtMs(params: {
 export function resolveSessionLifecycleTimestamps(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
+  pathOptions?: SessionFilePathOptions;
 }): { sessionStartedAt?: number; lastInteractionAt?: number } {
   const entry = params.entry;
   if (!entry) {
@@ -81,6 +100,7 @@ export function resolveSessionLifecycleTimestamps(params: {
       readSessionHeaderStartedAtMs({
         entry,
         agentId: params.agentId,
+        pathOptions: params.pathOptions,
       }),
     lastInteractionAt: resolveTimestamp(entry.lastInteractionAt),
   };

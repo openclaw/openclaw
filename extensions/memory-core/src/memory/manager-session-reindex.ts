@@ -5,7 +5,7 @@ export function shouldSyncSessionsForReindex(params: {
   sync?: {
     reason?: string;
     force?: boolean;
-    sessionTranscriptScopes?: Array<{ agentId: string; sessionId: string }>;
+    sessionTranscripts?: string[];
   };
   needsFullReindex?: boolean;
 }): boolean {
@@ -13,8 +13,8 @@ export function shouldSyncSessionsForReindex(params: {
     return false;
   }
   if (
-    params.sync?.sessionTranscriptScopes?.some(
-      (scope) => scope.agentId.trim().length > 0 && scope.sessionId.trim().length > 0,
+    params.sync?.sessionTranscripts?.some(
+      (sessionTranscript) => sessionTranscript.trim().length > 0,
     )
   ) {
     return true;

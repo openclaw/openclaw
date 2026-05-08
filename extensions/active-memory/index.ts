@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
-import { loadSqliteSessionTranscriptEvents } from "openclaw/plugin-sdk/agent-harness-runtime";
+import fs from "node:fs/promises";
+import path from "node:path";
+import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   DEFAULT_PROVIDER,
   parseModelRef,
@@ -16,6 +21,8 @@ import {
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
+import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -31,6 +38,7 @@ const DEFAULT_MIN_TIMEOUT_MS = 250;
 const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
+const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
@@ -143,6 +151,7 @@ type ActiveRecallPluginConfig = {
   circuitBreakerMaxTimeouts?: number;
   circuitBreakerCooldownMs?: number;
   persistTranscripts?: boolean;
+  transcriptDir?: string;
   qmd?: {
     searchMode?: ActiveMemoryQmdSearchMode;
   };
@@ -183,6 +192,7 @@ type ResolvedActiveRecallPluginConfig = {
   circuitBreakerMaxTimeouts: number;
   circuitBreakerCooldownMs: number;
   persistTranscripts: boolean;
+  transcriptDir: string;
   qmd: {
     searchMode: ActiveMemoryQmdSearchMode;
   };
@@ -242,15 +252,10 @@ type TranscriptReadLimits = {
   maxBytes?: number;
 };
 
-type TranscriptScope = {
-  agentId: string;
-  sessionId: string;
-};
-
 type RecallSubagentResult = {
   rawReply: string;
   resultStatus?: "failed" | "unavailable";
-  transcriptScope?: TranscriptScope;
+  transcriptPath?: string;
   searchDebug?: ActiveMemorySearchDebug;
 };
 
@@ -270,16 +275,6 @@ type CachedActiveRecallResult = {
 };
 
 type ActiveMemoryChatType = "direct" | "group" | "channel" | "explicit";
-type ActiveMemorySessionEntry = {
-  chatType?: unknown;
-  groupId?: unknown;
-  nativeChannelId?: unknown;
-  nativeDirectUserId?: unknown;
-  deliveryContext?: {
-    to?: unknown;
-  };
-  lastTo?: unknown;
-};
 
 type ActiveMemorySessionToggleEntry = {
   version: 1;
@@ -388,6 +383,17 @@ function clampInt(value: number | undefined, fallback: number, min: number, max:
   return Math.max(min, Math.min(max, Math.floor(value as number)));
 }
 
+function normalizeTranscriptDir(value: unknown): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) {
+    return DEFAULT_TRANSCRIPT_DIR;
+  }
+  const normalized = raw.replace(/\\/g, "/");
+  const parts = normalized.split("/").map((part) => part.trim());
+  const safeParts = parts.filter((part) => part.length > 0 && part !== "." && part !== "..");
+  return safeParts.length > 0 ? path.join(...safeParts) : DEFAULT_TRANSCRIPT_DIR;
+}
+
 function normalizeChatIdList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -468,6 +474,42 @@ function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
 }
 
+function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string): string {
+  const normalized = transcriptDir.trim();
+  if (!normalized || normalized.includes(":") || path.isAbsolute(normalized)) {
+    return path.resolve(baseSessionsDir, DEFAULT_TRANSCRIPT_DIR);
+  }
+  const resolvedBase = path.resolve(baseSessionsDir);
+  const candidate = path.resolve(resolvedBase, normalized);
+  if (!isPathInside(resolvedBase, candidate)) {
+    return path.resolve(resolvedBase, DEFAULT_TRANSCRIPT_DIR);
+  }
+  return candidate;
+}
+
+function toSafeTranscriptAgentDirName(agentId: string): string {
+  const encoded = encodeURIComponent(agentId.trim());
+  return encoded ? encoded : "unknown-agent";
+}
+
+function resolvePersistentTranscriptBaseDir(api: OpenClawPluginApi, agentId: string): string {
+  return path.join(
+    api.runtime.state.resolveStateDir(),
+    "plugins",
+    "active-memory",
+    "transcripts",
+    "agents",
+    toSafeTranscriptAgentDirName(agentId),
+  );
+}
+
+function requireTransientWorkspaceDir(tempDir: string | undefined): string {
+  if (!tempDir) {
+    throw new Error("Active memory transient workspace was not initialized.");
+  }
+  return tempDir;
+}
+
 function resolveCanonicalSessionKeyFromSessionId(params: {
   api: OpenClawPluginApi;
   agentId: string;
@@ -513,27 +555,6 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function normalizeActiveMemoryChatType(value: unknown): ActiveMemoryChatType | undefined {
-  if (value === "direct" || value === "group" || value === "channel" || value === "explicit") {
-    return value;
-  }
-  return undefined;
-}
-
-function normalizeConversationIdValue(value: unknown): string | undefined {
-  const trimmed = normalizeOptionalString(value)?.toLowerCase();
-  if (!trimmed) {
-    return undefined;
-  }
-  for (const prefix of ["room:", "group:", "channel:", "direct:", "dm:", "user:"]) {
-    if (trimmed.startsWith(prefix)) {
-      const withoutPrefix = trimmed.slice(prefix.length).trim();
-      return withoutPrefix || undefined;
-    }
-  }
-  return trimmed;
 }
 
 function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
@@ -631,14 +652,19 @@ function resolveRecallRunChannelContext(params: {
     // Channel IDs containing ":" or "/" are scoped conversation IDs, not
     // runnable channel names. The same guard that
     // applies to explicit channelId (#76704) must also apply to channels
-    // read from SQLite session rows (#77396).
+    // read from the session store (#77396).
     const strongEntryChannel =
       rawStrongEntryChannel && isRunnableChannelName(rawStrongEntryChannel)
         ? rawStrongEntryChannel
         : undefined;
+    const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
     return resolveReturnValue({
-      resolvedChannel: strongEntryChannel,
-      resolvedChannelStrength: strongEntryChannel ? "strong" : undefined,
+      resolvedChannel: strongEntryChannel ?? weakEntryChannel,
+      resolvedChannelStrength: strongEntryChannel
+        ? "strong"
+        : weakEntryChannel
+          ? "weak"
+          : undefined,
     });
   } catch {
     return resolveReturnValue({});
@@ -830,6 +856,7 @@ function normalizePluginConfig(
       600_000,
     ),
     persistTranscripts: raw.persistTranscripts === true,
+    transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
     qmd: {
       searchMode: resolveQmdSearchMode(qmd?.searchMode),
     },
@@ -1060,12 +1087,7 @@ function resolveChatType(ctx: {
   messageProvider?: string;
   channelId?: string;
   mainKey?: string;
-  sessionEntry?: ActiveMemorySessionEntry;
 }): ActiveMemoryChatType | undefined {
-  const storedChatType = normalizeActiveMemoryChatType(ctx.sessionEntry?.chatType);
-  if (storedChatType) {
-    return storedChatType;
-  }
   const sessionKey = ctx.sessionKey?.trim().toLowerCase();
   if (sessionKey) {
     if (sessionKey.startsWith("agent:") && sessionKey.split(":")[2] === "explicit") {
@@ -1108,7 +1130,6 @@ function isAllowedChatType(
     messageProvider?: string;
     channelId?: string;
     mainKey?: string;
-    sessionEntry?: ActiveMemorySessionEntry;
   },
 ): boolean {
   const chatType = resolveChatType(ctx);
@@ -1140,28 +1161,7 @@ function isAllowedChatType(
 function resolveConversationId(ctx: {
   sessionKey?: string;
   messageProvider?: string;
-  sessionEntry?: ActiveMemorySessionEntry;
 }): string | undefined {
-  const storedChatType = normalizeActiveMemoryChatType(ctx.sessionEntry?.chatType);
-  if (storedChatType === "direct") {
-    const id =
-      normalizeConversationIdValue(ctx.sessionEntry?.nativeDirectUserId) ??
-      normalizeConversationIdValue(ctx.sessionEntry?.deliveryContext?.to) ??
-      normalizeConversationIdValue(ctx.sessionEntry?.lastTo);
-    if (id) {
-      return id;
-    }
-  }
-  if (storedChatType === "group" || storedChatType === "channel") {
-    const id =
-      normalizeConversationIdValue(ctx.sessionEntry?.groupId) ??
-      normalizeConversationIdValue(ctx.sessionEntry?.nativeChannelId) ??
-      normalizeConversationIdValue(ctx.sessionEntry?.deliveryContext?.to) ??
-      normalizeConversationIdValue(ctx.sessionEntry?.lastTo);
-    if (id) {
-      return id;
-    }
-  }
   const rawSessionKey = ctx.sessionKey?.trim();
   if (!rawSessionKey) {
     return undefined;
@@ -1195,7 +1195,7 @@ function resolveConversationId(ctx: {
         .slice(index + 1)
         .join(":")
         .trim();
-      return normalizeConversationIdValue(tail);
+      return tail || undefined;
     }
   }
   return undefined;
@@ -1216,7 +1216,6 @@ function isAllowedChatId(
   ctx: {
     sessionKey?: string;
     messageProvider?: string;
-    sessionEntry?: ActiveMemorySessionEntry;
   },
 ): boolean {
   const hasAllowlist = config.allowedChatIds.length > 0;
@@ -1545,14 +1544,20 @@ function resolveTranscriptReadLimits(
   };
 }
 
-async function streamBoundedTranscriptEvents(params: {
-  transcriptScope: TranscriptScope;
+async function streamBoundedTranscriptJsonl(params: {
+  sessionFile: string;
   limits?: TranscriptReadLimits;
   onRecord: (record: unknown) => boolean | void;
 }): Promise<void> {
   const limits = resolveTranscriptReadLimits(params.limits);
+  const scope = resolveSqliteSessionTranscriptScopeForPath({
+    transcriptPath: params.sessionFile,
+  });
+  if (!scope) {
+    return;
+  }
   try {
-    const events = loadSqliteSessionTranscriptEvents(params.transcriptScope);
+    const events = loadSqliteSessionTranscriptEvents(scope);
     if (JSON.stringify(events.map((entry) => entry.event)).length > limits.maxBytes) {
       return;
     }
@@ -1641,12 +1646,12 @@ function extractTerminalMemorySearchResultFromSessionRecord(
 }
 
 async function readActiveMemorySearchDebug(
-  transcriptScope: TranscriptScope,
+  sessionFile: string,
   limits?: TranscriptReadLimits,
 ): Promise<ActiveMemorySearchDebug | undefined> {
   let found: ActiveMemorySearchDebug | undefined;
-  await streamBoundedTranscriptEvents({
-    transcriptScope,
+  await streamBoundedTranscriptJsonl({
+    sessionFile,
     limits,
     onRecord: (record) => {
       const debug = extractActiveMemorySearchDebugFromSessionRecord(record);
@@ -1659,12 +1664,12 @@ async function readActiveMemorySearchDebug(
 }
 
 async function readTerminalMemorySearchResult(
-  transcriptScope: TranscriptScope,
+  sessionFile: string,
   limits?: TranscriptReadLimits,
 ): Promise<TerminalMemorySearchResult | undefined> {
   let found: TerminalMemorySearchResult | undefined;
-  await streamBoundedTranscriptEvents({
-    transcriptScope,
+  await streamBoundedTranscriptJsonl({
+    sessionFile,
     limits,
     onRecord: (record) => {
       const result = extractTerminalMemorySearchResultFromSessionRecord(record);
@@ -1679,7 +1684,7 @@ async function readTerminalMemorySearchResult(
 }
 
 function watchTerminalMemorySearchResult(params: {
-  getTranscriptScope: () => TranscriptScope | undefined;
+  getSessionFile: () => string | undefined;
   abortSignal: AbortSignal;
 }): TerminalMemorySearchWatch {
   let stopped = false;
@@ -1718,10 +1723,8 @@ function watchTerminalMemorySearchResult(params: {
     }
     inFlight = true;
     try {
-      const transcriptScope = params.getTranscriptScope();
-      const result = transcriptScope
-        ? await readTerminalMemorySearchResult(transcriptScope)
-        : undefined;
+      const sessionFile = params.getSessionFile();
+      const result = sessionFile ? await readTerminalMemorySearchResult(sessionFile) : undefined;
       if (result) {
         finish(result);
         return;
@@ -1807,17 +1810,17 @@ function extractAssistantTextFromSessionRecord(value: unknown): string {
 }
 
 async function readPartialAssistantText(
-  transcriptScope: TranscriptScope | undefined,
+  sessionFile: string | undefined,
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
-  if (!transcriptScope) {
+  if (!sessionFile) {
     return null;
   }
   const texts: string[] = [];
   const resolvedLimits = resolveTranscriptReadLimits(limits);
   let collectedChars = 0;
-  await streamBoundedTranscriptEvents({
-    transcriptScope,
+  await streamBoundedTranscriptJsonl({
+    sessionFile,
     limits: resolvedLimits,
     onRecord: (record) => {
       const text = extractAssistantTextFromSessionRecord(record);
@@ -1909,7 +1912,7 @@ async function waitForSubagentPartialTimeoutData(
 async function buildTimeoutRecallResult(params: {
   elapsedMs: number;
   maxSummaryChars: number;
-  transcriptScope?: TranscriptScope;
+  sessionFile?: string;
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
   subagentPromise?: Promise<RecallSubagentResult>;
@@ -1921,7 +1924,7 @@ async function buildTimeoutRecallResult(params: {
   const rawReply =
     params.rawReply ??
     subagentPartialData.rawReply ??
-    (await readPartialAssistantText(params.transcriptScope));
+    (await readPartialAssistantText(params.sessionFile));
   const summary = truncateSummary(
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
@@ -1929,9 +1932,7 @@ async function buildTimeoutRecallResult(params: {
   const searchDebug =
     params.searchDebug ??
     subagentPartialData.searchDebug ??
-    (params.transcriptScope
-      ? await readActiveMemorySearchDebug(params.transcriptScope)
-      : undefined);
+    (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined);
   if (summary.length === 0) {
     return {
       status: "timeout",
@@ -2331,7 +2332,7 @@ async function runRecallSubagent(params: {
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
   abortSignal?: AbortSignal;
-  onTranscriptScope?: (transcriptScope: TranscriptScope) => void;
+  onSessionFile?: (sessionFile: string) => void;
 }): Promise<RecallSubagentResult> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
@@ -2361,11 +2362,28 @@ async function runRecallSubagent(params: {
   const subagentSessionKey = parentSessionKey
     ? `${parentSessionKey}:${subagentSuffix}`
     : `agent:${params.agentId}:${subagentSuffix}`;
-  const transcriptScope = {
-    agentId: params.agentId,
-    sessionId: subagentSessionId,
-  };
-  params.onTranscriptScope?.(transcriptScope);
+  const transientWorkspace = params.config.persistTranscripts
+    ? undefined
+    : await tempWorkspace({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "openclaw-active-memory-",
+      });
+  const tempDir = transientWorkspace?.dir;
+  const persistedDir = params.config.persistTranscripts
+    ? resolveSafeTranscriptDir(
+        resolvePersistentTranscriptBaseDir(params.api, params.agentId),
+        params.config.transcriptDir,
+      )
+    : undefined;
+  const sessionFile =
+    persistedDir !== undefined
+      ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
+      : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
+  params.onSessionFile?.(sessionFile);
+  if (persistedDir) {
+    await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
+    await fs.chmod(persistedDir, 0o700).catch(() => undefined);
+  }
   const prompt = buildRecallPrompt({
     config: params.config,
     query: params.query,
@@ -2389,6 +2407,7 @@ async function runRecallSubagent(params: {
       agentId: params.agentId,
       messageChannel,
       messageProvider,
+      sessionFile,
       workspaceDir,
       agentDir,
       config: embeddedConfig,
@@ -2428,19 +2447,17 @@ async function runRecallSubagent(params: {
       .join("\n")
       .trim();
     const searchDebug =
-      (await readActiveMemorySearchDebug(transcriptScope)) ??
+      (await readActiveMemorySearchDebug(sessionFile)) ??
       readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
-      transcriptScope: params.config.persistTranscripts ? transcriptScope : undefined,
+      transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
       searchDebug,
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      const partialReply = await readPartialAssistantText(transcriptScope);
-      const searchDebug = partialReply
-        ? await readActiveMemorySearchDebug(transcriptScope)
-        : undefined;
+      const partialReply = await readPartialAssistantText(sessionFile);
+      const searchDebug = await readActiveMemorySearchDebug(sessionFile);
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
     if (
@@ -2460,6 +2477,8 @@ async function runRecallSubagent(params: {
       return { rawReply: "NONE", resultStatus: "failed" };
     }
     throw error;
+  } finally {
+    await transientWorkspace?.cleanup();
   }
 }
 
@@ -2558,7 +2577,7 @@ async function maybeResolveActiveRecall(params: {
 
   const controller = new AbortController();
   const TIMEOUT_SENTINEL = Symbol("timeout");
-  let transcriptScope: TranscriptScope | undefined;
+  let sessionFile: string | undefined;
   const watchdogTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`active-memory timeout after ${watchdogTimeoutMs}ms`));
@@ -2581,12 +2600,12 @@ async function maybeResolveActiveRecall(params: {
       ...params,
       modelRef: resolvedModelRef,
       abortSignal: controller.signal,
-      onTranscriptScope: (value) => {
-        transcriptScope = value;
+      onSessionFile: (value) => {
+        sessionFile = value;
       },
     });
     terminalMemorySearchWatch = watchTerminalMemorySearchResult({
-      getTranscriptScope: () => transcriptScope,
+      getSessionFile: () => sessionFile,
       abortSignal: controller.signal,
     });
     // Silently catch late rejections after timeout so they don't become
@@ -2604,7 +2623,7 @@ async function maybeResolveActiveRecall(params: {
       const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
-        transcriptScope,
+        sessionFile,
         subagentPromise,
       });
       if (params.config.logging) {
@@ -2651,20 +2670,13 @@ async function maybeResolveActiveRecall(params: {
       return result;
     }
 
-    const {
-      rawReply,
-      resultStatus,
-      transcriptScope: persistedTranscriptScope,
-      searchDebug,
-    } = raceResult;
+    const { rawReply, resultStatus, transcriptPath, searchDebug } = raceResult;
     const summary = truncateSummary(
       normalizeActiveSummary(rawReply) ?? "",
       params.config.maxSummaryChars,
     );
-    if (params.config.logging && persistedTranscriptScope) {
-      params.api.logger.info?.(
-        `${logPrefix} transcriptScope=${persistedTranscriptScope.agentId}/${persistedTranscriptScope.sessionId}`,
-      );
+    if (params.config.logging && transcriptPath) {
+      params.api.logger.info?.(`${logPrefix} transcript=${transcriptPath}`);
     }
     const result: ActiveRecallResult =
       summary.length > 0
@@ -2719,7 +2731,7 @@ async function maybeResolveActiveRecall(params: {
       const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
-        transcriptScope,
+        sessionFile,
         rawReply: partialTimeoutData.rawReply,
         searchDebug: partialTimeoutData.searchDebug,
       });
@@ -2934,18 +2946,10 @@ export default definePluginEntry({
             });
             return undefined;
           }
-          const sessionEntry =
-            resolvedSessionKey && effectiveAgentId
-              ? (api.runtime.agent.session.getSessionEntry({
-                  agentId: effectiveAgentId,
-                  sessionKey: resolvedSessionKey,
-                }) as ActiveMemorySessionEntry | undefined)
-              : undefined;
           if (
             !isAllowedChatType(config, {
               ...ctx,
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
-              sessionEntry,
               mainKey: api.config.session?.mainKey,
             })
           ) {
@@ -2960,7 +2964,6 @@ export default definePluginEntry({
             !isAllowedChatId(config, {
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
               messageProvider: ctx.messageProvider,
-              sessionEntry,
             })
           ) {
             await persistPluginStatusLines({

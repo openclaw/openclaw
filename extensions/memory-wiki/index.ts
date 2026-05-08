@@ -5,6 +5,7 @@ import { createWikiCorpusSupplement } from "./src/corpus-supplement.js";
 import { createMemoryWikiSourceSyncMigrationProvider } from "./src/doctor-legacy-state.js";
 import { registerMemoryWikiGatewayMethods } from "./src/gateway.js";
 import { createWikiPromptSectionBuilder } from "./src/prompt-section.js";
+import { createMemoryWikiSourceSyncMigrationProvider } from "./src/source-sync-migration.js";
 import {
   createWikiApplyTool,
   createWikiGetTool,

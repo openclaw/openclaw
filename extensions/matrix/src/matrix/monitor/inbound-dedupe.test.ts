@@ -17,10 +17,10 @@ describe("Matrix inbound event dedupe", () => {
     }
   });
 
-  function createStateRoot(): string {
+  function createStoragePath(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-inbound-dedupe-"));
     tempDirs.push(dir);
-    return dir;
+    return path.join(dir, "inbound-dedupe.json");
   }
 
   const auth = {
@@ -32,10 +32,10 @@ describe("Matrix inbound event dedupe", () => {
   } as const;
 
   it("persists committed events across restarts", async () => {
-    const stateRootDir = createStateRoot();
+    const storagePath = createStoragePath();
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
     });
 
     expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$event-1" })).toBe(true);
@@ -47,16 +47,16 @@ describe("Matrix inbound event dedupe", () => {
 
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
     });
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$event-1" })).toBe(false);
   });
 
   it("does not persist released pending claims", async () => {
-    const stateRootDir = createStateRoot();
+    const storagePath = createStoragePath();
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
     });
 
     expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$event-2" })).toBe(true);
@@ -65,17 +65,17 @@ describe("Matrix inbound event dedupe", () => {
 
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
     });
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$event-2" })).toBe(true);
   });
 
   it("prunes expired and overflowed entries on load", async () => {
-    const stateRootDir = createStateRoot();
+    const storagePath = createStoragePath();
     let now = 10;
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
       ttlMs: 1_000,
       maxEntries: 10,
       nowMs: () => now,
@@ -89,7 +89,7 @@ describe("Matrix inbound event dedupe", () => {
 
     const deduper = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
       ttlMs: 20,
       maxEntries: 2,
       nowMs: () => 100,
@@ -102,11 +102,11 @@ describe("Matrix inbound event dedupe", () => {
   });
 
   it("retains replayed backlog events based on processing time", async () => {
-    const stateRootDir = createStateRoot();
+    const storagePath = createStoragePath();
     let now = 100;
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
       ttlMs: 20,
       nowMs: () => now,
     });
@@ -121,10 +121,24 @@ describe("Matrix inbound event dedupe", () => {
     now = 110;
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
       ttlMs: 20,
       nowMs: () => now,
     });
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$backlog" })).toBe(false);
+  });
+
+  it("does not create the legacy JSON file", async () => {
+    const storagePath = createStoragePath();
+    const deduper = await createMatrixInboundEventDeduper({
+      auth: auth as never,
+      storagePath,
+    });
+
+    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$sqlite" })).toBe(true);
+    await deduper.commitEvent({ roomId: "!room:example.org", eventId: "$sqlite" });
+    await deduper.stop();
+
+    expect(fs.existsSync(storagePath)).toBe(false);
   });
 });

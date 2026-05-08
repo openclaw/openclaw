@@ -73,7 +73,7 @@ function normalizeLease(value: unknown): AcpxProcessLease | undefined {
   };
 }
 
-export function createAcpxProcessLeaseStore(): AcpxProcessLeaseStore {
+export function createAcpxProcessLeaseStore(_params: { stateDir: string }): AcpxProcessLeaseStore {
   let updateQueue: Promise<void> = Promise.resolve();
 
   async function readStoredLeases(): Promise<AcpxProcessLease[]> {

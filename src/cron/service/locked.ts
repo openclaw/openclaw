@@ -9,7 +9,7 @@ const resolveChain = (promise: Promise<unknown>) =>
   );
 
 export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {
-  const scopeKey = state.deps.storeKey;
+  const scopeKey = state.deps.storePath;
   const scopeOp = operationChains.get(scopeKey) ?? Promise.resolve();
   const next = Promise.all([resolveChain(state.op), resolveChain(scopeOp)]).then(fn);
 

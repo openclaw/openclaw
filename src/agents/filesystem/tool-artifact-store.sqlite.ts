@@ -164,7 +164,7 @@ export function listSqliteToolArtifacts(
   const { agentId, runId } = normalizeScope(options);
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<ToolArtifactDatabase>(database.db);
-  return executeSqliteQuerySync(
+  return executeSqliteQuerySync<ToolArtifactRow>(
     database.db,
     db
       .selectFrom("tool_artifacts")
@@ -183,7 +183,7 @@ export function readSqliteToolArtifact(
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<ToolArtifactDatabase>(database.db);
   const row =
-    executeSqliteQueryTakeFirstSync(
+    executeSqliteQueryTakeFirstSync<ToolArtifactRow>(
       database.db,
       db
         .selectFrom("tool_artifacts")
@@ -200,7 +200,7 @@ export function exportSqliteToolArtifacts(
   const { agentId, runId } = normalizeScope(options);
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<ToolArtifactDatabase>(database.db);
-  return executeSqliteQuerySync(
+  return executeSqliteQuerySync<ToolArtifactRow>(
     database.db,
     db
       .selectFrom("tool_artifacts")

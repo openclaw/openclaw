@@ -7,7 +7,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
-import { resolveSessionKeyForSessionScope } from "./session-transcript-key.js";
+import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
   loadGatewaySessionRow,
@@ -40,6 +40,7 @@ function buildGatewaySessionSnapshot(params: {
     groupChannel: sessionRow.groupChannel,
     space: sessionRow.space,
     chatType: sessionRow.chatType,
+    origin: sessionRow.origin,
     spawnedBy: sessionRow.spawnedBy,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     forkedFromParent: sessionRow.forkedFromParent,
@@ -104,14 +105,7 @@ async function handleTranscriptUpdateBroadcast(
   },
   update: SessionTranscriptUpdate,
 ): Promise<void> {
-  const sessionKey =
-    update.sessionKey ??
-    (update.sessionId
-      ? resolveSessionKeyForSessionScope({
-          agentId: update.agentId,
-          sessionId: update.sessionId,
-        })
-      : undefined);
+  const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
   if (!sessionKey || update.message === undefined) {
     return;
   }
@@ -128,7 +122,7 @@ async function handleTranscriptUpdateBroadcast(
   const { entry } = loadSessionEntry(sessionKey);
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const messageSeq = entry?.sessionId
-    ? await readSessionMessageCountAsync({ agentId, sessionId: entry.sessionId })
+    ? await readSessionMessageCountAsync(entry.sessionId, entry.sessionFile, agentId)
     : undefined;
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),

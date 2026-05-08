@@ -3170,7 +3170,8 @@ describe("createTelegramBot", () => {
       }
     }
   });
-  it("honors routed group activation from SQLite session rows", async () => {
+  it("honors routed group activation from session store", async () => {
+    const storePath = "/tmp/openclaw-telegram-group-activation.json";
     const routedGroupEntry = {
       sessionId: "agent:ops:telegram:group:123",
       updatedAt: 0,
@@ -4106,7 +4107,7 @@ describe("createTelegramBot", () => {
     };
 
     const patchSessionEntryMock = vi.mocked(telegramBotDepsForTest.patchSessionEntry);
-    patchSessionEntryMock.mockRejectedValueOnce(new Error("session row boom"));
+    patchSessionEntryMock.mockRejectedValueOnce(new Error("session store boom"));
 
     const ctx = {
       update: { update_id: 890 },
@@ -4124,7 +4125,7 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     };
 
-    await expect(runMiddlewareChain(ctx)).rejects.toThrow("session row boom");
+    await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
     await runMiddlewareChain(ctx);
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);

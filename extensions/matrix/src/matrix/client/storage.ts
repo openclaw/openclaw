@@ -9,14 +9,35 @@ import {
   writeMatrixStorageMetadata,
   type StoredRootMetadata,
 } from "./storage-meta-state.js";
+import type { MatrixAuth } from "./types.js";
 import type { MatrixStoragePaths } from "./types.js";
 
 const DEFAULT_ACCOUNT_KEY = "default";
+const STORAGE_META_FILENAME = "storage-meta.json";
+const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
+const LEGACY_CRYPTO_MIGRATION_FILENAME = "legacy-crypto-migration.json";
+const RECOVERY_KEY_FILENAME = "recovery-key.json";
+const IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
 
 function scoreStorageRoot(rootDir: string): number {
   let score = 0;
+  if (fs.existsSync(path.join(rootDir, "bot-storage.json"))) {
+    score += 8;
+  }
   if (fs.existsSync(path.join(rootDir, "crypto"))) {
     score += 8;
+  }
+  if (fs.existsSync(path.join(rootDir, THREAD_BINDINGS_FILENAME))) {
+    score += 4;
+  }
+  if (fs.existsSync(path.join(rootDir, LEGACY_CRYPTO_MIGRATION_FILENAME))) {
+    score += 3;
+  }
+  if (fs.existsSync(path.join(rootDir, RECOVERY_KEY_FILENAME))) {
+    score += 2;
+  }
+  if (fs.existsSync(path.join(rootDir, IDB_SNAPSHOT_FILENAME))) {
+    score += 2;
   }
   if (Object.keys(readStoredRootMetadata(rootDir)).length > 0) {
     score += 1;
@@ -201,13 +222,34 @@ export function resolveMatrixStoragePaths(params: {
     deviceId: params.deviceId,
   });
   return {
-    stateDir,
     rootDir,
-    recoveryKeyStorageKey: rootDir,
-    idbSnapshotStorageKey: rootDir,
+    storagePath: path.join(rootDir, "bot-storage.json"),
+    cryptoPath: path.join(rootDir, "crypto"),
+    metaPath: path.join(rootDir, STORAGE_META_FILENAME),
+    recoveryKeyPath: path.join(rootDir, "recovery-key.json"),
+    idbSnapshotPath: path.join(rootDir, IDB_SNAPSHOT_FILENAME),
     accountKey: canonical.accountKey,
     tokenHash,
   };
+}
+
+export function resolveMatrixStateFilePath(params: {
+  auth: MatrixAuth;
+  filename: string;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+}): string {
+  const storagePaths = resolveMatrixStoragePaths({
+    homeserver: params.auth.homeserver,
+    userId: params.auth.userId,
+    accessToken: params.auth.accessToken,
+    accountId: params.accountId ?? params.auth.accountId,
+    deviceId: params.auth.deviceId,
+    env: params.env,
+    stateDir: params.stateDir,
+  });
+  return path.join(storagePaths.rootDir, params.filename);
 }
 
 function writeStoredRootMetadata(

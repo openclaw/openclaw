@@ -3,7 +3,7 @@ import path from "node:path";
 import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { SkillProposal, SkillWorkshopStatus } from "./types.js";
 
-type SkillWorkshopState = {
+type StoreFile = {
   version: 1;
   proposals: SkillProposal[];
   review?: SkillWorkshopReviewState;
@@ -124,7 +124,7 @@ function normalizeReviewEntry(
   return normalizeReviewState(entry.review);
 }
 
-async function readSkillWorkshopState(storeKey: string): Promise<SkillWorkshopState> {
+async function readStore(storeKey: string): Promise<StoreFile> {
   const proposals = (await proposalStore.entries())
     .map((entry) => normalizeProposalEntry(entry.value, storeKey))
     .filter((proposal): proposal is SkillProposal => Boolean(proposal))
@@ -165,10 +165,10 @@ export class SkillWorkshopStore {
   }
 
   async list(status?: SkillWorkshopStatus): Promise<SkillProposal[]> {
-    const state = await readSkillWorkshopState(this.storeKey);
+    const file = await readStore(this.storeKey);
     const proposals = status
-      ? state.proposals.filter((proposal) => proposal.status === status)
-      : state.proposals;
+      ? file.proposals.filter((proposal) => proposal.status === status)
+      : file.proposals;
     return proposals.toSorted((left, right) => right.createdAt - left.createdAt);
   }
 
@@ -178,8 +178,8 @@ export class SkillWorkshopStore {
 
   async add(proposal: SkillProposal, maxPending: number): Promise<SkillProposal> {
     return await withLock(this.storeKey, async () => {
-      const state = await readSkillWorkshopState(this.storeKey);
-      const duplicate = state.proposals.find(
+      const file = await readStore(this.storeKey);
+      const duplicate = file.proposals.find(
         (item) =>
           (item.status === "pending" || item.status === "quarantined") &&
           item.skillName === proposal.skillName &&
@@ -189,7 +189,7 @@ export class SkillWorkshopStore {
         return duplicate;
       }
       await writeProposal(this.storeKey, proposal);
-      const pending = [proposal, ...state.proposals]
+      const pending = [proposal, ...file.proposals]
         .filter((item) => item.status === "pending" || item.status === "quarantined")
         .toSorted((left, right) => right.createdAt - left.createdAt);
       for (const stale of pending.slice(Math.max(1, Math.trunc(maxPending)))) {
@@ -201,12 +201,12 @@ export class SkillWorkshopStore {
 
   async updateStatus(id: string, status: SkillWorkshopStatus): Promise<SkillProposal> {
     return await withLock(this.storeKey, async () => {
-      const state = await readSkillWorkshopState(this.storeKey);
-      const index = state.proposals.findIndex((proposal) => proposal.id === id);
+      const file = await readStore(this.storeKey);
+      const index = file.proposals.findIndex((proposal) => proposal.id === id);
       if (index < 0) {
         throw new Error(`proposal not found: ${id}`);
       }
-      const updated = { ...state.proposals[index], status, updatedAt: Date.now() };
+      const updated = { ...file.proposals[index], status, updatedAt: Date.now() };
       await writeProposal(this.storeKey, updated);
       return updated;
     });
@@ -214,8 +214,8 @@ export class SkillWorkshopStore {
 
   async recordReviewTurn(toolCalls: number): Promise<SkillWorkshopReviewState> {
     return await withLock(this.storeKey, async () => {
-      const state = await readSkillWorkshopState(this.storeKey);
-      const current = normalizeReviewState(state.review);
+      const file = await readStore(this.storeKey);
+      const current = normalizeReviewState(file.review);
       const next = {
         ...current,
         turnsSinceReview: current.turnsSinceReview + 1,

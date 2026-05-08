@@ -20,7 +20,7 @@ You do not need to rename config keys or reinstall the plugin under a new name.
 
 ## What the migration does automatically
 
-When you run [`openclaw doctor --fix`](/gateway/doctor), OpenClaw imports or repairs old Matrix state through the migration system. Runtime startup does not move legacy Matrix files; startup reads the SQLite-backed state created by doctor.
+When you run [`openclaw doctor --fix`](/gateway/doctor), OpenClaw imports or repairs old Matrix state through the migration system. Runtime startup does not move legacy Matrix files; startup reads the SQLite-backed state created by doctor/migrate.
 Before any actionable Matrix migration step mutates on-disk state, OpenClaw creates or reuses a focused recovery snapshot.
 
 When you use `openclaw update`, the exact trigger depends on how OpenClaw is installed:
@@ -33,10 +33,8 @@ Automatic migration covers:
 
 - creating or reusing a pre-migration snapshot under `~/Backups/openclaw-migrations/`
 - reusing your cached Matrix credentials
-- moving legacy top-level Matrix credentials to the selected named account
 - keeping the same account selection and `channels.matrix` config
 - importing old Matrix sync stores into SQLite plugin state
-- importing old Matrix IndexedDB crypto snapshots into SQLite plugin blobs
 - moving the oldest flat Matrix crypto store into the current account-scoped location when the target account can be resolved safely
 - extracting a previously saved Matrix room-key backup decryption key from the old rust crypto store, when that key exists locally
 - reusing the most complete existing token-hash storage root for the same Matrix account, homeserver, and user when the access token changes later
@@ -45,7 +43,7 @@ Automatic migration covers:
 
 Snapshot details:
 
-- OpenClaw records the successful snapshot in SQLite plugin state after the archive is verified, so later doctor passes can reuse the same archive without creating another state file.
+- OpenClaw writes a marker file at `~/.openclaw/matrix/migration-snapshot.json` after a successful snapshot so later doctor/migration passes can reuse the same archive.
 - These automatic Matrix migration snapshots back up config + state only (`includeWorkspace: false`).
 - If Matrix only has warning-only migration state, for example because `userId` or `accessToken` is still missing, OpenClaw does not create the snapshot yet because no Matrix mutation is actionable.
 - If the snapshot step fails, OpenClaw skips Matrix migration for that run instead of mutating state without a recovery point.

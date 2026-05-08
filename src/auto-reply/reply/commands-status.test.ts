@@ -4,7 +4,6 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
-import { savePersistedAuthProfileSecretsStore } from "../../agents/auth-profiles/persisted.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
@@ -118,6 +117,7 @@ afterEach(() => {
 });
 
 function writeTranscriptUsageLog(params: {
+  dir: string;
   agentId: string;
   sessionId: string;
   usage: {
@@ -128,9 +128,18 @@ function writeTranscriptUsageLog(params: {
     totalTokens: number;
   };
 }) {
+  const transcriptPath = path.join(
+    params.dir,
+    ".openclaw",
+    "agents",
+    params.agentId,
+    "sessions",
+    `${params.sessionId}.jsonl`,
+  );
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId,
     sessionId: params.sessionId,
+    transcriptPath,
     events: [
       {
         type: "message",
@@ -480,6 +489,7 @@ describe("buildStatusReply subagent summary", () => {
     await withTempHome(async (dir) => {
       const sessionId = "sess-status-transcript";
       writeTranscriptUsageLog({
+        dir,
         agentId: "main",
         sessionId,
         usage: {
@@ -596,10 +606,18 @@ describe("buildStatusReply subagent summary", () => {
 
     await withTempHome(
       async (dir) => {
-        const stateDir = path.join(dir, ".openclaw");
-        const agentDir = path.join(stateDir, "agents", "main", "agent");
-        savePersistedAuthProfileSecretsStore(
-          {
+        const authPath = path.join(
+          dir,
+          ".openclaw",
+          "agents",
+          "main",
+          "agent",
+          "auth-profiles.json",
+        );
+        fs.mkdirSync(path.dirname(authPath), { recursive: true });
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify({
             version: 1,
             profiles: {
               "openai-codex:status": {
@@ -610,9 +628,8 @@ describe("buildStatusReply subagent summary", () => {
                 expires: Date.now() + 60 * 60_000,
               },
             },
-          },
-          agentDir,
-          { env: { HOME: dir, OPENCLAW_STATE_DIR: stateDir } },
+          }),
+          "utf8",
         );
         const usageResetBase = Math.floor(Date.now() / 1000);
         providerUsageMock.loadProviderUsageSummary.mockResolvedValue({

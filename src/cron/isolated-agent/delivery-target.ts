@@ -1,7 +1,6 @@
 import { parseExplicitTargetForLoadedChannel } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { readSqliteSessionDeliveryContext } from "../../config/sessions/session-entries.sqlite.js";
 import { getSessionEntry } from "../../config/sessions/store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -109,15 +108,6 @@ async function loadChannelSelectionRuntime() {
 async function loadDeliveryTargetRuntime() {
   return await deliveryTargetRuntimeLoader.load();
 }
-
-function readDeliveryContext(params: { agentId: string; sessionKey: string }) {
-  try {
-    return readSqliteSessionDeliveryContext(params);
-  } catch {
-    return undefined;
-  }
-}
-
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
@@ -144,12 +134,9 @@ export async function resolveDeliveryTarget(
     ? getSessionEntry({ agentId, sessionKey: threadSessionKey })
     : undefined;
   const main = threadEntry ?? getSessionEntry({ agentId, sessionKey: mainSessionKey });
-  const deliverySessionKey = threadEntry && threadSessionKey ? threadSessionKey : mainSessionKey;
-  const deliveryContext = readDeliveryContext({ agentId, sessionKey: deliverySessionKey });
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
-    deliveryContext,
     requestedChannel,
     explicitTo,
     explicitThreadId: jobPayload.threadId,
@@ -178,7 +165,6 @@ export async function resolveDeliveryTarget(
   const resolved = fallbackChannel
     ? resolveSessionDeliveryTarget({
         entry: main,
-        deliveryContext,
         requestedChannel,
         explicitTo,
         explicitThreadId: jobPayload.threadId,

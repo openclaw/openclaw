@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { CronService } from "./service.js";
 import {
-  createCronStoreHarness,
   createNoopLogger,
   installCronTestHooks,
   writeCronStoreSnapshot,
@@ -9,12 +12,40 @@ import {
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
-const { makeStoreKey } = createCronStoreHarness({ prefix: "openclaw-cron-row-store-" });
 installCronTestHooks({ logger: noopLogger });
 
+async function makeStorePath() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-row-store-"));
+  return {
+    dir,
+    storePath: path.join(dir, "cron", "jobs.json"),
+  };
+}
+
 describe("CronService store load", () => {
-  it("skips invalid main jobs with agentTurn payloads loaded from SQLite", async () => {
-    const { storeKey } = await makeStoreKey();
+  let tempDir: string | null = null;
+  let originalOpenClawStateDir: string | undefined;
+
+  afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    if (originalOpenClawStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+    }
+    originalOpenClawStateDir = undefined;
+    if (!tempDir) {
+      return;
+    }
+    await fs.rm(tempDir, { recursive: true, force: true });
+    tempDir = null;
+  });
+
+  it("skips invalid main jobs with agentTurn payloads loaded from disk", async () => {
+    const { dir, storePath } = await makeStorePath();
+    tempDir = dir;
+    originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(dir, "state");
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
 
@@ -31,10 +62,10 @@ describe("CronService store load", () => {
       name: "bad",
     } satisfies CronJob;
 
-    await writeCronStoreSnapshot({ storeKey, jobs: [job] });
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
 
     const cron = new CronService({
-      storeKey,
+      storePath,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,

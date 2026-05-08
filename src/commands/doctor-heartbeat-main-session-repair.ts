@@ -1,14 +1,21 @@
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
+import { formatFilesystemTimestamp } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import {
+  resolveSessionFilePath,
+  type resolveSessionFilePathOptions,
+} from "../config/sessions/paths.js";
 import {
   deleteSessionEntry,
   getSessionEntry,
   upsertSessionEntry,
 } from "../config/sessions/store.js";
-import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatFilesystemTimestamp } from "../infra/filesystem-timestamp.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import type { note } from "../terminal/note.js";
@@ -63,11 +70,14 @@ function parseTranscriptMessageEvent(event: unknown): { role: string; content?: 
   return { role, content: message.content };
 }
 
-function summarizeTranscriptHeartbeatMessages(transcriptScope: {
-  agentId: string;
-  sessionId: string;
-}): TranscriptHeartbeatSummary | null {
-  const events = loadSqliteSessionTranscriptEvents(transcriptScope);
+function summarizeTranscriptHeartbeatMessages(
+  transcriptPath: string,
+): TranscriptHeartbeatSummary | null {
+  const scope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+  if (!scope) {
+    return null;
+  }
+  const events = loadSqliteSessionTranscriptEvents(scope);
   const summary: TranscriptHeartbeatSummary = {
     inspectedMessages: 0,
     userMessages: 0,
@@ -101,9 +111,9 @@ function summarizeTranscriptHeartbeatMessages(transcriptScope: {
 
 export function resolveHeartbeatMainSessionRepairCandidate(params: {
   entry: SessionEntry | undefined;
-  transcriptScope?: { agentId: string; sessionId: string };
+  transcriptPath?: string;
 }): HeartbeatMainSessionRepairCandidate | null {
-  const { entry, transcriptScope } = params;
+  const { entry, transcriptPath } = params;
   if (!entry) {
     return null;
   }
@@ -112,13 +122,13 @@ export function resolveHeartbeatMainSessionRepairCandidate(params: {
     return null;
   }
   const hasSyntheticHeartbeatOwnership = sessionEntryHasSyntheticHeartbeatOwnership(entry);
-  if (hasSyntheticHeartbeatOwnership && !transcriptScope) {
+  if (hasSyntheticHeartbeatOwnership && !transcriptPath) {
     return { reason: "metadata" };
   }
-  if (!transcriptScope) {
+  if (!transcriptPath) {
     return null;
   }
-  const summary = summarizeTranscriptHeartbeatMessages(transcriptScope);
+  const summary = summarizeTranscriptHeartbeatMessages(transcriptPath);
   if (!summary) {
     return null;
   }
@@ -172,8 +182,9 @@ export function moveHeartbeatMainSessionEntry(params: {
 export async function repairHeartbeatPoisonedMainSession(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
+  absoluteStorePath: string;
   stateDir: string;
-  sessionScopeOpts: { agentId?: string };
+  sessionPathOpts: ReturnType<typeof resolveSessionFilePathOptions>;
   prompter: DoctorPrompterLike;
   warnings: string[];
   changes: string[];
@@ -183,15 +194,23 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   if (!mainEntry?.sessionId) {
     return;
   }
-  const transcriptScope =
-    params.sessionScopeOpts.agentId && mainEntry.sessionId
-      ? { agentId: params.sessionScopeOpts.agentId, sessionId: mainEntry.sessionId }
-      : undefined;
+  let transcriptPath: string | undefined;
+  try {
+    transcriptPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, params.sessionPathOpts);
+  } catch {
+    transcriptPath = undefined;
+  }
   const resolveCandidate = (entry: SessionEntry | undefined) =>
     resolveHeartbeatMainSessionRepairCandidate({
       entry,
-      transcriptScope,
-    });
+      transcriptPath,
+    }) ??
+    (mainEntry.sessionFile && mainEntry.sessionFile !== transcriptPath
+      ? resolveHeartbeatMainSessionRepairCandidate({
+          entry,
+          transcriptPath: mainEntry.sessionFile,
+        })
+      : null);
   const candidate = resolveCandidate(mainEntry);
   if (!candidate) {
     return;

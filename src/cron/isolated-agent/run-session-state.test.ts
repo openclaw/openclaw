@@ -56,12 +56,16 @@ describe("createPersistCronSessionEntry", () => {
     );
     const persistSessionRow = vi.fn(async (sessionKey: string, entry: SessionEntry) => {
       expect(sessionKey).toBe("agent:main:cron:job");
-      expect(entry).toMatchObject({
+      expect(entry).toEqual({
         status: "running",
         startedAt: 900,
         updatedAt: 1000,
+        systemSent: true,
+        skillsSnapshot: {
+          prompt: "old prompt",
+          skills: [{ name: "memory" }],
+        },
       });
-      expect(entry.sessionId).toBeUndefined();
     });
 
     const persist = createPersistCronSessionEntry({
@@ -86,14 +90,12 @@ describe("createPersistCronSessionEntry", () => {
     );
     const persistSessionRow = vi.fn(async (sessionKey: string, entry: SessionEntry) => {
       expect(sessionKey).toBe("agent:main:cron:shell-only");
-      expect(entry).toEqual(
-        expect.objectContaining({
-          label: "Cron: shell-only",
-          status: "running",
-          updatedAt: 1000,
-        }),
-      );
-      expect(entry.sessionId).toBeUndefined();
+      expect(entry).toEqual({
+        label: "Cron: shell-only",
+        status: "running",
+        updatedAt: 1000,
+        systemSent: true,
+      });
     });
 
     const persist = createPersistCronSessionEntry({
@@ -115,18 +117,21 @@ describe("createPersistCronSessionEntry", () => {
         label: "Cron: completed",
       }),
     );
+    const persistSessionRow = vi.fn(async (sessionKey: string, entry: SessionEntry) => {
+      expect(sessionKey).toBe("agent:main:cron:completed");
+      expect(entry).toEqual({
+        sessionId: "run-session-id",
+        label: "Cron: completed",
+        updatedAt: 1000,
+        systemSent: true,
+      });
+    });
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:completed",
-      persistSessionRow: vi.fn(async (sessionKey: string, entry: SessionEntry) => {
-        expect(sessionKey).toBe("agent:main:cron:completed");
-        expect(entry).toMatchObject({
-          sessionId: "run-session-id",
-          label: "Cron: completed",
-        });
-      }),
+      persistSessionRow,
     });
 
     await persist();

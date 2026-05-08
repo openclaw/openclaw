@@ -10,11 +10,14 @@ const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
 function getInstallRecords() {
-  const index = readInstalledPluginIndex();
-  if (!index.installRecords) {
+  const index = readInstalledPluginIndex({ allowLegacyFile: true });
+  const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+  if (!allowLegacyCompat && !index.installRecords) {
     throw new Error("expected modern installRecords in installed plugin index");
   }
-  return index.installRecords;
+  return allowLegacyCompat
+    ? readInstalledPluginRecords({ allowLegacyFile: true })
+    : (index.installRecords ?? {});
 }
 
 function readOpenClawConfig() {
@@ -117,7 +120,7 @@ function recordFixturePluginTrust() {
     installRecords: {},
     plugins: [],
     diagnostics: [],
-    ...readInstalledPluginIndex(),
+    ...readInstalledPluginIndex({ allowLegacyFile: true }),
   };
   ledger.updatedAtMs = Date.now();
   ledger.installRecords ??= ledger.records ?? {};
@@ -734,11 +737,14 @@ function assertClawHubInstalled() {
     throw new Error(`unexpected ClawHub inspect plugin id: ${inspect.plugin?.id}`);
   }
 
-  const index = readInstalledPluginIndex();
-  if (!index.installRecords) {
+  const index = readInstalledPluginIndex({ allowLegacyFile: true });
+  const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+  if (!allowLegacyCompat && !index.installRecords) {
     throw new Error("expected modern installRecords in installed plugin index");
   }
-  const installRecords = index.installRecords;
+  const installRecords = allowLegacyCompat
+    ? readInstalledPluginRecords({ allowLegacyFile: true })
+    : (index.installRecords ?? {});
   const record = installRecords[pluginId];
   if (!record) {
     throw new Error(`missing ClawHub install record for ${pluginId}`);
@@ -781,7 +787,7 @@ function assertClawHubRemoved() {
     throw new Error(`ClawHub plugin still listed after uninstall: ${pluginId}`);
   }
 
-  const installRecords = readInstalledPluginRecords();
+  const installRecords = readInstalledPluginRecords({ allowLegacyFile: true });
   if (installRecords[pluginId]) {
     throw new Error(`ClawHub install record still present after uninstall: ${pluginId}`);
   }

@@ -225,39 +225,12 @@ describe("active-memory plugin", () => {
     }
     return value;
   };
-  const requirePrependContext = (result: unknown): string =>
-    requireNonEmptyString(
-      (result as { prependContext?: unknown } | undefined)?.prependContext,
-      "expected prependContext",
-    );
-  const expectPrependContextContains = (result: unknown, text: string) => {
-    expect(requirePrependContext(result)).toContain(text);
-  };
-  const lastEmbeddedRunParams = () =>
-    requireRecord(runEmbeddedPiAgent.mock.calls.at(-1)?.[0], "expected embedded run params");
-  const embeddedRunConfig = () =>
-    requireRecord(lastEmbeddedRunParams().config, "expected embedded run config");
-  const activeMemoryConfigFrom = (config: Record<string, unknown>) => {
-    const plugins = requireRecord(config.plugins, "expected plugins config");
-    const entries = requireRecord(plugins.entries, "expected plugin entries");
-    const activeMemoryEntry = requireRecord(
-      entries["active-memory"],
-      "expected active-memory entry",
-    );
-    return requireRecord(activeMemoryEntry.config, "expected active-memory config");
-  };
-  const currentActiveMemoryConfig = () => activeMemoryConfigFrom(configFile);
-  const expectEmbeddedChannel = (messageChannel: string, messageProvider = messageChannel) => {
-    const params = lastEmbeddedRunParams();
-    expect(params.messageChannel).toBe(messageChannel);
-    expect(params.messageProvider).toBe(messageProvider);
-  };
-  const firstHookRegistration = () => {
-    const [call] = api.on.mock.calls as Array<[string, Function, Record<string, unknown>?]>;
-    if (!call) {
-      throw new Error("expected before_prompt_build hook registration");
-    }
-    return call;
+  const seedSessionEntry = (sessionKey: string, entry: Record<string, unknown>) => {
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: `${sessionKey}:session`,
+      updatedAt: 1,
+      ...entry,
+    };
   };
 
   beforeEach(async () => {
@@ -297,6 +270,7 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore["agent:main:main"] = {
       sessionId: "s-main",
       updatedAt: 0,
+      chatType: "direct",
     };
     for (const key of Object.keys(hooks)) {
       delete hooks[key];
@@ -327,10 +301,9 @@ describe("active-memory plugin", () => {
   });
 
   it("registers a before_prompt_build hook", () => {
-    const [hookName, handler, options] = firstHookRegistration();
-    expect(hookName).toBe("before_prompt_build");
-    expect(typeof handler).toBe("function");
-    expect(options).toEqual({ timeoutMs: 15_000 });
+    expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function), {
+      timeoutMs: 15_000,
+    });
     expect(hookOptions.before_prompt_build?.timeoutMs).toBe(15_000);
   });
 
@@ -803,6 +776,7 @@ describe("active-memory plugin", () => {
   });
 
   it("treats non-default main session keys as direct chats", async () => {
+    seedSessionEntry("agent:main:home", { chatType: "direct", channel: "telegram" });
     api.config = {
       agents: {
         defaults: {
@@ -869,6 +843,11 @@ describe("active-memory plugin", () => {
   });
 
   it("runs for group sessions when group chat types are explicitly allowed", async () => {
+    seedSessionEntry("agent:main:telegram:group:-100123", {
+      chatType: "group",
+      channel: "telegram",
+      groupId: "-100123",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["direct", "group"],
@@ -895,6 +874,11 @@ describe("active-memory plugin", () => {
   });
 
   it("uses messageProvider not topic channelId for embedded recall in Telegram forum topics (#76704)", async () => {
+    seedSessionEntry("agent:main:telegram:group:-100123:topic:77", {
+      chatType: "group",
+      channel: "telegram",
+      groupId: "-100123:topic:77",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["direct", "group"],
@@ -927,6 +911,11 @@ describe("active-memory plugin", () => {
   });
 
   it("uses messageProvider not Google Chat space id for embedded recall (#78918)", async () => {
+    seedSessionEntry("agent:main:googlechat:default:direct:spaces/khfx4yaaaae", {
+      chatType: "direct",
+      channel: "googlechat",
+      nativeDirectUserId: "spaces/khfx4yaaaae",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["direct"],
@@ -956,6 +945,7 @@ describe("active-memory plugin", () => {
   });
 
   it("runs for explicit sessions when explicit chat types are explicitly allowed", async () => {
+    seedSessionEntry("agent:main:explicit:portal-123", { chatType: "explicit" });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["explicit"],
@@ -980,6 +970,7 @@ describe("active-memory plugin", () => {
   });
 
   it("keeps explicit session classification when the opaque session id contains chat-type tokens", async () => {
+    seedSessionEntry("agent:main:explicit:portal-123:group:shadow", { chatType: "explicit" });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["explicit"],
@@ -1004,6 +995,11 @@ describe("active-memory plugin", () => {
   });
 
   it("skips group sessions whose conversation id is not in allowedChatIds", async () => {
+    seedSessionEntry("agent:main:feishu:group:oc_blocked_group", {
+      chatType: "group",
+      channel: "feishu",
+      groupId: "oc_blocked_group",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["direct", "group"],
@@ -1027,6 +1023,11 @@ describe("active-memory plugin", () => {
   });
 
   it("runs for group sessions whose conversation id is in allowedChatIds", async () => {
+    seedSessionEntry("agent:main:feishu:group:oc_allowed_group", {
+      chatType: "group",
+      channel: "feishu",
+      groupId: "oc_allowed_group",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["direct", "group"],
@@ -1053,37 +1054,12 @@ describe("active-memory plugin", () => {
     });
   });
 
-  it("uses typed stored session metadata before parsing session-key shape", async () => {
-    hoisted.sessionStore["agent:main:typed-main"] = {
-      sessionId: "typed-main-session",
-      updatedAt: 1,
-      chatType: "group",
-      groupId: "oc_allowed_group",
-      channel: "feishu",
-    };
-    api.pluginConfig = {
-      agents: ["main"],
-      allowedChatTypes: ["group"],
-      allowedChatIds: ["oc_allowed_group"],
-    };
-    plugin.register(api as unknown as OpenClawPluginApi);
-
-    const result = await hooks.before_prompt_build(
-      { prompt: "hi", messages: [] },
-      {
-        agentId: "main",
-        trigger: "user",
-        sessionKey: "agent:main:typed-main",
-        messageProvider: "feishu",
-        channelId: "feishu",
-      },
-    );
-
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    expectPrependContextResult(result);
-  });
-
   it("treats allowedChatIds matching as case-insensitive", async () => {
+    seedSessionEntry("agent:main:feishu:group:oc_mixed_case", {
+      chatType: "group",
+      channel: "feishu",
+      groupId: "oc_mixed_case",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["group"],
@@ -1107,6 +1083,11 @@ describe("active-memory plugin", () => {
   });
 
   it("skips sessions whose conversation id is in deniedChatIds even when chat type is allowed", async () => {
+    seedSessionEntry("agent:main:feishu:group:oc_blocked_group", {
+      chatType: "group",
+      channel: "feishu",
+      groupId: "oc_blocked_group",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["direct", "group"],
@@ -1154,6 +1135,11 @@ describe("active-memory plugin", () => {
   });
 
   it("skips direct-chat sessions whose conversation id is not in allowedChatIds", async () => {
+    seedSessionEntry("agent:main:feishu:direct:ou_some_direct_user", {
+      chatType: "direct",
+      channel: "feishu",
+      nativeDirectUserId: "ou_some_direct_user",
+    });
     // Documents the cross-type narrowing behaviour: allowedChatIds, when
     // non-empty, filters every allowed chat type at once, including direct
     // chats. An operator who wants 'all directs + only specific groups' must
@@ -1182,6 +1168,11 @@ describe("active-memory plugin", () => {
   });
 
   it("runs for direct-chat sessions whose conversation id is explicitly in allowedChatIds", async () => {
+    seedSessionEntry("agent:main:feishu:direct:ou_allowed_direct_user", {
+      chatType: "direct",
+      channel: "feishu",
+      nativeDirectUserId: "ou_allowed_direct_user",
+    });
     // Companion to the previous test: the 'all directs + only specific groups'
     // pattern is still available by listing the direct session ids themselves
     // in allowedChatIds. This makes the cross-type narrowing behaviour usable
@@ -1208,8 +1199,12 @@ describe("active-memory plugin", () => {
     expectPrependContextResult(result);
   });
 
-  it("matches per-peer direct session keys (agent:<id>:direct:<peer>)", async () => {
-    // Covers dmScope="per-peer" sessions that omit the channel segment.
+  it("matches per-peer direct sessions through typed metadata", async () => {
+    seedSessionEntry("agent:main:direct:ou_per_peer_user", {
+      chatType: "direct",
+      channel: "feishu",
+      nativeDirectUserId: "ou_per_peer_user",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["direct"],
@@ -1232,9 +1227,12 @@ describe("active-memory plugin", () => {
     expectPrependContextResult(result);
   });
 
-  it("matches per-account-channel-peer direct session keys (agent:<id>:<channel>:<account>:direct:<peer>)", async () => {
-    // Covers dmScope="per-account-channel-peer" sessions that include
-    // an extra accountId segment between the channel and chat type.
+  it("matches per-account-channel-peer direct sessions through typed metadata", async () => {
+    seedSessionEntry("agent:main:feishu:acct123:direct:ou_per_account_user", {
+      chatType: "direct",
+      channel: "feishu",
+      nativeDirectUserId: "ou_per_account_user",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["direct"],
@@ -1257,11 +1255,12 @@ describe("active-memory plugin", () => {
     expectPrependContextResult(result);
   });
 
-  it("strips :thread:<id> suffix before matching allowedChatIds (group)", async () => {
-    // Threaded sessions append `:thread:<id>` to the canonical session
-    // key. Without the suffix-stripping step the conversation id would
-    // be parsed as `oc_threaded_group:thread:topic42` and silently
-    // bypass the allowlist.
+  it("matches threaded groups through typed metadata", async () => {
+    seedSessionEntry("agent:main:feishu:group:oc_threaded_group:thread:topic42", {
+      chatType: "group",
+      channel: "feishu",
+      groupId: "oc_threaded_group",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["group"],
@@ -1284,9 +1283,12 @@ describe("active-memory plugin", () => {
     expectPrependContextResult(result);
   });
 
-  it("strips :thread:<id> suffix before matching deniedChatIds (direct)", async () => {
-    // Symmetrical guard for the denylist: threaded direct sessions
-    // should still hit the deny rule despite the trailing `:thread:<id>`.
+  it("matches threaded direct deny rules through typed metadata", async () => {
+    seedSessionEntry("agent:main:feishu:direct:ou_threaded_blocked_user:thread:topic7", {
+      chatType: "direct",
+      channel: "feishu",
+      nativeDirectUserId: "ou_threaded_blocked_user",
+    });
     api.pluginConfig = {
       agents: ["main"],
       allowedChatTypes: ["direct"],
@@ -1840,6 +1842,11 @@ describe("active-memory plugin", () => {
   });
 
   it("preserves canonical parent session scope in the blocking memory subagent session key", async () => {
+    seedSessionEntry("agent:main:telegram:direct:12345:thread:99", {
+      chatType: "direct",
+      channel: "telegram",
+      nativeDirectUserId: "12345",
+    });
     await hooks.before_prompt_build(
       { prompt: "what should i grab on the way?", messages: [] },
       {
@@ -3332,6 +3339,7 @@ describe("active-memory plugin", () => {
       sessionId: "session-a",
       updatedAt: 25,
       channel: "telegram",
+      chatType: "direct",
     };
 
     await hooks.before_prompt_build(
@@ -3363,6 +3371,8 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
+      chatType: "direct",
+      channel: "telegram",
     };
 
     const result = await hooks.before_prompt_build(
@@ -3435,6 +3445,7 @@ describe("active-memory plugin", () => {
       sessionId: "session-a",
       updatedAt: 25,
       channel: "telegram",
+      chatType: "direct",
     };
 
     await hooks.before_prompt_build(
@@ -3458,7 +3469,11 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore["agent:main:qqbot:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
+      chatType: "direct",
       channel: "c2c:10D4F7C2",
+      origin: {
+        provider: "qqbot",
+      },
     };
 
     await hooks.before_prompt_build(
@@ -3482,7 +3497,9 @@ describe("active-memory plugin", () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
       updatedAt: 25,
-      channel: "webchat",
+      origin: {
+        provider: "webchat",
+      },
     };
 
     await hooks.before_prompt_build(
@@ -3492,6 +3509,32 @@ describe("active-memory plugin", () => {
         trigger: "user",
         sessionKey: "agent:main:telegram:direct:12345",
         messageProvider: "webchat",
+        channelId: "telegram",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+    });
+  });
+
+  it("preserves a direct explicit channel when weak legacy fallback disagrees", async () => {
+    hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+      origin: {
+        provider: "webchat",
+      },
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? direct explicit channel", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:telegram:direct:12345",
+        messageProvider: "telegram",
         channelId: "telegram",
       },
     );

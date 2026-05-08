@@ -16,9 +16,8 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
-import { hasTrustedToolPolicies, runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
+import { runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -29,7 +28,6 @@ import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import type { AgentToolArtifactStore } from "./filesystem/agent-filesystem.js";
 import { adjustedParamsByToolCallId } from "./pi-tools.before-tool-call.state.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -61,8 +59,6 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
-  cwd?: string;
-  sandbox?: { root: string; bridge: SandboxFsBridge };
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   artifactStore?: AgentToolArtifactStore;
@@ -593,19 +589,7 @@ export async function runBeforeToolCallHook(args: {
 
   const hookRunner = getGlobalHookRunner();
   try {
-    const hasBeforeToolCallHooks = Boolean(hookRunner?.hasHooks("before_tool_call"));
-    const hasTrustedPolicies = hasTrustedToolPolicies();
-    if (!hasBeforeToolCallHooks && !hasTrustedPolicies) {
-      return { blocked: false, params };
-    }
     const normalizedParams = isPlainObject(params) ? params : {};
-    const deriveOptions = {
-      ...(args.ctx?.cwd ? { cwd: args.ctx.cwd } : {}),
-      ...(args.ctx?.sandbox ? { sandbox: args.ctx.sandbox } : {}),
-    };
-    const deriveHostToolParams = (eventParams: Record<string, unknown>) =>
-      deriveToolParams(toolName, eventParams, deriveOptions);
-    const trustedDerivedParams = hasTrustedPolicies ? deriveHostToolParams(normalizedParams) : {};
     const toolContext = {
       toolName,
       ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
@@ -616,22 +600,16 @@ export async function runBeforeToolCallHook(args: {
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
     };
-    const trustedPolicyResult = hasTrustedPolicies
-      ? await runTrustedToolPolicies(
-          {
-            toolName,
-            params: normalizedParams,
-            ...trustedDerivedParams,
-            ...(args.ctx?.runId && { runId: args.ctx.runId }),
-            ...(args.toolCallId && { toolCallId: args.toolCallId }),
-          },
-          toolContext,
-          {
-            ...(args.ctx?.config ? { config: args.ctx.config } : {}),
-            deriveEvent: deriveHostToolParams,
-          },
-        )
-      : undefined;
+    const trustedPolicyResult = await runTrustedToolPolicies(
+      {
+        toolName,
+        params: normalizedParams,
+        ...(args.ctx?.runId && { runId: args.ctx.runId }),
+        ...(args.toolCallId && { toolCallId: args.toolCallId }),
+      },
+      toolContext,
+      args.ctx?.config ? { config: args.ctx.config } : undefined,
+    );
     if (trustedPolicyResult?.block) {
       return {
         blocked: true,
@@ -665,16 +643,14 @@ export async function runBeforeToolCallHook(args: {
       });
     }
     const policyAdjustedParams = trustedPolicyResult?.params ?? params;
-    if (!hookRunner || !hasBeforeToolCallHooks) {
+    if (!hookRunner?.hasHooks("before_tool_call")) {
       return { blocked: false, params: policyAdjustedParams };
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
-    const hookDerivedParams = deriveToolParams(toolName, hookEventParams, deriveOptions);
     const hookResult = await hookRunner.runBeforeToolCall(
       {
         toolName,
         params: hookEventParams,
-        ...hookDerivedParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
       },

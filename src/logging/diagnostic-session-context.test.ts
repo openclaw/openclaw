@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendSqliteSessionTranscriptEvent } from "../config/sessions/transcript-store.sqlite.js";
 import { saveCronStore } from "../cron/store.js";
-import type { CronStoreSnapshot } from "../cron/types.js";
+import type { CronStoreFile } from "../cron/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -20,7 +20,7 @@ let previousStateDir: string | undefined;
 
 async function writeCronJob(id: string, name: string) {
   const now = Date.now();
-  const store: CronStoreSnapshot = {
+  const store: CronStoreFile = {
     version: 1,
     jobs: [
       {
@@ -37,7 +37,7 @@ async function writeCronJob(id: string, name: string) {
       },
     ],
   };
-  await saveCronStore("default", store);
+  await saveCronStore(path.join(tempDir!, "cron", "jobs.json"), store);
 }
 
 function appendAssistantEvent(params: { sessionId: string; text: string; id: string }) {
@@ -84,7 +84,7 @@ describe("diagnostic session context", () => {
     });
   });
 
-  it("formats cron job and last assistant context for stalled session diagnostics", async () => {
+  it("formats cron job and last assistant context for stalled session logs", async () => {
     await writeCronJob("job-123", "Twitter Mention Moderation Agent");
     appendAssistantEvent({
       sessionId: "run-456",

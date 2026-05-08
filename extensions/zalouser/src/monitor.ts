@@ -684,63 +684,79 @@ async function processMessage(
   };
 
   await core.channel.turn.runAssembled({
-    cfg: config,
     channel: "zalouser",
     accountId: account.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    messageId: messageSid ?? `${message.timestampMs}`,
-    ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      preparePayload: (payload) => {
-        if (payload.text === undefined) {
-          return payload;
-        }
-        return {
-          ...payload,
-          text: core.channel.text.convertMarkdownTables(
-            payload.text,
-            core.channel.text.resolveMarkdownTableMode({
-              cfg: config,
-              channel: "zalouser",
-              accountId: account.accountId,
-            }),
-          ),
-        };
-      },
-      durable: () => ({
-        to: normalizedTo,
+    raw: message,
+    adapter: {
+      ingest: () => ({
+        id: messageSid ?? `${message.timestampMs}`,
+        timestamp: message.timestampMs,
+        rawText: rawBody,
+        textForAgent: rawBody,
+        textForCommands: commandBody,
+        raw: message,
       }),
-      deliver: async (payload) => {
-        return await deliverZalouserReply({
-          payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
-          profile: account.profile,
-          chatId,
-          isGroup,
-          runtime,
-          core,
-          config,
-          accountId: account.accountId,
-          tableMode: "off",
-        });
-      },
-      onDelivered: (_payload, _info, result) => {
-        if (result?.visibleReplySent !== false) {
-          statusSink?.({ lastOutboundAt: Date.now() });
-        }
-      },
-      onError: (err, info) => {
-        runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
-      },
-    },
-    replyPipeline,
-    record: {
-      onRecordError: (err) => {
-        runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
-      },
+      resolveTurn: () => ({
+        cfg: config,
+        channel: "zalouser",
+        accountId: account.accountId,
+        agentId: route.agentId,
+        routeSessionKey: route.sessionKey,
+        ctxPayload,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          preparePayload: (payload) => {
+            if (payload.text === undefined) {
+              return payload;
+            }
+            return {
+              ...payload,
+              text: core.channel.text.convertMarkdownTables(
+                payload.text,
+                core.channel.text.resolveMarkdownTableMode({
+                  cfg: config,
+                  channel: "zalouser",
+                  accountId: account.accountId,
+                }),
+              ),
+            };
+          },
+          durable: () => ({
+            to: normalizedTo,
+          }),
+          deliver: async (payload) => {
+            return await deliverZalouserReply({
+              payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+              profile: account.profile,
+              chatId,
+              isGroup,
+              runtime,
+              core,
+              config,
+              accountId: account.accountId,
+              tableMode: "off",
+            });
+          },
+          onDelivered: (_payload, _info, result) => {
+            if (result?.visibleReplySent !== false) {
+              statusSink?.({ lastOutboundAt: Date.now() });
+            }
+          },
+          onError: (err, info) => {
+            runtime.error(
+              `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
+            );
+          },
+        },
+        replyPipeline,
+        record: {
+          onRecordError: (err) => {
+            runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+          },
+        },
+      }),
     },
   });
   if (isGroup && historyKey) {

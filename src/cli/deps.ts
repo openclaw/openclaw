@@ -37,6 +37,7 @@ const NON_CHANNEL_DEP_KEYS = new Set([
   "runIsolatedAgentJob",
   "runtime",
   "sendCronFailureAlert",
+  "storePath",
   "then",
   "toJSON",
   "toString",

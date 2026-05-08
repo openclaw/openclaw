@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolveUserPath } from "../utils.js";
-import { getMediaMaterializationDir, resolveMediaBufferPath } from "./store.js";
+import { getMediaDir, getMediaMaterializationDir, resolveMediaBufferPath } from "./store.js";
 
 type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
 
@@ -157,7 +157,10 @@ export async function resolveInboundMediaReference(
     return null;
   }
 
-  const inboundDirs = [path.resolve(getMediaMaterializationDir(), "inbound")];
+  const inboundDirs = [
+    path.resolve(getMediaDir(), "inbound"),
+    path.resolve(getMediaMaterializationDir(), "inbound"),
+  ];
   const rawResolvedPath = path.resolve(localPath);
   let rel: string | null = null;
   for (const inboundDir of inboundDirs) {

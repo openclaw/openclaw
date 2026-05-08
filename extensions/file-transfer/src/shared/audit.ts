@@ -2,7 +2,7 @@
 //
 // Records every decision (allow/deny/error) at the gateway-side tool layer in
 // SQLite plugin state. Legacy ~/.openclaw/audit/file-transfer.jsonl files are
-// doctor inputs only.
+// doctor/migrate inputs only.
 //
 // Log records do NOT include file contents or hashes of secrets. They do
 // include canonical paths and sha256 of the payload, so treat the audit

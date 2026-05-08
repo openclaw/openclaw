@@ -29,7 +29,7 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import {
-  rotateSqliteTranscriptAfterCompaction,
+  rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
@@ -56,13 +56,8 @@ export async function compactEmbeddedPiSession(
   ensureContextEnginesInitialized();
   const agentIds = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
     config: params.config,
   });
-  const transcriptScope = {
-    agentId: agentIds.sessionAgentId,
-    sessionId: params.sessionId,
-  };
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
   const contextEngine = await resolveContextEngine(params.config, {
@@ -129,13 +124,12 @@ export async function compactEmbeddedPiSession(
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
         const { sessionAgentId } = resolveSessionAgentIds({
           sessionKey: params.sessionKey,
-          agentId: params.agentId,
           config: params.config,
         });
         checkpointSnapshot = engineOwnsCompaction
           ? await captureCompactionCheckpointSnapshotAsync({
               agentId: sessionAgentId,
-              sessionId: params.sessionId,
+              sessionFile: params.sessionFile,
             })
           : null;
         const hookRunner = engineOwnsCompaction
@@ -152,12 +146,14 @@ export async function compactEmbeddedPiSession(
         };
         const runtimeContext = contextEngineRuntimeContext;
         // Engine-owned compaction doesn't load the transcript at this level, so
-        // message counts are unavailable.
+        // message counts are unavailable. We pass sessionFile so hook subscribers
+        // can read the transcript themselves if they need exact counts.
         if (hookRunner?.hasHooks?.("before_compaction") && hookRunner.runBeforeCompaction) {
           try {
             await hookRunner.runBeforeCompaction(
               {
                 messageCount: -1,
+                sessionFile: params.sessionFile,
               },
               hookCtx,
             );
@@ -170,7 +166,7 @@ export async function compactEmbeddedPiSession(
         const result = await contextEngine.compact({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
-          transcriptScope,
+          sessionFile: params.sessionFile,
           tokenBudget: contextTokenBudget,
           currentTokenCount: params.currentTokenCount,
           compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
@@ -179,27 +175,23 @@ export async function compactEmbeddedPiSession(
           runtimeContext,
         });
         const delegatedSessionId = result.result?.sessionId;
+        const delegatedSessionFile = result.result?.sessionFile;
         const delegatedRotatedTranscript =
-          typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId;
+          (typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId) ||
+          (typeof delegatedSessionFile === "string" && delegatedSessionFile !== params.sessionFile);
         let postCompactionSessionId = delegatedSessionId ?? params.sessionId;
-        let postCompactionTranscriptScope = {
-          agentId: agentIds.sessionAgentId,
-          sessionId: postCompactionSessionId,
-        };
+        let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
         let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
           if (shouldRotateCompactionTranscript(params.config) && !delegatedRotatedTranscript) {
             try {
-              const rotation = await rotateSqliteTranscriptAfterCompaction({
+              const rotation = await rotateTranscriptFileAfterCompaction({
                 agentId: agentIds.sessionAgentId,
-                sessionId: params.sessionId,
+                sessionFile: params.sessionFile,
               });
               if (rotation.rotated) {
                 postCompactionSessionId = rotation.sessionId ?? postCompactionSessionId;
-                postCompactionTranscriptScope = {
-                  agentId: agentIds.sessionAgentId,
-                  sessionId: postCompactionSessionId,
-                };
+                postCompactionSessionFile = rotation.sessionFile ?? postCompactionSessionFile;
                 postCompactionLeafId = rotation.leafId;
                 log.info(
                   `[compaction] rotated active transcript after context-engine compaction ` +
@@ -216,10 +208,7 @@ export async function compactEmbeddedPiSession(
             try {
               const postLeafId =
                 postCompactionLeafId ??
-                (await readSessionLeafIdFromTranscriptAsync({
-                  agentId: agentIds.sessionAgentId,
-                  sessionId: postCompactionSessionId,
-                })) ??
+                (await readSessionLeafIdFromTranscriptAsync(postCompactionSessionFile)) ??
                 undefined;
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,
@@ -233,6 +222,7 @@ export async function compactEmbeddedPiSession(
                 firstKeptEntryId: result.result?.firstKeptEntryId,
                 tokensBefore: result.result?.tokensBefore,
                 tokensAfter: result.result?.tokensAfter,
+                postSessionFile: postCompactionSessionFile,
                 postLeafId,
                 postEntryId: postLeafId,
               });
@@ -245,10 +235,9 @@ export async function compactEmbeddedPiSession(
           }
           await runContextEngineMaintenance({
             contextEngine,
-            sessionAgentId: agentIds.sessionAgentId,
             sessionId: postCompactionSessionId,
             sessionKey: params.sessionKey,
-            transcriptScope: postCompactionTranscriptScope,
+            sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,
             config: params.config,
@@ -257,9 +246,8 @@ export async function compactEmbeddedPiSession(
         if (engineOwnsCompaction && result.ok && result.compacted) {
           await runPostCompactionSideEffects({
             config: params.config,
-            agentId: agentIds.sessionAgentId,
-            sessionId: postCompactionSessionId,
             sessionKey: params.sessionKey,
+            sessionFile: postCompactionSessionFile,
           });
         }
         if (
@@ -278,6 +266,7 @@ export async function compactEmbeddedPiSession(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: result.result?.tokensAfter,
+                sessionFile: postCompactionSessionFile,
               },
               afterHookCtx,
             );
@@ -300,6 +289,9 @@ export async function compactEmbeddedPiSession(
                 details: result.result.details,
                 ...(postCompactionSessionId !== params.sessionId
                   ? { sessionId: postCompactionSessionId }
+                  : {}),
+                ...(postCompactionSessionFile !== params.sessionFile
+                  ? { sessionFile: postCompactionSessionFile }
                   : {}),
               }
             : undefined,
@@ -358,7 +350,6 @@ function buildCompactionContextEngineRuntimeContext(params: {
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.compaction",
     }),
-    agentId: sessionAgentId,
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.params.currentTokenCount,
   };

@@ -1,4 +1,7 @@
-import { validateSessionId } from "../../config/sessions/session-id.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
@@ -19,6 +22,7 @@ import {
   loadSessionCostSummaryFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
+  resolveExistingUsageSessionFile,
   type DiscoveredSession,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
@@ -66,10 +70,12 @@ type CostUsageCacheEntry = {
 function readSessionTranscriptUpdatedAt(params: {
   agentId?: string;
   sessionId: string;
+  sessionFile?: string;
 }): number | undefined {
   const scope = resolveSqliteSessionTranscriptScope({
     agentId: params.agentId,
     sessionId: params.sessionId,
+    transcriptPath: params.sessionFile,
   });
   if (!scope) {
     return undefined;
@@ -113,6 +119,7 @@ function resolveSessionUsageFileOrRespond(
   entry: SessionEntry | undefined;
   agentId: string | undefined;
   sessionId: string;
+  sessionFile: string;
 } | null {
   const { entry, agentId: loadedAgentId } = loadSessionEntry(key);
 
@@ -121,8 +128,10 @@ function resolveSessionUsageFileOrRespond(
   const agentId = parsed?.agentId ?? loadedAgentId;
   const rawSessionId = parsed?.rest ?? key;
   const sessionId = entry?.sessionId ?? rawSessionId;
+  let sessionFile: string;
   try {
-    validateSessionId(sessionId);
+    const pathOpts = resolveSessionFilePathOptions({ agentId });
+    sessionFile = resolveSessionFilePath(sessionId, entry, pathOpts);
   } catch {
     respond(
       false,
@@ -132,7 +141,7 @@ function resolveSessionUsageFileOrRespond(
     return null;
   }
 
-  return { config, entry, agentId, sessionId };
+  return { config, entry, agentId, sessionId, sessionFile };
 }
 
 const parseDateParts = (
@@ -317,12 +326,13 @@ const parseDateRange = (params: {
   return { startMs: defaultStartMs, endMs: todayEndMs };
 };
 
+type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 type UsageGroupingMode = "instance" | "family";
 
 type MergedEntry = {
   key: string;
-  agentId?: string;
   sessionId: string;
+  sessionFile: string;
   label?: string;
   updatedAt: number;
   storeEntry?: SessionEntry;
@@ -364,7 +374,7 @@ async function discoverAllSessionsForUsage(params: {
   config: OpenClawConfig;
   startMs: number;
   endMs: number;
-}): Promise<DiscoveredSession[]> {
+}): Promise<DiscoveredSessionWithAgent[]> {
   const agents = listAgentsForGateway(params.config).agents;
   const results = await Promise.all(
     agents.map(async (agent) => {
@@ -374,7 +384,7 @@ async function discoverAllSessionsForUsage(params: {
         endMs: params.endMs,
         includeFirstUserMessage: false,
       });
-      return sessions;
+      return sessions.map((session) => Object.assign({}, session, { agentId: agent.id }));
     }),
   );
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
@@ -869,8 +879,18 @@ export const usageHandlers: GatewayRequestHandlers = {
       const agentId = agentIdFromKey ?? storeAgentId;
       const sessionId = storeEntry?.sessionId ?? keyRest;
 
+      // Resolve the session file path
+      let sessionFile: string | undefined;
       try {
-        validateSessionId(sessionId);
+        const pathOpts = resolveSessionFilePathOptions({
+          agentId,
+        });
+        sessionFile = resolveExistingUsageSessionFile({
+          sessionId,
+          sessionEntry: storeEntry,
+          sessionFile: resolveSessionFilePath(sessionId, storeEntry, pathOpts),
+          agentId,
+        });
       } catch {
         respond(
           false,
@@ -880,23 +900,26 @@ export const usageHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      const transcriptUpdatedAt = readSessionTranscriptUpdatedAt({
-        agentId,
-        sessionId,
-      });
-      if (transcriptUpdatedAt !== undefined) {
-        maybeMergeFamilyEntry({
-          mergedEntries,
-          groupingMode,
-          base: {
-            key: resolvedStoreKey,
-            agentId,
-            sessionId,
-            label: storeEntry?.label,
-            updatedAt: storeEntry?.updatedAt ?? transcriptUpdatedAt,
-            storeEntry,
-          },
+      if (sessionFile) {
+        const transcriptUpdatedAt = readSessionTranscriptUpdatedAt({
+          agentId,
+          sessionId,
+          sessionFile,
         });
+        if (transcriptUpdatedAt !== undefined) {
+          maybeMergeFamilyEntry({
+            mergedEntries,
+            groupingMode,
+            base: {
+              key: resolvedStoreKey,
+              sessionId,
+              sessionFile,
+              label: storeEntry?.label,
+              updatedAt: storeEntry?.updatedAt ?? transcriptUpdatedAt,
+              storeEntry,
+            },
+          });
+        }
       }
     } else {
       // Full discovery for list view
@@ -926,8 +949,8 @@ export const usageHandlers: GatewayRequestHandlers = {
             groupingMode,
             base: {
               key: storeMatch.key,
-              agentId: discovered.agentId,
               sessionId: discovered.sessionId,
+              sessionFile: discovered.sessionFile,
               label: storeMatch.entry.label,
               updatedAt: storeMatch.entry.updatedAt ?? discovered.mtime,
               storeEntry: storeMatch.entry,
@@ -941,8 +964,8 @@ export const usageHandlers: GatewayRequestHandlers = {
           mergedEntries.push({
             // Keep agentId in the key so the dashboard can attribute sessions and later fetch logs.
             key: `agent:${discovered.agentId}:${discovered.sessionId}`,
-            agentId: discovered.agentId,
             sessionId: discovered.sessionId,
+            sessionFile: discovered.sessionFile,
             label: undefined, // No label for unnamed sessions
             updatedAt: discovered.mtime,
             scope: "instance",
@@ -1041,14 +1064,24 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
 
     for (const merged of limitedEntries) {
-      const agentId = merged.agentId ?? parseAgentSessionKey(merged.key)?.agentId;
+      const agentId = parseAgentSessionKey(merged.key)?.agentId;
       let usage: SessionCostSummary | null = null;
       const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
       for (const includedSessionId of includedSessionIds) {
         const isCurrentSession = includedSessionId === merged.sessionId;
+        const includedSessionFile = isCurrentSession
+          ? merged.sessionFile
+          : resolveExistingUsageSessionFile({
+              sessionId: includedSessionId,
+              agentId,
+            });
+        if (!includedSessionFile) {
+          continue;
+        }
         const cachedUsage = await loadSessionCostSummaryFromCache({
           sessionId: includedSessionId,
           sessionEntry: isCurrentSession ? merged.storeEntry : undefined,
+          sessionFile: includedSessionFile,
           config,
           agentId,
           startMs,
@@ -1063,7 +1096,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         if (!usage) {
           usage = createEmptySessionCostSummary();
           usage.sessionId = merged.sessionId;
-          usage.agentId = agentId;
+          usage.sessionFile = merged.sessionFile;
         }
         mergeSessionUsageInto(usage, includedUsage);
       }
@@ -1082,8 +1115,8 @@ export const usageHandlers: GatewayRequestHandlers = {
         aggregateTotals.missingCostEntries += usage.missingCostEntries;
       }
 
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.lastChannel;
-      const chatType = merged.storeEntry?.chatType;
+      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
+      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
 
       if (usage) {
         if (usage.messageCounts) {
@@ -1213,6 +1246,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         agentId,
         channel,
         chatType,
+        origin: merged.storeEntry?.origin,
         modelOverride: merged.storeEntry?.modelOverride,
         providerOverride: merged.storeEntry?.providerOverride,
         modelProvider: merged.storeEntry?.modelProvider,
@@ -1294,11 +1328,12 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId } = resolved;
+    const { config, entry, agentId, sessionId, sessionFile } = resolved;
 
     const timeseries = await loadSessionUsageTimeSeries({
       sessionId,
       sessionEntry: entry,
+      sessionFile,
       config,
       agentId,
       maxPoints: 200,
@@ -1331,11 +1366,12 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId } = resolved;
+    const { config, entry, agentId, sessionId, sessionFile } = resolved;
 
     const logs = await loadSessionLogs({
       sessionId,
       sessionEntry: entry,
+      sessionFile,
       config,
       agentId,
       limit,

@@ -7,7 +7,7 @@ const runtime = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "main"),
   loadSessionEntry: vi.fn(() => ({
     cfg: {},
-    entry: { sessionId: "sess-main" },
+    entry: { sessionId: "sess-main", sessionFile: "/tmp/session.jsonl" },
   })),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
   readSessionMessagesAsync: vi.fn(async (): Promise<unknown[]> => []),
@@ -91,10 +91,8 @@ describe("embedded gateway stub", () => {
       maxMessages: 200,
     });
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionId: "sess-main",
-      },
+      "sess-main",
+      "/tmp/session.jsonl",
       {
         mode: "recent",
         maxMessages: 200,
@@ -122,10 +120,8 @@ describe("embedded gateway stub", () => {
       maxMessages: 1,
     });
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionId: "sess-main",
-      },
+      "sess-main",
+      "/tmp/session.jsonl",
       {
         mode: "recent",
         maxMessages: 1,

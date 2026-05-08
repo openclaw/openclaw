@@ -21,10 +21,16 @@ const SCHEMAS = [
     schemaOutFile: "src/state/openclaw-agent-schema.generated.ts",
     schemaExport: "OPENCLAW_AGENT_SCHEMA_SQL",
   },
+  {
+    name: "proxy-capture",
+    schema: "src/proxy-capture/schema.sql",
+    outFile: "src/proxy-capture/db.generated.d.ts",
+    schemaOutFile: "src/proxy-capture/schema.generated.ts",
+    schemaExport: "PROXY_CAPTURE_SCHEMA_SQL",
+  },
 ];
 
 const verify = process.argv.includes("--verify") || process.argv.includes("--check");
-const SQLITE_TYPE_MAPPING = JSON.stringify({ blob: "Uint8Array" });
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -81,8 +87,6 @@ function generate(schema) {
         "kysely-codegen",
         "--dialect",
         "sqlite",
-        "--type-mapping",
-        SQLITE_TYPE_MAPPING,
         "--out-file",
         tmpOut,
       ],

@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
-const MAX_ENTRIES = 900;
+const MAX_ENTRIES = 2_048;
 const TOPIC_NAME_CACHE_STATE_KEY = Symbol.for("openclaw.telegramTopicNameCacheState");
 const DEFAULT_TOPIC_NAME_CACHE_KEY = "__default__";
 const TOPIC_NAME_STORE = createPluginStateSyncKeyedStore<TopicEntry & { scopeKey: string }>(
   "telegram",
   {
     namespace: "topic-names",
-    maxEntries: MAX_ENTRIES,
+    maxEntries: 50_000,
   },
 );
 

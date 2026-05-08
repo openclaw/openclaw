@@ -53,52 +53,6 @@ function createProposal(
   };
 }
 
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error) {
-      expect(error.code).toBe("ENOENT");
-      return;
-    }
-    throw error;
-  }
-  throw new Error(`expected path to be missing: ${targetPath}`);
-}
-
-function detailRecord(result: unknown): Record<string, unknown> {
-  const details = (result as { details?: unknown } | undefined)?.details;
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
-    throw new Error("expected tool result details");
-  }
-  return details as Record<string, unknown>;
-}
-
-function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: string) {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call;
-}
-
-function firstMockArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  const arg = mockCall(mock, 0, "first mock call")[0];
-  if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
-    throw new Error("expected first mock argument object");
-  }
-  return arg as Record<string, unknown>;
-}
-
-function requireApprovalDecision(result: unknown): {
-  requireApproval: { title: string; allowedDecisions: string[] };
-} {
-  if (!result || typeof result !== "object" || !("requireApproval" in result)) {
-    throw new Error("expected approval decision");
-  }
-  return result as { requireApproval: { title: string; allowedDecisions: string[] } };
-}
-
 describe("skill-workshop", () => {
   it("registers inert hooks and a null tool when disabled", () => {
     const on = vi.fn();
@@ -116,8 +70,8 @@ describe("skill-workshop", () => {
 
     expect(tool).toBeNull();
     expect(on.mock.calls.map(([hook]) => hook)).toEqual(["before_prompt_build", "agent_end"]);
-    expect(typeof mockCall(on, 0, "before_prompt_build hook registration")[1]).toBe("function");
-    expect(typeof mockCall(on, 1, "agent_end hook registration")[1]).toBe("function");
+    expect(typeof on.mock.calls[0]?.[1]).toBe("function");
+    expect(typeof on.mock.calls[1]?.[1]).toBe("function");
   });
 
   it("detects user corrections and creates an animated GIF proposal", async () => {
@@ -763,6 +717,10 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          session: {
+            resolveSessionFilePath: (sessionId: string) =>
+              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
+          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -797,8 +755,7 @@ describe("skill-workshop", () => {
       expect.objectContaining({
         disableTools: true,
         toolsAllow: [],
-        agentId: "main",
-        sessionId: expect.stringMatching(/^skill-workshop-review-/u),
+        sessionFile: expect.stringContaining(path.join("agents", "main", "sessions")),
         provider: "openai",
         model: "gpt-5.4",
       }),
@@ -824,6 +781,10 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          session: {
+            resolveSessionFilePath: (sessionId: string) =>
+              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
+          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -894,6 +855,10 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          session: {
+            resolveSessionFilePath: (sessionId: string) =>
+              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
+          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -953,6 +918,10 @@ describe("skill-workshop", () => {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentWorkspaceDir: () => workspaceDir,
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          session: {
+            resolveSessionFilePath: (sessionId: string) =>
+              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
+          },
           runEmbeddedPiAgent,
         },
         state: {

@@ -58,13 +58,9 @@ function countAgentTranscriptEvents(sessionId) {
   });
 }
 
-function readPluginStateJson(pluginId, namespace, key) {
+function readOpenClawStateKvJson(scope, key) {
   return withSqliteDatabase(stateDatabasePath(), (db) => {
-    const row = db
-      .prepare(
-        "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-      )
-      .get(pluginId, namespace, key);
+    const row = db.prepare("SELECT value_json FROM kv WHERE scope = ? AND key = ?").get(scope, key);
     return typeof row?.value_json === "string" ? JSON.parse(row.value_json) : undefined;
   });
 }
@@ -132,7 +128,7 @@ function configure() {
 }
 
 function readInstallRecord() {
-  const record = readInstalledPluginRecords().codex;
+  const record = readInstalledPluginRecords({ allowLegacyFile: true }).codex;
   if (!record) {
     throw new Error("missing codex install record");
   }
@@ -140,7 +136,7 @@ function readInstallRecord() {
 }
 
 function readInstallRecords() {
-  return readInstalledPluginRecords();
+  return readInstalledPluginRecords({ allowLegacyFile: true });
 }
 
 function assertPlugin() {
@@ -366,12 +362,17 @@ function assertAgentTurn() {
   if (entry.modelOverride && entry.modelOverride !== modelRef) {
     throw new Error(`unexpected session model override: ${entry.modelOverride}`);
   }
+  if (typeof entry.sessionFile !== "string" || !entry.sessionFile.trim()) {
+    throw new Error(
+      `missing OpenClaw transcript key in SQLite session entry: ${entry.sessionFile}`,
+    );
+  }
   const transcriptEvents = countAgentTranscriptEvents(sessionId);
   if (transcriptEvents <= 0) {
     throw new Error(`missing SQLite transcript events for ${sessionId}`);
   }
 
-  const binding = readPluginStateJson("codex", "app-server-thread-bindings", sessionId);
+  const binding = readOpenClawStateKvJson("codex_app_server_thread_bindings", entry.sessionFile);
   if (binding.schemaVersion !== 1 || typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }

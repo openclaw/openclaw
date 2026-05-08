@@ -18,7 +18,7 @@ function readJson(file) {
 }
 
 function records() {
-  return readInstalledPluginRecords();
+  return readInstalledPluginRecords({ allowLegacyFile: true });
 }
 
 function recordFor(pluginId) {

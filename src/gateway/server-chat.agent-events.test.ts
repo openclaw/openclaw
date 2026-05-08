@@ -32,6 +32,7 @@ vi.mock("./session-utils.js", () => ({
     store: {},
     entry: undefined,
     canonicalKey: "session-1",
+    legacyKey: undefined,
   })),
 }));
 
@@ -62,6 +63,7 @@ describe("agent event handler", () => {
         store: {},
         entry: undefined,
         canonicalKey: "session-1",
+        legacyKey: undefined,
       } as unknown as ReturnType<typeof loadSessionEntry>);
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
@@ -961,6 +963,7 @@ describe("agent event handler", () => {
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 },
       canonicalKey: "session-1",
+      legacyKey: undefined,
     });
 
     registerAgentRunContext("run-tool-toggle", {
@@ -998,6 +1001,7 @@ describe("agent event handler", () => {
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "off", updatedAt: 1_500 },
       canonicalKey: "session-1",
+      legacyKey: undefined,
     });
 
     registerAgentRunContext("run-tool-inline", {

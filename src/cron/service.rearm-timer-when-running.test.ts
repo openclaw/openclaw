@@ -10,7 +10,7 @@ import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
-const { makeStoreKey } = createCronStoreHarness();
+const { makeStorePath } = createCronStoreHarness();
 
 function createDueRecurringJob(params: {
   id: string;
@@ -66,11 +66,11 @@ describe("CronService - timer re-arm when running (#12025)", () => {
 
   it("re-arms the timer when onTimer is called while state.running is true", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const { storeKey } = await makeStoreKey();
+    const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
 
     const state = createRunningCronServiceState({
-      storeKey,
+      storePath: store.storePath,
       log: noopLogger,
       nowMs: () => now,
       jobs: [
@@ -100,15 +100,16 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     expect(state.running).toBe(true);
 
     timeoutSpy.mockRestore();
+    await store.cleanup();
   });
 
   it("arms a watchdog timer while a timer tick is still executing", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const { storeKey } = await makeStoreKey();
+    const store = await makeStorePath();
     const now = Date.parse("2026-02-06T10:05:00.000Z");
     const deferredRun = createDeferred<{ status: "ok"; summary: string }>();
 
-    await saveCronStore(storeKey, {
+    await saveCronStore(store.storePath, {
       version: 1,
       jobs: [
         createDueRecurringJob({
@@ -120,8 +121,8 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     });
 
     const state = createCronServiceState({
+      storePath: store.storePath,
       cronEnabled: true,
-      storeKey,
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -150,5 +151,6 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     expect(state.running).toBe(false);
 
     timeoutSpy.mockRestore();
+    await store.cleanup();
   });
 });

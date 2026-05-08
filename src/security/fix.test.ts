@@ -238,7 +238,7 @@ describe("security fix", () => {
     await expectTightenedStateAndConfigPerms(stateDir, configPath);
   });
 
-  it("collects permission targets for credentials + SQLite state + include files", async () => {
+  it("collects permission targets for credentials + agent auth/sessions + include files", async () => {
     const stateDir = await createStateDir("includes");
 
     const includesDir = path.join(stateDir, "includes");
@@ -267,6 +267,9 @@ describe("security fix", () => {
 
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     await fs.mkdir(agentDir, { recursive: true });
+    const authProfilesPath = path.join(agentDir, "auth-profiles.json");
+    await fs.writeFile(authProfilesPath, "{}\n", "utf-8");
+    await fs.chmod(authProfilesPath, 0o644);
 
     const stateDbDir = path.join(stateDir, "state");
     await fs.mkdir(stateDbDir, { recursive: true });
@@ -276,9 +279,6 @@ describe("security fix", () => {
     const stateWalPath = `${stateDbPath}-wal`;
     await fs.writeFile(stateWalPath, "", "utf-8");
     await fs.chmod(stateWalPath, 0o644);
-    const stateShmPath = `${stateDbPath}-shm`;
-    await fs.writeFile(stateShmPath, "", "utf-8");
-    await fs.chmod(stateShmPath, 0o644);
 
     const agentDbPath = path.join(agentDir, "openclaw-agent.sqlite");
     await fs.writeFile(agentDbPath, "", "utf-8");
@@ -286,9 +286,6 @@ describe("security fix", () => {
     const agentWalPath = `${agentDbPath}-wal`;
     await fs.writeFile(agentWalPath, "", "utf-8");
     await fs.chmod(agentWalPath, 0o644);
-    const agentShmPath = `${agentDbPath}-shm`;
-    await fs.writeFile(agentShmPath, "", "utf-8");
-    await fs.chmod(agentShmPath, 0o644);
 
     const targets = await collectSecurityPermissionTargets({
       env: createFixEnv(stateDir, configPath),
@@ -311,6 +308,7 @@ describe("security fix", () => {
       { path: credsDir, mode: 0o700, require: "dir" },
       { path: allowFromPath, mode: 0o600, require: "file" },
       { path: path.join(stateDir, "agents", "main"), mode: 0o700, require: "dir" },
+      { path: agentDir, mode: 0o700, require: "dir" },
       { path: agentDir, mode: 0o700, require: "dir" },
       { path: agentDbPath, mode: 0o600, require: "file" },
       { path: agentWalPath, mode: 0o600, require: "file" },

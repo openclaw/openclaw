@@ -7,11 +7,9 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { ChannelType, type AutocompleteInteraction } from "../internal/discord.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -225,7 +223,6 @@ describe("discord native /think autocomplete", () => {
       agentId: "main",
       sessionKey: SESSION_KEY,
       entry: {
-        sessionId: "think-dm",
         updatedAt: Date.now(),
         providerOverride: "openai-codex",
         modelOverride: "gpt-5.4",
@@ -325,7 +322,6 @@ describe("discord native /think autocomplete", () => {
       agentId: "main",
       sessionKey: SESSION_KEY,
       entry: {
-        sessionId: "think-guild",
         updatedAt: Date.now(),
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-7",

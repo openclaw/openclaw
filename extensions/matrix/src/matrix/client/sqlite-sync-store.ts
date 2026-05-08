@@ -116,8 +116,8 @@ export function parsePersistedMatrixSyncStore(raw: string): PersistedMatrixSyncS
   }
 }
 
-export function resolveMatrixSyncStoreKey(rootDir: string): string {
-  return createHash("sha256").update(path.resolve(rootDir), "utf8").digest("hex").slice(0, 32);
+export function resolveMatrixSyncStoreKey(storagePath: string): string {
+  return createHash("sha256").update(path.resolve(storagePath), "utf8").digest("hex").slice(0, 32);
 }
 
 function cloneJson<T>(value: T): T {
@@ -138,7 +138,7 @@ function syncDataToSyncResponse(syncData: ISyncData): ISyncResponse {
   };
 }
 
-export class SqliteBackedMatrixSyncStore extends MemoryStore {
+export class FileBackedMatrixSyncStore extends MemoryStore {
   private readonly persistLock = createAsyncLock();
   private readonly accumulator = new SyncAccumulator();
   private savedSync: ISyncData | null = null;
@@ -150,13 +150,13 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
 
-  constructor(private readonly rootDir: string) {
+  constructor(private readonly storagePath: string) {
     super();
 
     let restoredSavedSync: ISyncData | null = null;
     let restoredClientOptions: IStoredClientOpts | undefined;
     let restoredCleanShutdown = false;
-    const persisted = SYNC_STORE.lookup(resolveMatrixSyncStoreKey(this.rootDir));
+    const persisted = SYNC_STORE.lookup(resolveMatrixSyncStoreKey(this.storagePath));
     restoredSavedSync = persisted?.savedSync ?? null;
     restoredClientOptions = persisted?.clientOptions;
     restoredCleanShutdown = persisted?.cleanShutdown === true;
@@ -236,7 +236,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.savedSync = null;
     this.savedClientOptions = undefined;
     this.cleanShutdown = false;
-    SYNC_STORE.delete(resolveMatrixSyncStoreKey(this.rootDir));
+    SYNC_STORE.delete(resolveMatrixSyncStoreKey(this.storagePath));
   }
 
   markCleanShutdown(): void {
@@ -268,7 +268,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
       void this.flush().catch((err) => {
-        LogService.warn("MatrixSqliteSyncStore", "Failed to persist Matrix sync store:", err);
+        LogService.warn("MatrixFileSyncStore", "Failed to persist Matrix sync store:", err);
       });
     }, PERSIST_DEBOUNCE_MS);
     this.persistTimer.unref?.();
@@ -284,9 +284,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     });
     try {
       await this.persistLock(async () => {
-        SYNC_STORE.register(resolveMatrixSyncStoreKey(this.rootDir), payload);
+        SYNC_STORE.register(resolveMatrixSyncStoreKey(this.storagePath), payload);
         claimCurrentTokenStorageState({
-          rootDir: this.rootDir,
+          rootDir: path.dirname(this.storagePath),
         });
       });
     } catch (err) {

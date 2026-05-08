@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -327,11 +327,12 @@ describe("telegram thread bindings", () => {
     await __testing.resetTelegramThreadBindingsForTests();
     readAcpSessionEntryMock.mockReturnValue({
       cfg: {} as never,
+      storePath: "/tmp/acp-store.json",
       sessionKey: "agent:main:acp:stale-1",
-      rowSessionKey: "agent:main:acp:stale-1",
+      storeSessionKey: "agent:main:acp:stale-1",
       entry: undefined,
       acp: undefined,
-      readFailed: false,
+      storeReadFailed: false,
     });
 
     const reloaded = createTelegramThreadBindingManager({
@@ -381,7 +382,7 @@ describe("telegram thread bindings", () => {
     expect(readAcpSessionEntryMock).not.toHaveBeenCalled();
   });
 
-  it("keeps ACP bindings when the session database cannot be read during startup cleanup", async () => {
+  it("keeps ACP bindings when the session store cannot be read during startup cleanup", async () => {
     createTelegramThreadBindingManager({
       accountId: "default",
       persist: true,
@@ -401,11 +402,12 @@ describe("telegram thread bindings", () => {
     await __testing.resetTelegramThreadBindingsForTests();
     readAcpSessionEntryMock.mockReturnValue({
       cfg: {} as never,
+      storePath: "/tmp/acp-store.json",
       sessionKey: "agent:main:acp:read-failed",
-      rowSessionKey: "agent:main:acp:read-failed",
+      storeSessionKey: "agent:main:acp:read-failed",
       entry: undefined,
       acp: undefined,
-      readFailed: true,
+      storeReadFailed: true,
     });
 
     const reloaded = createTelegramThreadBindingManager({
