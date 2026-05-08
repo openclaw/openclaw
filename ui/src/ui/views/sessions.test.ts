@@ -692,11 +692,11 @@ describe("sessions view", () => {
     const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
     expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).some((option) => option.value === "full")).toBe(true);
+    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toContain("full");
     expect(reasoning?.value).toBe("custom-mode");
-    expect(
-      Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
-    ).toBe(true);
+    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toContain(
+      "custom-mode",
+    );
 
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
