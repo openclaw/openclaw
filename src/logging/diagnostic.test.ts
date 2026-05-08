@@ -903,7 +903,7 @@ describe("stuck session diagnostics threshold", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    let finishPhase!: () => void;
+    let finishPhase: (() => void) | undefined;
     const phase = withDiagnosticPhase(
       "startup.plugins.load",
       () =>
@@ -911,6 +911,10 @@ describe("stuck session diagnostics threshold", () => {
           finishPhase = resolve;
         }),
     );
+    if (!finishPhase) {
+      throw new Error("Expected diagnostic phase finish callback to be initialized");
+    }
+    const completePhase = finishPhase;
 
     try {
       startDiagnosticHeartbeat(
@@ -933,7 +937,7 @@ describe("stuck session diagnostics threshold", () => {
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "telegram" });
       vi.advanceTimersByTime(30_000);
     } finally {
-      finishPhase();
+      completePhase();
       await phase;
       unsubscribe();
     }
