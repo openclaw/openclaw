@@ -23,6 +23,7 @@ import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceFinalizeAudioInputResult,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
@@ -550,6 +551,15 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.session.sendRealtimeInput({ audioStreamEnd: true });
       this.audioStreamEnded = true;
     }
+  }
+
+  finalizeAudioInput(): RealtimeVoiceFinalizeAudioInputResult {
+    if (!this.session || !this.connected || !this.sessionConfigured) {
+      return { status: "no_response" };
+    }
+    this.session.sendRealtimeInput({ audioStreamEnd: true });
+    this.audioStreamEnded = true;
+    return { status: "committed" };
   }
 
   setMediaTimestamp(_ts: number): void {}

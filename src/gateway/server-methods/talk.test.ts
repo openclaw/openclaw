@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   createTalkRealtimeRelaySession: vi.fn(),
   sendTalkRealtimeRelayAudio: vi.fn(),
   cancelTalkRealtimeRelayTurn: vi.fn(),
+  finalizeTalkRealtimeRelayTurn: vi.fn(),
   stopTalkRealtimeRelaySession: vi.fn(),
   registerTalkRealtimeRelayAgentRun: vi.fn(),
   submitTalkRealtimeRelayToolResult: vi.fn(),
@@ -75,6 +76,7 @@ vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
   return {
     ...actual,
     cancelTalkRealtimeRelayTurn: mocks.cancelTalkRealtimeRelayTurn,
+    finalizeTalkRealtimeRelayTurn: mocks.finalizeTalkRealtimeRelayTurn,
     createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
     registerTalkRealtimeRelayAgentRun: mocks.registerTalkRealtimeRelayAgentRun,
     sendTalkRealtimeRelayAudio: mocks.sendTalkRealtimeRelayAudio,
@@ -574,9 +576,28 @@ describe("talk.session unified handlers", () => {
       result: { ok: true },
     });
 
+    const endRespond = vi.fn();
+    await talkHandlers["talk.session.endTurn"]({
+      req: { type: "req", id: "5", method: "talk.session.endTurn" },
+      params: { sessionId: "relay-unified-1", turnId: "turn-1" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: endRespond as never,
+      context: {} as never,
+    });
+    expect(mocks.finalizeTalkRealtimeRelayTurn).toHaveBeenCalledWith({
+      relaySessionId: "relay-unified-1",
+      connId: "conn-1",
+    });
+    expect(endRespond).toHaveBeenCalledWith(
+      true,
+      { ok: true, turnId: "turn-1", events: [] },
+      undefined,
+    );
+
     const closeRespond = vi.fn();
     await talkHandlers["talk.session.close"]({
-      req: { type: "req", id: "5", method: "talk.session.close" },
+      req: { type: "req", id: "6", method: "talk.session.close" },
       params: { sessionId: "relay-unified-1" },
       client: { connId: "conn-1" } as never,
       isWebchatConnect: () => false,

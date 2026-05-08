@@ -4,6 +4,7 @@ import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBrowserAudioContract,
+  type RealtimeVoiceFinalizeAudioInputResult,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceTool,
 } from "../talk/provider-types.js";
@@ -22,8 +23,10 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
+const MAX_RELAY_DOWNLINK_AUDIO_BYTES = 20 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
+const RELAY_COMMIT_NO_OUTPUT_TIMEOUT_MS = 2500;
 const RELAY_EVENT = "talk.event";
 
 type TalkRealtimeRelayEventPayload =
@@ -31,6 +34,7 @@ type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "inputAudio"; byteLength: number }
   | { relaySessionId: string; type: "audio"; audioBase64: string }
   | { relaySessionId: string; type: "clear" }
+  | { relaySessionId: string; type: "idle"; reason: "no_response" | "unsupported" | "no_input" }
   | { relaySessionId: string; type: "mark"; markName: string }
   | {
       relaySessionId: string;
@@ -48,8 +52,22 @@ type TalkRealtimeRelayEventPayload =
       args: unknown;
     }
   | { relaySessionId: string; type: "toolResult"; callId: string }
-  | { relaySessionId: string; type: "error"; message: string }
+  | {
+      relaySessionId: string;
+      type: "error";
+      category?: RealtimeRelayErrorCategory;
+      hard?: boolean;
+      message: string;
+    }
+  | {
+      relaySessionId: string;
+      type: "paused";
+      category: RealtimeRelayErrorCategory;
+      reason: "provider_hard_error";
+    }
   | { relaySessionId: string; type: "close"; reason: "completed" | "error" };
+
+export type RealtimeRelayErrorCategory = "quota" | "auth" | "provider_unavailable" | "unknown";
 
 type TalkRealtimeRelayEvent = TalkRealtimeRelayEventPayload & { talkEvent?: TalkEvent };
 
@@ -60,6 +78,8 @@ type RelaySession = {
   bridge: RealtimeVoiceBridgeSession;
   talk: TalkSessionController;
   expiresAtMs: number;
+  acceptedAudioBytes: number;
+  outputEventCount: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
   activeAgentRuns: Map<string, string>;
 };
@@ -89,6 +109,77 @@ const relaySessions = new Map<string, RelaySession>();
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function classifyRealtimeRelayError(error: unknown): RealtimeRelayErrorCategory {
+  const message = formatError(error).toLowerCase();
+  if (
+    /\b(insufficient[_ -]?quota|quota|billing|credits?|payment|required plan|usage limit)\b/.test(
+      message,
+    )
+  ) {
+    return "quota";
+  }
+  if (
+    /\b(auth|authentication|unauthorized|forbidden|permission|api key|apikey|invalid key|401|403)\b/.test(
+      message,
+    )
+  ) {
+    return "auth";
+  }
+  if (
+    /\b(unavailable|overloaded|temporarily unavailable|service unavailable|timeout|timed out|econnreset|econnrefused|503|502|504)\b/.test(
+      message,
+    )
+  ) {
+    return "provider_unavailable";
+  }
+  return "unknown";
+}
+
+export function sanitizedRelayErrorMessage(category: RealtimeRelayErrorCategory): string {
+  switch (category) {
+    case "quota":
+      return "realtime provider quota or billing error";
+    case "auth":
+      return "realtime provider authentication error";
+    case "provider_unavailable":
+      return "realtime provider unavailable";
+    case "unknown":
+      return "realtime provider error";
+  }
+}
+
+function emitRelayError(
+  emit: (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) => void,
+  relaySessionId: string,
+  error: unknown,
+  hard = false,
+): void {
+  const category = classifyRealtimeRelayError(error);
+  const message = sanitizedRelayErrorMessage(category);
+  emit(
+    { relaySessionId, type: "error", category, hard, message },
+    { type: "session.error", payload: { message }, final: hard },
+  );
+  if (hard) {
+    emit({ relaySessionId, type: "paused", category, reason: "provider_hard_error" });
+  }
+}
+
+function emitAudioChunks(
+  emit: (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) => void,
+  relaySessionId: string,
+  audio: Buffer,
+  turnId: string | undefined,
+): void {
+  for (let offset = 0; offset < audio.length; offset += MAX_RELAY_DOWNLINK_AUDIO_BYTES) {
+    const chunk = audio.subarray(offset, offset + MAX_RELAY_DOWNLINK_AUDIO_BYTES);
+    emit(
+      { relaySessionId, type: "audio", audioBase64: chunk.toString("base64") },
+      { type: "output.audio.delta", turnId, payload: { byteLength: chunk.length } },
+    );
+  }
 }
 
 function broadcastToOwner(
@@ -125,6 +216,24 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
       final: true,
     }),
   });
+}
+
+function scheduleCommitNoOutputFallback(
+  session: RelaySession,
+  outputEventCountAtCommit: number,
+): void {
+  const timer = setTimeout(() => {
+    const active = relaySessions.get(session.id);
+    if (!active || active.outputEventCount !== outputEventCountAtCommit) {
+      return;
+    }
+    broadcastToOwner(active.context, active.connId, {
+      relaySessionId: active.id,
+      type: "idle",
+      reason: "no_response",
+    });
+  }, RELAY_COMMIT_NO_OUTPUT_TIMEOUT_MS);
+  timer.unref?.();
 }
 
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
@@ -172,11 +281,23 @@ export function createTalkRealtimeRelaySession(
     { onEvent: recordTalkObservabilityEvent },
   );
   let relay: RelaySession | undefined;
-  const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
+  const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) => {
+    if (
+      relay &&
+      (event.type === "audio" ||
+        event.type === "clear" ||
+        event.type === "transcript" ||
+        event.type === "toolCall" ||
+        event.type === "idle" ||
+        event.type === "error")
+    ) {
+      relay.outputEventCount += 1;
+    }
     broadcastToOwner(params.context, params.connId, {
       ...event,
       ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
     });
+  };
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
     providerConfig: params.providerConfig,
@@ -188,18 +309,7 @@ export function createTalkRealtimeRelaySession(
       isOpen: () => Boolean(relay && relaySessions.has(relay.id)),
       sendAudio: (audio) => {
         const turnId = relay ? ensureRelayTurn(relay) : undefined;
-        emit(
-          {
-            relaySessionId,
-            type: "audio",
-            audioBase64: audio.toString("base64"),
-          },
-          {
-            type: "output.audio.delta",
-            turnId,
-            payload: { byteLength: audio.length },
-          },
-        );
+        emitAudioChunks(emit, relaySessionId, audio, turnId);
       },
       clearAudio: () => {
         const turnId = relay ? ensureRelayTurn(relay) : undefined;
@@ -269,11 +379,7 @@ export function createTalkRealtimeRelaySession(
     },
     onReady: () =>
       emit({ relaySessionId, type: "ready" }, { type: "session.ready", payload: null }),
-    onError: (error) =>
-      emit(
-        { relaySessionId, type: "error", message: error.message },
-        { type: "session.error", payload: { message: error.message }, final: true },
-      ),
+    onError: (error) => emitRelayError(emit, relaySessionId, error, true),
     onClose: (reason) => {
       const active = relaySessions.get(relaySessionId);
       if (!active) {
@@ -295,6 +401,8 @@ export function createTalkRealtimeRelaySession(
     bridge,
     talk,
     expiresAtMs,
+    acceptedAudioBytes: 0,
+    outputEventCount: 0,
     cleanupTimer: setTimeout(() => {
       const active = relaySessions.get(relaySessionId);
       if (active) {
@@ -306,7 +414,7 @@ export function createTalkRealtimeRelaySession(
   relay.cleanupTimer.unref?.();
   relaySessions.set(relaySessionId, relay);
   bridge.connect().catch((error: unknown) => {
-    emit({ relaySessionId, type: "error", message: formatError(error) });
+    emitRelayError(emit, relaySessionId, error, true);
     const active = relaySessions.get(relaySessionId);
     if (active) {
       closeRelaySession(active, "error");
@@ -365,6 +473,7 @@ export function sendTalkRealtimeRelayAudio(params: {
   const session = getRelaySession(params.relaySessionId, params.connId);
   const turnId = ensureRelayTurn(session);
   const audio = Buffer.from(params.audioBase64, "base64");
+  session.acceptedAudioBytes += audio.length;
   session.bridge.sendAudio(audio);
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
@@ -433,6 +542,83 @@ export function cancelTalkRealtimeRelayTurn(params: {
     type: "clear",
     talkEvent: cancelled.ok ? cancelled.event : undefined,
   });
+}
+
+export async function finalizeTalkRealtimeRelayTurn(params: {
+  relaySessionId: string;
+  connId: string;
+}): Promise<RealtimeVoiceFinalizeAudioInputResult | void> {
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  const turnId = ensureRelayTurn(session);
+  if (session.acceptedAudioBytes <= 0) {
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "idle",
+      reason: "no_input",
+      talkEvent: session.talk.emit({
+        type: "input.audio.committed",
+        turnId,
+        payload: { status: "no_input" },
+        final: true,
+      }),
+    });
+    return { status: "idle" };
+  }
+  const supportsFinalize = typeof session.bridge.bridge.finalizeAudioInput === "function";
+  if (!supportsFinalize) {
+    session.acceptedAudioBytes = 0;
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "idle",
+      reason: "unsupported",
+      talkEvent: session.talk.emit({
+        type: "input.audio.committed",
+        turnId,
+        payload: { status: "unsupported" },
+        final: true,
+      }),
+    });
+    return { status: "idle" };
+  }
+  const outputEventCountAtCommit = session.outputEventCount;
+  let result: RealtimeVoiceFinalizeAudioInputResult | void;
+  try {
+    result = await session.bridge.finalizeAudioInput();
+  } catch (error) {
+    emitRelayError(
+      (event, talkEvent) =>
+        broadcastToOwner(session.context, session.connId, {
+          ...event,
+          ...(talkEvent ? { talkEvent: session.talk.emit(talkEvent) } : {}),
+        }),
+      session.id,
+      error,
+    );
+    throw new Error(sanitizedRelayErrorMessage(classifyRealtimeRelayError(error)));
+  }
+  const status = result && typeof result === "object" ? result.status : undefined;
+  session.acceptedAudioBytes = 0;
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "inputAudio",
+    byteLength: 0,
+    talkEvent: session.talk.emit({
+      type: "input.audio.committed",
+      turnId,
+      payload: { status: status ?? "committed" },
+      final: true,
+    }),
+  });
+  if (status === "idle" || status === "no_response") {
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "idle",
+      reason: "no_response",
+    });
+    return result;
+  }
+  scheduleCommitNoOutputFallback(session, outputEventCountAtCommit);
+  return result;
 }
 
 export function stopTalkRealtimeRelaySession(params: {

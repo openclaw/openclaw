@@ -774,4 +774,38 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "conversation.item.create" });
     expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
   });
+
+  it("finalizes buffered input audio by committing and requesting a response", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onEvent,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    const result = bridge.finalizeAudioInput?.();
+
+    expect(result).toEqual({ status: "committed" });
+    expect(parseSent(socket).slice(-2)).toEqual([
+      { type: "input_audio_buffer.commit" },
+      { type: "response.create" },
+    ]);
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "input_audio_buffer.commit",
+    });
+    expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
+  });
 });

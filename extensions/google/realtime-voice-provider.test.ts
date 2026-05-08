@@ -824,4 +824,22 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       ],
     });
   });
+
+  it("marks the Google audio stream complete on explicit finalize", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    const result = bridge.finalizeAudioInput?.();
+
+    expect(result).toEqual({ status: "committed" });
+    expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
+  });
 });
