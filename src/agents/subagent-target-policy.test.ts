@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveConfiguredSubagentAllowAgents,
   resolveSubagentAllowedTargetIds,
   resolveSubagentTargetPolicy,
 } from "./subagent-target-policy.js";
@@ -63,5 +64,34 @@ describe("subagent target policy", () => {
       allowAny: false,
       allowedIds: ["planner"],
     });
+  });
+
+  it("uses SPAWN_ALLOWLIST as a fallback allowlist when config omits one", () => {
+    expect(
+      resolveConfiguredSubagentAllowAgents({
+        env: { SPAWN_ALLOWLIST: " planner, checker " },
+      }),
+    ).toEqual(["planner", "checker"]);
+    expect(
+      resolveConfiguredSubagentAllowAgents({
+        env: { OPENCLAW_SPAWN_ALLOWLIST: '["research", "*"]', SPAWN_ALLOWLIST: "ignored" },
+      }),
+    ).toEqual(["research", "*"]);
+  });
+
+  it("keeps explicit config ahead of SPAWN_ALLOWLIST", () => {
+    expect(
+      resolveConfiguredSubagentAllowAgents({
+        agentAllowAgents: ["agent-specific"],
+        defaultAllowAgents: ["default"],
+        env: { SPAWN_ALLOWLIST: "*" },
+      }),
+    ).toEqual(["agent-specific"]);
+    expect(
+      resolveConfiguredSubagentAllowAgents({
+        defaultAllowAgents: ["default"],
+        env: { SPAWN_ALLOWLIST: "*" },
+      }),
+    ).toEqual(["default"]);
   });
 });

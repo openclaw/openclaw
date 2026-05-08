@@ -8,6 +8,19 @@ export function normalizeStringList(input: unknown): string[] {
   return normalizeCsvOrLooseStringList(input);
 }
 
+function normalizeConfigRequirementList(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return normalizeStringList(input);
+  }
+  return input.flatMap((entry) => {
+    if (entry && typeof entry === "object") {
+      const path = readStringValue((entry as Record<string, unknown>).path)?.trim();
+      return path ? [path] : [];
+    }
+    return normalizeStringList([entry]);
+  });
+}
+
 export function getFrontmatterString(
   frontmatter: Record<string, unknown>,
   key: string,
@@ -69,7 +82,7 @@ export function resolveOpenClawManifestRequires(
     bins: normalizeStringList(requiresRaw.bins),
     anyBins: normalizeStringList(requiresRaw.anyBins),
     env: normalizeStringList(requiresRaw.env),
-    config: normalizeStringList(requiresRaw.config),
+    config: normalizeConfigRequirementList(requiresRaw.config),
   };
 }
 

@@ -888,10 +888,12 @@ export async function readSystemdServiceRuntime(
   }
   const parsed = parseSystemdShow(res.stdout || "");
   const activeState = normalizeLowercaseStringOrEmpty(parsed.activeState);
-  const status = activeState === "active" ? "running" : activeState ? "stopped" : "unknown";
+  const activeByProbe =
+    activeState === "active" ? true : await isSystemdUnitActive(env, unitName).catch(() => false);
+  const status = activeByProbe ? "running" : activeState ? "stopped" : "unknown";
   return {
     status,
-    state: parsed.activeState,
+    state: activeByProbe ? "active" : parsed.activeState,
     subState: parsed.subState,
     pid: parsed.mainPid,
     lastExitStatus: parsed.execMainStatus,

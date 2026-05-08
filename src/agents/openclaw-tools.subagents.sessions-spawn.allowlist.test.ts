@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -127,6 +128,21 @@ describe("subagent spawn allowlist + sandbox guards", () => {
       },
     });
     const result = await spawn({ agentId: "beta" });
+    expect(result).toMatchObject({
+      status: "accepted",
+      childSessionKey: expect.stringMatching(/^agent:beta:subagent:/),
+    });
+  });
+
+  it("falls back to SPAWN_ALLOWLIST when config omits allowAgents", async () => {
+    setConfig({
+      agents: {
+        list: [{ id: "main" }, { id: "beta" }],
+      },
+    });
+
+    const result = await withEnvAsync({ SPAWN_ALLOWLIST: "*" }, () => spawn({ agentId: "beta" }));
+
     expect(result).toMatchObject({
       status: "accepted",
       childSessionKey: expect.stringMatching(/^agent:beta:subagent:/),

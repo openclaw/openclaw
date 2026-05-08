@@ -147,6 +147,28 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill.install[0]?.bins).toEqual(["fakebin"]);
   });
 
+  it("normalizes object-shaped config requirements from skill metadata", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "object-config-skill"),
+      name: "object-config-skill",
+      description: "Object config metadata",
+      metadata:
+        '{"openclaw":{"requires":{"config":[{"path":"browser.enabled","access":"read","purpose":"Check browser config"}]}}}',
+    });
+
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config: { browser: { enabled: true } },
+    });
+    const skill = requireReportedSkill(report, "object-config-skill");
+
+    expect(skill.eligible).toBe(true);
+    expect(skill.requirements.config).toEqual(["browser.enabled"]);
+    expect(skill.missing.config).toEqual([]);
+    expect(skill.configChecks).toEqual([{ path: "browser.enabled", satisfied: true }]);
+  });
+
   it("respects OS-gated skills", () => {
     const entry = makeEntry({
       name: "os-skill",

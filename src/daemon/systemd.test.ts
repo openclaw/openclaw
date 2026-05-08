@@ -23,6 +23,7 @@ import {
   isSystemdUnitActive,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceRuntime,
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
@@ -466,6 +467,10 @@ describe("isNonFatalSystemdInstallProbeError", () => {
 });
 
 describe("systemd runtime parsing", () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+  });
+
   it("parses active state details", () => {
     const output = [
       "ActiveState=inactive",
@@ -494,6 +499,40 @@ describe("systemd runtime parsing", () => {
       activeState: "inactive",
       subState: "dead",
       execMainCode: "exited",
+    });
+  });
+
+  it("prefers is-active when show reports a stale failed state", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(
+          args,
+          "show",
+          GATEWAY_SERVICE,
+          "--no-page",
+          "--property",
+          "ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode",
+        );
+        cb(
+          null,
+          ["ActiveState=failed", "SubState=failed", "MainPID=42", "ExecMainStatus=0"].join("\n"),
+          "",
+        );
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "is-active", "--quiet", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+
+    await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toMatchObject({
+      status: "running",
+      state: "active",
+      pid: 42,
+      lastExitStatus: 0,
     });
   });
 });

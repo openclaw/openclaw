@@ -2508,6 +2508,12 @@ export const chatHandlers: GatewayRequestHandlers = {
               fastModeOverride: p.fastMode,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
+                if (runId !== clientRunId) {
+                  context.addChatRun(runId, {
+                    sessionKey,
+                    clientRunId,
+                  });
+                }
                 if (!hasBeforeAgentRunGate) {
                   void emitUserTranscriptUpdate();
                 }

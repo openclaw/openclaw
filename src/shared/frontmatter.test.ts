@@ -98,14 +98,19 @@ describe("shared/frontmatter", () => {
           bins: "bun, node",
           anyBins: [" ffmpeg ", ""],
           env: ["OPENCLAW_TOKEN", " OPENCLAW_URL "],
-          config: null,
+          config: [
+            " browser.enabled ",
+            { path: "skills.entries.example.enabled", access: "read", purpose: "status" },
+            { access: "read" },
+            42,
+          ],
         },
       }),
     ).toEqual({
       bins: ["bun", "node"],
       anyBins: ["ffmpeg"],
       env: ["OPENCLAW_TOKEN", "OPENCLAW_URL"],
-      config: [],
+      config: ["browser.enabled", "skills.entries.example.enabled", "42"],
     });
     expect(resolveOpenClawManifestRequires({})).toBeUndefined();
     expect(resolveOpenClawManifestOs({ os: [" darwin ", "linux", ""] })).toEqual([

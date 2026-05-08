@@ -8,7 +8,10 @@ import {
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
 import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveSubagentAllowedTargetIds } from "../subagent-target-policy.js";
+import {
+  resolveConfiguredSubagentAllowAgents,
+  resolveSubagentAllowedTargetIds,
+} from "../subagent-target-policy.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -54,9 +57,11 @@ export function createAgentsListTool(opts?: {
           DEFAULT_AGENT_ID,
       );
 
-      const allowAgents =
-        resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
-        cfg?.agents?.defaults?.subagents?.allowAgents;
+      const allowAgents = resolveConfiguredSubagentAllowAgents({
+        agentAllowAgents: resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents,
+        defaultAllowAgents: cfg?.agents?.defaults?.subagents?.allowAgents,
+        env: process.env,
+      });
 
       const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
       const configuredIds = configuredAgents.map((entry) => normalizeAgentId(entry.id));

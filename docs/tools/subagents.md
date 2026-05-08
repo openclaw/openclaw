@@ -286,6 +286,9 @@ See [Configuration reference](/gateway/configuration-reference) and
 <ParamField path="agents.defaults.subagents.allowAgents" type="string[]">
   Default target-agent allowlist used when the requester agent does not set its own `subagents.allowAgents`.
 </ParamField>
+<ParamField path="SPAWN_ALLOWLIST" type="string">
+  Environment fallback used only when neither per-agent nor default config sets `allowAgents`. Accepts `*`, comma-separated agent ids, or a JSON string array. `OPENCLAW_SPAWN_ALLOWLIST` is also accepted and takes precedence.
+</ParamField>
 <ParamField path="agents.defaults.subagents.requireAgentId" type="boolean" default="false">
   Block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Per-agent override: `agents.list[].subagents.requireAgentId`.
 </ParamField>
