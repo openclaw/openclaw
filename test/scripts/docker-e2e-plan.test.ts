@@ -30,6 +30,15 @@ function planFor(
   }).plan;
 }
 
+function requireFirstLane(plan: ReturnType<typeof planFor>) {
+  const [lane] = plan.lanes;
+  expect(lane).toBeDefined();
+  if (!lane) {
+    throw new Error("Expected at least one Docker E2E lane");
+  }
+  return lane;
+}
+
 describe("scripts/lib/docker-e2e-plan", () => {
   it("plans the full release path against package-backed e2e images", () => {
     const plan = planFor({
@@ -342,7 +351,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         ),
       }),
     ]);
-    expect(plan.lanes[0]?.command).toContain(
+    expect(requireFirstLane(plan).command).toContain(
       'OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/published-upgrade-survivor-2026.4.29"',
     );
   });
