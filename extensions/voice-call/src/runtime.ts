@@ -444,6 +444,8 @@ export async function createVoiceCallRuntime(params: {
                   consultResult: result.text,
                   backgroundEmailPrompt: effectiveConfig.realtime.backgroundEmailPrompt,
                   recipientEmail: effectiveConfig.realtime.recipientEmail,
+                  provider: agentProvider,
+                  model,
                 });
               })
               .catch((err: unknown) => {
@@ -499,6 +501,8 @@ export async function createVoiceCallRuntime(params: {
                   consultResult: r.text,
                   backgroundEmailPrompt: effectiveConfig.realtime.backgroundEmailPrompt,
                   recipientEmail: effectiveConfig.realtime.recipientEmail,
+                  provider: agentProvider,
+                  model,
                 });
               })
               .catch((err: unknown) => {
