@@ -2,8 +2,10 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  replaceSqliteSessionTranscriptEvents,
+} from "./openclaw-runtime.js";
 import {
   buildSessionTranscriptEntry,
   listSessionTranscriptsForAgent,

@@ -119,10 +119,14 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = lastEmbeddedAgentCall();
-      expect(call.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
-      expect(call.workspaceDir).toBe(opsWorkspace);
-      expect(call.sessionFile).toContain(path.join("agents", "ops"));
+      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+        sessionKey?: string;
+        workspaceDir?: string;
+        sessionFile?: string;
+      };
+      expect(call?.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
+      expect(call?.workspaceDir).toBe(opsWorkspace);
+      expect(call?.sessionFile).toMatch(/^sqlite-transcript:\/\/ops\/.+\.jsonl$/u);
     });
   });
 
@@ -133,10 +137,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
       const call = lastEmbeddedAgentCall();
 
-      expect(call.sessionFile).toContain(
-        path.join(home, ".openclaw", "agents", "main", "sessions"),
-      );
-      expect(String(call.sessionFile).endsWith(".jsonl")).toBe(true);
+      expect(call?.sessionFile).toMatch(/^sqlite-transcript:\/\/main\/.+\.jsonl$/u);
     });
   });
 

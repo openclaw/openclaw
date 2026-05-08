@@ -57,5 +57,4 @@ enum SessionActions {
         alert.alertStyle = .warning
         alert.runModal()
     }
-
 }

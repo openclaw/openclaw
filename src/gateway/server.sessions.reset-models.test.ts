@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { getSessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator, getSessionEntry } from "../config/sessions.js";
 import { hasSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { testState, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
@@ -307,6 +307,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
     ok: true;
     key: string;
     entry: {
+      sessionId?: string;
       sessionFile?: string;
       chatType?: string;
       channel?: string;
@@ -362,7 +363,14 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   }>("sessions.reset", { key: "subagent:child" });
 
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.sessionFile).toBe(customSessionFile);
+  const resetSessionId = reset.payload?.entry.sessionId;
+  expect(resetSessionId).toBeTruthy();
+  expect(reset.payload?.entry.sessionFile).toBe(
+    createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: resetSessionId ?? "",
+    }),
+  );
   expect(reset.payload?.entry.chatType).toBe("group");
   expect(reset.payload?.entry.channel).toBe("discord");
   expect(reset.payload?.entry.groupId).toBe("group-1");
@@ -415,7 +423,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(reset.payload?.entry.label).toBe("owned child");
 
   const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:subagent:child" });
-  expect(stored?.sessionFile).toBe(customSessionFile);
+  expect(stored?.sessionFile).toBe(reset.payload?.entry.sessionFile);
   expect(stored?.chatType).toBe("group");
   expect(stored?.channel).toBe("discord");
   expect(stored?.groupId).toBe("group-1");

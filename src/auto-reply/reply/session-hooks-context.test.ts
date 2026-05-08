@@ -189,7 +189,7 @@ describe("session hook context wiring", () => {
 
   it("passes sessionKey to session_end hook context on reset", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
-    const { transcriptPath } = await createStoredSession({
+    await createStoredSession({
       prefix: "openclaw-session-hook-end",
       sessionKey,
       sessionId: "old-session",

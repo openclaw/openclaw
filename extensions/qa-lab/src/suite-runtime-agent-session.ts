@@ -6,11 +6,11 @@ import {
   saveCommitmentStore,
   type CommitmentStoreFile,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/config-runtime";
 import {
   createCorePluginStateKeyedStore,
   createPluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionEntry,
