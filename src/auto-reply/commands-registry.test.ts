@@ -148,6 +148,22 @@ function requireCommandArgMenu(
   return menu;
 }
 
+function requireSeenChoice(
+  seen: {
+    provider?: string;
+    model?: string;
+    catalogLength?: number;
+    commandKey: string;
+    argName: string;
+  } | null,
+) {
+  expect(seen).not.toBeNull();
+  if (!seen) {
+    throw new Error("Expected command choice context");
+  }
+  return seen;
+}
+
 describe("commands registry", () => {
   it("builds command text with args", () => {
     expect(buildCommandText("status")).toBe("/status");
@@ -580,34 +596,28 @@ describe("commands registry args", () => {
       ],
     };
 
-    const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
-    expect(menu?.arg.name).toBe("level");
-    expect(menu?.choices).toEqual([
+    const menu = requireCommandArgMenu({ command, args: undefined, cfg: {} as never });
+    expect(menu.arg.name).toBe("level");
+    expect(menu.choices).toEqual([
       { label: "low", value: "low" },
       { label: "high", value: "high" },
     ]);
     expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
       "Choose level for /think.\nOptions: low, high.",
     );
-    const seenChoice = seen as {
-      provider?: string;
-      model?: string;
-      catalogLength?: number;
-      commandKey: string;
-      argName: string;
-    } | null;
-    expect(seenChoice?.commandKey).toBe("think");
-    expect(seenChoice?.argName).toBe("level");
-    expect(seenChoice?.provider).toEqual(expect.stringMatching(/\S/));
-    expect(seenChoice?.model).toEqual(expect.stringMatching(/\S/));
-    expect(seenChoice?.catalogLength).toBe(0);
+    const seenChoice = requireSeenChoice(seen);
+    expect(seenChoice.commandKey).toBe("think");
+    expect(seenChoice.argName).toBe("level");
+    expect(seenChoice.provider).toEqual(expect.stringMatching(/\S/));
+    expect(seenChoice.model).toEqual(expect.stringMatching(/\S/));
+    expect(seenChoice.catalogLength).toBe(0);
   });
 
   it("uses configured model catalog reasoning for /think arg menus", () => {
     installOllamaThinkingProvider();
     const command = requireNativeCommand("think");
 
-    const menu = resolveCommandArgMenu({
+    const menu = requireCommandArgMenu({
       command,
       args: undefined,
       cfg: {
@@ -623,8 +633,8 @@ describe("commands registry args", () => {
       model: "glm-5.1:cloud",
     });
 
-    expect(menu?.arg.name).toBe("level");
-    expect(menu?.choices.map((choice) => choice.value)).toEqual([
+    expect(menu.arg.name).toBe("level");
+    expect(menu.choices.map((choice) => choice.value)).toEqual([
       "off",
       "low",
       "medium",
@@ -639,7 +649,7 @@ describe("commands registry args", () => {
   it("uses configured model compat for /think arg menus", () => {
     const command = requireNativeCommand("think");
 
-    const menu = resolveCommandArgMenu({
+    const menu = requireCommandArgMenu({
       command,
       args: undefined,
       cfg: {
@@ -662,7 +672,7 @@ describe("commands registry args", () => {
       model: "gpt-5.4",
     });
 
-    expect(menu?.choices.map((choice) => choice.value)).toContain("xhigh");
+    expect(menu.choices.map((choice) => choice.value)).toContain("xhigh");
     expect(formatCommandArgMenuTitle({ command, menu: menu! })).toContain("xhigh");
   });
 
