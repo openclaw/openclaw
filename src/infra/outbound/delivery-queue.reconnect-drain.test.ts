@@ -25,6 +25,16 @@ function normalizeReconnectAccountIdForTest(accountId?: string | null): string {
   return (accountId ?? "").trim() || "default";
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 async function drainDirectChatReconnectPending(opts: {
   accountId: string;
   deliver: DeliverFn;
@@ -347,7 +357,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     await startupRecovery;
 
     expect(deliver).toHaveBeenCalledTimes(2);
-    expect(deliveredTargets.filter((target) => target === "+1555")).toHaveLength(1);
+    expect(countMatching(deliveredTargets, (target) => target === "+1555")).toBe(1);
     expect(startupLog.info).toHaveBeenCalledWith(
       expect.stringContaining("Recovery skipped for delivery"),
     );

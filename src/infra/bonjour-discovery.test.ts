@@ -305,7 +305,7 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    expect(calls.filter((c) => c[1] === "-B")).toHaveLength(1);
+    expect(calls.reduce((count, c) => count + (c[1] === "-B" ? 1 : 0), 0)).toBe(1);
     expect(calls.find((c) => c[1] === "-B")?.[3]).toBe("local.");
   });
 });
