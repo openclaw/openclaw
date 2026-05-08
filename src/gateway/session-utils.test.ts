@@ -311,15 +311,18 @@ describe("gateway session utils", () => {
     });
 
     expect(result.sessions).toHaveLength(5);
-    expect(
-      result.sessions.every((session) =>
-        session.thinkingLevels?.some((level) => level.id === "medium"),
-      ),
-    ).toBe(true);
-    expect(result.sessions.every((session) => session.thinkingOptions?.includes("medium"))).toBe(
-      true,
+    const missingMediumLevelSessionIds = result.sessions
+      .filter((session) => !session.thinkingLevels?.some((level) => level.id === "medium"))
+      .map((session) => session.sessionId);
+    const missingMediumOptionSessionIds = result.sessions
+      .filter((session) => !session.thinkingOptions?.includes("medium"))
+      .map((session) => session.sessionId);
+
+    expect(missingMediumLevelSessionIds).toEqual([]);
+    expect(missingMediumOptionSessionIds).toEqual([]);
+    expect(result.sessions.map((session) => session.thinkingDefault)).toEqual(
+      Array.from({ length: result.sessions.length }, () => "medium"),
     );
-    expect(result.sessions.every((session) => session.thinkingDefault === "medium")).toBe(true);
     expect(resolveThinkingProfile).toHaveBeenCalled();
   });
 
