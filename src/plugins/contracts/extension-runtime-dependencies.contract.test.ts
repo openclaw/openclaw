@@ -146,12 +146,13 @@ function isTypeOnlyClause(clause: string | undefined): boolean {
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
     return false;
   }
-  return trimmed
-    .slice(1, -1)
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .every((part) => part.startsWith("type "));
+  for (const part of trimmed.slice(1, -1).split(",")) {
+    const importName = part.trim();
+    if (importName.length > 0 && !importName.startsWith("type ")) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function collectRuntimeImports(filePath: string): string[] {
