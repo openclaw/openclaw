@@ -119,7 +119,9 @@ describe("appendExactAssistantMessageToSessionTranscript — redaction", () => {
     });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) {
+      return;
+    }
 
     const raw = fs.readFileSync(result.sessionFile, "utf-8");
     expect(raw).toContain(fakeApiKey);
