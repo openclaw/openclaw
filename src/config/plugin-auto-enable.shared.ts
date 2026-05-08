@@ -16,7 +16,10 @@ import {
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  loadPluginMetadataSnapshotAsync,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -982,6 +985,24 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
       env: params.env,
     }).manifestRegistry
   );
+}
+
+export async function resolvePluginAutoEnableManifestRegistryAsync(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+}): Promise<PluginManifestRegistry> {
+  if (params.manifestRegistry) {
+    return params.manifestRegistry;
+  }
+  if (!configMayNeedPluginManifestRegistry(params.config, params.env)) {
+    return EMPTY_PLUGIN_MANIFEST_REGISTRY;
+  }
+  const snapshot = await loadPluginMetadataSnapshotAsync({
+    config: params.config,
+    env: params.env,
+  });
+  return snapshot.manifestRegistry;
 }
 
 export function materializePluginAutoEnableCandidatesInternal(params: {

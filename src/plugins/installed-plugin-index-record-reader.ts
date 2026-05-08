@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJson, tryReadJsonSync } from "../infra/json-files.js";
@@ -38,6 +39,11 @@ function readJsonObjectFileSync(filePath: string): Record<string, unknown> | nul
   return isRecord(parsed) ? parsed : null;
 }
 
+async function readJsonObjectFileAsync(filePath: string): Promise<Record<string, unknown> | null> {
+  const parsed = await tryReadJson<unknown>(filePath);
+  return isRecord(parsed) ? parsed : null;
+}
+
 function readStringRecord(value: unknown): Record<string, string> {
   if (!isRecord(value)) {
     return {};
@@ -68,6 +74,12 @@ function readManifestPluginId(packageDir: string): string | undefined {
   return id || undefined;
 }
 
+async function readManifestPluginIdAsync(packageDir: string): Promise<string | undefined> {
+  const manifest = await readJsonObjectFileAsync(path.join(packageDir, "openclaw.plugin.json"));
+  const id = typeof manifest?.id === "string" ? manifest.id.trim() : "";
+  return id || undefined;
+}
+
 function resolveRecoveredManagedNpmPluginId(params: {
   packageName: string;
   packageDir: string;
@@ -81,6 +93,24 @@ function resolveRecoveredManagedNpmPluginId(params: {
       ? packageManifest.name.trim()
       : params.packageName;
   const pluginId = readManifestPluginId(params.packageDir) ?? packageName;
+  return validatePluginId(pluginId) ? undefined : pluginId;
+}
+
+async function resolveRecoveredManagedNpmPluginIdAsync(params: {
+  packageName: string;
+  packageDir: string;
+}): Promise<string | undefined> {
+  const packageManifest = await readJsonObjectFileAsync(
+    path.join(params.packageDir, "package.json"),
+  );
+  if (!packageManifest || !hasPackagePluginMetadata(packageManifest)) {
+    return undefined;
+  }
+  const packageName =
+    typeof packageManifest.name === "string" && packageManifest.name.trim()
+      ? packageManifest.name.trim()
+      : params.packageName;
+  const pluginId = (await readManifestPluginIdAsync(params.packageDir)) ?? packageName;
   return validatePluginId(pluginId) ? undefined : pluginId;
 }
 
@@ -124,12 +154,62 @@ function buildRecoveredManagedNpmInstallRecords(
   return records;
 }
 
+async function buildRecoveredManagedNpmInstallRecordsAsync(
+  options: InstalledPluginIndexStoreOptions = {},
+): Promise<Record<string, PluginInstallRecord>> {
+  const npmRoot = options.stateDir
+    ? path.join(options.stateDir, "npm")
+    : resolveDefaultPluginNpmDir(options.env);
+  const rootManifest = await readJsonObjectFileAsync(path.join(npmRoot, "package.json"));
+  const dependencies = readStringRecord(rootManifest?.dependencies);
+  const records: Record<string, PluginInstallRecord> = {};
+  for (const [packageName, dependencySpec] of Object.entries(dependencies)) {
+    const packageDir = path.join(npmRoot, "node_modules", packageName);
+    let stat: fs.Stats;
+    try {
+      stat = await fsPromises.stat(packageDir);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) {
+      continue;
+    }
+    const pluginId = await resolveRecoveredManagedNpmPluginIdAsync({ packageName, packageDir });
+    if (!pluginId) {
+      continue;
+    }
+    const packageManifest = await readJsonObjectFileAsync(path.join(packageDir, "package.json"));
+    const version =
+      typeof packageManifest?.version === "string" && packageManifest.version.trim()
+        ? packageManifest.version.trim()
+        : undefined;
+    records[pluginId] = {
+      source: "npm",
+      spec: `${packageName}@${dependencySpec}`,
+      installPath: packageDir,
+      ...(version ? { version, resolvedName: packageName, resolvedVersion: version } : {}),
+      ...(version ? { resolvedSpec: `${packageName}@${version}` } : {}),
+    };
+  }
+  return records;
+}
+
 function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,
 ): Record<string, PluginInstallRecord> {
   return {
     ...buildRecoveredManagedNpmInstallRecords(options),
+    ...persisted,
+  };
+}
+
+async function mergeRecoveredManagedNpmInstallRecordsAsync(
+  persisted: Record<string, PluginInstallRecord> | null,
+  options: InstalledPluginIndexStoreOptions,
+): Promise<Record<string, PluginInstallRecord>> {
+  return {
+    ...(await buildRecoveredManagedNpmInstallRecordsAsync(options)),
     ...persisted,
   };
 }
@@ -174,7 +254,7 @@ export async function loadInstalledPluginIndexInstallRecords(
   params: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord>> {
   return cloneInstallRecords(
-    mergeRecoveredManagedNpmInstallRecords(
+    await mergeRecoveredManagedNpmInstallRecordsAsync(
       await readPersistedInstalledPluginIndexInstallRecords(params),
       params,
     ),

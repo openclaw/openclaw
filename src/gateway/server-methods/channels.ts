@@ -10,7 +10,7 @@ import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { applyPluginAutoEnableAsync } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
@@ -241,10 +241,12 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const probe = (params as { probe?: boolean }).probe === true;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
-    const cfg = applyPluginAutoEnable({
-      config: context.getRuntimeConfig(),
-      env: process.env,
-    }).config;
+    const cfg = (
+      await applyPluginAutoEnableAsync({
+        config: context.getRuntimeConfig(),
+        env: process.env,
+      })
+    ).config;
     const runtime = context.getRuntimeSnapshot();
     const plugins = listChannelPlugins();
     const pluginMap = new Map<ChannelId, ChannelPlugin>(
@@ -493,10 +495,12 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const cfg = applyPluginAutoEnable({
-        config: context.getRuntimeConfig(),
-        env: process.env,
-      }).config;
+      const cfg = (
+        await applyPluginAutoEnableAsync({
+          config: context.getRuntimeConfig(),
+          env: process.env,
+        })
+      ).config;
       const payload = await startChannelAccount({
         channelId,
         accountId: (params as { accountId?: string | null }).accountId,

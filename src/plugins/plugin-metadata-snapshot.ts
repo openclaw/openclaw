@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActiveDiagnosticsTimelineSpan,
+  measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -17,7 +18,10 @@ import type {
   PluginMetadataSnapshotOwnerMaps,
 } from "./plugin-metadata-snapshot.types.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
+import {
+  loadPluginRegistrySnapshotWithMetadata,
+  loadPluginRegistrySnapshotWithMetadataAsync,
+} from "./plugin-registry.js";
 export type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataManifestView,
@@ -192,49 +196,54 @@ export function loadPluginMetadataSnapshot(
   );
 }
 
-function loadPluginMetadataSnapshotImpl(
+export function loadPluginMetadataSnapshotAsync(
   params: LoadPluginMetadataSnapshotParams,
-): PluginMetadataSnapshot {
-  const totalStartedAt = performance.now();
-  const registryStartedAt = performance.now();
-  const registryResult = loadPluginRegistrySnapshotWithMetadata({
+): Promise<PluginMetadataSnapshot> {
+  const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
+  return measureDiagnosticsTimelineSpan(
+    "plugins.metadata.scan",
+    () => loadPluginMetadataSnapshotImplAsync(params),
+    {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        hasWorkspaceDir: params.workspaceDir !== undefined,
+        hasInstalledIndex: params.index !== undefined,
+        async: true,
+      },
+    },
+  );
+}
+
+function buildRegistryParams(params: LoadPluginMetadataSnapshotParams) {
+  return {
     config: params.config,
     workspaceDir: params.workspaceDir,
     ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     env: params.env,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
     ...(params.index ? { index: params.index } : {}),
-  }) ?? {
-    source: "derived" as const,
-    snapshot: { plugins: [] },
-    diagnostics: [],
   };
-  const registrySnapshotMs = performance.now() - registryStartedAt;
+}
+
+function buildPluginMetadataSnapshotFromParts(
+  params: LoadPluginMetadataSnapshotParams,
+  registryResult: { snapshot: InstalledPluginIndex; diagnostics: readonly unknown[] },
+  manifestRegistry: ReturnType<typeof loadPluginManifestRegistry>,
+  metrics: {
+    totalStartedAt: number;
+    registrySnapshotMs: number;
+    manifestRegistryMs: number;
+  },
+): PluginMetadataSnapshot {
   const index = normalizeInstalledPluginIndex(registryResult.snapshot);
-  const manifestStartedAt = performance.now();
-  const manifestRegistry =
-    index.plugins.length === 0
-      ? loadPluginManifestRegistry({
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          diagnostics: [...index.diagnostics],
-          installRecords: index.installRecords,
-        })
-      : loadPluginManifestRegistryForInstalledIndex({
-          index,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          includeDisabled: true,
-        });
-  const manifestRegistryMs = performance.now() - manifestStartedAt;
   const normalizePluginId = createPluginRegistryIdNormalizer(index, { manifestRegistry });
   const byPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
   const ownerMapsStartedAt = performance.now();
   const owners = buildPluginMetadataOwnerMaps(manifestRegistry.plugins);
   const ownerMapsMs = performance.now() - ownerMapsStartedAt;
-  const totalMs = performance.now() - totalStartedAt;
+  const totalMs = performance.now() - metrics.totalStartedAt;
 
   return {
     policyHash: index.policyHash,
@@ -247,7 +256,8 @@ function loadPluginMetadataSnapshotImpl(
     }),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index,
-    registryDiagnostics: registryResult.diagnostics,
+    registryDiagnostics:
+      registryResult.diagnostics as PluginMetadataSnapshot["registryDiagnostics"],
     manifestRegistry,
     plugins: manifestRegistry.plugins,
     diagnostics: manifestRegistry.diagnostics,
@@ -255,12 +265,87 @@ function loadPluginMetadataSnapshotImpl(
     normalizePluginId,
     owners,
     metrics: {
-      registrySnapshotMs,
-      manifestRegistryMs,
+      registrySnapshotMs: metrics.registrySnapshotMs,
+      manifestRegistryMs: metrics.manifestRegistryMs,
       ownerMapsMs,
       totalMs,
       indexPluginCount: index.plugins.length,
       manifestPluginCount: manifestRegistry.plugins.length,
     },
   };
+}
+
+function loadManifestRegistryFromIndex(
+  params: LoadPluginMetadataSnapshotParams,
+  index: InstalledPluginIndex,
+): ReturnType<typeof loadPluginManifestRegistry> {
+  return index.plugins.length === 0
+    ? loadPluginManifestRegistry({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        diagnostics: [...index.diagnostics],
+        installRecords: index.installRecords,
+      })
+    : loadPluginManifestRegistryForInstalledIndex({
+        index,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        includeDisabled: true,
+      });
+}
+
+function loadPluginMetadataSnapshotImpl(
+  params: LoadPluginMetadataSnapshotParams,
+): PluginMetadataSnapshot {
+  const totalStartedAt = performance.now();
+  const registryStartedAt = performance.now();
+  const registryResult = loadPluginRegistrySnapshotWithMetadata(buildRegistryParams(params)) ?? {
+    source: "derived" as const,
+    snapshot: { plugins: [] } as unknown as InstalledPluginIndex,
+    diagnostics: [],
+  };
+  const registrySnapshotMs = performance.now() - registryStartedAt;
+  const index = normalizeInstalledPluginIndex(registryResult.snapshot);
+  const manifestStartedAt = performance.now();
+  const manifestRegistry = loadManifestRegistryFromIndex(params, index);
+  const manifestRegistryMs = performance.now() - manifestStartedAt;
+  return buildPluginMetadataSnapshotFromParts(
+    params,
+    { snapshot: index, diagnostics: registryResult.diagnostics },
+    manifestRegistry,
+    { totalStartedAt, registrySnapshotMs, manifestRegistryMs },
+  );
+}
+
+async function loadPluginMetadataSnapshotImplAsync(
+  params: LoadPluginMetadataSnapshotParams,
+): Promise<PluginMetadataSnapshot> {
+  const totalStartedAt = performance.now();
+  const registryStartedAt = performance.now();
+  const registryResult = (await loadPluginRegistrySnapshotWithMetadataAsync(
+    buildRegistryParams(params),
+  )) ?? {
+    source: "derived" as const,
+    snapshot: { plugins: [] } as unknown as InstalledPluginIndex,
+    diagnostics: [],
+  };
+  const registrySnapshotMs = performance.now() - registryStartedAt;
+  const index = normalizeInstalledPluginIndex(registryResult.snapshot);
+  // Yield to the event loop before the still-sync manifest construction so any
+  // pending I/O (e.g., WhatsApp keepalives) can interleave between the async
+  // registry read and the heavier manifest walk.
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  const manifestStartedAt = performance.now();
+  const manifestRegistry = loadManifestRegistryFromIndex(params, index);
+  const manifestRegistryMs = performance.now() - manifestStartedAt;
+  return buildPluginMetadataSnapshotFromParts(
+    params,
+    { snapshot: index, diagnostics: registryResult.diagnostics },
+    manifestRegistry,
+    { totalStartedAt, registrySnapshotMs, manifestRegistryMs },
+  );
 }
