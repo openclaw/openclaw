@@ -8,6 +8,7 @@ import {
   replaceSqliteSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
+  readDreamingSessionCorpusText,
   resolveMemoryCorePluginConfig,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -65,6 +66,18 @@ function requireCandidateByKey<T extends { key: string }>(candidates: T[], key: 
     throw new Error(`expected promotion candidate ${key}`);
   }
   return candidate;
+}
+
+async function readSessionCorpus(
+  workspaceDir: string,
+  day: string,
+  stateDir = path.join(workspaceDir, ".state"),
+): Promise<string> {
+  return readDreamingSessionCorpusText({
+    workspaceDir,
+    relativePath: `memory/.dreams/session-corpus/${day}.txt`,
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST_FAST: "1" },
+  });
 }
 
 function requireCandidateKeyByPath(
@@ -834,9 +847,7 @@ describe("memory-core dreaming phases", () => {
     expect(
       Object.keys((await readSessionIngestionStateForTest(workspaceDir)).files).length,
     ).toBeGreaterThan(0);
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
-    ).resolves.toBeUndefined();
+    await expect(readSessionCorpus(workspaceDir, "2026-04-05")).resolves.not.toBe("");
 
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
@@ -927,14 +938,9 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    const mainCorpus = await fs.readFile(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-      "utf-8",
-    );
-    const subagentCorpus = await fs.readFile(
-      path.join(subagentWorkspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-      "utf-8",
-    );
+    const stateDir = path.join(workspaceDir, ".state");
+    const mainCorpus = await readSessionCorpus(workspaceDir, "2026-04-05", stateDir);
+    const subagentCorpus = await readSessionCorpus(subagentWorkspaceDir, "2026-04-05", stateDir);
     expect(mainCorpus).toContain("Main workspace should stay in main dreams.");
     expect(mainCorpus).not.toContain("CEO workspace should stay in CEO dreams.");
     expect(subagentCorpus).toContain("CEO workspace should stay in CEO dreams.");
@@ -997,14 +1003,7 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    const corpusPath = path.join(
-      workspaceDir,
-      "memory",
-      ".dreams",
-      "session-corpus",
-      "2026-04-05.txt",
-    );
-    const corpus = await fs.readFile(corpusPath, "utf-8");
+    const corpus = await readSessionCorpus(workspaceDir, "2026-04-05");
     expect(corpus).not.toContain("OPENAI_API_KEY=sk-1234567890abcdef");
     expect(corpus).toContain("OPENAI_API_KEY=sk-123…cdef");
   });
@@ -1088,9 +1087,7 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readSessionCorpus(workspaceDir, "2026-04-05")).resolves.toBe("");
 
     const sessionIngestion = await readSessionIngestionStateForTest(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
@@ -1175,9 +1172,7 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readSessionCorpus(workspaceDir, "2026-04-05")).resolves.toBe("");
 
     const sessionIngestion = await readSessionIngestionStateForTest(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
@@ -1258,9 +1253,7 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readSessionCorpus(workspaceDir, "2026-04-05")).resolves.toBe("");
 
     const sessionIngestion = await readSessionIngestionStateForTest(workspaceDir);
     expect(Object.values(sessionIngestion.files)).toEqual([
@@ -1358,10 +1351,7 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    const corpus = await fs.readFile(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-16.txt"),
-      "utf-8",
-    );
+    const corpus = await readSessionCorpus(workspaceDir, "2026-04-16");
     expect(corpus).toContain("User: What changed in the sync?");
     expect(corpus).toContain("Assistant: One new session was converted.");
     expect(corpus).not.toContain("System (untrusted):");
@@ -1485,10 +1475,7 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    const corpus = await fs.readFile(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-16.txt"),
-      "utf-8",
-    );
+    const corpus = await readSessionCorpus(workspaceDir, "2026-04-16");
     expect(corpus).toContain("User: Document the Ollama provider setup.");
     expect(corpus).toContain(
       "Assistant: I documented the Ollama provider setup in the workspace notes.",
@@ -1711,14 +1698,10 @@ describe("memory-core dreaming phases", () => {
     expect(oldCandidate?.dailyCount).toBe(1);
     expect(newCandidate?.dailyCount).toBe(1);
 
-    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
-    const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
-      name.endsWith(".txt"),
-    );
-    let combinedCorpus = "";
-    for (const fileName of corpusFiles) {
-      combinedCorpus += `${await fs.readFile(path.join(sessionCorpusDir, fileName), "utf-8")}\n`;
-    }
+    const combinedCorpus = [
+      await readSessionCorpus(workspaceDir, "2026-04-05"),
+      await readSessionCorpus(workspaceDir, "2026-04-06"),
+    ].join("\n");
     const oldOccurrences = combinedCorpus.match(/Move backups to S3 Glacier\./g)?.length ?? 0;
     const newOccurrences = combinedCorpus.match(/Keep retention at 365 days\./g)?.length ?? 0;
     expect(oldOccurrences).toBe(1);
@@ -1790,12 +1773,9 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
-    const corpusFiles = (await fs.readdir(corpusDir))
-      .filter((name) => name.endsWith(".txt"))
-      .toSorted();
-    expect(corpusFiles).toEqual(["2026-04-05.txt"]);
-    const dayCorpus = await fs.readFile(path.join(corpusDir, "2026-04-05.txt"), "utf-8");
+    await expect(readSessionCorpus(workspaceDir, "2026-04-01")).resolves.toBe("");
+    const dayCorpus = await readSessionCorpus(workspaceDir, "2026-04-05");
+    expect(dayCorpus).not.toBe("");
     expect(dayCorpus).toContain("Current reminder that should be in today corpus.");
     expect(dayCorpus).not.toContain("Old planning note that should stay out of lookback.");
   });
@@ -1858,14 +1838,7 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    const corpusPath = path.join(
-      workspaceDir,
-      "memory",
-      ".dreams",
-      "session-corpus",
-      "2026-04-05.txt",
-    );
-    const corpus = await fs.readFile(corpusPath, "utf-8");
+    const corpus = await readSessionCorpus(workspaceDir, "2026-04-05");
     const persistedLines = corpus
       .split(/\r?\n/)
       .map((line) => line.trim())

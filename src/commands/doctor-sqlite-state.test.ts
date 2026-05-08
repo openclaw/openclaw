@@ -15,6 +15,7 @@ import {
   MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
+  readDreamingSessionCorpusText,
   readDreamingWorkspaceMap,
   readDreamingWorkspaceValue,
 } from "../memory-host-sdk/dreaming-state-store.js";
@@ -662,6 +663,13 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           })}\n`,
           "utf8",
         );
+        const sessionCorpusDir = path.join(dreamsDir, "session-corpus");
+        await fs.mkdir(sessionCorpusDir, { recursive: true });
+        await fs.writeFile(
+          path.join(sessionCorpusDir, "2026-04-05.txt"),
+          "User: Move backups to S3 Glacier.\nAssistant: Retention stays at 365 days.\n",
+          "utf8",
+        );
         await fs.writeFile(path.join(dreamsDir, "short-term-promotion.lock"), "999999:0\n", "utf8");
 
         await maybeRepairLegacyRuntimeStateFiles({
@@ -687,6 +695,9 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           code: "ENOENT",
         });
         await expect(fs.stat(path.join(dreamsDir, "events.jsonl"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(fs.stat(path.join(sessionCorpusDir, "2026-04-05.txt"))).rejects.toMatchObject({
           code: "ENOENT",
         });
         await expect(
@@ -734,6 +745,15 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
             query: "legacy doctor event",
           },
         ]);
+        await expect(
+          readDreamingSessionCorpusText({
+            workspaceDir,
+            relativePath: "memory/.dreams/session-corpus/2026-04-05.txt",
+            env,
+          }),
+        ).resolves.toBe(
+          "User: Move backups to S3 Glacier.\nAssistant: Retention stays at 365 days.\n",
+        );
       });
     });
   });

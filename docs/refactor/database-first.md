@@ -985,6 +985,9 @@ is newer than the backup.
   `session.trajectory.jsonl`.
   Docker MCP channel seed scripts now seed SQLite rows directly. Direct
   `sessions.json` writes are limited to doctor/migration fixtures.
+  Memory-core host events and session-corpus scratch rows now live in shared
+  SQLite plugin-state; `events.jsonl` and `session-corpus/*.txt` are legacy
+  doctor migration inputs only.
   The runtime SQLite session backend test suite no longer fabricates a
   `sessions.json`; legacy source fixtures now live in the doctor/migration
   tests that import them.

@@ -12,6 +12,7 @@ export const MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE = "dreaming.daily-inges
 export const MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE = "dreaming.session-ingestion.files";
 export const MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE =
   "dreaming.session-ingestion.messages";
+export const MEMORY_CORE_SESSION_CORPUS_LINES_NAMESPACE = "dreaming.session-corpus.lines";
 export const MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE = "dreaming.short-term-recall";
 export const MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE = "dreaming.phase-signals";
 export const MEMORY_CORE_SHORT_TERM_META_NAMESPACE = "dreaming.short-term-meta";
@@ -25,6 +26,13 @@ type WorkspaceMapRow<T> = {
 type WorkspaceValueRow<T> = {
   workspaceKey: string;
   value: T;
+};
+
+type SessionCorpusLineRow = {
+  workspaceKey: string;
+  path: string;
+  lineNumber: number;
+  text: string;
 };
 
 const stores = new Map<string, PluginStateKeyedStore<unknown>>();
@@ -67,6 +75,43 @@ function mapEntryKey(workspaceDir: string, key: string): string {
 function valueEntryKey(workspaceDir: string, key: string): string {
   const { prefix } = workspacePrefix(workspaceDir);
   return `${prefix}:${key}`;
+}
+
+function sessionCorpusPathKey(
+  workspaceDir: string,
+  relativePath: string,
+  lineNumber: number,
+): string {
+  const { prefix } = workspacePrefix(workspaceDir);
+  return `${prefix}:${hashValue(relativePath, 24)}:${lineNumber.toString().padStart(12, "0")}`;
+}
+
+function getSessionCorpusStore(
+  env?: NodeJS.ProcessEnv,
+): PluginStateKeyedStore<SessionCorpusLineRow> {
+  return createPluginStateKeyedStore<SessionCorpusLineRow>(MEMORY_CORE_PLUGIN_ID, {
+    namespace: MEMORY_CORE_SESSION_CORPUS_LINES_NAMESPACE,
+    maxEntries: MAX_DREAMING_STATE_ROWS,
+    ...(env ? { env } : {}),
+  });
+}
+
+export function createDreamingSessionCorpusLineStorageEntry(params: {
+  workspaceDir: string;
+  relativePath: string;
+  lineNumber: number;
+  text: string;
+}): { key: string; value: SessionCorpusLineRow } {
+  const { workspaceKey } = workspacePrefix(params.workspaceDir);
+  return {
+    key: sessionCorpusPathKey(params.workspaceDir, params.relativePath, params.lineNumber),
+    value: {
+      workspaceKey,
+      path: params.relativePath,
+      lineNumber: params.lineNumber,
+      text: params.text,
+    },
+  };
 }
 
 export function createDreamingWorkspaceMapStorageEntry<T>(
@@ -154,4 +199,97 @@ export async function writeDreamingWorkspaceValue(
 ): Promise<void> {
   const entry = createDreamingWorkspaceValueStorageEntry(workspaceDir, key, value);
   await getStore<WorkspaceValueRow<unknown>>(namespace).register(entry.key, entry.value);
+}
+
+export async function readDreamingSessionCorpusLines(params: {
+  workspaceDir: string;
+  relativePath: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  const { prefix, workspaceKey } = workspacePrefix(params.workspaceDir);
+  return (await getSessionCorpusStore(params.env).entries())
+    .filter(
+      (entry) =>
+        entry.key.startsWith(`${prefix}:`) &&
+        entry.value.workspaceKey === workspaceKey &&
+        entry.value.path === params.relativePath,
+    )
+    .toSorted((left, right) => {
+      if (left.value.lineNumber !== right.value.lineNumber) {
+        return left.value.lineNumber - right.value.lineNumber;
+      }
+      return left.key.localeCompare(right.key);
+    })
+    .map((entry) => entry.value.text);
+}
+
+export async function readDreamingSessionCorpusText(params: {
+  workspaceDir: string;
+  relativePath: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const lines = await readDreamingSessionCorpusLines(params);
+  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+}
+
+export async function writeDreamingSessionCorpusText(params: {
+  workspaceDir: string;
+  relativePath: string;
+  text: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<number> {
+  const store = getSessionCorpusStore(params.env);
+  const { prefix, workspaceKey } = workspacePrefix(params.workspaceDir);
+  const existing = await store.entries();
+  await Promise.all(
+    existing
+      .filter(
+        (entry) =>
+          entry.key.startsWith(`${prefix}:`) &&
+          entry.value.workspaceKey === workspaceKey &&
+          entry.value.path === params.relativePath,
+      )
+      .map((entry) => store.delete(entry.key)),
+  );
+  const lines = params.text.replace(/\r\n/g, "\n").replace(/\n$/u, "").split("\n");
+  const nonEmptyLines = params.text.length === 0 ? [] : lines;
+  await Promise.all(
+    nonEmptyLines.map((line, index) => {
+      const entry = createDreamingSessionCorpusLineStorageEntry({
+        workspaceDir: params.workspaceDir,
+        relativePath: params.relativePath,
+        lineNumber: index + 1,
+        text: line,
+      });
+      return store.register(entry.key, entry.value);
+    }),
+  );
+  return nonEmptyLines.length;
+}
+
+export async function appendDreamingSessionCorpusLines(params: {
+  workspaceDir: string;
+  relativePath: string;
+  lines: string[];
+  env?: NodeJS.ProcessEnv;
+}): Promise<number> {
+  if (params.lines.length === 0) {
+    return (await readDreamingSessionCorpusLines(params)).length + 1;
+  }
+  const store = getSessionCorpusStore(params.env);
+  const existingCount = (await readDreamingSessionCorpusLines(params)).length;
+  const firstLine = existingCount + 1;
+  await Promise.all(
+    params.lines.map((line, index) => {
+      const lineNumber = firstLine + index;
+      const entry = createDreamingSessionCorpusLineStorageEntry({
+        workspaceDir: params.workspaceDir,
+        relativePath: params.relativePath,
+        lineNumber,
+        text: line,
+      });
+      return store.register(entry.key, entry.value);
+    }),
+  );
+  return firstLine;
 }

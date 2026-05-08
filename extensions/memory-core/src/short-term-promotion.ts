@@ -7,6 +7,7 @@ import {
   MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
+  readDreamingSessionCorpusText,
   readDreamingWorkspaceMap,
   readDreamingWorkspaceValue,
   writeDreamingWorkspaceMap,
@@ -779,6 +780,10 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   return SHORT_TERM_BASENAME_RE.test(normalized);
 }
 
+function isShortTermSessionCorpusPath(filePath: string): boolean {
+  return SHORT_TERM_SESSION_CORPUS_RE.test(normalizeMemoryPath(filePath));
+}
+
 async function shortTermRecallSourceExists(params: {
   workspaceDir: string;
   entry: Pick<ShortTermRecallEntry, "path">;
@@ -786,6 +791,14 @@ async function shortTermRecallSourceExists(params: {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return false;
+  }
+  if (isShortTermSessionCorpusPath(params.entry.path)) {
+    return (
+      (await readDreamingSessionCorpusText({
+        workspaceDir,
+        relativePath: normalizeMemoryPath(params.entry.path),
+      })) !== ""
+    );
   }
   for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path)) {
     try {
@@ -1390,6 +1403,25 @@ async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
 ): Promise<PromotionCandidate | null> {
+  if (isShortTermSessionCorpusPath(candidate.path)) {
+    const rawSource = await readDreamingSessionCorpusText({
+      workspaceDir,
+      relativePath: normalizeMemoryPath(candidate.path),
+    });
+    if (!rawSource) {
+      return null;
+    }
+    const relocated = relocateCandidateRange(rawSource.split(/\r?\n/), candidate);
+    if (!relocated) {
+      return null;
+    }
+    return {
+      ...candidate,
+      startLine: relocated.startLine,
+      endLine: relocated.endLine,
+      snippet: relocated.snippet,
+    };
+  }
   const sourcePaths = resolveShortTermSourcePathCandidates(workspaceDir, candidate.path);
   for (const sourcePath of sourcePaths) {
     let rawSource: string;
