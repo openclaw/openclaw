@@ -225,8 +225,7 @@ describe("cron view", () => {
       container,
     );
 
-    const selected = container.querySelector(".list-item-selected");
-    expect(selected).not.toBeNull();
+    getElement(container, ".list-item-selected", HTMLElement);
 
     const row = getElement(container, ".list-item-clickable", HTMLElement);
     row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -327,7 +326,7 @@ describe("cron view", () => {
     expect(collapseButton.getAttribute("aria-expanded")).toBe("true");
     collapseButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onToggleFormCollapsed).toHaveBeenCalledWith(true);
-    expect(container.querySelector(".cron-form")).not.toBeNull();
+    getElement(container, ".cron-form", HTMLElement);
 
     const collapsedProps = createProps() as CronProps & {
       cronFormCollapsed: boolean;
@@ -440,7 +439,7 @@ describe("cron view", () => {
 
     const runBody = container.querySelector(".cron-run-entry__body.chat-text");
     expect(runBody?.querySelector("strong")?.textContent).toBe("markdown");
-    expect(runBody?.querySelector("table")).not.toBeNull();
+    expect(runBody?.querySelectorAll("table")).toHaveLength(1);
   });
 
   it("shows run errors in one place when no summary exists", () => {
@@ -565,9 +564,8 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Execution");
     expect(container.textContent).toContain("Delivery");
 
-    const checkboxLabel = container.querySelector(".cron-checkbox");
-    expect(checkboxLabel).not.toBeNull();
-    const firstElement = checkboxLabel?.firstElementChild;
+    const checkboxLabel = getElement(container, ".cron-checkbox", HTMLLabelElement);
+    const firstElement = checkboxLabel.firstElementChild;
     expect(firstElement?.tagName.toLowerCase()).toBe("input");
 
     render(
