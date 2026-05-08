@@ -379,7 +379,10 @@ describe("doctor state integrity oauth dir checks", () => {
       }),
     );
     const files = fs.readdirSync(sessionsDir);
-    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+    const archivedOrphanTranscripts = files.filter((name) =>
+      name.startsWith("orphan-session.jsonl.deleted."),
+    );
+    expect(archivedOrphanTranscripts.length).toBeGreaterThan(0);
   });
 
   it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
@@ -401,7 +404,10 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     const files = fs.readdirSync(sessionsDir);
     expect(files).toContain("orphan-session.jsonl");
-    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(false);
+    const archivedOrphanTranscripts = files.filter((name) =>
+      name.startsWith("orphan-session.jsonl.deleted."),
+    );
+    expect(archivedOrphanTranscripts).toEqual([]);
   });
 
   it.skipIf(process.platform === "win32")(
