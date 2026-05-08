@@ -66,8 +66,8 @@ describe("security audit workspace skill path escape findings", () => {
         const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
           cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
         });
-        expect(findings.some((entry) => entry.checkId === "skills.workspace.symlink_escape")).toBe(
-          false,
+        expect(findings.map((entry) => entry.checkId)).not.toContain(
+          "skills.workspace.symlink_escape",
         );
       })(),
     ];
