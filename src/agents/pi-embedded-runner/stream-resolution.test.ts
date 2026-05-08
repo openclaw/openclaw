@@ -149,12 +149,14 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("routes PI native OpenAI-compatible provider streams through boundary-aware transports", async () => {
     const nativeStreamFn = getApiProvider("openai-completions")?.streamSimple;
-    expect(nativeStreamFn).toBeDefined();
+    if (!nativeStreamFn) {
+      throw new Error("expected native OpenAI-compatible stream function");
+    }
     const innerStreamFn = vi.fn(async (_model, _context, options) => options);
     overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
 
     const streamFn = resolveEmbeddedAgentStreamFn({
-      currentStreamFn: nativeStreamFn as StreamFn,
+      currentStreamFn: nativeStreamFn,
       shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {

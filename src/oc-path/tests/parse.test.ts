@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { parseMd } from '../parse.js';
+import { describe, expect, it } from "vitest";
+import { parseMd } from "../parse.js";
 
-describe('parseMd — frontmatter', () => {
-  it('parses simple frontmatter', () => {
+describe("parseMd — frontmatter", () => {
+  it("parses simple frontmatter", () => {
     const raw = `---
 name: github
 description: gh CLI for issues, PRs, runs
@@ -13,20 +13,20 @@ Body text.
     const { ast, diagnostics } = parseMd(raw);
     expect(diagnostics).toEqual([]);
     expect(ast.frontmatter).toEqual([
-      { key: 'name', value: 'github', line: 2 },
-      { key: 'description', value: 'gh CLI for issues, PRs, runs', line: 3 },
+      { key: "name", value: "github", line: 2 },
+      { key: "description", value: "gh CLI for issues, PRs, runs", line: 3 },
     ]);
   });
 
-  it('handles no frontmatter', () => {
+  it("handles no frontmatter", () => {
     const raw = `## First section\n\nContent.\n`;
     const { ast } = parseMd(raw);
     expect(ast.frontmatter).toEqual([]);
-    expect(ast.preamble).toBe('');
+    expect(ast.preamble).toBe("");
     expect(ast.blocks.length).toBe(1);
   });
 
-  it('emits diagnostic for unclosed frontmatter', () => {
+  it("emits diagnostic for unclosed frontmatter", () => {
     const raw = `---
 name: github
 description: never closes
@@ -35,24 +35,24 @@ Body.
 `;
     const { diagnostics } = parseMd(raw);
     expect(diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'OC_FRONTMATTER_UNCLOSED' }),
+      expect.objectContaining({ code: "OC_FRONTMATTER_UNCLOSED" }),
     );
   });
 
-  it('strips quotes from values', () => {
+  it("strips quotes from values", () => {
     const raw = `---
 title: "Hello world"
 hint: 'quoted'
 ---
 `;
     const { ast } = parseMd(raw);
-    expect(ast.frontmatter[0]?.value).toBe('Hello world');
-    expect(ast.frontmatter[1]?.value).toBe('quoted');
+    expect(ast.frontmatter[0]?.value).toBe("Hello world");
+    expect(ast.frontmatter[1]?.value).toBe("quoted");
   });
 });
 
-describe('parseMd — H2 blocks', () => {
-  it('splits sections', () => {
+describe("parseMd — H2 blocks", () => {
+  it("splits sections", () => {
     const raw = `Preamble text.
 
 ## First
@@ -64,14 +64,14 @@ Body of first.
 Body of second.
 `;
     const { ast } = parseMd(raw);
-    expect(ast.preamble.trim()).toBe('Preamble text.');
+    expect(ast.preamble.trim()).toBe("Preamble text.");
     expect(ast.blocks.length).toBe(2);
-    expect(ast.blocks[0]?.heading).toBe('First');
-    expect(ast.blocks[0]?.slug).toBe('first');
-    expect(ast.blocks[1]?.heading).toBe('Second');
+    expect(ast.blocks[0]?.heading).toBe("First");
+    expect(ast.blocks[0]?.slug).toBe("first");
+    expect(ast.blocks[1]?.heading).toBe("Second");
   });
 
-  it('preserves line numbers (1-based)', () => {
+  it("preserves line numbers (1-based)", () => {
     const raw = `Line 1
 ## Heading at line 2
 Line 3
@@ -80,7 +80,7 @@ Line 3
     expect(ast.blocks[0]?.line).toBe(2);
   });
 
-  it('does NOT split on `## ` inside fenced code blocks', () => {
+  it("does NOT split on `## ` inside fenced code blocks", () => {
     const raw = `## Real section
 
 \`\`\`md
@@ -91,12 +91,12 @@ content
 ## Another section
 `;
     const { ast } = parseMd(raw);
-    expect(ast.blocks.map((b) => b.heading)).toEqual(['Real section', 'Another section']);
+    expect(ast.blocks.map((b) => b.heading)).toEqual(["Real section", "Another section"]);
   });
 });
 
-describe('parseMd — items', () => {
-  it('extracts plain bullet items', () => {
+describe("parseMd — items", () => {
+  it("extracts plain bullet items", () => {
     const raw = `## Boundaries
 
 - never write to /etc
@@ -104,23 +104,23 @@ describe('parseMd — items', () => {
 `;
     const { ast } = parseMd(raw);
     expect(ast.blocks[0]?.items.length).toBe(2);
-    expect(ast.blocks[0]?.items[0]?.text).toBe('never write to /etc');
+    expect(ast.blocks[0]?.items[0]?.text).toBe("never write to /etc");
     expect(ast.blocks[0]?.items[0]?.kv).toBeUndefined();
   });
 
-  it('extracts kv items', () => {
+  it("extracts kv items", () => {
     const raw = `## Tools
 
 - gh: GitHub CLI
 - curl: HTTP client
 `;
     const { ast } = parseMd(raw);
-    expect(ast.blocks[0]?.items[0]?.kv).toEqual({ key: 'gh', value: 'GitHub CLI' });
-    expect(ast.blocks[0]?.items[0]?.slug).toBe('gh');
-    expect(ast.blocks[0]?.items[1]?.kv).toEqual({ key: 'curl', value: 'HTTP client' });
+    expect(ast.blocks[0]?.items[0]?.kv).toEqual({ key: "gh", value: "GitHub CLI" });
+    expect(ast.blocks[0]?.items[0]?.slug).toBe("gh");
+    expect(ast.blocks[0]?.items[1]?.kv).toEqual({ key: "curl", value: "HTTP client" });
   });
 
-  it('does NOT extract bullets inside fenced code', () => {
+  it("does NOT extract bullets inside fenced code", () => {
     const raw = `## Section
 
 \`\`\`
@@ -131,12 +131,12 @@ describe('parseMd — items', () => {
 `;
     const { ast } = parseMd(raw);
     expect(ast.blocks[0]?.items.length).toBe(1);
-    expect(ast.blocks[0]?.items[0]?.text).toBe('real bullet');
+    expect(ast.blocks[0]?.items[0]?.text).toBe("real bullet");
   });
 });
 
-describe('parseMd — tables', () => {
-  it('extracts a simple table', () => {
+describe("parseMd — tables", () => {
+  it("extracts a simple table", () => {
     const raw = `## Tool Guidance
 
 | tool | guidance |
@@ -146,15 +146,17 @@ describe('parseMd — tables', () => {
 `;
     const { ast } = parseMd(raw);
     const table = ast.blocks[0]?.tables[0];
-    expect(table).toBeDefined();
-    expect(table?.headers).toEqual(['tool', 'guidance']);
-    expect(table?.rows.length).toBe(2);
-    expect(table?.rows[0]).toEqual(['gh', 'use for GitHub']);
+    if (!table) {
+      throw new Error("expected parsed markdown table");
+    }
+    expect(table.headers).toEqual(["tool", "guidance"]);
+    expect(table.rows.length).toBe(2);
+    expect(table.rows[0]).toEqual(["gh", "use for GitHub"]);
   });
 });
 
-describe('parseMd — code blocks', () => {
-  it('extracts a fenced code block', () => {
+describe("parseMd — code blocks", () => {
+  it("extracts a fenced code block", () => {
     const raw = `## Examples
 
 \`\`\`ts
@@ -163,12 +165,12 @@ const x = 1;
 `;
     const { ast } = parseMd(raw);
     expect(ast.blocks[0]?.codeBlocks[0]).toMatchObject({
-      lang: 'ts',
-      text: 'const x = 1;',
+      lang: "ts",
+      text: "const x = 1;",
     });
   });
 
-  it('handles unlanguaged fences', () => {
+  it("handles unlanguaged fences", () => {
     const raw = `## Block
 
 \`\`\`
@@ -180,24 +182,24 @@ plain text
   });
 });
 
-describe('parseMd — byte-fidelity', () => {
-  it('preserves raw on the AST', () => {
+describe("parseMd — byte-fidelity", () => {
+  it("preserves raw on the AST", () => {
     const raw = `---\nname: x\n---\n\n## Sec\n\n- a\n- b\n`;
     const { ast } = parseMd(raw);
     expect(ast.raw).toBe(raw);
   });
 
-  it('preserves BOM in raw but ignores it for parsing', () => {
-    const raw = '﻿## Heading\n';
+  it("preserves BOM in raw but ignores it for parsing", () => {
+    const raw = "﻿## Heading\n";
     const { ast } = parseMd(raw);
     expect(ast.raw).toBe(raw);
-    expect(ast.blocks[0]?.heading).toBe('Heading');
+    expect(ast.blocks[0]?.heading).toBe("Heading");
   });
 
-  it('handles CRLF line endings', () => {
-    const raw = '## Heading\r\n\r\n- item\r\n';
+  it("handles CRLF line endings", () => {
+    const raw = "## Heading\r\n\r\n- item\r\n";
     const { ast } = parseMd(raw);
-    expect(ast.blocks[0]?.heading).toBe('Heading');
-    expect(ast.blocks[0]?.items[0]?.text).toBe('item');
+    expect(ast.blocks[0]?.heading).toBe("Heading");
+    expect(ast.blocks[0]?.items[0]?.text).toBe("item");
   });
 });
