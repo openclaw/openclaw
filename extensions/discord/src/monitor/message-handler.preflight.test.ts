@@ -639,8 +639,7 @@ describe("preflightDiscordMessage", () => {
       registerBindingAdapter: true,
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
+    expect(expectPreflightResult(result).boundSessionKey).toBe(threadBinding.targetSessionKey);
   });
 
   it("drops hydrated bound-thread webhook copies after fetching an empty payload", async () => {
@@ -770,9 +769,9 @@ describe("preflightDiscordMessage", () => {
         config: expect.objectContaining({ enabled: true }),
       }),
     );
-    expect(result).not.toBeNull();
-    expect(result?.sender.isPluralKit).toBe(true);
-    expect(result?.canonicalMessageId).toBe("orig-123");
+    const preflight = expectPreflightResult(result);
+    expect(preflight.sender.isPluralKit).toBe(true);
+    expect(preflight.canonicalMessageId).toBe("orig-123");
   });
 
   it("skips PluralKit lookup for bound-thread webhook echoes", async () => {
@@ -848,9 +847,9 @@ describe("preflightDiscordMessage", () => {
       }),
     );
 
-    expect(result).not.toBeNull();
-    expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
-    expect(result?.shouldRequireMention).toBe(false);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.boundSessionKey).toBe(threadBinding.targetSessionKey);
+    expect(preflight.shouldRequireMention).toBe(false);
   });
 
   it("drops bot messages without mention when allowBots=mentions", async () => {
