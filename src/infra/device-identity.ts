@@ -177,6 +177,12 @@ function readStoredIdentity(filePath: string): StoredIdentity | null {
   );
 }
 
+function readStoredIdentityForEnv(env: NodeJS.ProcessEnv): StoredIdentity | null {
+  return parseStoredIdentity(
+    readOpenClawStateKvJson(DEVICE_IDENTITY_SCOPE, DEVICE_IDENTITY_KEY, { env }),
+  );
+}
+
 function writeStoredIdentity(filePath: string, stored: StoredIdentity): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     DEVICE_IDENTITY_SCOPE,
@@ -232,6 +238,28 @@ export function loadDeviceIdentityIfPresent(
 ): DeviceIdentity | null {
   try {
     const parsed = readStoredIdentity(filePath);
+    if (!parsed) {
+      return null;
+    }
+    const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+    if (!derivedId || derivedId !== parsed.deviceId) {
+      return null;
+    }
+    return {
+      deviceId: parsed.deviceId,
+      publicKeyPem: parsed.publicKeyPem,
+      privateKeyPem: parsed.privateKeyPem,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function loadDeviceIdentityIfPresentForEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): DeviceIdentity | null {
+  try {
+    const parsed = readStoredIdentityForEnv(env);
     if (!parsed) {
       return null;
     }
