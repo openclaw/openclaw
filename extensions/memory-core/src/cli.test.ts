@@ -142,6 +142,23 @@ describe("memory cli", () => {
     );
   }
 
+  const ansiPattern = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+
+  function loggedOutput(spy: ReturnType<typeof vi.spyOn>) {
+    return spy.mock.calls
+      .map((call: unknown[]) => (typeof call[0] === "string" ? call[0] : ""))
+      .join("\n")
+      .replace(ansiPattern, "");
+  }
+
+  function expectLogged(spy: ReturnType<typeof vi.spyOn>, expected: string) {
+    expect(loggedOutput(spy)).toContain(expected);
+  }
+
+  function expectNotLogged(spy: ReturnType<typeof vi.spyOn>, expected: string) {
+    expect(loggedOutput(spy)).not.toContain(expected);
+  }
+
   async function runMemoryCli(args: string[]) {
     const program = new Command();
     program.name("test");
@@ -241,14 +258,12 @@ describe("memory cli", () => {
     await runMemoryCli(["status"]);
 
     expect(probeVectorAvailability).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: ready"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Semantic vectors: ready"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector dims: 1024"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector path: /opt/sqlite-vec.dylib"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("FTS: ready"));
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("Embedding cache: enabled (123 entries)"),
-    );
+    expectLogged(log, "Vector store: ready");
+    expectLogged(log, "Semantic vectors: ready");
+    expectLogged(log, "Vector dims: 1024");
+    expectLogged(log, "Vector path: /opt/sqlite-vec.dylib");
+    expectLogged(log, "FTS: ready");
+    expectLogged(log, "Embedding cache: enabled (123 entries)");
     expect(close).toHaveBeenCalled();
   });
 
@@ -277,8 +292,8 @@ describe("memory cli", () => {
 
     expect(probeVectorAvailability).not.toHaveBeenCalled();
     expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Provider: auto"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: unknown"));
+    expectLogged(log, "Provider: auto");
+    expectLogged(log, "Vector store: unknown");
     expect(close).toHaveBeenCalled();
   });
 
@@ -366,9 +381,9 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status", "--agent", "main"]);
 
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: unavailable"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Semantic vectors: unavailable"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector error: load failed"));
+    expectLogged(log, "Vector store: unavailable");
+    expectLogged(log, "Semantic vectors: unavailable");
+    expectLogged(log, "Vector error: load failed");
     expect(close).toHaveBeenCalled();
   });
 
@@ -391,7 +406,7 @@ describe("memory cli", () => {
     expect(probeVectorStoreAvailability).toHaveBeenCalled();
     expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: ready"));
+    expectLogged(log, "Embeddings: ready");
     expect(close).toHaveBeenCalled();
   });
 
@@ -427,12 +442,10 @@ describe("memory cli", () => {
     expect(probeVectorStoreAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(probeVectorAvailability).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: ready"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Semantic vectors: unavailable"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: unavailable"));
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("Embeddings error: No embedding provider available"),
-    );
+    expectLogged(log, "Vector store: ready");
+    expectLogged(log, "Semantic vectors: unavailable");
+    expectLogged(log, "Embeddings: unavailable");
+    expectLogged(log, "Embeddings error: No embedding provider available");
     expect(close).toHaveBeenCalled();
   });
 
@@ -466,8 +479,8 @@ describe("memory cli", () => {
     expect(probeVectorStoreAvailability).not.toHaveBeenCalled();
     expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: ready"));
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Vector store:"));
+    expectLogged(log, "Vector: ready");
+    expectNotLogged(log, "Vector store:");
     expect(close).toHaveBeenCalled();
   });
 
@@ -498,8 +511,8 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status"]);
 
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Recall store: 1 entries"));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
+      expectLogged(log, "Recall store: 1 entries");
+      expectLogged(log, "Dreaming: off");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -553,7 +566,7 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status", "--fix"]);
 
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Repair: rewrote store"));
+      expectLogged(log, "Repair: rewrote store");
       await expect(fs.stat(lockPath)).rejects.toThrow();
       const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
         entries: Record<string, { conceptTags?: string[] }>;
@@ -577,9 +590,7 @@ describe("memory cli", () => {
 
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status"]);
-      expect(log).toHaveBeenCalledWith(
-        expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
-      );
+      expectLogged(log, "Fix: openclaw memory status --fix --agent main");
 
       log.mockClear();
       mockManager({
@@ -588,9 +599,7 @@ describe("memory cli", () => {
         close,
       });
       await runMemoryCli(["status", "--fix"]);
-      expect(log).not.toHaveBeenCalledWith(
-        expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
-      );
+      expectNotLogged(log, "Fix: openclaw memory status --fix --agent main");
     });
   });
 
@@ -623,10 +632,8 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status", "--fix"]);
 
-      expect(log).toHaveBeenCalledWith(
-        expect.stringContaining("Dream repair: archived session corpus"),
-      );
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dream archive:"));
+      expectLogged(log, "Dream repair: archived session corpus");
+      expectLogged(log, "Dream archive:");
       await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(
         fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
@@ -746,7 +753,7 @@ describe("memory cli", () => {
       await runMemoryCli(["index"]);
 
       expectCliSync(sync);
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD index: "));
+      expectLogged(log, "QMD index: ");
       expect(log).toHaveBeenCalledWith("Memory index updated (main).");
       expect(close).toHaveBeenCalled();
     });
@@ -776,8 +783,8 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status"]);
 
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD audit:"));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("2 collections"));
+      expectLogged(log, "QMD audit:");
+      expectLogged(log, "2 collections");
       expect(close).toHaveBeenCalled();
     });
   });
