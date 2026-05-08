@@ -156,7 +156,7 @@ describe("resolveMatrixMonitorConfig", () => {
     expect(resolveTargets).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenCalledWith("matrix dm allowlist unresolved: user:Ghost");
     expect(runtime.log).toHaveBeenCalledWith(
-      "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored.",
+      "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender.",
     );
     expect(runtime.log).toHaveBeenCalledWith("matrix rooms unresolved: channel:Project X");
     expect(runtime.log).toHaveBeenCalledWith(
@@ -243,11 +243,11 @@ describe("resolveMatrixMonitorConfig", () => {
     expect(result.allowFromResolvedEntries).toEqual([
       { input: "matrix:@Bob:Example.org", id: "@bob:example.org" },
     ]);
-    expect(result.groupAllowFrom).toEqual([]);
+    expect(result.groupAllowFrom).toEqual(["Carol"]);
     expect(result.roomsConfig).toEqual({
       "!ops:example.org": {
         enabled: true,
-        users: ["@erin:example.org"],
+        users: ["@erin:example.org", "Frank"],
       },
     });
     expect(resolveTargets).toHaveBeenCalledTimes(1);
@@ -260,15 +260,15 @@ describe("resolveMatrixMonitorConfig", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith("matrix dm allowlist unresolved: Alice");
     expect(runtime.log).toHaveBeenCalledWith(
-      "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
+      "matrix dm allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
     );
     expect(runtime.log).toHaveBeenCalledWith("matrix group allowlist unresolved: Carol");
     expect(runtime.log).toHaveBeenCalledWith(
-      "matrix group allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
+      "matrix group allowlist entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
     );
     expect(runtime.log).toHaveBeenCalledWith("matrix room users unresolved: Frank");
     expect(runtime.log).toHaveBeenCalledWith(
-      "matrix room users entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
+      "matrix room users entries must be full Matrix IDs (example: @user:server). Unresolved entries will not match any sender. To match Matrix display names, set channels.matrix.dangerouslyAllowNameMatching=true.",
     );
   });
 
@@ -288,6 +288,26 @@ describe("resolveMatrixMonitorConfig", () => {
     });
 
     expect(result).toEqual(["@bob:example.org", "*"]);
+    expect(resolveTargets).not.toHaveBeenCalled();
+  });
+
+  it("keeps unresolved live group allowlist entries configured for fail-closed matching", async () => {
+    const runtime = createRuntime();
+    const resolveTargets = vi.fn(async () => [
+      { input: "Alice", resolved: true, id: "@alice:example.org" },
+    ]);
+
+    const result = await resolveMatrixMonitorLiveUserAllowlist({
+      cfg: createConfig(),
+      accountId: "ops",
+      entries: ["Alice", "matrix:@Bob:Example.org"],
+      failClosedOnUnresolved: true,
+      startupResolvedEntries: [{ input: "Alice", id: "@startup-alice:example.org" }],
+      runtime,
+      resolveTargets,
+    });
+
+    expect(result).toEqual(["Alice", "@bob:example.org"]);
     expect(resolveTargets).not.toHaveBeenCalled();
   });
 

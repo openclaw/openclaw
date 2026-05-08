@@ -440,6 +440,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   const resolveCachedLiveAllowlist = async (params: {
     cfg: CoreConfig;
     entries?: ReadonlyArray<string | number>;
+    failClosedOnUnresolved?: boolean;
     startupResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
     cache: LiveAllowlistCacheEntry | null;
     updateCache: (next: LiveAllowlistCacheEntry) => void;
@@ -447,6 +448,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     const accountConfig = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
     const signature = JSON.stringify({
       entries: (params.entries ?? []).map((entry) => String(entry).trim()),
+      failClosedOnUnresolved: params.failClosedOnUnresolved === true,
       dangerouslyAllowNameMatching: isDangerousNameMatchingEnabled(accountConfig),
     });
     if (params.cache?.signature === signature) {
@@ -456,6 +458,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       cfg: params.cfg,
       accountId,
       entries: params.entries,
+      failClosedOnUnresolved: params.failClosedOnUnresolved,
       startupResolvedEntries: params.startupResolvedEntries,
       runtime,
     });
@@ -732,6 +735,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const liveGroupAllowFrom = await resolveCachedLiveAllowlist({
           cfg: liveCfg,
           entries: liveAccountAllowlists.groupAllowFrom,
+          failClosedOnUnresolved: true,
           startupResolvedEntries: groupAllowFromResolvedEntries,
           cache: liveGroupAllowlistCache,
           updateCache: (next) => {

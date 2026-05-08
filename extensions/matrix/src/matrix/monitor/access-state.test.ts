@@ -80,6 +80,26 @@ describe("resolveMatrixMonitorAccessState", () => {
     ]);
   });
 
+  it("treats unresolved configured room allowlists as configured but nonmatching", () => {
+    const state = resolveMatrixMonitorAccessState({
+      allowFrom: [],
+      storeAllowFrom: [],
+      groupAllowFrom: ["Alice"],
+      roomUsers: ["Dana"],
+      senderId: "@alice:example.org",
+      isRoom: true,
+    });
+
+    expect(state.groupAllowConfigured).toBe(true);
+    expect(state.roomUserMatch).toEqual({ allowed: false });
+    expect(state.groupAllowMatch).toEqual({ allowed: false });
+    expect(state.commandAuthorizers).toEqual([
+      { configured: false, allowed: false },
+      { configured: true, allowed: false },
+      { configured: true, allowed: false },
+    ]);
+  });
+
   it("keeps room-user matching disabled for dm traffic", () => {
     const state = resolveMatrixMonitorAccessState({
       allowFrom: [],
