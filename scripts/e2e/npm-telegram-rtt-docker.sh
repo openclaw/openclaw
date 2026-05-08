@@ -161,7 +161,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-mkdir -p "$(dirname "$config_path")" "$HOME/.openclaw/workspace" "$HOME/.openclaw/agents/main/sessions" "$HOME/workspace"
+mkdir -p "$(dirname "$config_path")" "$HOME/.openclaw/workspace" "$HOME/.openclaw/agents/main/agent" "$HOME/workspace"
 
 node /app/scripts/e2e/npm-telegram-rtt-config.mjs \
   "$config_path" \

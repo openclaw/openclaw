@@ -302,7 +302,8 @@ run_agent_turn_logged() {
   local prompt="$4"
   local out_json="$5"
   local started_at
-  SESSION_JSONL="$(session_jsonl_path "$profile" "$session_id")"
+  SESSION_DB_PATH="$(session_db_path "$profile")"
+  SESSION_TRANSCRIPT_ID="$session_id"
   started_at="$(date +%s)"
   echo "==> Agent turn start: $label ($profile)"
   run_agent_turn "$profile" "$session_id" "$prompt" "$out_json"
@@ -351,13 +352,25 @@ dump_profile_debug() {
     echo "missing: ${GATEWAY_LOG:-<unset>}"
   fi
 
-  echo "---- session transcript ($profile) ----"
-  if [[ -n "${SESSION_JSONL:-}" && -f "$SESSION_JSONL" ]]; then
-    tail -n 80 "$SESSION_JSONL"
+  echo "---- session transcript rows ($profile) ----"
+  if [[ -n "${SESSION_DB_PATH:-}" && -f "$SESSION_DB_PATH" && -n "${SESSION_TRANSCRIPT_ID:-}" ]]; then
+    node - <<'NODE' "$SESSION_DB_PATH" "$SESSION_TRANSCRIPT_ID" || true
+const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const rows = db
+  .prepare(
+    "select seq, event_json from transcript_events where session_id = ? order by seq desc limit 80",
+  )
+  .all(process.argv[3]);
+for (const row of rows.reverse()) {
+  console.log(`${row.seq}: ${row.event_json}`);
+}
+db.close();
+NODE
   else
-    echo "missing: ${SESSION_JSONL:-<unset>}"
-    if [[ -n "${SESSION_JSONL:-}" ]]; then
-      ls -la "$(dirname "$SESSION_JSONL")" 2>/dev/null || true
+    echo "missing: ${SESSION_DB_PATH:-<unset>}"
+    if [[ -n "${SESSION_DB_PATH:-}" ]]; then
+      ls -la "$(dirname "$SESSION_DB_PATH")" 2>/dev/null || true
     fi
   fi
 
@@ -446,15 +459,20 @@ NODE
 }
 
 assert_session_used_tools() {
-  local jsonl="$1"
-  shift
-  node - <<'NODE' "$jsonl" "$@"
-const fs = require("node:fs");
-const jsonl = process.argv[2];
-const required = new Set(process.argv.slice(3));
-
-const raw = fs.readFileSync(jsonl, "utf8");
-const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+  local db_path="$1"
+  local session_id="$2"
+  shift 2
+  node - <<'NODE' "$db_path" "$session_id" "$@"
+const { DatabaseSync } = require("node:sqlite");
+const dbPath = process.argv[2];
+const sessionId = process.argv[3];
+const required = new Set(process.argv.slice(4));
+const db = new DatabaseSync(dbPath, { readOnly: true });
+const rows = db
+  .prepare("select event_json from transcript_events where session_id = ? order by seq asc")
+  .all(sessionId);
+db.close();
+const lines = rows.map((row) => String(row.event_json ?? "")).filter(Boolean);
 const seen = new Set();
 
 const toolTypes = new Set([
@@ -507,7 +525,7 @@ for (const line of lines) {
     const entry = JSON.parse(line);
     walk(entry, null);
   } catch {
-    // ignore unparsable lines
+    // ignore unparsable rows
   }
 }
 
@@ -522,10 +540,9 @@ if (missing.length > 0) {
 NODE
 }
 
-session_jsonl_path() {
+session_db_path() {
   local profile="$1"
-  local session_id="$2"
-  echo "$HOME/.openclaw-${profile}/agents/main/sessions/${session_id}.jsonl"
+  echo "$HOME/.openclaw-${profile}/agents/main/agent/openclaw-agent.sqlite"
 }
 
 run_profile() {
@@ -627,7 +644,8 @@ run_profile() {
   IMAGE_PNG="$workspace/proof.png"
   IMAGE_TXT="$workspace/image.txt"
   SESSION_ID_PREFIX="e2e-tools-${profile}"
-  SESSION_JSONL=""
+  SESSION_DB_PATH=""
+  SESSION_TRANSCRIPT_ID=""
 
   PROOF_VALUE="$(node -e 'console.log(require("node:crypto").randomBytes(16).toString("hex"))')"
   echo -n "$PROOF_VALUE" >"$PROOF_TXT"
@@ -770,12 +788,12 @@ run_profile() {
   phase_mark_start "Verify tool usage via session transcript ($profile)"
   # Give the gateway a moment to flush transcripts.
   sleep 1
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN1_SESSION_ID")" read
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2_SESSION_ID")" write
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN2B_SESSION_ID")" read
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN3_SESSION_ID")" exec
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN3B_SESSION_ID")" write
-  assert_session_used_tools "$(session_jsonl_path "$profile" "$TURN4_SESSION_ID")" image write
+  assert_session_used_tools "$(session_db_path "$profile")" "$TURN1_SESSION_ID" read
+  assert_session_used_tools "$(session_db_path "$profile")" "$TURN2_SESSION_ID" write
+  assert_session_used_tools "$(session_db_path "$profile")" "$TURN2B_SESSION_ID" read
+  assert_session_used_tools "$(session_db_path "$profile")" "$TURN3_SESSION_ID" exec
+  assert_session_used_tools "$(session_db_path "$profile")" "$TURN3B_SESSION_ID" write
+  assert_session_used_tools "$(session_db_path "$profile")" "$TURN4_SESSION_ID" image write
   phase_mark_passed "Verify tool usage via session transcript ($profile)"
 
   cleanup_profile

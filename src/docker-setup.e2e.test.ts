@@ -358,7 +358,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(envFile).toContain("OPENCLAW_TZ=Asia/Shanghai");
   });
 
-  it("precreates agent data dirs to avoid EACCES in container", async () => {
+  it("precreates agent database dirs to avoid EACCES in container", async () => {
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-agent-dirs");
     const workspaceDir = join(activeSandbox.rootDir, "workspace-agent-dirs");
@@ -371,8 +371,6 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.status).toBe(0);
     const agentDirStat = await stat(join(configDir, "agents", "main", "agent"));
     expect(agentDirStat.isDirectory()).toBe(true);
-    const sessionsDirStat = await stat(join(configDir, "agents", "main", "sessions"));
-    expect(sessionsDirStat.isDirectory()).toBe(true);
 
     // Verify that a root-user chown step runs before setup.
     const log = await readDockerLog(activeSandbox);

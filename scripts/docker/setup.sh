@@ -274,7 +274,6 @@ mkdir -p "$OPENCLAW_WORKSPACE_DIR"
 # where the container (even as root) cannot create new host subdirectories.
 mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
 mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/agent"
-mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/sessions"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
