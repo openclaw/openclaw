@@ -1182,10 +1182,11 @@ describe("DiscordVoiceManager", () => {
           player: { state: { status: string } };
         }
       | undefined;
-    expect(entry).toBeDefined();
-    if (entry) {
-      entry.player.state.status = "playing";
+    if (!entry) {
+      throw new Error("expected voice session for guild g1");
     }
+    expect(entry.player.state.status).toBe("idle");
+    entry.player.state.status = "playing";
 
     await (
       manager as unknown as {

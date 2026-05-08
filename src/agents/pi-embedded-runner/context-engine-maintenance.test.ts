@@ -201,7 +201,6 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
           { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
         ],
       });
-      expect(rewritePromise).toBeDefined();
       expect(rewritePromise?.then).toBeTypeOf("function");
 
       await flushAsyncWork();
