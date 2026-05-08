@@ -228,7 +228,7 @@ export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 export const overflowBaseRunParams = {
   sessionId: "test-session",
   sessionKey: "test-key",
-  sessionFile: "/tmp/session.json",
+  sessionFile: "sqlite-transcript://main/test-session.jsonl",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,

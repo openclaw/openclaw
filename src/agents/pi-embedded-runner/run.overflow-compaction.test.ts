@@ -166,7 +166,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     await runEmbeddedPiAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "sqlite-transcript://main/test-session.jsonl",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -583,7 +583,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedCompactDirect).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "test-session",
-        sessionFile: "/tmp/session.json",
+        sessionFile: "sqlite-transcript://main/test-session.jsonl",
         runtimeContext: expect.objectContaining({
           trigger: "overflow",
           authProfileId: "test-profile",
@@ -736,7 +736,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     await runEmbeddedPiAgent(overflowBaseRunParams);
 
     expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledWith(
-      { messageCount: -1, sessionFile: "/tmp/session.json" },
+      { messageCount: -1, sessionFile: "sqlite-transcript://main/test-session.jsonl" },
       expect.objectContaining({
         sessionKey: "test-key",
       }),
@@ -746,7 +746,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         messageCount: -1,
         compactedCount: -1,
         tokenCount: 50,
-        sessionFile: "/tmp/session.json",
+        sessionFile: "sqlite-transcript://main/test-session.jsonl",
       },
       expect.objectContaining({
         sessionKey: "test-key",
@@ -775,7 +775,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         contextEngine: mockedContextEngine,
         sessionId: "test-session",
         sessionKey: "test-key",
-        sessionFile: "/tmp/session.json",
+        sessionFile: "sqlite-transcript://main/test-session.jsonl",
         reason: "compaction",
         runtimeContext: expect.objectContaining({
           trigger: "overflow",

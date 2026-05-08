@@ -33,7 +33,7 @@ export function createQueueTestRun(params: {
       agentId: "agent",
       agentDir: "/tmp",
       sessionId: "sess",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "sqlite-transcript://agent/sess.jsonl",
       workspaceDir: "/tmp",
       config: {} as OpenClawConfig,
       provider: "openai",

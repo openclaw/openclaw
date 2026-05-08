@@ -75,7 +75,7 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "test-session",
-        sessionFile: "/tmp/session.json",
+        sessionFile: "sqlite-transcript://main/test-session.jsonl",
         tokenBudget: 200000,
         force: true,
         compactionTarget: "budget",
@@ -449,7 +449,7 @@ describe("timeout-triggered compaction", () => {
     await runEmbeddedPiAgent(overflowBaseRunParams);
 
     expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledWith(
-      { messageCount: -1, sessionFile: "/tmp/session.json" },
+      { messageCount: -1, sessionFile: "sqlite-transcript://main/test-session.jsonl" },
       expect.objectContaining({
         sessionKey: "test-key",
       }),
@@ -459,7 +459,7 @@ describe("timeout-triggered compaction", () => {
         messageCount: -1,
         compactedCount: -1,
         tokenCount: 70,
-        sessionFile: "/tmp/session.json",
+        sessionFile: "sqlite-transcript://main/test-session.jsonl",
       },
       expect.objectContaining({
         sessionKey: "test-key",
