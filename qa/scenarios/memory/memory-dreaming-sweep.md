@@ -153,24 +153,11 @@ steps:
       - set: memoryPath
         value:
           expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
-      - set: homeDir
-        value:
-          expr: "env.gateway.runtimeEnv.HOME ?? env.gateway.runtimeEnv.OPENCLAW_HOME ?? env.gateway.tempRoot"
-      - set: sessionsDir
-        value:
-          expr: "resolveSessionTranscriptsDirForAgent('qa', env.gateway.runtimeEnv, () => homeDir)"
-      - set: transcriptPath
-        value:
-          expr: "path.join(sessionsDir, `${config.transcriptId}.jsonl`)"
       - try:
           actions:
             - call: fs.mkdir
               args:
                 - expr: "path.dirname(dailyPath)"
-                - recursive: true
-            - call: fs.mkdir
-              args:
-                - ref: sessionsDir
                 - recursive: true
             - call: fs.writeFile
               args:
@@ -180,11 +167,32 @@ steps:
             - set: now
               value:
                 expr: "Date.now()"
-            - call: fs.writeFile
+            - call: seedQaSessionTranscript
+              saveAs: seededSession
               args:
-                - ref: transcriptPath
-                - expr: "[JSON.stringify({ type: 'session', id: config.transcriptId, timestamp: new Date(now - 120000).toISOString() }), JSON.stringify({ type: 'message', message: { role: 'user', timestamp: new Date(now - 90000).toISOString(), content: [{ type: 'text', text: config.transcriptUserPrompt }] } }), JSON.stringify({ type: 'message', message: { role: 'assistant', timestamp: new Date(now - 60000).toISOString(), content: [{ type: 'text', text: config.transcriptAssistantReply }] } })].join('\\n') + '\\n'"
-                - utf8
+                - ref: env
+                - agentId: qa
+                  sessionId:
+                    expr: config.transcriptId
+                  sessionKey: agent:qa:seed-memory-dreaming-sweep
+                  now:
+                    ref: now
+                  originLabel: QA seeded memory dreaming sweep transcript
+                  messages:
+                    - role: user
+                      timestamp:
+                        expr: "now - 90000"
+                      content:
+                        - type: text
+                          text:
+                            expr: config.transcriptUserPrompt
+                    - role: assistant
+                      timestamp:
+                        expr: "now - 60000"
+                      content:
+                        - type: text
+                          text:
+                            expr: config.transcriptAssistantReply
             - call: fs.rm
               args:
                 - ref: memoryPath
