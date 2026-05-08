@@ -134,31 +134,25 @@ payloads so large generated media is not duplicated into the support bundle.
 
 ## Capture location
 
-By default, runtime trajectory events are written beside the session file:
+By default, runtime trajectory events are written to the owning agent database:
 
 ```text
-<session>.trajectory.jsonl
+~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite
+trajectory_runtime_events
 ```
 
-OpenClaw also writes a best-effort pointer file beside the session:
+The export manifest reports this source as an agent-database reference, for
+example:
 
 ```text
-<session>.trajectory-path.json
+agent-db:<agentId>:trajectory_runtime_events:<sessionId>
 ```
 
-Set `OPENCLAW_TRAJECTORY_DIR` to store runtime trajectory sidecars in a
-dedicated directory:
-
-```bash
-export OPENCLAW_TRAJECTORY_DIR=/var/lib/openclaw/trajectories
-```
-
-When this variable is set, OpenClaw writes one JSONL file per session id in that
-directory.
-
-Session maintenance no longer prunes trajectory sidecars. Runtime-owned
-trajectory cleanup removes run-scoped artifacts when the owning runtime finishes
-or when a doctor migration imports legacy transcript files into SQLite.
+For compatibility with older captures, `/export-trajectory` can still read a
+legacy `<session>.trajectory.jsonl` sidecar or pointer file when no SQLite
+runtime events exist for the session. New runtime captures do not create those
+files. `OPENCLAW_TRAJECTORY_DIR` is therefore only useful for legacy/debug
+captures and is not the normal durable store.
 
 ## Disable capture
 

@@ -667,7 +667,10 @@ Move these into agent databases:
   the per-agent `cache_entries` table. Gateway-wide model caches stay in the
   global database unless they become agent-specific.
 - ACP parent stream logs. Done for runtime writes.
-- Trajectory sidecars when they are not explicit export files
+- Trajectory sidecars when they are not explicit export files. Done for runtime
+  writes: trajectory capture writes agent-database `trajectory_runtime_events`
+  rows and mirrors run-scoped artifacts into SQLite. Legacy sidecars remain
+  readable only as export/migration compatibility input.
 
 Keep these file-backed for now:
 
@@ -777,6 +780,7 @@ Make every agent data stream database-native:
 - ACP spawn setup no longer persists transcript JSONL paths. Done.
 - Runtime trajectory capture writes event rows/artifacts directly. The explicit
   support/export command can still produce JSONL bundles as an export format.
+  Done.
 - Disk workspaces stay on disk when configured as disk mode.
 - VFS scratch and experimental VFS-only workspace mode use the agent DB.
 
