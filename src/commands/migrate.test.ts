@@ -581,7 +581,42 @@ describe("migrateApplyCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("Codex plugin migration skipped for now.");
   });
 
-  it("allows interactive Codex plugin migration to choose no plugins", async () => {
+  it("returns without confirmation when both Codex skill and plugin selectors are skipped", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const skillPlan = codexSkillPlan();
+    const pluginPlan = codexPluginPlan();
+    const planned = codexSkillPlan({
+      summary: {
+        total: skillPlan.items.length + pluginPlan.items.length,
+        planned: skillPlan.items.length + pluginPlan.items.length,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [...skillPlan.items, ...pluginPlan.items],
+    });
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect
+      .mockResolvedValueOnce([MIGRATION_SKILL_SELECTION_SKIP])
+      .mockResolvedValueOnce([MIGRATION_SKILL_SELECTION_SKIP]);
+
+    const result = await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    expect(result).toBe(planned);
+    expect(mocks.multiselect).toHaveBeenCalledTimes(2);
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+    expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("Codex skill migration skipped for now.");
+    expect(runtime.log).toHaveBeenCalledWith("Codex plugin migration skipped for now.");
+  });
+
+  it("does not apply when interactive Codex plugin migration chooses no plugins", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,
       value: true,
@@ -589,26 +624,22 @@ describe("migrateApplyCommand", () => {
     const planned = codexPluginPlan();
     mocks.provider.plan.mockResolvedValue(planned);
     mocks.multiselect.mockResolvedValue([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
-    mocks.promptYesNo.mockResolvedValue(true);
-    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
-      ...selectedPlan,
-      summary: { ...selectedPlan.summary, planned: 0, migrated: selectedPlan.summary.planned },
-      items: selectedPlan.items.map((item) =>
-        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
-      ),
-    }));
 
-    await migrateDefaultCommand(runtime, { provider: "codex" });
+    const result = await migrateDefaultCommand(runtime, { provider: "codex" });
 
     expect(mocks.multiselect).toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.stringContaining("Select native Codex plugins"),
       }),
     );
-    expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
-    expect(appliedPlan.summary).toMatchObject({ planned: 0, skipped: 3, conflicts: 0 });
-    expect(appliedPlan.items).toEqual(
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+    expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "No Codex skills or native Codex plugins selected for migration.",
+    );
+    expect(result.summary).toMatchObject({ planned: 0, skipped: 3, conflicts: 0 });
+    expect(result.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "plugin:google-calendar",
@@ -781,7 +812,7 @@ describe("migrateApplyCommand", () => {
     );
   });
 
-  it("applies Toggle all off before interactive Codex migration apply", async () => {
+  it("does not apply archive-only Codex migration work after Toggle all off", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,
       value: true,
@@ -789,20 +820,17 @@ describe("migrateApplyCommand", () => {
     const planned = codexSkillPlan();
     mocks.provider.plan.mockResolvedValue(planned);
     mocks.multiselect.mockResolvedValue([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
-    mocks.promptYesNo.mockResolvedValue(true);
-    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
-      ...selectedPlan,
-      summary: { ...selectedPlan.summary, planned: 0, migrated: 1 },
-      items: selectedPlan.items.map((item) =>
-        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
-      ),
-    }));
 
-    await migrateDefaultCommand(runtime, { provider: "codex" });
+    const result = await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
-    expect(appliedPlan.summary).toMatchObject({ planned: 1, skipped: 2, conflicts: 0 });
-    expect(appliedPlan.items).toEqual(
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+    expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "No Codex skills or native Codex plugins selected for migration.",
+    );
+    expect(result.summary).toMatchObject({ planned: 1, skipped: 2, conflicts: 0 });
+    expect(result.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "skill:alpha",
@@ -848,11 +876,15 @@ describe("migrateApplyCommand", () => {
     ]);
     mocks.promptYesNo.mockResolvedValue(true);
     mocks.provider.apply.mockClear();
+    mocks.promptYesNo.mockClear();
 
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
-    expect(appliedPlan.summary).toMatchObject({ planned: 1, skipped: 2, conflicts: 0 });
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "No Codex skills or native Codex plugins selected for migration.",
+    );
   });
 
   it("does not apply when interactive apply confirmation is declined", async () => {

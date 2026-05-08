@@ -188,6 +188,23 @@ async function promptCodexMigrationSelections(
   return await promptCodexMigrationPluginSelection(runtime, skillSelectedPlan, opts);
 }
 
+function hasSelectedCodexMigrationWork(plan: MigrationPlan): boolean {
+  return plan.items.some(
+    (item) =>
+      item.status === "planned" &&
+      ((item.kind === "skill" && item.action === "copy") ||
+        (item.kind === "plugin" && item.action === "install")),
+  );
+}
+
+function shouldSkipCodexApplyAfterInteractiveSelection(plan: MigrationPlan): boolean {
+  return plan.providerId === "codex" && !hasSelectedCodexMigrationWork(plan);
+}
+
+function logNoCodexSelection(runtime: RuntimeEnv): void {
+  runtime.log("No Codex skills or native Codex plugins selected for migration.");
+}
+
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
   const cfg = getRuntimeConfig();
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg });
@@ -271,6 +288,10 @@ export async function migrateApplyCommand(
     if (!selectedPlan) {
       return plan;
     }
+    if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
+      logNoCodexSelection(runtime);
+      return selectedPlan;
+    }
     const ok = await promptYesNo("Apply this migration now?", false);
     if (!ok) {
       runtime.log("Migration cancelled.");
@@ -333,6 +354,10 @@ export async function migrateDefaultCommand(
     const selectedPlan = await promptCodexMigrationSelections(runtime, plan, opts);
     if (!selectedPlan) {
       return plan;
+    }
+    if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
+      logNoCodexSelection(runtime);
+      return selectedPlan;
     }
     const ok = await promptYesNo("Apply this migration now?", false);
     if (!ok) {
