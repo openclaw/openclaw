@@ -56,10 +56,13 @@ describe('wave-09 sentinel-guard', () => {
     }
   });
 
-  it('S-07 round-trip emit detects sentinel in raw bytes', () => {
+  it('S-07 round-trip echoes pre-existing sentinel; strict mode rejects', () => {
     const raw = '## Section\n\n- token: __OPENCLAW_REDACTED__\n';
     const { ast } = parseMd(raw);
-    expect(() => emitMd(ast)).toThrow(OcEmitSentinelError);
+    expect(emitMd(ast)).toBe(raw);
+    expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(
+      OcEmitSentinelError,
+    );
   });
 
   it('S-08 round-trip emit allows sentinel-free content', () => {
@@ -141,16 +144,22 @@ describe('wave-09 sentinel-guard', () => {
     );
   });
 
-  it('S-13 sentinel embedded as substring in raw still triggers round-trip guard', () => {
+  it('S-13 sentinel-as-substring in raw — strict mode catches it', () => {
     const raw = `Some prose ${REDACTED_SENTINEL} more prose.\n`;
     const { ast } = parseMd(raw);
-    expect(() => emitMd(ast)).toThrow(OcEmitSentinelError);
+    expect(emitMd(ast)).toBe(raw);
+    expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(
+      OcEmitSentinelError,
+    );
   });
 
-  it('S-14 multiple sentinel occurrences — first throw is reported', () => {
+  it('S-14 multiple sentinel occurrences in raw — strict mode catches them', () => {
     const raw = `## A\n${REDACTED_SENTINEL}\n${REDACTED_SENTINEL}\n`;
     const { ast } = parseMd(raw);
-    expect(() => emitMd(ast)).toThrow(OcEmitSentinelError);
+    expect(emitMd(ast)).toBe(raw);
+    expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(
+      OcEmitSentinelError,
+    );
   });
 
   it('S-15 fileNameForGuard appears in the error path', () => {

@@ -18,12 +18,17 @@ describe('emitJsonc — round-trip', () => {
     expect(emitJsonc(ast)).toBe(raw);
   });
 
-  it('throws OcEmitSentinelError if the raw bytes contain the redaction sentinel', () => {
+  it('echoes pre-existing sentinel bytes by default; strict mode rejects', () => {
+    // Round-trip trusts parsed bytes — workspace files legitimately
+    // containing the sentinel (in code blocks, pasted error logs)
+    // would otherwise become a workspace-wide emit DoS. Strict mode
+    // is the opt-in path.
     const raw = `{ "x": "${REDACTED_SENTINEL}" }`;
     const { ast } = parseJsonc(raw);
-    expect(() => emitJsonc(ast, { fileNameForGuard: 'config' })).toThrow(
-      OcEmitSentinelError,
-    );
+    expect(emitJsonc(ast)).toBe(raw);
+    expect(() =>
+      emitJsonc(ast, { fileNameForGuard: 'config', acceptPreExistingSentinel: false }),
+    ).toThrow(OcEmitSentinelError);
   });
 });
 

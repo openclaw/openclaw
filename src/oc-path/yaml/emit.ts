@@ -20,14 +20,22 @@ import type { YamlAst } from './ast.js';
 export interface YamlEmitOptions {
   readonly mode?: 'roundtrip' | 'render';
   readonly fileNameForGuard?: string;
+  /**
+   * See `JsoncEmitOptions.acceptPreExistingSentinel` for the rationale.
+   * Default `true` — round-trip echoes parsed bytes without scanning.
+   * Render mode always scans the rendered output (callers can inject
+   * sentinels via setYamlOcPath, so render-time scan is mandatory).
+   */
+  readonly acceptPreExistingSentinel?: boolean;
 }
 
 export function emitYaml(ast: YamlAst, opts: YamlEmitOptions = {}): string {
   const mode = opts.mode ?? 'roundtrip';
   const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : 'oc://';
+  const acceptPreExisting = opts.acceptPreExistingSentinel ?? true;
 
   if (mode === 'roundtrip') {
-    if (ast.raw.includes(REDACTED_SENTINEL)) {
+    if (!acceptPreExisting && ast.raw.includes(REDACTED_SENTINEL)) {
       throw new OcEmitSentinelError(`${guardPath}/[raw]`);
     }
     return ast.raw;

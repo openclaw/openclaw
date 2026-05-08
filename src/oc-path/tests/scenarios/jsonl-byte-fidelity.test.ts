@@ -92,4 +92,34 @@ describe('wave-16 jsonl byte-fidelity', () => {
       '{"a":1}\n{not json}\n\n{"b":2}\nstill not json\n{"c":3}\n';
     expect(rt(raw)).toBe(raw);
   });
+
+  // F10 — CRLF preservation. Without lineEnding tracking on the AST,
+  // a CRLF input edited via setJsonlOcPath rebuilds raw via render
+  // which joins with `\n`, mixing endings on Windows-authored datasets.
+  it('JL-17 CRLF input round-trips byte-identical via the default emit', () => {
+    const raw = '{"a":1}\r\n{"b":2}\r\n{"c":3}\r\n';
+    expect(rt(raw)).toBe(raw);
+  });
+
+  it('JL-18 CRLF input preserves CRLF after a structural edit (render mode)', () => {
+    // Pin the render path: setJsonlOcPath rebuilds raw via render mode,
+    // which now consults ast.lineEnding to reconstruct the original
+    // convention. Without the fix, render-mode output uses `\n` and
+    // produces mixed line endings on Windows datasets.
+    const raw = '{"a":1}\r\n{"b":2}\r\n';
+    const { ast } = parseJsonl(raw);
+    const rendered = emitJsonl(ast, { mode: 'render' });
+    expect(rendered).toBe('{"a":1}\r\n{"b":2}');
+    // Pin no-LF-only joins by counting CRLFs vs bare LFs.
+    expect((rendered.match(/\r\n/g) ?? []).length).toBe(1);
+    expect((rendered.match(/(?<!\r)\n/g) ?? []).length).toBe(0);
+  });
+
+  it('JL-19 LF input preserves LF after a structural edit (render mode)', () => {
+    // Symmetric: a Unix-authored log doesn't mysteriously gain CRLF.
+    const raw = '{"a":1}\n{"b":2}\n';
+    const { ast } = parseJsonl(raw);
+    const rendered = emitJsonl(ast, { mode: 'render' });
+    expect(rendered).toBe('{"a":1}\n{"b":2}');
+  });
 });

@@ -16,6 +16,8 @@
  * @module @openclaw/oc-path/oc-path
  */
 
+import { OcEmitSentinelError, REDACTED_SENTINEL } from './sentinel.js';
+
 const OC_SCHEME = 'oc://';
 
 /**
@@ -385,6 +387,16 @@ export function formatOcPath(path: OcPath): string {
       out.slice(0, 80) + '…',
       'OC_PATH_TOO_LONG',
     );
+  }
+  // Sentinel guard at the path-string emit boundary. The substrate's
+  // contract: emit boundaries refuse to write the redaction sentinel,
+  // and `formatOcPath` IS such a boundary — path strings flow into
+  // telemetry, audit events, error messages, find result `path` fields.
+  // Without this guard, a struct field carrying the literal
+  // `__OPENCLAW_REDACTED__` slips past every consumer except the CLI
+  // (which has its own scrubSentinel layer).
+  if (out.includes(REDACTED_SENTINEL)) {
+    throw new OcEmitSentinelError(out);
   }
   return out;
 }

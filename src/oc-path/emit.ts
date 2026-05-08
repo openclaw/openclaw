@@ -40,21 +40,31 @@ export interface EmitOptions {
    * compute a path per leaf.
    */
   readonly fileNameForGuard?: string;
+  /**
+   * See `JsoncEmitOptions.acceptPreExistingSentinel` for the rationale.
+   * Default `true` — round-trip echoes parsed bytes without scanning
+   * for the sentinel. Render mode scans every leaf regardless.
+   */
+  readonly acceptPreExistingSentinel?: boolean;
 }
 
 /**
- * Emit the AST. Throws `OcEmitSentinelError` if any leaf string
- * matches `REDACTED_SENTINEL`. Otherwise returns the rendered bytes.
+ * Emit the AST. In render mode, throws `OcEmitSentinelError` if any
+ * leaf string matches `REDACTED_SENTINEL`. In round-trip mode, echoes
+ * `ast.raw` verbatim (does not scan unless caller opts in via
+ * `acceptPreExistingSentinel: false`).
  */
 export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
   const mode = opts.mode ?? 'roundtrip';
   const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : 'oc://';
+  const acceptPreExisting = opts.acceptPreExistingSentinel ?? true;
 
   if (mode === 'roundtrip') {
-    // Verify the round-trip output doesn't contain a sentinel — guards
-    // against a user inserting `__OPENCLAW_REDACTED__` into raw bytes
-    // before parse.
-    if (ast.raw.includes('__OPENCLAW_REDACTED__')) {
+    // Round-trip trusts parsed bytes — see emit-policy comment in
+    // jsonc/emit.ts. A markdown file legitimately containing the
+    // sentinel literal (in a code block, in a pasted error log) would
+    // otherwise become a workspace-wide emit DoS.
+    if (!acceptPreExisting && ast.raw.includes('__OPENCLAW_REDACTED__')) {
       guardSentinel('__OPENCLAW_REDACTED__', `${guardPath}/[raw]`);
     }
     return ast.raw;

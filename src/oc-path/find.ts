@@ -459,7 +459,8 @@ function walkJsonl(
 
   // Line-address slot — `*` enumerates every value line; `**` adds a
   // 0-segment skip in addition to enumerating; literal matches `Lnnn`
-  // / `$first` / `$last` / `-N` (negative index).
+  // / `$first` / `$last` / `-N` (negative index); union matches each
+  // alternative; predicate filters by per-line top-level field.
   // The first sub MUST address a line; deeper subs walk inside the
   // line's JSON value.
   if (walked.length === 0) {
@@ -478,6 +479,39 @@ function walkJsonl(
       });
       return;
     }
+    if (isUnionSeg(cur.value)) {
+      // `{L1,L2}` enumerates each alternative independently — yaml /
+      // jsonc walkers handle union uniformly at every slot, so the
+      // jsonl line slot must too. Each alternative goes through the
+      // same single-line resolution as a literal `Lnnn` / `$first` /
+      // `-N` would (so unions of positional tokens, e.g. `{L1,$last}`,
+      // work as expected).
+      const alts = parseUnionSeg(cur.value);
+      if (alts === null) {return;}
+      for (const alt of alts) {
+        const line = pickLine(ast, alt);
+        if (line === null) {continue;}
+        const concreteAddr = line.kind === 'value' ? `L${line.line}` : alt;
+        walkJsonlInsideLine(line, subs, i + 1, [{ slot: cur.slot, value: concreteAddr }], onMatch);
+      }
+      return;
+    }
+    if (isPredicateSeg(cur.value)) {
+      // `[event=foo]` filters value lines by the predicate's key/op
+      // applied to the top-level field of each line's parsed JSON.
+      // Parsing is structural (no recursion into nested children) —
+      // a predicate inside a line's body uses the same syntax inside
+      // the JSONC walker's predicate path.
+      const pred = parsePredicateSeg(cur.value);
+      if (pred === null) {return;}
+      forEachValueLine(ast, (l, addr) => {
+        if (l.kind !== 'value') {return;}
+        const actual = topLevelLeafText(l.value, pred.key);
+        if (!evaluatePredicate(actual, pred)) {return;}
+        walkJsonlInsideLine(l, subs, i + 1, [{ slot: cur.slot, value: addr }], onMatch);
+      });
+      return;
+    }
     // Positional / Lnnn / literal — pickLine handles all single-line
     // addressing tokens. The emitted concrete address is `Lnnn` (the
     // canonical line-address form) regardless of how it was looked up.
@@ -487,6 +521,23 @@ function walkJsonl(
     walkJsonlInsideLine(line, subs, i + 1, [{ slot: cur.slot, value: concreteAddr }], onMatch);
     return;
   }
+}
+
+/**
+ * Stringify the top-level field's leaf value for predicate evaluation
+ * at the jsonl line slot. Only string/number/boolean/null leaves
+ * compare; nested objects/arrays return `null` (predicate doesn't
+ * match a non-leaf sibling).
+ */
+function topLevelLeafText(value: JsoncValue, key: string): string | null {
+  if (value.kind !== 'object') {return null;}
+  const entry = value.entries.find((e) => e.key === key);
+  if (entry === undefined) {return null;}
+  const v = entry.value;
+  if (v.kind === 'string') {return v.value;}
+  if (v.kind === 'number' || v.kind === 'boolean') {return String(v.value);}
+  if (v.kind === 'null') {return null;}
+  return null;
 }
 
 function walkJsonlInsideLine(

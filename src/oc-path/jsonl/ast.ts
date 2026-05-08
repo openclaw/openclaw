@@ -22,6 +22,14 @@ export interface JsonlAst {
   readonly kind: 'jsonl';
   readonly raw: string;
   readonly lines: readonly JsonlLine[];
+  /**
+   * Line-ending convention detected at parse time. Used by render mode
+   * to reconstruct the original convention (Windows-authored datasets
+   * use CRLF; Unix uses LF). Optional for back-compat with synthetic
+   * ASTs that don't track this — render mode falls back to LF when
+   * undefined.
+   */
+  readonly lineEnding?: '\r\n' | '\n';
 }
 
 /**

@@ -13,12 +13,16 @@ describe('emitJsonl — round-trip', () => {
     expect(emitJsonl(ast)).toBe(raw);
   });
 
-  it('throws OcEmitSentinelError when raw contains the sentinel', () => {
+  it('echoes pre-existing sentinel bytes by default; strict mode rejects', () => {
     const raw = `{"a":"${REDACTED_SENTINEL}"}\n`;
     const { ast } = parseJsonl(raw);
-    expect(() => emitJsonl(ast, { fileNameForGuard: 'session-events' })).toThrow(
-      OcEmitSentinelError,
-    );
+    expect(emitJsonl(ast)).toBe(raw);
+    expect(() =>
+      emitJsonl(ast, {
+        fileNameForGuard: 'session-events',
+        acceptPreExistingSentinel: false,
+      }),
+    ).toThrow(OcEmitSentinelError);
   });
 });
 

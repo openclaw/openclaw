@@ -210,6 +210,34 @@ describe('findOcPaths — JSONL kind', () => {
       expect(m.path.section).toMatch(/^L\d+$/);
     }
   });
+
+  // F8 — line-slot union and predicate. Without these, yaml/jsonc
+  // walkers handled them but JSONL fell through to `pickLine(addr)`
+  // which returns null for union/predicate shapes → silent zero matches.
+  it('union {L1,L2} at line slot enumerates each alternative', () => {
+    const out = findOcPaths(jsonl, parseOcPath('oc://session/{L1,L3}/event'));
+    expect(out).toHaveLength(2);
+    const events = out.map((m) => (m.match.kind === 'leaf' ? m.match.valueText : ''));
+    expect(events).toEqual(['start', 'end']);
+  });
+
+  it('union of positional + literal line addresses works', () => {
+    const out = findOcPaths(jsonl, parseOcPath('oc://session/{L1,$last}/event'));
+    expect(out).toHaveLength(2);
+    const events = out.map((m) => (m.match.kind === 'leaf' ? m.match.valueText : ''));
+    expect(events).toEqual(['start', 'end']);
+  });
+
+  it('predicate [event=action] at line slot filters by top-level field', () => {
+    const out = findOcPaths(jsonl, parseOcPath('oc://session/[event=action]/userId'));
+    expect(out).toHaveLength(1);
+    if (out[0]?.match.kind === 'leaf') {expect(out[0].match.valueText).toBe('u1');}
+  });
+
+  it('predicate [event=missing] at line slot matches zero lines (silent zero is correct)', () => {
+    const out = findOcPaths(jsonl, parseOcPath('oc://session/[event=missing]/userId'));
+    expect(out).toHaveLength(0);
+  });
 });
 
 // ---------- Positional primitives ($first / $last / -N) -------------------

@@ -13,9 +13,28 @@
 import type { Diagnostic } from '../ast.js';
 import type { JsoncAst, JsoncEntry, JsoncValue } from './ast.js';
 
+/**
+ * Bound on parse-time recursion depth. Mirrors `MAX_TRAVERSAL_DEPTH`
+ * from oc-path; real configs don't nest beyond ~10 levels, so 256 is
+ * a safe ceiling. Pathological input like
+ * `'['.repeat(20000) + '0' + ']'.repeat(20000)` would otherwise
+ * trigger V8 RangeError before any structural diagnostic — the CLI
+ * loads attacker-supplied workspace files via `loadAst`, so this
+ * defense fires before raw stack overflow escapes to commander.
+ */
+export const MAX_PARSE_DEPTH = 256;
+
 export interface JsoncParseResult {
   readonly ast: JsoncAst;
   readonly diagnostics: readonly Diagnostic[];
+}
+
+class ParseDepthError extends Error {
+  readonly code = 'OC_JSONC_DEPTH_EXCEEDED';
+  constructor(line: number) {
+    super(`structural depth exceeded MAX_PARSE_DEPTH (${MAX_PARSE_DEPTH}) at line ${line}`);
+    this.name = 'ParseDepthError';
+  }
 }
 
 class ParseState {
@@ -58,7 +77,7 @@ export function parseJsonc(raw: string): JsoncParseResult {
 
   let root: JsoncValue | null = null;
   try {
-    root = parseValue(st, diagnostics);
+    root = parseValue(st, diagnostics, 0);
     skipWs(st);
     if (!st.eof()) {
       diagnostics.push({
@@ -73,7 +92,7 @@ export function parseJsonc(raw: string): JsoncParseResult {
       line: st.line,
       message: err instanceof Error ? err.message : String(err),
       severity: 'error',
-      code: 'OC_JSONC_PARSE_FAILED',
+      code: err instanceof ParseDepthError ? err.code : 'OC_JSONC_PARSE_FAILED',
     });
   }
 
@@ -115,12 +134,18 @@ function skipWs(st: ParseState): void {
   }
 }
 
-function parseValue(st: ParseState, diags: Diagnostic[]): JsoncValue {
+function parseValue(st: ParseState, diags: Diagnostic[], depth: number): JsoncValue {
+  // Bound recursion. Without this guard, pathological input like
+  // `'['.repeat(20000) + '0' + ']'.repeat(20000)` triggers V8
+  // RangeError before any structural diagnostic — the CLI loads
+  // attacker-supplied workspace files via `loadAst`, so unbounded
+  // recursion would escape commander as a raw stack-overflow string.
+  if (depth > MAX_PARSE_DEPTH) {throw new ParseDepthError(st.line);}
   skipWs(st);
   const startLine = st.line;
   const c = st.peek();
-  if (c === '{') {return parseObject(st, diags, startLine);}
-  if (c === '[') {return parseArray(st, diags, startLine);}
+  if (c === '{') {return parseObject(st, diags, startLine, depth);}
+  if (c === '[') {return parseArray(st, diags, startLine, depth);}
   if (c === '"') {return { kind: 'string', value: parseString(st), line: startLine };}
   if (c === 't' || c === 'f') {return parseBoolean(st, startLine);}
   if (c === 'n') {return parseNull(st, startLine);}
@@ -130,7 +155,7 @@ function parseValue(st: ParseState, diags: Diagnostic[]): JsoncValue {
   );
 }
 
-function parseObject(st: ParseState, diags: Diagnostic[], startLine: number): JsoncValue {
+function parseObject(st: ParseState, diags: Diagnostic[], startLine: number, depth: number): JsoncValue {
   if (st.advance() !== '{') {throw new Error('expected `{`');}
   const entries: JsoncEntry[] = [];
   skipWs(st);
@@ -150,7 +175,7 @@ function parseObject(st: ParseState, diags: Diagnostic[], startLine: number): Js
       throw new Error(`expected \`:\` after key at line ${st.line}`);
     }
     skipWs(st);
-    const value = parseValue(st, diags);
+    const value = parseValue(st, diags, depth + 1);
     entries.push({ key, value, line: keyLine });
     skipWs(st);
     const next = st.peek();
@@ -174,7 +199,7 @@ function parseObject(st: ParseState, diags: Diagnostic[], startLine: number): Js
   }
 }
 
-function parseArray(st: ParseState, diags: Diagnostic[], startLine: number): JsoncValue {
+function parseArray(st: ParseState, diags: Diagnostic[], startLine: number, depth: number): JsoncValue {
   if (st.advance() !== '[') {throw new Error('expected `[`');}
   const items: JsoncValue[] = [];
   skipWs(st);
@@ -184,7 +209,7 @@ function parseArray(st: ParseState, diags: Diagnostic[], startLine: number): Jso
   }
   while (true) {
     skipWs(st);
-    items.push(parseValue(st, diags));
+    items.push(parseValue(st, diags, depth + 1));
     skipWs(st);
     const next = st.peek();
     if (next === ',') {

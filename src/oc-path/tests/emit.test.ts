@@ -22,10 +22,16 @@ describe('emit — round-trip mode (default)', () => {
     expect(emitMd(ast)).toBe(raw);
   });
 
-  it('throws if raw bytes already contain the sentinel literal', () => {
+  it('echoes raw bytes containing the sentinel by default; strict mode rejects', () => {
+    // Round-trip trusts parsed bytes — see emit.ts policy comment.
+    // Strict mode (acceptPreExistingSentinel: false) is the opt-in
+    // path for callers that want LKG-style fingerprint verification.
     const raw = '## Section\n\n- token: __OPENCLAW_REDACTED__\n';
     const { ast } = parseMd(raw);
-    expect(() => emitMd(ast)).toThrow(OcEmitSentinelError);
+    expect(emitMd(ast)).toBe(raw);
+    expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(
+      OcEmitSentinelError,
+    );
   });
 });
 

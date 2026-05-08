@@ -21,14 +21,21 @@ import type { JsonlAst } from './ast.js';
 export interface JsonlEmitOptions {
   readonly mode?: 'roundtrip' | 'render';
   readonly fileNameForGuard?: string;
+  /**
+   * See `JsoncEmitOptions.acceptPreExistingSentinel` for the rationale.
+   * Default `true` — round-trip echoes parsed bytes without scanning
+   * for the sentinel. Render mode scans value-line leaves regardless.
+   */
+  readonly acceptPreExistingSentinel?: boolean;
 }
 
 export function emitJsonl(ast: JsonlAst, opts: JsonlEmitOptions = {}): string {
   const mode = opts.mode ?? 'roundtrip';
   const guardPath = opts.fileNameForGuard ? `oc://${opts.fileNameForGuard}` : 'oc://';
+  const acceptPreExisting = opts.acceptPreExistingSentinel ?? true;
 
   if (mode === 'roundtrip') {
-    if (ast.raw.includes(REDACTED_SENTINEL)) {
+    if (!acceptPreExisting && ast.raw.includes(REDACTED_SENTINEL)) {
       throw new OcEmitSentinelError(`${guardPath}/[raw]`);
     }
     return ast.raw;
@@ -37,15 +44,26 @@ export function emitJsonl(ast: JsonlAst, opts: JsonlEmitOptions = {}): string {
   const out: string[] = [];
   for (const ln of ast.lines) {
     if (ln.kind === 'blank' || ln.kind === 'malformed') {
-      if (ln.raw.includes(REDACTED_SENTINEL)) {
+      // Blank/malformed lines round-trip as their original raw bytes.
+      // Apply the same trust policy: only scan when caller opts in.
+      if (!acceptPreExisting && ln.raw.includes(REDACTED_SENTINEL)) {
         throw new OcEmitSentinelError(`${guardPath}/L${ln.line}`);
       }
       out.push(ln.raw);
       continue;
     }
+    // Value lines re-serialize via renderValue, which always scans
+    // string leaves regardless of acceptPreExistingSentinel — a
+    // caller-injected sentinel via setOcPath / appendJsonl must
+    // always be rejected.
     out.push(renderValue(ln.value, `${guardPath}/L${ln.line}`, []));
   }
-  return out.join('\n');
+  // Restore the original line-ending convention. Without this, a CRLF
+  // input edited via setJsonlOcPath would emit a mixed-ending file:
+  // edited lines joined with `\n` and untouched lines retaining the
+  // `\r` on their .raw bytes — silent CRLF→LF corruption on
+  // Windows-authored datasets.
+  return out.join(ast.lineEnding ?? '\n');
 }
 
 function renderValue(value: JsoncValue, guardPath: string, walked: readonly string[]): string {

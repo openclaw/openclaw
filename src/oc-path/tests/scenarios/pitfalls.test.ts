@@ -225,6 +225,22 @@ describe('wave-23 pitfalls — round-trip', () => {
   });
 });
 
+// ---------- Sentinel-guard pitfalls --------------------------------------
+
+describe('wave-23 pitfalls — sentinel at format boundary (F9)', () => {
+  it('formatOcPath rejects an OcPath struct carrying the redaction sentinel', () => {
+    // Path strings flow into telemetry, audit events, error messages,
+    // find-result `path` fields. Without the format-time guard, a
+    // struct with `section: REDACTED_SENTINEL` would slip past every
+    // consumer except the CLI's scrubSentinel layer. The substrate's
+    // contract is "emit boundaries refuse the sentinel" — formatOcPath
+    // IS such a boundary for path strings.
+    expect(() =>
+      formatOcPath({ file: 'AGENTS.md', section: '__OPENCLAW_REDACTED__' }),
+    ).toThrow(/sentinel literal/);
+  });
+});
+
 // ---------- Containment pitfalls -----------------------------------------
 
 describe('wave-23 pitfalls — file-slot containment', () => {
@@ -386,22 +402,36 @@ describe('wave-23 pitfalls — performance & limits', () => {
     ).toThrow(/Formatted oc:\/\/ exceeds/);
   });
 
-  it('walker depth cap fires on jsonl `**` against a long log', () => {
-    // JSONL is the kind most likely to grow unbounded in production
-    // (forensics, replay, audit). Pin the outer-walker guard so a
-    // pattern that exceeds MAX_TRAVERSAL_DEPTH doesn't slip past the
-    // jsonl driver into per-line walkJsonc dispatch.
-    const lines: string[] = [];
-    // Build a deeply nested JSONL line: {"a":{"a":{"a":{...}}}}
+  it('parser depth cap fires on pathological JSONC nesting (F6)', () => {
+    // Without `MAX_PARSE_DEPTH`, pathological input like
+    // `'['.repeat(20000) + '0' + ']'.repeat(20000)` triggers a V8
+    // RangeError ("Maximum call stack size exceeded") that escapes
+    // commander as a raw stringified error — no `OcEmitSentinelError`-
+    // style structured catch. Pin the structured-diagnostic path:
+    // parser must surface OC_JSONC_DEPTH_EXCEEDED, not bare RangeError.
+    const open = '['.repeat(MAX_TRAVERSAL_DEPTH + 100);
+    const close = ']'.repeat(MAX_TRAVERSAL_DEPTH + 100);
+    const raw = `${open}0${close}`;
+    const result = parseJsonc(raw);
+    expect(result.ast.root).toBeNull();
+    expect(
+      result.diagnostics.some((d) => d.code === 'OC_JSONC_DEPTH_EXCEEDED'),
+    ).toBe(true);
+  });
+
+  it('parser depth cap fires on JSONL line with deeply-nested JSON (F6)', () => {
+    // Per-line parseJsonc dispatch carries the same protection — each
+    // value line is parsed in isolation and gets its own depth cap.
+    // The line surfaces as `kind: 'malformed'` with the depth diagnostic.
     let nested = '"x"';
     for (let i = 0; i < MAX_TRAVERSAL_DEPTH + 50; i++) {
       nested = `{"a":${nested}}`;
     }
-    lines.push(nested);
-    const { ast } = parseJsonl(lines.join('\n'));
-    expect(() => findOcPaths(ast, parseOcPath('oc://log.jsonl/L1/**'))).toThrow(
-      /MAX_TRAVERSAL_DEPTH/,
-    );
+    const { diagnostics } = parseJsonl(nested + '\n');
+    // The line-level diagnostic is OC_JSONL_LINE_MALFORMED (line failed);
+    // we don't promote OC_JSONC_DEPTH_EXCEEDED through the JSONL layer
+    // but the malformed-line detection prevents stack-overflow escape.
+    expect(diagnostics.some((d) => d.code === 'OC_JSONL_LINE_MALFORMED')).toBe(true);
   });
 });
 
