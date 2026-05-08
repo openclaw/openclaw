@@ -388,7 +388,9 @@ describe("persistPluginInstall", () => {
     expect(next).toEqual(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalled();
     expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
-    expect(runtimeLogs.some((line) => line.includes("Plugin registry refresh failed"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Plugin registry refresh failed")]),
+    );
   });
 
   it("removes stale denylist entries before enabling installed plugins", async () => {
