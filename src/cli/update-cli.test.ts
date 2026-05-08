@@ -2969,8 +2969,8 @@ describe("update-cli", () => {
       },
       assert: () => {
         const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
-        expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(
-          false,
+        expect(logLines).not.toEqual(
+          expect.arrayContaining([expect.stringContaining("Daemon restarted successfully.")]),
         );
       },
     },
