@@ -1,5 +1,13 @@
 import path from "node:path";
-import { resolveSessionFilePath, resolveSessionTranscriptPath } from "../config/sessions/paths.js";
+import {
+  createSqliteSessionTranscriptLocator,
+  isSqliteSessionTranscriptLocator,
+  resolveSessionFilePath,
+} from "../config/sessions/paths.js";
+
+function normalizeTranscriptLocator(value: string): string {
+  return isSqliteSessionTranscriptLocator(value) ? value.trim() : path.resolve(value);
+}
 
 function classifySessionTranscriptCandidate(
   sessionId: string,
@@ -60,7 +68,7 @@ export function resolveSessionTranscriptCandidates(
       if (sessionFileState === "custom") {
         const trimmed = sessionFile.trim();
         if (trimmed) {
-          candidates.push(path.resolve(trimmed));
+          candidates.push(normalizeTranscriptLocator(trimmed));
         }
       } else if (sessionFileState !== "stale") {
         pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
@@ -68,13 +76,13 @@ export function resolveSessionTranscriptCandidates(
     } else {
       const trimmed = sessionFile.trim();
       if (trimmed) {
-        candidates.push(path.resolve(trimmed));
+        candidates.push(normalizeTranscriptLocator(trimmed));
       }
     }
   }
 
   if (agentId) {
-    pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
+    pushCandidate(() => createSqliteSessionTranscriptLocator({ sessionId, agentId }));
     if (sessionFile && sessionFileState === "stale") {
       pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
     }
@@ -90,7 +98,7 @@ export function resolveStableSessionEndTranscript(params: {
 }): { sessionFile?: string } {
   const stablePath = params.sessionFile?.trim();
   if (stablePath) {
-    return { sessionFile: path.resolve(stablePath) };
+    return { sessionFile: normalizeTranscriptLocator(stablePath) };
   }
 
   const [candidate] = resolveSessionTranscriptCandidates(
@@ -98,5 +106,5 @@ export function resolveStableSessionEndTranscript(params: {
     params.sessionFile,
     params.agentId,
   );
-  return candidate ? { sessionFile: path.resolve(candidate) } : {};
+  return candidate ? { sessionFile: normalizeTranscriptLocator(candidate) } : {};
 }

@@ -7,6 +7,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnv } from "../test-utils/env.js";
 import {
   buildGroupDisplayName,
+  createSqliteSessionTranscriptLocator,
   deriveSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -674,7 +675,7 @@ describe("sessions", () => {
         agentId: "codex",
       });
       expect(sessionFile).toBe(
-        path.join(path.resolve("/custom/state"), "agents", "codex", "sessions", "sess-2.jsonl"),
+        createSqliteSessionTranscriptLocator({ agentId: "codex", sessionId: "sess-2" }),
       );
     });
   });

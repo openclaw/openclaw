@@ -2,6 +2,7 @@
 
 export { resolveSessionRowEntry } from "../config/sessions/store-entry.js";
 export {
+  createSqliteSessionTranscriptLocator,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";

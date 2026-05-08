@@ -9,7 +9,7 @@ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -733,11 +733,11 @@ export async function initSessionState(params: {
     sessionCtxForState.SessionKey ?? sessionKey,
   ).threadId;
   const fallbackSessionFile = !sessionEntry.sessionFile
-    ? resolveSessionTranscriptPath(
-        sessionEntry.sessionId,
+    ? createSqliteSessionTranscriptLocator({
+        sessionId: sessionEntry.sessionId,
         agentId,
-        ctx.MessageThreadId ?? threadIdFromSessionKey,
-      )
+        topicId: ctx.MessageThreadId ?? threadIdFromSessionKey,
+      })
     : undefined;
   const resolvedSessionFile = await resolveAndPersistSessionFile({
     sessionId: sessionEntry.sessionId,

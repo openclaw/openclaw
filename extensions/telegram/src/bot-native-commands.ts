@@ -39,11 +39,11 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
+  createSqliteSessionTranscriptLocator,
   getSessionEntry,
   listSessionEntries,
   resolveAndPersistSessionFile,
   resolveSessionRowEntry,
-  resolveSessionTranscriptPath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -185,11 +185,10 @@ async function resolveTelegramCommandSessionFile(params: {
       sessionKey,
     });
     const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const fallbackSessionFile = resolveSessionTranscriptPath(
+    const fallbackSessionFile = createSqliteSessionTranscriptLocator({
       sessionId,
-      params.agentId,
-      params.threadId,
-    );
+      agentId: params.agentId,
+    });
     const persisted = await resolveAndPersistSessionFile({
       sessionId,
       sessionKey: resolved.normalizedKey,

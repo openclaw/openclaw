@@ -1,9 +1,9 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  createSqliteSessionTranscriptLocator,
   getSessionEntry,
   mergeSessionEntry,
   resolveAgentIdFromSessionKey,
-  resolveSessionTranscriptPath,
   upsertSessionEntry,
 } from "../../config/sessions.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -86,11 +86,10 @@ export async function resetReplyRunSession(params: {
     fallbackNoticeActiveModel: undefined,
     fallbackNoticeReason: undefined,
   };
-  const nextSessionFile = resolveSessionTranscriptPath(
-    nextSessionId,
+  const nextSessionFile = createSqliteSessionTranscriptLocator({
+    sessionId: nextSessionId,
     agentId,
-    params.messageThreadId,
-  );
+  });
   nextEntry.sessionFile = nextSessionFile;
   if (params.activeSessionStore) {
     params.activeSessionStore[params.sessionKey] = nextEntry;

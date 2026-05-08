@@ -8,9 +8,9 @@ import {
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
+  createSqliteSessionTranscriptLocator,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { getSessionEntry, normalizeSessionRowKey } from "./store.js";
@@ -118,11 +118,11 @@ export async function resolveSessionTranscriptFile(params: {
 
   const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
   const fallbackSessionFile = !sessionEntry?.sessionFile
-    ? resolveSessionTranscriptPath(
-        params.sessionId,
-        params.agentId,
-        params.threadId ?? threadIdFromSessionKey,
-      )
+    ? createSqliteSessionTranscriptLocator({
+        sessionId: params.sessionId,
+        agentId: params.agentId,
+        topicId: params.threadId ?? threadIdFromSessionKey,
+      })
     : undefined;
   const resolvedSessionFile = await resolveAndPersistSessionFile({
     sessionId: params.sessionId,

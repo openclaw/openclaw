@@ -56,6 +56,7 @@ export function resolveSessionFilePathOptions(params: {
 }
 
 export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+export const SQLITE_SESSION_TRANSCRIPT_LOCATOR_PREFIX = "sqlite-transcript://";
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
@@ -66,6 +67,57 @@ export function validateSessionId(sessionId: string): string {
     throw new Error(`Invalid session ID: ${sessionId}`);
   }
   return trimmed;
+}
+
+export function createSqliteSessionTranscriptLocator(params: {
+  agentId?: string;
+  sessionId: string;
+  topicId?: string | number;
+}): string {
+  const agentId = normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID);
+  const sessionId = validateSessionId(params.sessionId);
+  const safeTopicId =
+    typeof params.topicId === "string"
+      ? encodeURIComponent(params.topicId)
+      : typeof params.topicId === "number"
+        ? String(params.topicId)
+        : undefined;
+  const fileName =
+    safeTopicId !== undefined ? `${sessionId}-topic-${safeTopicId}.jsonl` : `${sessionId}.jsonl`;
+  return `${SQLITE_SESSION_TRANSCRIPT_LOCATOR_PREFIX}${encodeURIComponent(agentId)}/${fileName}`;
+}
+
+export function parseSqliteSessionTranscriptLocator(locator: string):
+  | {
+      agentId: string;
+      sessionId: string;
+    }
+  | undefined {
+  const trimmed = locator.trim();
+  if (!trimmed.startsWith(SQLITE_SESSION_TRANSCRIPT_LOCATOR_PREFIX)) {
+    return undefined;
+  }
+  try {
+    const url = new URL(trimmed);
+    const agentId = decodeURIComponent(url.hostname).trim();
+    const fileName = decodeURIComponent(url.pathname.replace(/^\/+/u, "")).trim();
+    if (!fileName.endsWith(".jsonl")) {
+      return undefined;
+    }
+    const withoutExt = fileName.slice(0, -".jsonl".length);
+    const topicIndex = withoutExt.indexOf("-topic-");
+    const sessionId = topicIndex > 0 ? withoutExt.slice(0, topicIndex) : withoutExt;
+    return {
+      agentId: normalizeAgentId(agentId),
+      sessionId: validateSessionId(sessionId),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function isSqliteSessionTranscriptLocator(locator: string | undefined): boolean {
+  return typeof locator === "string" && parseSqliteSessionTranscriptLocator(locator) !== undefined;
 }
 
 function resolveSessionsDir(opts?: SessionFilePathOptions): string {
@@ -272,8 +324,17 @@ export function resolveSessionFilePath(
   entry?: { sessionFile?: string },
   opts?: SessionFilePathOptions,
 ): string {
-  const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
+  if (!opts?.sessionsDir) {
+    const parsed = candidate ? parseSqliteSessionTranscriptLocator(candidate) : undefined;
+    if (parsed?.sessionId === sessionId) {
+      return candidate!;
+    }
+    if (!candidate) {
+      return createSqliteSessionTranscriptLocator({ agentId: opts?.agentId, sessionId });
+    }
+  }
+  const sessionsDir = resolveSessionsDir(opts);
   if (candidate) {
     try {
       return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
