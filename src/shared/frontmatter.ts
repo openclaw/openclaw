@@ -55,6 +55,19 @@ export type OpenClawManifestRequires = {
   config: string[];
 };
 
+function normalizeConfigRequirementList(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return normalizeStringList(input);
+  }
+  return input.flatMap((entry) => {
+    if (entry && typeof entry === "object" && "path" in entry) {
+      const pathVal = (entry as Record<string, unknown>).path;
+      return typeof pathVal === "string" && pathVal.trim() ? [pathVal.trim()] : [];
+    }
+    return typeof entry === "string" && entry.trim() ? [entry.trim()] : [];
+  });
+}
+
 export function resolveOpenClawManifestRequires(
   metadataObj: Record<string, unknown>,
 ): OpenClawManifestRequires | undefined {
@@ -69,7 +82,7 @@ export function resolveOpenClawManifestRequires(
     bins: normalizeStringList(requiresRaw.bins),
     anyBins: normalizeStringList(requiresRaw.anyBins),
     env: normalizeStringList(requiresRaw.env),
-    config: normalizeStringList(requiresRaw.config),
+    config: normalizeConfigRequirementList(requiresRaw.config),
   };
 }
 
