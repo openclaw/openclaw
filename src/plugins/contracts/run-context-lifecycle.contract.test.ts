@@ -5,7 +5,12 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import {
+  deleteSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../../config/sessions/store.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -29,6 +34,26 @@ async function waitForPluginEventHandlers(): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+function readSessionRows(agentId = "main"): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
+async function mutateSessionRows(
+  mutator: (store: Record<string, SessionEntry>) => Promise<void> | void,
+  agentId = "main",
+): Promise<void> {
+  const store = readSessionRows(agentId);
+  await mutator(store);
+  for (const { sessionKey } of listSessionEntries({ agentId })) {
+    deleteSessionEntry({ agentId, sessionKey });
+  }
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    upsertSessionEntry({ agentId, sessionKey, entry });
+  }
 }
 
 describe("plugin run context lifecycle", () => {
@@ -670,9 +695,8 @@ describe("plugin run context lifecycle", () => {
     const stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-run-context-restart-state-"),
     );
-    const storePath = path.join(stateDir, "sessions.json");
     const tempConfig = {
-      session: { store: storePath },
+      session: {},
     };
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
@@ -680,7 +704,7 @@ describe("plugin run context lifecycle", () => {
       await withTempConfig({
         cfg: tempConfig,
         run: async () => {
-          await updateSessionStore(storePath, (store) => {
+          await mutateSessionRows((store) => {
             store["agent:main:main"] = {
               sessionId: "session-1",
               updatedAt: Date.now(),
@@ -711,7 +735,7 @@ describe("plugin run context lifecycle", () => {
             }),
           ).resolves.toMatchObject({ failures: [] });
 
-          const stored = loadSessionStore(storePath);
+          const stored = readSessionRows();
           expect(stored["agent:main:main"]?.pluginExtensions).toEqual({
             "restart-state-fixture": { workflow: { state: "waiting" } },
           });
