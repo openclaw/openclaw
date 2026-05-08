@@ -57,7 +57,8 @@ describe("codex app-server session binding", () => {
       modelProvider: "openai",
       dynamicToolsFingerprint: "tools-v1",
     });
-    await expect(fs.stat(resolveCodexAppServerBindingPath(sessionFile))).resolves.toBeTruthy();
+    const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
+    expect(bindingStat.isFile()).toBe(true);
   });
 
   it("round-trips plugin app policy context with app ids as record keys", async () => {

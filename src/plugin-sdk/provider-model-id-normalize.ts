@@ -1,7 +1,7 @@
 const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
 
 export function normalizeGooglePreviewModelId(id: string): string {
-  if (id === "gemini-3-pro") {
+  if (id === "gemini-3-pro" || id === "gemini-3-pro-preview") {
     return "gemini-3.1-pro-preview";
   }
   if (id === "gemini-3-flash") {

@@ -192,7 +192,7 @@ describe("applyMigrationSkillSelection", () => {
     );
 
     expect(selected.summary).toMatchObject({ planned: 0, skipped: 2 });
-    expect(selected.items.every((item) => item.status === "skipped")).toBe(true);
+    expect(selected.items.map((item) => item.status)).toEqual(["skipped", "skipped"]);
   });
 
   it("defaults interactive selection to planned skills only", () => {

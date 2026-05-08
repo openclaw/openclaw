@@ -17,6 +17,10 @@ vi.mock("./probe.js", () => ({
   getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
 }));
 
+vi.mock("./private-api-status.js", () => ({
+  getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
+}));
+
 vi.mock("./actions.runtime.js", () => ({
   imessageActionsRuntime: runtimeMock,
 }));
@@ -124,6 +128,28 @@ describe("imessage message actions", () => {
     expect(described?.actions).not.toContain("react");
     expect(described?.actions).not.toContain("reply");
     expect(described?.actions).toContain("edit");
+  });
+
+  it("rejects configured-off actions at execution time", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg({ reactions: false }),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          emoji: "👍",
+        },
+      } as never),
+    ).rejects.toThrow(/disabled in config/i);
+
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
   });
 
   it("maps message tool reactions to imsg tapback kinds", async () => {
@@ -506,30 +532,38 @@ describe("imessage message actions", () => {
     });
   });
 
-  it("routes upload-file through the private API attachment bridge", async () => {
-    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
-      available: true,
-      v2Ready: true,
-      selectors: {},
-    });
-    runtimeMock.sendAttachment.mockResolvedValue({ messageId: "sent-guid" });
+  it.each([
+    ["asVoice", { asVoice: true }],
+    ["as_voice", { as_voice: true }],
+  ])(
+    "routes upload-file through the private API attachment bridge with %s",
+    async (_label, voiceParam) => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+      });
+      runtimeMock.sendAttachment.mockResolvedValue({ messageId: "sent-guid" });
 
-    const result = await imessageMessageActions.handleAction?.({
-      action: "upload-file",
-      cfg: cfg(),
-      params: {
-        chatGuid: "iMessage;+;chat0000",
-        filename: "photo.jpg",
-        buffer: Buffer.from("image").toString("base64"),
-      },
-    } as never);
+      const result = await imessageMessageActions.handleAction?.({
+        action: "upload-file",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "photo.jpg",
+          buffer: Buffer.from("image").toString("base64"),
+          ...voiceParam,
+        },
+      } as never);
 
-    expect(runtimeMock.sendAttachment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatGuid: "iMessage;+;chat0000",
-        filename: "photo.jpg",
-      }),
-    );
-    expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
-  });
+      expect(runtimeMock.sendAttachment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chatGuid: "iMessage;+;chat0000",
+          filename: "photo.jpg",
+          asVoice: true,
+        }),
+      );
+      expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
+    },
+  );
 });

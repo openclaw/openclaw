@@ -482,9 +482,10 @@ describe("config io write prepare", () => {
       auth: { mode: "token" },
     });
     const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
-    expect(channels?.imessage).toBeDefined();
+    expect(channels?.imessage).toMatchObject({
+      cliPath: "/usr/local/bin/imsg",
+    });
     expect(channels?.imessage).not.toHaveProperty("runtimeOnlyDefault");
-    expect(channels?.imessage?.cliPath).toBe("/usr/local/bin/imsg");
   });
 
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {

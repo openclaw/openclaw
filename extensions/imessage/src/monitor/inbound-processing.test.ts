@@ -412,6 +412,58 @@ describe("describeIMessageEchoDropLog", () => {
   });
 });
 
+describe("buildIMessageInboundContext", () => {
+  it("keeps numeric row id and provider GUID separately for action tooling", () => {
+    const decision = resolveIMessageInboundDecision({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      message: {
+        id: 12345,
+        guid: "p:0/GUID-current",
+        sender: "+15555550123",
+        text: "Hello",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "Hello",
+      bodyText: "Hello",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      selfChatCache: undefined,
+      logVerbose: undefined,
+    });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    const { ctxPayload } = buildIMessageInboundContext({
+      cfg: {} as OpenClawConfig,
+      decision,
+      message: {
+        id: 12345,
+        guid: "p:0/GUID-current",
+        sender: "+15555550123",
+        text: "Hello",
+        is_from_me: false,
+        is_group: false,
+      },
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(ctxPayload.MessageSid).toBe("1");
+    expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
+  });
+});
+
 describe("resolveIMessageInboundDecision command auth", () => {
   const cfg = {} as OpenClawConfig;
   const resolveDmCommandDecision = (params: {
