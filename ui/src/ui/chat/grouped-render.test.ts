@@ -1103,8 +1103,8 @@ describe("grouped chat rendering", () => {
     try {
       renderAssistantImage("https://example.com/cat.png");
       let image = container.querySelector<HTMLImageElement>(".chat-message-image");
-      expect(image).not.toBeNull();
-      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(image).toBeInstanceOf(HTMLImageElement);
+      image!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
       expect(openSpy).toHaveBeenCalledTimes(1);
       expect(openSpy).toHaveBeenCalledWith(
@@ -1116,14 +1116,14 @@ describe("grouped chat rendering", () => {
       openSpy.mockClear();
       renderAssistantImage("javascript:alert(1)");
       image = container.querySelector<HTMLImageElement>(".chat-message-image");
-      expect(image).not.toBeNull();
-      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(image).toBeInstanceOf(HTMLImageElement);
+      image!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       expect(openSpy).not.toHaveBeenCalled();
 
       renderAssistantImage("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' />");
       image = container.querySelector<HTMLImageElement>(".chat-message-image");
-      expect(image).not.toBeNull();
-      image?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(image).toBeInstanceOf(HTMLImageElement);
+      image!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       expect(openSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
@@ -1720,10 +1720,10 @@ describe("grouped chat rendering", () => {
     );
 
     const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
-    sidebarButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
+    sidebarButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
-    expect(sidebarButton).not.toBeNull();
     expect(onOpenSidebar).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "markdown",
