@@ -30,6 +30,7 @@ export function resolveCodexPromptSnapshotAppServerOptions(
   return resolveCodexAppServerRuntimeOptions({
     pluginConfig,
     env: {},
+    requirementsToml: null,
   });
 }
 
