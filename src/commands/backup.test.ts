@@ -385,7 +385,7 @@ describe("backup commands", () => {
       });
 
       expect(result.includeWorkspace).toBe(false);
-      expect(result.assets.some((asset) => asset.kind === "workspace")).toBe(false);
+      expect(result.assets.map((asset) => asset.kind)).not.toContain("workspace");
 
       const configOnly = await backupCreateCommand(runtime, {
         dryRun: true,
