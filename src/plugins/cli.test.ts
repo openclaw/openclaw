@@ -397,7 +397,9 @@ describe("registerPluginCliCommands", () => {
       primary: "memory",
     });
 
-    expect(program.commands.filter((command) => command.name() === "memory")).toHaveLength(1);
+    expect(
+      program.commands.reduce((count, command) => count + (command.name() === "memory" ? 1 : 0), 0),
+    ).toBe(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["memory-core"],
