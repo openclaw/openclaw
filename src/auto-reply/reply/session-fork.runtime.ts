@@ -54,11 +54,14 @@ async function estimateParentTranscriptTokensFromSqlite(params: {
   agentId: string;
 }): Promise<number | undefined> {
   try {
-    const filePath = resolveForkParentSessionFile(params.parentEntry, params.agentId);
+    const transcriptLocator = resolveForkParentTranscriptLocator(
+      params.parentEntry,
+      params.agentId,
+    );
     const scope = resolveSqliteSessionTranscriptScope({
       agentId: params.agentId,
       sessionId: params.parentEntry.sessionId,
-      transcriptPath: filePath,
+      transcriptPath: transcriptLocator,
     });
     if (!scope) {
       return undefined;
@@ -73,10 +76,13 @@ async function estimateParentTranscriptTokensFromSqlite(params: {
   }
 }
 
-function resolveForkParentSessionFile(parentEntry: StoreSessionEntry, agentId: string): string {
-  const sessionFile = parentEntry.sessionFile?.trim();
-  if (sessionFile && isSqliteSessionTranscriptLocator(sessionFile)) {
-    return sessionFile;
+function resolveForkParentTranscriptLocator(
+  parentEntry: StoreSessionEntry,
+  agentId: string,
+): string {
+  const transcriptLocator = parentEntry.sessionFile?.trim();
+  if (transcriptLocator && isSqliteSessionTranscriptLocator(transcriptLocator)) {
+    return transcriptLocator;
   }
   return createSqliteSessionTranscriptLocator({ agentId, sessionId: parentEntry.sessionId });
 }
@@ -183,7 +189,6 @@ function collectBranchLabels(params: {
 }
 
 async function readForkSourceTranscript(params: {
-  parentSessionFile: string;
   agentId: string;
   sessionId: string;
 }): Promise<ForkSourceTranscript | null> {
@@ -237,13 +242,13 @@ function buildBranchLabelEntries(params: {
 }
 
 async function writeForkHeaderOnly(params: {
-  parentSessionFile: string;
+  parentTranscriptLocator: string;
   agentId: string;
   cwd: string;
 }): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
-  const sessionFile = createSqliteSessionTranscriptLocator({
+  const childTranscriptLocator = createSqliteSessionTranscriptLocator({
     agentId: params.agentId,
     sessionId,
   });
@@ -253,24 +258,24 @@ async function writeForkHeaderOnly(params: {
     id: sessionId,
     timestamp,
     cwd: params.cwd,
-    parentSession: params.parentSessionFile,
+    parentSession: params.parentTranscriptLocator,
   } satisfies SessionHeader;
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId,
     sessionId,
-    transcriptPath: sessionFile,
+    transcriptPath: childTranscriptLocator,
     events: [header],
   });
-  return { sessionId, sessionFile };
+  return { sessionId, sessionFile: childTranscriptLocator };
 }
 
 async function writeBranchedSession(params: {
-  parentSessionFile: string;
+  parentTranscriptLocator: string;
   source: ForkSourceTranscript;
 }): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
-  const sessionFile = createSqliteSessionTranscriptLocator({
+  const childTranscriptLocator = createSqliteSessionTranscriptLocator({
     agentId: params.source.agentId,
     sessionId,
   });
@@ -287,7 +292,7 @@ async function writeBranchedSession(params: {
     id: sessionId,
     timestamp,
     cwd: params.source.cwd,
-    parentSession: params.parentSessionFile,
+    parentSession: params.parentTranscriptLocator,
   } satisfies SessionHeader;
   const entries = [header, ...pathWithoutLabels, ...labelEntries];
   const hasAssistant = entries.some(
@@ -297,24 +302,23 @@ async function writeBranchedSession(params: {
     replaceSqliteSessionTranscriptEvents({
       agentId: params.source.agentId,
       sessionId,
-      transcriptPath: sessionFile,
+      transcriptPath: childTranscriptLocator,
       events: entries,
     });
   }
-  return { sessionId, sessionFile };
+  return { sessionId, sessionFile: childTranscriptLocator };
 }
 
 export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
 }): Promise<{ sessionId: string; sessionFile: string } | null> {
-  const parentSessionFile = resolveForkParentSessionFile(params.parentEntry, params.agentId);
-  if (!parentSessionFile) {
-    return null;
-  }
+  const parentTranscriptLocator = resolveForkParentTranscriptLocator(
+    params.parentEntry,
+    params.agentId,
+  );
   try {
     const source = await readForkSourceTranscript({
-      parentSessionFile,
       agentId: params.agentId,
       sessionId: params.parentEntry.sessionId,
     });
@@ -322,9 +326,9 @@ export async function forkSessionFromParentRuntime(params: {
       return null;
     }
     return source.leafId
-      ? await writeBranchedSession({ parentSessionFile, source })
+      ? await writeBranchedSession({ parentTranscriptLocator, source })
       : await writeForkHeaderOnly({
-          parentSessionFile,
+          parentTranscriptLocator,
           agentId: source.agentId,
           cwd: source.cwd,
         });
