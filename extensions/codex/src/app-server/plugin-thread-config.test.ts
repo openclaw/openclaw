@@ -261,7 +261,9 @@ describe("Codex plugin thread config", () => {
       pluginName: "google-calendar",
     });
     expect(config.diagnostics).toEqual([]);
-    expect(request.mock.calls.filter(([method]) => method === "app/list")).toHaveLength(1);
+    expect(
+      request.mock.calls.reduce((count, [method]) => count + (method === "app/list" ? 1 : 0), 0),
+    ).toBe(1);
   });
 
   it("does not expose plugin apps missing from the app inventory snapshot", async () => {

@@ -52,6 +52,16 @@ const TEST_CONFIG = {
   },
 } as OpenClawConfig;
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 const resolveSessionConversationStub: NonNullable<
   ChannelMessagingAdapter["resolveSessionConversation"]
 > = ({ rawId }) => ({
@@ -1248,7 +1258,7 @@ describe("sessions tools", () => {
       sessionKey: targetKey,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
   });
 
   it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {
@@ -1315,7 +1325,7 @@ describe("sessions tools", () => {
       reply: "child reply",
       delivery: { status: "skipped", mode: "announce" },
     });
-    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
     const replyPromptAgentCalls = calls.filter(
       (call) =>
         call.method === "agent" &&
@@ -1449,7 +1459,7 @@ describe("sessions tools", () => {
     });
     await vi.waitFor(
       () => {
-        expect(calls.filter((call) => call.method === "send")).toHaveLength(1);
+        expect(countMatching(calls, (call) => call.method === "send")).toBe(1);
       },
       { timeout: 2_000, interval: 5 },
     );
