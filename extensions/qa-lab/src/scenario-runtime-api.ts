@@ -58,6 +58,7 @@ export type QaScenarioRuntimeDeps = {
   readConfigSnapshot: QaScenarioRuntimeFunction;
   createSession: QaScenarioRuntimeFunction;
   readEffectiveTools: QaScenarioRuntimeFunction;
+  readQaCrestodianAuditEntries: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
   readRawQaSessionEntries: QaScenarioRuntimeFunction;
   setQaActiveMemorySessionDisabled: QaScenarioRuntimeFunction;
@@ -144,6 +145,7 @@ type QaScenarioRuntimeApi<
   readConfigSnapshot: TDeps["readConfigSnapshot"];
   createSession: TDeps["createSession"];
   readEffectiveTools: TDeps["readEffectiveTools"];
+  readQaCrestodianAuditEntries: TDeps["readQaCrestodianAuditEntries"];
   readSkillStatus: TDeps["readSkillStatus"];
   readRawQaSessionEntries: TDeps["readRawQaSessionEntries"];
   setQaActiveMemorySessionDisabled: TDeps["setQaActiveMemorySessionDisabled"];
@@ -245,6 +247,7 @@ export function createQaScenarioRuntimeApi<
     readConfigSnapshot: params.deps.readConfigSnapshot,
     createSession: params.deps.createSession,
     readEffectiveTools: params.deps.readEffectiveTools,
+    readQaCrestodianAuditEntries: params.deps.readQaCrestodianAuditEntries,
     readSkillStatus: params.deps.readSkillStatus,
     readRawQaSessionEntries: params.deps.readRawQaSessionEntries,
     setQaActiveMemorySessionDisabled: params.deps.setQaActiveMemorySessionDisabled,

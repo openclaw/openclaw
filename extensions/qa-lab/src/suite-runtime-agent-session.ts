@@ -4,7 +4,10 @@ import {
   replaceSqliteSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/config-runtime";
-import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createCorePluginStateKeyedStore,
+  createPluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionEntry,
@@ -18,9 +21,25 @@ type ActiveMemorySessionToggleEntry = {
   updatedAt: number;
 };
 
+type QaCrestodianAuditEntry = {
+  timestamp?: string;
+  operation?: string;
+  summary?: string;
+  [key: string]: unknown;
+};
+
 function createActiveMemorySessionToggleStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   return createPluginStateKeyedStore<ActiveMemorySessionToggleEntry>("active-memory", {
     namespace: "session-toggles",
+    maxEntries: 50_000,
+    env: env.gateway.runtimeEnv,
+  });
+}
+
+function createCrestodianAuditStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
+  return createCorePluginStateKeyedStore<QaCrestodianAuditEntry>({
+    ownerId: "core:crestodian",
+    namespace: "audit",
     maxEntries: 50_000,
     env: env.gateway.runtimeEnv,
   });
@@ -156,6 +175,11 @@ async function setQaActiveMemorySessionDisabled(
   return { sessionKey, disabled: false };
 }
 
+async function readQaCrestodianAuditEntries(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
+  const auditStore = createCrestodianAuditStore(env);
+  return (await auditStore.entries()).map((entry) => entry.value);
+}
+
 async function readEffectiveTools(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
   sessionKey: string,
@@ -247,6 +271,7 @@ async function readRawQaSessionEntries(env: Pick<QaSuiteRuntimeEnv, "gateway">) 
 export {
   createSession,
   readEffectiveTools,
+  readQaCrestodianAuditEntries,
   readRawQaSessionEntries,
   readSkillStatus,
   setQaActiveMemorySessionDisabled,

@@ -20,6 +20,7 @@ const readConfigSnapshot = vi.hoisted(() => vi.fn());
 const waitForConfigRestartSettle = vi.hoisted(() => vi.fn());
 const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
+const readQaCrestodianAuditEntries = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
 const readRawQaSessionEntries = vi.hoisted(() => vi.fn());
 const setQaActiveMemorySessionDisabled = vi.hoisted(() => vi.fn());
@@ -87,6 +88,7 @@ vi.mock("./suite-runtime-gateway.js", () => ({
 vi.mock("./suite-runtime-agent.js", () => ({
   createSession,
   readEffectiveTools,
+  readQaCrestodianAuditEntries,
   readSkillStatus,
   readRawQaSessionEntries,
   setQaActiveMemorySessionDisabled,
