@@ -513,6 +513,17 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../pi-tools.js", () => ({
     createOpenClawCodingTools: createOpenClawCodingToolsMock,
+    resolveProcessToolScopeKey: ({
+      scopeKey,
+      sessionKey,
+      sessionId,
+      agentId,
+    }: {
+      scopeKey?: string;
+      sessionKey?: string;
+      sessionId?: string;
+      agentId?: string;
+    }) => scopeKey ?? sessionKey ?? sessionId ?? (agentId ? `agent:${agentId}` : undefined),
   }));
 
   vi.doMock("./replay-history.js", () => ({

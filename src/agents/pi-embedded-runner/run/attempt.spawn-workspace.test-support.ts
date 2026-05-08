@@ -541,6 +541,17 @@ vi.mock("../../cache-trace.js", () => ({
 vi.mock("../../pi-tools.js", () => ({
   createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) =>
     hoisted.createOpenClawCodingToolsMock(options),
+  resolveProcessToolScopeKey: ({
+    scopeKey,
+    sessionKey,
+    sessionId,
+    agentId,
+  }: {
+    scopeKey?: string;
+    sessionKey?: string;
+    sessionId?: string;
+    agentId?: string;
+  }) => scopeKey ?? sessionKey ?? sessionId ?? (agentId ? `agent:${agentId}` : undefined),
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 
