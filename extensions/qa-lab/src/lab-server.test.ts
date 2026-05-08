@@ -35,6 +35,15 @@ const captureMock = vi.hoisted(() => {
         return acc;
       }, {}),
     ).map(([value, count]) => ({ value, count }));
+  const countMatching = <T>(values: T[], predicate: (value: T) => boolean) => {
+    let count = 0;
+    for (const value of values) {
+      if (predicate(value)) {
+        count += 1;
+      }
+    }
+    return count;
+  };
 
   const store = {
     upsertSession(session: Record<string, unknown>) {
@@ -46,7 +55,7 @@ const captureMock = vi.hoisted(() => {
     listSessions(limit: number) {
       return sessions.slice(0, limit).map((session) =>
         Object.assign({}, session, {
-          eventCount: events.filter((event) => event.sessionId === session.id).length,
+          eventCount: countMatching(events, (event) => event.sessionId === session.id),
         }),
       );
     },
@@ -59,7 +68,7 @@ const captureMock = vi.hoisted(() => {
       return {
         sessionId,
         totalEvents: selected.length,
-        unlabeledEventCount: metas.filter((meta) => !meta.provider && !meta.model).length,
+        unlabeledEventCount: countMatching(metas, (meta) => !meta.provider && !meta.model),
         providers: countValues(metas.map((meta) => meta.provider as string | undefined)),
         apis: countValues(metas.map((meta) => meta.api as string | undefined)),
         models: countValues(metas.map((meta) => meta.model as string | undefined)),
