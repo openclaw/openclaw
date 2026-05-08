@@ -775,8 +775,10 @@ describe("gateway bonjour advertiser", () => {
     const disableLog = logger.warn.mock.calls.find(
       (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
     );
-    expect(disableLog).toBeDefined();
-    expect(String(disableLog?.[0])).toMatch(/restarts within \d+ minutes/);
+    if (!disableLog) {
+      throw new Error("expected advertiser disable warning after repeated restarts");
+    }
+    expect(String(disableLog[0])).toMatch(/restarts within \d+ minutes/);
 
     const advertiseCallsAtDisable = advertise.mock.calls.length;
     const createServiceCallsAtDisable = createService.mock.calls.length;
