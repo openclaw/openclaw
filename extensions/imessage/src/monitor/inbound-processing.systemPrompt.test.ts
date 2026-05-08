@@ -61,7 +61,9 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
       }),
     );
     expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") return;
+    if (decision.kind !== "dispatch") {
+      return;
+    }
     expect(decision.groupSystemPrompt).toBe("Keep responses under 3 sentences.");
   });
 
@@ -74,7 +76,9 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
       }),
     );
     expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") return;
+    if (decision.kind !== "dispatch") {
+      return;
+    }
     expect(decision.groupSystemPrompt).toBe("Default group voice.");
   });
 
@@ -88,7 +92,9 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
       }),
     );
     expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") return;
+    if (decision.kind !== "dispatch") {
+      return;
+    }
     expect(decision.groupSystemPrompt).toBe("Specific group voice.");
   });
 
@@ -105,7 +111,9 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
       }),
     );
     expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") return;
+    if (decision.kind !== "dispatch") {
+      return;
+    }
     expect(decision.groupSystemPrompt).toBeUndefined();
   });
 
@@ -119,7 +127,9 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
       }),
     );
     expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") return;
+    if (decision.kind !== "dispatch") {
+      return;
+    }
     expect(decision.groupSystemPrompt).toBeUndefined();
   });
 
@@ -133,7 +143,9 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
       }),
     );
     expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") return;
+    if (decision.kind !== "dispatch") {
+      return;
+    }
     expect(decision.groupSystemPrompt).toBe("Wildcard.");
   });
 
@@ -162,7 +174,9 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
       }),
     );
     expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") return;
+    if (decision.kind !== "dispatch") {
+      return;
+    }
     expect(decision.isGroup).toBe(false);
     expect(decision.groupSystemPrompt).toBeUndefined();
   });
