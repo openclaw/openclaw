@@ -49,6 +49,16 @@ function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsFo
   >["skillCommands"];
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("createTelegramBot command menu", () => {
   beforeAll(async () => {
     ({ normalizeTelegramCommandName } = await import("./command-config.js"));
@@ -175,7 +185,8 @@ describe("createTelegramBot command menu", () => {
     }
     expect(registered).toContainEqual({ command: "custom_backup", description: "Git backup" });
     expect(registered).not.toContainEqual({ command: "status", description: "Custom status" });
-    expect(registered.filter((command) => command.command === "status")).toEqual([nativeStatus]);
+    expect(registered.find((command) => command.command === "status")).toEqual(nativeStatus);
+    expect(countMatching(registered, (command) => command.command === "status")).toBe(1);
     expect(errorSpy).toHaveBeenCalled();
   });
 
