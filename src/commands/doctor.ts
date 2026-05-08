@@ -1,12 +1,11 @@
-import os from "node:os";
-import path from "node:path";
+import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store-path.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
 export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
   if (options?.postUpgrade) {
-    const installsPath = path.join(os.homedir(), ".openclaw", "plugins", "installs.json");
+    const installsPath = resolveInstalledPluginIndexStorePath();
     const report = await runPostUpgradeProbes({ installsPath });
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
