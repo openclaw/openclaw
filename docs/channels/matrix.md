@@ -108,7 +108,7 @@ To accept every invite, use `autoJoin: "always"`.
 
 DM and room allowlists are best populated with stable IDs:
 
-- DMs (`dm.allowFrom`, `groupAllowFrom`, `groups.<room>.users`): use `@user:server`. Display names only resolve when the homeserver directory returns exactly one match.
+- DMs (`dm.allowFrom`, `groupAllowFrom`, `groups.<room>.users`): use `@user:server`. Display names are ignored by default because they are mutable; set `dangerouslyAllowNameMatching: true` only when you explicitly need compatibility with display-name entries.
 - Rooms (`groups`, `autoJoinAllowlist`): use `!room:server` or `#alias:server`. Names are resolved best-effort against joined rooms; unresolved entries are ignored at runtime.
 
 ### Account ID normalization
@@ -826,7 +826,7 @@ Live directory lookup uses the logged-in Matrix account:
 
 ## Configuration reference
 
-Allowlist-style fields (`groupAllowFrom`, `dm.allowFrom`, `groups.<room>.users`) accept full Matrix user IDs (safest). Exact directory matches are resolved at startup and whenever the allowlist changes while the monitor is running; entries that cannot be resolved are ignored at runtime. Room allowlists prefer room IDs or aliases for the same reason.
+Allowlist-style user fields (`groupAllowFrom`, `dm.allowFrom`, `groups.<room>.users`) accept full Matrix user IDs (safest). Non-ID user entries are ignored by default. If you set `dangerouslyAllowNameMatching: true`, exact Matrix directory display-name matches are resolved at startup and whenever the allowlist changes while the monitor is running; entries that cannot be resolved are ignored at runtime. Room allowlists prefer room IDs or aliases for the same reason.
 
 ### Account and connection
 
@@ -862,6 +862,7 @@ Allowlist-style fields (`groupAllowFrom`, `dm.allowFrom`, `groups.<room>.users`)
 - `dm.threadReplies`: DM-only override for reply threading (`"off"`, `"inbound"`, `"always"`).
 - `allowBots`: accept messages from other configured Matrix bot accounts (`true` or `"mentions"`).
 - `allowlistOnly`: when `true`, forces all active DM policies (except `"disabled"`) and `"open"` group policies to `"allowlist"`. Does not change `"disabled"` policies.
+- `dangerouslyAllowNameMatching`: when `true`, allows Matrix display-name directory lookup for user allowlist entries. Prefer full `@user:server` IDs.
 - `autoJoin`: `"always"`, `"allowlist"`, or `"off"`. Default: `"off"`. Applies to every Matrix invite, including DM-style invites.
 - `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `"allowlist"`. Alias entries are resolved against the homeserver, not against state claimed by the invited room.
 - `contextVisibility`: supplemental context visibility (`"all"` default, `"allowlist"`, `"allowlist_quote"`).
