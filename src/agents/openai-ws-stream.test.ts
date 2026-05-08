@@ -29,6 +29,16 @@ import type { InputItem, ResponseCreateEvent } from "./openai-ws-types.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock OpenAIWebSocketManager
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2751,7 +2761,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
     expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
-    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(countMatching(events, (event) => event.type === "start")).toBe(1);
     expect(events.some((event) => event.type === "error")).toBe(false);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
@@ -2785,7 +2795,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
     expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
-    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(countMatching(events, (event) => event.type === "start")).toBe(1);
     expect(events.some((event) => event.type === "error")).toBe(false);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
@@ -2820,7 +2830,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     expect(streamSimpleCalls).toHaveLength(0);
     expect(firstManager.closeCallCount).toBeGreaterThanOrEqual(1);
-    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(countMatching(events, (event) => event.type === "start")).toBe(1);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("retry succeeded");
   });
