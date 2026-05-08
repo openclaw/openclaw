@@ -226,6 +226,16 @@ function createStores() {
   };
 }
 
+function requireRegisteredMSTeamsConfig(): OpenClawConfig {
+  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
+    | { cfg?: OpenClawConfig }
+    | undefined;
+  if (!registered?.cfg) {
+    throw new Error("expected registered MSTeams handler config");
+  }
+  return registered.cfg;
+}
+
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -362,13 +372,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       entries: ["Product/Roadmap"],
     });
 
-    const registeredCfg = registerMSTeamsHandlers.mock.calls[0]?.[1] as { cfg: OpenClawConfig };
-    expect(registeredCfg.cfg.channels?.msteams?.allowFrom).toEqual([
+    const registeredCfg = requireRegisteredMSTeamsConfig();
+    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual([
       "Alice",
       "user:40a1a0ed-4ff2-4164-a219-55518990c197",
       "40a1a0ed-4ff2-4164-a219-55518990c197",
     ]);
-    expect(registeredCfg.cfg.channels?.msteams?.groupAllowFrom).toEqual([
+    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual([
       "Bob",
       "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198",
       "50a1a0ed-4ff2-4164-a219-55518990c198",
@@ -414,9 +424,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       entries: ["Bob"],
     });
 
-    const registeredCfg = registerMSTeamsHandlers.mock.calls[0]?.[1] as { cfg: OpenClawConfig };
-    expect(registeredCfg.cfg.channels?.msteams?.allowFrom).toEqual(["Alice", "alice-aad"]);
-    expect(registeredCfg.cfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob", "bob-aad"]);
+    const registeredCfg = requireRegisteredMSTeamsConfig();
+    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual(["Alice", "alice-aad"]);
+    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob", "bob-aad"]);
 
     abort.abort();
     await task;
