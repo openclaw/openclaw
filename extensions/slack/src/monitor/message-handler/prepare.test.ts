@@ -1388,6 +1388,80 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(new Set([root!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(1);
   });
 
+  it("keeps an implicit-conversation root and its Slack thread follow-up on one parent session in `requireMention: false` channels (#78505)", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const rootTs = "1778073105.769279";
+    const expectedSessionKey = `agent:main:slack:channel:c0agg76cp1s:thread:${rootTs}`;
+    const replies = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          text: "What day is it?",
+          user: "U_TRAJCHE",
+          ts: rootTs,
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "first",
+            groupPolicy: "open",
+            channels: { C0AGG76CP1S: { enabled: true, requireMention: false } },
+          },
+        },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as unknown as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "first",
+      channelsConfig: { C0AGG76CP1S: { enabled: true, requireMention: false } },
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "genai", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Trajche" });
+
+    const root = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "first" }),
+      message: {
+        type: "message",
+        channel: "C0AGG76CP1S",
+        channel_type: "channel",
+        user: "U_TRAJCHE",
+        text: "What day is it?",
+        ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+    recordSlackThreadParticipation("default", "C0AGG76CP1S", rootTs);
+
+    const followUp = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "first" }),
+      message: {
+        type: "message",
+        channel: "C0AGG76CP1S",
+        channel_type: "channel",
+        user: "U_TRAJCHE",
+        text: "and the time?",
+        ts: "1778073128.229409",
+        thread_ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(root).toBeTruthy();
+    expect(followUp).toBeTruthy();
+    // Without the seeding fix, root would land on `agent:main:slack:channel:c0agg76cp1s`
+    // while followUp would land on `:thread:<rootTs>`, splitting the conversation
+    // across two sessions. Both must share one session key.
+    expect(root!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(followUp!.ctxPayload.SessionKey).toBe(expectedSessionKey);
+    expect(new Set([root!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(1);
+  });
+
   it("treats Slack user-group mentions as explicit mentions when the bot is a member", async () => {
     const usergroupsUsersList = vi.fn().mockResolvedValue({
       ok: true,
