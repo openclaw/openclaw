@@ -434,7 +434,7 @@ export function createInMemoryAcpEventLedger(options: LedgerOptions = {}): AcpEv
   });
 }
 
-export function resolveDefaultAcpEventLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveLegacyAcpEventLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "acp", "event-ledger.json");
 }
 
@@ -535,7 +535,7 @@ function writeStoreToSqlite(
 
 export function legacyAcpEventLedgerFileExists(env: NodeJS.ProcessEnv = process.env): boolean {
   try {
-    return statSync(resolveDefaultAcpEventLedgerPath(env)).isFile();
+    return statSync(resolveLegacyAcpEventLedgerPath(env)).isFile();
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
       return false;
@@ -547,7 +547,7 @@ export function legacyAcpEventLedgerFileExists(env: NodeJS.ProcessEnv = process.
 export async function importLegacyAcpEventLedgerFileToSqlite(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ imported: boolean; sessions: number; events: number }> {
-  const filePath = resolveDefaultAcpEventLedgerPath(env);
+  const filePath = resolveLegacyAcpEventLedgerPath(env);
   let parsed: unknown;
   try {
     parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;

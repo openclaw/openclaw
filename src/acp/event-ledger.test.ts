@@ -7,7 +7,7 @@ import {
   createInMemoryAcpEventLedger,
   createSqliteAcpEventLedger,
   importLegacyAcpEventLedgerFileToSqlite,
-  resolveDefaultAcpEventLedgerPath,
+  resolveLegacyAcpEventLedgerPath,
 } from "./event-ledger.js";
 
 describe("ACP event ledger", () => {
@@ -327,7 +327,7 @@ describe("ACP event ledger", () => {
   it("imports legacy file-backed ledger state into SQLite", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-      const filePath = resolveDefaultAcpEventLedgerPath(env);
+      const filePath = resolveLegacyAcpEventLedgerPath(env);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(
         filePath,
