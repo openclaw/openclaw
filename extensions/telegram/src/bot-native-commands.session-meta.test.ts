@@ -1335,7 +1335,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       {
         sessionId: "sess-topic",
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-        fallbackSessionFile: "sqlite-transcript://main/sess-topic.jsonl",
+        fallbackSessionFile: "sqlite-transcript://main/sess-topic-topic-42.jsonl",
       },
       "resolved session file params",
     );
@@ -1344,7 +1344,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       {
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
-        sessionFile: "sqlite-transcript://main/sess-topic.jsonl",
+        sessionFile: "sqlite-transcript://main/sess-topic-topic-42.jsonl",
         messageThreadId: 42,
       },
       "plugin command params",

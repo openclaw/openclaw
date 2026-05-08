@@ -187,6 +187,7 @@ async function resolveTelegramCommandSessionFile(params: {
     const fallbackSessionFile = createSqliteSessionTranscriptLocator({
       sessionId,
       agentId: params.agentId,
+      topicId: params.threadId,
     });
     const persisted = await resolveAndPersistSessionFile({
       sessionId,
