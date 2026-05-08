@@ -236,7 +236,6 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
 
   it("gracefully returns the original chunk when tag overhead exceeds the limit", () => {
     const input = "**ab**";
-    expect(() => markdownToTelegramChunks(input, 6)).not.toThrow();
     const chunks = markdownToTelegramChunks(input, 6);
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.text).toBe("ab");
