@@ -96,6 +96,15 @@ function requireGeneratedVideo(result: OpenRouterVideoResult, index: number) {
   return video;
 }
 
+function requireGeneratedVideoBuffer(result: OpenRouterVideoResult, index: number) {
+  const video = requireGeneratedVideo(result, index);
+  expect(video.buffer).toBeInstanceOf(Buffer);
+  if (!video.buffer) {
+    throw new Error(`expected OpenRouter generated video ${index} buffer`);
+  }
+  return { video, buffer: video.buffer };
+}
+
 describe("openrouter video generation provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
@@ -250,8 +259,8 @@ describe("openrouter video generation provider", () => {
       expect.objectContaining({ auditContext: "openrouter-video-download" }),
     );
     expect(requireFetchCallHeaders(1).get("authorization")).toBe("Bearer openrouter-key");
-    const video = requireGeneratedVideo(result, 0);
-    expect(video.buffer.toString()).toBe("mp4-bytes");
+    const { video, buffer } = requireGeneratedVideoBuffer(result, 0);
+    expect(buffer.toString()).toBe("mp4-bytes");
     expect(video.mimeType).toBe("video/mp4");
     expect(result.metadata).toEqual({
       jobId: "job-123",
@@ -334,8 +343,8 @@ describe("openrouter video generation provider", () => {
       expect.any(Function),
       expect.objectContaining({ auditContext: "openrouter-video-download" }),
     );
-    const video = requireGeneratedVideo(result, 0);
-    expect(video.buffer.toString()).toBe("webm-bytes");
+    const { video, buffer } = requireGeneratedVideoBuffer(result, 0);
+    expect(buffer.toString()).toBe("webm-bytes");
     expect(video.fileName).toBe("video-1.webm");
   });
 
