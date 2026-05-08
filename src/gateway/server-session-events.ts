@@ -7,7 +7,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
-import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
+import { resolveSessionKeyForTranscriptLocator } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
   loadGatewaySessionRow,
@@ -105,7 +105,7 @@ async function handleTranscriptUpdateBroadcast(
   },
   update: SessionTranscriptUpdate,
 ): Promise<void> {
-  const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
+  const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptLocator(update.sessionFile);
   if (!sessionKey || update.message === undefined) {
     return;
   }
