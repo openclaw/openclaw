@@ -956,4 +956,87 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
   });
+
+  it("passes an isolated abortSignal to preflight compaction so compaction abort does not kill the main turn", async () => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "assistant", content: "x", usage: { input: 90_000, output: 0 } } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+    const parentController = new AbortController();
+    const replyOperation = {
+      abortSignal: parentController.signal,
+      setPhase: vi.fn(),
+      updateSessionId: vi.fn(),
+    } as never;
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionFile, sessionKey: "main" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+      abortSignal?: AbortSignal;
+    };
+    // compaction receives a signal (parent abort propagates to it)
+    expect(compactCall.abortSignal).toBeInstanceOf(AbortSignal);
+    // but it is NOT the same object as the parent — isolated so compaction abort cannot cancel main turn
+    expect(compactCall.abortSignal).not.toBe(parentController.signal);
+    // parent abort still propagates to the compaction signal
+    expect(compactCall.abortSignal?.aborted).toBe(false);
+    parentController.abort();
+    expect(compactCall.abortSignal?.aborted).toBe(true);
+  });
+
+  it("passes an isolated abortSignal to memory flush so flush abort does not kill the main turn", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+    };
+    const parentController = new AbortController();
+    const replyOperation = {
+      abortSignal: parentController.signal,
+      setPhase: vi.fn(),
+      updateSessionId: vi.fn(),
+    } as never;
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    const flushCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      abortSignal?: AbortSignal;
+    };
+    expect(flushCall.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(flushCall.abortSignal).not.toBe(parentController.signal);
+    expect(flushCall.abortSignal?.aborted).toBe(false);
+    parentController.abort();
+    expect(flushCall.abortSignal?.aborted).toBe(true);
+  });
 });

@@ -630,7 +630,9 @@ export async function runPreflightCompactionIfNeeded(params: {
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
     senderIsOwner: params.followupRun.run.senderIsOwner,
     ownerNumbers: params.followupRun.run.ownerNumbers,
-    abortSignal: params.replyOperation.abortSignal,
+    // Isolate compaction abort from main turn: parent abort cancels compaction,
+    // but compaction failure does not propagate back and kill the main turn.
+    abortSignal: AbortSignal.any([params.replyOperation.abortSignal]),
   });
 
   if (!result?.ok || !result.compacted) {
@@ -945,7 +947,8 @@ export async function runMemoryFlushIfNeeded(params: {
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-          abortSignal: params.replyOperation.abortSignal,
+          // Isolate memory-flush abort from main turn (same pattern as preflight compaction).
+          abortSignal: AbortSignal.any([params.replyOperation.abortSignal]),
           replyOperation: params.replyOperation,
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
