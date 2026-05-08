@@ -73,6 +73,9 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "Be accurate, brief, and speakable.",
 ].join(" ");
 
+/** Default timeout for background consult runs (email-first and timeout-exceeded paths). */
+const BACKGROUND_CONSULT_TIMEOUT_MS = 120_000;
+
 let telnyxProviderPromise: Promise<TelnyxProviderModule> | undefined;
 let twilioProviderPromise: Promise<TwilioProviderModule> | undefined;
 let plivoProviderPromise: Promise<PlivoProviderModule> | undefined;
@@ -412,7 +415,10 @@ export async function createVoiceCallRuntime(params: {
             log.info(
               `[voice-call] Email-first path: caller requested email delivery for call=${callId}, agent=${agentId}, session=${sessionKey}`,
             );
-            const consultPromise = consultRealtimeVoiceAgent(consultParams);
+            const consultPromise = consultRealtimeVoiceAgent({
+              ...consultParams,
+              timeoutMs: BACKGROUND_CONSULT_TIMEOUT_MS,
+            });
             consultPromise
               .then((result: { text: string }) => {
                 spawnEmailDeliveryAgent({
@@ -444,7 +450,10 @@ export async function createVoiceCallRuntime(params: {
             log.info(
               `[voice-call] Timeout path: racing consult against ${bgTimeout}ms for call=${callId}, agent=${agentId}, session=${sessionKey}`,
             );
-            const consultPromise = consultRealtimeVoiceAgent(consultParams);
+            const consultPromise = consultRealtimeVoiceAgent({
+              ...consultParams,
+              timeoutMs: BACKGROUND_CONSULT_TIMEOUT_MS,
+            });
             const result = await Promise.race([
               consultPromise.then((r: { text: string }) => ({ kind: "result" as const, value: r })),
               new Promise<{ kind: "timeout" }>((resolve) =>
