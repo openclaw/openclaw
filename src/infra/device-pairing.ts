@@ -437,9 +437,23 @@ function resolveApprovedTokenScopes(params: {
   approvedScopes?: string[];
   existing?: PairedDevice;
 }): string[] {
-  const requestedScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
-  if (requestedScopes.length > 0) {
-    return requestedScopes;
+  const pendingScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
+  if (pendingScopes.length > 0) {
+    const approvedBaseline = resolveRoleScopedDeviceTokenScopes(
+      params.role,
+      params.existing?.approvedScopes ?? params.existing?.scopes,
+    );
+    const requestedScopeDelta =
+      params.existingToken && approvedBaseline.length > 0
+        ? pendingScopes.filter((scope) => !approvedBaseline.includes(scope))
+        : pendingScopes;
+    if (requestedScopeDelta.length === 0 && params.existingToken) {
+      return resolveRoleScopedDeviceTokenScopes(params.role, params.existingToken.scopes);
+    }
+    return resolveRoleScopedDeviceTokenScopes(
+      params.role,
+      mergeScopes(params.existingToken?.scopes, requestedScopeDelta),
+    );
   }
   return resolveRoleScopedDeviceTokenScopes(
     params.role,
