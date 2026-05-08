@@ -10,7 +10,7 @@ import {
   isHeartbeatLikeTuiSession,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
-  resolveTuiLastSessionStatePath,
+  resolveLegacyTuiLastSessionStatePath,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
 
@@ -43,7 +43,7 @@ describe("tui last session state", () => {
     });
 
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe("agent:main:tui-123");
-    await expect(fs.access(resolveTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
+    await expect(fs.access(resolveLegacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -61,7 +61,7 @@ describe("tui last session state", () => {
       sessionKey: "agent:main:tui-sqlite",
       stateDir,
     });
-    await expect(fs.access(resolveTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
+    await expect(fs.access(resolveLegacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
       code: "ENOENT",
     });
 
@@ -77,7 +77,7 @@ describe("tui last session state", () => {
       agentId: "main",
       sessionScope: "per-sender",
     });
-    const statePath = resolveTuiLastSessionStatePath(stateDir);
+    const statePath = resolveLegacyTuiLastSessionStatePath(stateDir);
     await fs.mkdir(path.dirname(statePath), { recursive: true });
     await fs.writeFile(
       statePath,
@@ -97,7 +97,7 @@ describe("tui last session state", () => {
 
   it("removes empty legacy JSON through the doctor migration helper", async () => {
     const stateDir = await makeTempStateDir();
-    const statePath = resolveTuiLastSessionStatePath(stateDir);
+    const statePath = resolveLegacyTuiLastSessionStatePath(stateDir);
     await fs.mkdir(path.dirname(statePath), { recursive: true });
     await fs.writeFile(statePath, "{}\n", "utf8");
 
@@ -135,7 +135,7 @@ describe("tui last session state", () => {
       agentId: "main",
       sessionScope: "per-sender",
     });
-    const statePath = resolveTuiLastSessionStatePath(stateDir);
+    const statePath = resolveLegacyTuiLastSessionStatePath(stateDir);
     await fs.mkdir(path.dirname(statePath), { recursive: true });
     await fs.writeFile(
       statePath,

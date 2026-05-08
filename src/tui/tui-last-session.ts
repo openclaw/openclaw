@@ -22,7 +22,7 @@ type LastSessionRecord = {
 type LastSessionStore = Record<string, LastSessionRecord>;
 const TUI_LAST_SESSION_KV_SCOPE = "tui:last-session";
 
-export function resolveTuiLastSessionStatePath(stateDir = resolveStateDir()): string {
+export function resolveLegacyTuiLastSessionStatePath(stateDir = resolveStateDir()): string {
   return path.join(stateDir, "tui", "last-session.json");
 }
 
@@ -89,7 +89,7 @@ function writeTuiLastSessionKv(params: {
 async function readLegacyTuiLastSessionStore(params: {
   stateDir?: string;
 }): Promise<LastSessionStore> {
-  const filePath = resolveTuiLastSessionStatePath(params.stateDir);
+  const filePath = resolveLegacyTuiLastSessionStatePath(params.stateDir);
   return await readStore(filePath);
 }
 
@@ -99,7 +99,7 @@ export async function legacyTuiLastSessionFileExists(
   } = {},
 ): Promise<boolean> {
   try {
-    await fs.access(resolveTuiLastSessionStatePath(params.stateDir));
+    await fs.access(resolveLegacyTuiLastSessionStatePath(params.stateDir));
     return true;
   } catch {
     return false;
@@ -111,7 +111,7 @@ export async function importLegacyTuiLastSessionStoreToSqlite(
     stateDir?: string;
   } = {},
 ): Promise<{ imported: boolean; pointers: number }> {
-  const filePath = resolveTuiLastSessionStatePath(params.stateDir);
+  const filePath = resolveLegacyTuiLastSessionStatePath(params.stateDir);
   const exists = await legacyTuiLastSessionFileExists(params);
   if (!exists) {
     return { imported: false, pointers: 0 };

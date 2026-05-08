@@ -35,7 +35,7 @@ import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/binding");
 
-const APPROVALS_PATH = "~/.openclaw/plugin-binding-approvals.json";
+const LEGACY_APPROVALS_PATH = "~/.openclaw/plugin-binding-approvals.json";
 const APPROVALS_KV_SCOPE = "plugin_binding_approvals";
 const APPROVALS_KV_KEY = "current";
 const PLUGIN_BINDING_CUSTOM_ID_PREFIX = "pluginbind";
@@ -163,16 +163,16 @@ function getPluginBindingGlobalState(): PluginBindingGlobalState {
   return pluginBindingGlobalState;
 }
 
-function resolveApprovalsPath(): string {
+function resolveLegacyApprovalsPath(): string {
   if (process.env.OPENCLAW_STATE_DIR?.trim()) {
     return path.join(resolveStateDir(process.env), "plugin-binding-approvals.json");
   }
-  return expandHomePrefix(APPROVALS_PATH);
+  return expandHomePrefix(LEGACY_APPROVALS_PATH);
 }
 
 function pluginBindingApprovalDbOptions(): OpenClawStateDatabaseOptions {
   return {
-    env: { ...process.env, OPENCLAW_STATE_DIR: path.dirname(resolveApprovalsPath()) },
+    env: { ...process.env, OPENCLAW_STATE_DIR: path.dirname(resolveLegacyApprovalsPath()) },
   };
 }
 
@@ -451,7 +451,7 @@ async function addPersistentApproval(entry: PluginBindingApprovalEntry): Promise
 
 export function legacyPluginBindingApprovalFileExists(): boolean {
   try {
-    return fs.statSync(resolveApprovalsPath()).isFile();
+    return fs.statSync(resolveLegacyApprovalsPath()).isFile();
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
       return false;
@@ -464,7 +464,7 @@ export function importLegacyPluginBindingApprovalFileToSqlite(): {
   imported: boolean;
   approvals: number;
 } {
-  const filePath = resolveApprovalsPath();
+  const filePath = resolveLegacyApprovalsPath();
   if (!legacyPluginBindingApprovalFileExists()) {
     return { imported: false, approvals: 0 };
   }
