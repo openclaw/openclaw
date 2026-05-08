@@ -1183,11 +1183,11 @@ describe("cron cli", () => {
     );
 
     const program = buildProgram();
-    const stderr = await captureStderrDuring(() =>
-      program.parseAsync(["cron", "edit", "job-1", "--system-event", "./run.sh"], {
+    const stderr = await captureStderrDuring(async () => {
+      await program.parseAsync(["cron", "edit", "job-1", "--system-event", "./run.sh"], {
         from: "user",
-      }),
-    );
+      });
+    });
 
     expect(stderr).toContain("--system-event on --session main does not execute shell commands");
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.update")).toBe(true);
@@ -1220,11 +1220,11 @@ describe("cron cli", () => {
     );
 
     const program = buildProgram();
-    const stderr = await captureStderrDuring(() =>
-      program.parseAsync(["cron", "edit", "job-1", "--system-event", "./run.sh"], {
+    const stderr = await captureStderrDuring(async () => {
+      await program.parseAsync(["cron", "edit", "job-1", "--system-event", "./run.sh"], {
         from: "user",
-      }),
-    );
+      });
+    });
 
     const listParams = callGatewayFromCli.mock.calls
       .filter((call) => call[0] === "cron.list")
