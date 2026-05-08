@@ -182,6 +182,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack/Teams inbound: keep queued message system events to routing labels only, avoiding truncated duplicate message previews while preserving the full body in the channel payload. (#67761) Thanks @jgallowa07.
 - fix(discord): gate user allowlist name resolution [AI]. (#79002) Thanks @pgondhi987.
 - fix(msteams): gate startup user allowlist resolution [AI]. (#79003) Thanks @pgondhi987.
 - Harden macOS shell wrapper allowlist parsing [AI]. (#78518) Thanks @pgondhi987.
