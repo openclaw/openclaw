@@ -189,39 +189,55 @@ async function fetchWithRetry(input: string, init?: RequestInit, attempts = 3) {
 }
 
 async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const response = await fetchWithRetry(`${baseUrl}/api/bootstrap`);
-    const bootstrap = (await response.json()) as {
-      runnerCatalog: {
+  let catalog:
+    | {
         status: "loading" | "ready" | "failed";
         real: Array<{ key: string; name: string }>;
+      }
+    | undefined;
+  await vi.waitFor(
+    async () => {
+      const response = await fetchWithRetry(`${baseUrl}/api/bootstrap`);
+      const bootstrap = (await response.json()) as {
+        runnerCatalog: {
+          status: "loading" | "ready" | "failed";
+          real: Array<{ key: string; name: string }>;
+        };
       };
-    };
-    if (bootstrap.runnerCatalog.status !== "loading") {
-      return bootstrap.runnerCatalog;
-    }
-    await sleep(10);
+      if (bootstrap.runnerCatalog.status === "loading") {
+        throw new Error("runner catalog still loading");
+      }
+      catalog = bootstrap.runnerCatalog;
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  if (!catalog) {
+    throw new Error("runner catalog stayed loading");
   }
-  throw new Error("runner catalog stayed loading");
+  return catalog;
 }
 
 async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const content = await readFile(filePath, "utf8");
-      if (content === expected) {
-        return content;
+  let content: string | undefined;
+  await vi.waitFor(
+    async () => {
+      try {
+        content = await readFile(filePath, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
+      if (content !== expected) {
+        throw new Error(`file did not reach expected content: ${filePath}`);
       }
-    }
-    await sleep(10);
+    },
+    { interval: 1, timeout: timeoutMs },
+  );
+  if (content === undefined) {
+    throw new Error(`file did not reach expected content: ${filePath}`);
   }
-  throw new Error(`file did not reach expected content: ${filePath}`);
+  return content;
 }
 
 async function createQaLabRepoRootFixture(params?: {
