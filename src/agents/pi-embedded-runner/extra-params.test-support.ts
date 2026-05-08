@@ -29,7 +29,6 @@ type RunExtraParamsCaseParams<
   applyModelId?: string;
   applyProvider?: string;
   callerHeaders?: Record<string, string>;
-  agentDir?: string;
   cfg?: OpenClawConfig;
   model: Model<TApi>;
   mockProviderRuntime?: boolean;
@@ -69,10 +68,6 @@ export function runExtraParamsCase<
       params.applyModelId ?? params.model.id,
       undefined,
       params.thinkingLevel,
-      undefined,
-      undefined,
-      undefined,
-      params.agentDir,
     );
   } finally {
     if (params.mockProviderRuntime === true) {
