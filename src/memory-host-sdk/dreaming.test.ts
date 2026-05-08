@@ -7,6 +7,7 @@ import {
   resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
+  resolveMemoryLightDreamingConfig,
 } from "./dreaming.js";
 
 describe("memory dreaming host helpers", () => {
@@ -18,6 +19,8 @@ describe("memory dreaming host helpers", () => {
           frequency: "0 */4 * * *",
           timezone: "Europe/London",
           model: " anthropic/claude-sonnet-4-6 ",
+          language: " zh-CN ",
+          diaryPrompt: " 用中文写一段简短的梦境日记。 ",
           storage: {
             mode: "both",
             separateReports: true,
@@ -39,6 +42,8 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.enabled).toBe(true);
     expect(resolved.frequency).toBe("0 */4 * * *");
     expect(resolved.timezone).toBe("Europe/London");
+    expect(resolved.language).toBe("zh-CN");
+    expect(resolved.diaryPrompt).toBe("用中文写一段简短的梦境日记。");
     expect(resolved.execution.defaults.model).toBe("anthropic/claude-sonnet-4-6");
     expect(resolved.phases.light.execution.model).toBe("anthropic/claude-sonnet-4-6");
     expect(resolved.phases.deep.execution.model).toBe("anthropic/claude-sonnet-4-6");
@@ -81,6 +86,20 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.light.execution.model).toBe("openai/gpt-5.4");
     expect(resolved.phases.deep.execution.model).toBe("openai/gpt-5.4");
     expect(resolved.phases.rem.execution.model).toBe("xai/grok-4.1-fast");
+  });
+
+  it("carries top-level diary language settings into phase configs", () => {
+    const light = resolveMemoryLightDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          language: "ja",
+          diaryPrompt: "日本語で短い日記を書いてください。",
+        },
+      },
+    });
+
+    expect(light.language).toBe("ja");
+    expect(light.diaryPrompt).toBe("日本語で短い日記を書いてください。");
   });
 
   it("falls back to cfg timezone and deep defaults", () => {

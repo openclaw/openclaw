@@ -112,6 +112,8 @@ type ShortTermPromotionDreamingConfig = {
   enabled: boolean;
   cron: string;
   timezone?: string;
+  language?: string;
+  diaryPrompt?: string;
   limit: number;
   minScore: number;
   minRecallCount: number;
@@ -393,6 +395,8 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     enabled: resolved.enabled,
     cron: resolved.cron,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
+    ...(resolved.language ? { language: resolved.language } : {}),
+    ...(resolved.diaryPrompt ? { diaryPrompt: resolved.diaryPrompt } : {}),
     limit: resolved.limit,
     minScore: resolved.minScore,
     minRecallCount: resolved.minRecallCount,
@@ -647,6 +651,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
             model: params.config.execution?.model,
+            language: params.config.language,
+            diaryPrompt: params.config.diaryPrompt,
             logger: params.logger,
           });
         } else {
@@ -657,6 +663,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
             model: params.config.execution?.model,
+            language: params.config.language,
+            diaryPrompt: params.config.diaryPrompt,
             logger: params.logger,
           });
         }

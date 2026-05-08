@@ -74,6 +74,8 @@ Dreaming can ingest redacted session transcripts into the dreaming corpus. When 
 
 Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn and appends a short diary entry. It uses the default runtime model unless `dreaming.model` is configured. If the configured model is unavailable, Dream Diary retries once with the session default model.
 
+Set `dreaming.language` to steer diary entries toward a specific language or locale, such as `zh-CN` or `ja`. Set `dreaming.diaryPrompt` when you need a full custom diary instruction for language, style, format, or length; a custom prompt takes precedence over `dreaming.language`.
+
 <Note>
 This diary is for human reading in the Dreams UI, not a promotion source. Dreaming-generated diary/report artifacts are excluded from short-term promotion. Only grounded memory snippets are eligible to promote into `MEMORY.md`.
 </Note>
@@ -115,10 +117,12 @@ The sweep includes the primary runtime workspace and any configured agent worksp
 
 Default cadence behavior:
 
-| Setting              | Default       |
-| -------------------- | ------------- |
-| `dreaming.frequency` | `0 3 * * *`   |
-| `dreaming.model`     | default model |
+| Setting                | Default       |
+| ---------------------- | ------------- |
+| `dreaming.frequency`   | `0 3 * * *`   |
+| `dreaming.model`       | default model |
+| `dreaming.language`    | unset         |
+| `dreaming.diaryPrompt` | unset         |
 
 ## Quick start
 
@@ -151,6 +155,24 @@ Default cadence behavior:
                 "enabled": true,
                 "timezone": "America/Los_Angeles",
                 "frequency": "0 */6 * * *"
+              }
+            }
+          }
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Custom diary language">
+    ```json
+    {
+      "plugins": {
+        "entries": {
+          "memory-core": {
+            "config": {
+              "dreaming": {
+                "enabled": true,
+                "language": "zh-CN"
               }
             }
           }
@@ -216,6 +238,12 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 </ParamField>
 <ParamField path="model" type="string">
   Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
+</ParamField>
+<ParamField path="language" type="string">
+  Optional language or locale hint for Dream Diary narrative output, for example `zh-CN` or `ja`.
+</ParamField>
+<ParamField path="diaryPrompt" type="string">
+  Optional full Dream Diary narrative prompt for custom language, style, format, or length. When set, this prompt takes precedence over `language`.
 </ParamField>
 
 <Warning>

@@ -320,6 +320,8 @@ describe("short-term dreaming config", () => {
           verboseLogging: true,
           frequency: "5 1 * * *",
           model: "anthropic/claude-haiku-4-5",
+          language: "zh-CN",
+          diaryPrompt: "用中文写一段简短的梦境日记。",
           phases: {
             deep: {
               limit: 7,
@@ -337,6 +339,8 @@ describe("short-term dreaming config", () => {
       enabled: true,
       cron: "5 1 * * *",
       timezone: "UTC",
+      language: "zh-CN",
+      diaryPrompt: "用中文写一段简短的梦境日记。",
       limit: 7,
       minScore: 0.4,
       minRecallCount: 2,

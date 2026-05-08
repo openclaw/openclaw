@@ -15,6 +15,7 @@ import {
   buildBackfillDiaryEntry,
   buildDiaryEntry,
   buildNarrativePrompt,
+  buildNarrativeSystemPrompt,
   dedupeDreamDiaryEntries,
   extractNarrativeText,
   formatNarrativeDate,
@@ -122,6 +123,29 @@ describe("buildNarrativePrompt", () => {
     const prompt = buildNarrativePrompt({ phase: "light", snippets });
     expect(prompt).toContain("snippet-11");
     expect(prompt).not.toContain("snippet-12");
+  });
+});
+
+describe("buildNarrativeSystemPrompt", () => {
+  it("keeps the default prompt when no language settings are configured", () => {
+    expect(buildNarrativeSystemPrompt()).toContain("Write a single entry in first person.");
+    expect(buildNarrativeSystemPrompt()).not.toContain("Language:");
+  });
+
+  it("adds a language rule when configured", () => {
+    const prompt = buildNarrativeSystemPrompt({ language: "zh-CN" });
+
+    expect(prompt).toContain("Write a single entry in first person.");
+    expect(prompt).toContain("Write the diary entry in zh-CN.");
+  });
+
+  it("uses a custom diary prompt before the language hint", () => {
+    const prompt = buildNarrativeSystemPrompt({
+      language: "zh-CN",
+      diaryPrompt: "用中文写一段简短的梦境日记。",
+    });
+
+    expect(prompt).toBe("用中文写一段简短的梦境日记。");
   });
 });
 
@@ -659,6 +683,7 @@ describe("generateAndAppendDreamNarrative", () => {
       nowMs,
       timezone: "UTC",
       model: "anthropic/claude-sonnet-4-6",
+      language: "zh-CN",
       logger,
     });
 
@@ -670,6 +695,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(runOptions.lightContext).toBe(true);
     expect(runOptions.deliver).toBe(false);
     expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(runOptions.extraSystemPrompt).toContain("Write the diary entry in zh-CN.");
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
 
@@ -754,6 +780,28 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.deleteSession.mock.calls[0]?.[0]).toEqual({ sessionKey: expectedSessionKey });
     expect(subagent.deleteSession.mock.calls[1]?.[0]).toEqual({ sessionKey: retrySessionKey });
     expectLogIncludes(logger.warn, "unknown model");
+  });
+
+  it("passes custom diary prompt to the narrative subagent", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("Prompt-shaped diary.");
+    const logger = createMockLogger();
+    const diaryPrompt = "用中文写一段简短的梦境日记，不超过三段。";
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "rem",
+        snippets: ["API endpoints need authentication"],
+      },
+      diaryPrompt,
+      language: "ja",
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledOnce();
+    expect(subagent.run.mock.calls[0][0].extraSystemPrompt).toBe(diaryPrompt);
   });
 
   it("does not hide configured model authorization failures by retrying", async () => {

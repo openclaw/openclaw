@@ -584,11 +584,13 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key         | Type      | Default       | Description                                       |
-| ----------- | --------- | ------------- | ------------------------------------------------- |
-| `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely               |
-| `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
-| `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
+| Key           | Type      | Default       | Description                                                      |
+| ------------- | --------- | ------------- | ---------------------------------------------------------------- |
+| `enabled`     | `boolean` | `false`       | Enable or disable dreaming entirely                              |
+| `frequency`   | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                |
+| `model`       | `string`  | default model | Optional Dream Diary subagent model override                     |
+| `language`    | `string`  | unset         | Optional Dream Diary output language or locale hint              |
+| `diaryPrompt` | `string`  | unset         | Optional custom Dream Diary narrative prompt; overrides language |
 
 ### Example
 
@@ -606,6 +608,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
             enabled: true,
             frequency: "0 3 * * *",
             model: "anthropic/claude-sonnet-4-6",
+            language: "zh-CN",
           },
         },
       },
@@ -619,6 +622,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
 - Dream Diary retries once with the session default model when the configured model is unavailable. Trust or allowlist failures are logged and are not silently retried.
+- `dreaming.language` adds a language hint to the built-in Dream Diary prompt. `dreaming.diaryPrompt` replaces the built-in prompt and takes precedence over `language`.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
 
 </Note>

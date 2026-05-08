@@ -88,6 +88,35 @@ const NARRATIVE_SYSTEM_PROMPT = [
   "- Output ONLY the diary entry. No preamble, no sign-off, no commentary.",
 ].join("\n");
 
+function normalizeOptionalNarrativeText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function buildNarrativeSystemPrompt(
+  params: {
+    language?: string;
+    diaryPrompt?: string;
+  } = {},
+): string {
+  const customPrompt = normalizeOptionalNarrativeText(params.diaryPrompt);
+  if (customPrompt) {
+    return customPrompt;
+  }
+
+  const language = normalizeOptionalNarrativeText(params.language);
+  if (!language) {
+    return NARRATIVE_SYSTEM_PROMPT;
+  }
+
+  return [
+    NARRATIVE_SYSTEM_PROMPT,
+    "",
+    "Language:",
+    `- Write the diary entry in ${language}. Preserve names, paths, code tokens, and quoted fragments when needed.`,
+  ].join("\n");
+}
+
 // Narrative generation is best-effort. Keep the timeout bounded so a stalled
 // diary subagent does not leave the parent dreaming cron job "running" for
 // many minutes after the reports have already been written. The previous 15 s
@@ -205,6 +234,8 @@ async function startNarrativeRunOrFallback(params: {
   nowMs: number;
   timezone?: string;
   model?: string;
+  language?: string;
+  diaryPrompt?: string;
   logger: Logger;
 }): Promise<string | null> {
   try {
@@ -213,7 +244,10 @@ async function startNarrativeRunOrFallback(params: {
       sessionKey: params.sessionKey,
       message: params.message,
       ...(params.model ? { model: params.model } : {}),
-      extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      extraSystemPrompt: buildNarrativeSystemPrompt({
+        language: params.language,
+        diaryPrompt: params.diaryPrompt,
+      }),
       lane: `dreaming-narrative:${params.sessionKey}`,
       lightContext: true,
       deliver: false,
@@ -883,6 +917,8 @@ export async function generateAndAppendDreamNarrative(params: {
   nowMs?: number;
   timezone?: string;
   model?: string;
+  language?: string;
+  diaryPrompt?: string;
   logger: Logger;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -917,6 +953,8 @@ export async function generateAndAppendDreamNarrative(params: {
           nowMs,
           timezone: params.timezone,
           model: attemptModel,
+          language: params.language,
+          diaryPrompt: params.diaryPrompt,
           logger: params.logger,
         });
         if (!runId) {

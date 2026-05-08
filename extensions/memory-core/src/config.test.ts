@@ -15,6 +15,8 @@ describe("memory-core manifest config schema", () => {
         dreaming: {
           enabled: true,
           timezone: "Europe/London",
+          language: "zh-CN",
+          diaryPrompt: "Write a concise diary entry in Chinese.",
           verboseLogging: true,
           storage: {
             mode: "inline",

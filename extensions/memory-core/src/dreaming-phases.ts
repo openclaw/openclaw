@@ -38,6 +38,8 @@ type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type DreamingHostConfig = unknown;
 type DreamingPhaseStorageConfig = {
   timezone?: string;
+  language?: string;
+  diaryPrompt?: string;
   storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
   execution?: { model?: string };
 };
@@ -1633,6 +1635,8 @@ async function runLightDreaming(params: {
         nowMs,
         timezone: params.config.timezone,
         model: params.config.execution?.model,
+        language: params.config.language,
+        diaryPrompt: params.config.diaryPrompt,
         logger: params.logger,
       });
     } else {
@@ -1643,6 +1647,8 @@ async function runLightDreaming(params: {
         nowMs,
         timezone: params.config.timezone,
         model: params.config.execution?.model,
+        language: params.config.language,
+        diaryPrompt: params.config.diaryPrompt,
         logger: params.logger,
       });
     }
@@ -1732,6 +1738,8 @@ async function runRemDreaming(params: {
         nowMs,
         timezone: params.config.timezone,
         model: params.config.execution?.model,
+        language: params.config.language,
+        diaryPrompt: params.config.diaryPrompt,
         logger: params.logger,
       });
     } else {
@@ -1742,6 +1750,8 @@ async function runRemDreaming(params: {
         nowMs,
         timezone: params.config.timezone,
         model: params.config.execution?.model,
+        language: params.config.language,
+        diaryPrompt: params.config.diaryPrompt,
         logger: params.logger,
       });
     }

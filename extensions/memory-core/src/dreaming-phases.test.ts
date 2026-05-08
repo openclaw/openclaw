@@ -184,9 +184,16 @@ function createHarness(
 }
 
 function createMockNarrativeSubagent(response = "The archive hummed softly.") {
-  const run = vi.fn(async (_params: { sessionKey: string; message: string; model?: string }) => ({
-    runId: "dream-run-1",
-  }));
+  const run = vi.fn(
+    async (_params: {
+      sessionKey: string;
+      message: string;
+      model?: string;
+      extraSystemPrompt?: string;
+    }) => ({
+      runId: "dream-run-1",
+    }),
+  );
   const waitForRun = vi.fn(async () => ({ status: "ok" }));
   const getSessionMessages = vi.fn(async () => ({
     messages: [{ role: "assistant", content: response }],
@@ -2468,6 +2475,7 @@ describe("memory-core dreaming phases", () => {
                   enabled: true,
                   timezone: "UTC",
                   model: "anthropic/claude-sonnet-4-6",
+                  language: "zh-CN",
                   storage: { mode: "inline", separateReports: false },
                   phases: {
                     light: {
@@ -2502,6 +2510,7 @@ describe("memory-core dreaming phases", () => {
     expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
     expect(firstRun?.message).toContain("Keep retention at 365 days.");
     expect(firstRun?.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(firstRun?.extraSystemPrompt).toContain("Write the diary entry in zh-CN.");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The backup plan glowed like cold storage.",
     );
