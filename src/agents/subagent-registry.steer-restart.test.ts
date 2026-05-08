@@ -136,7 +136,7 @@ describe("subagent registry steer restarts", () => {
   };
 
   const createDeferredAnnounceResolver = (): ((value: boolean) => void) => {
-    let resolveAnnounce!: (value: boolean) => void;
+    let resolveAnnounce: ((value: boolean) => void) | undefined;
     announceSpy.mockImplementationOnce(
       () =>
         new Promise<boolean>((resolve) => {
@@ -144,6 +144,9 @@ describe("subagent registry steer restarts", () => {
         }),
     );
     return (value: boolean) => {
+      if (!resolveAnnounce) {
+        throw new Error("Expected subagent announcement resolver to be initialized");
+      }
       resolveAnnounce(value);
     };
   };
