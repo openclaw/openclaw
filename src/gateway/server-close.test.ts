@@ -139,6 +139,27 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("stops the config reloader before stopping channels", async () => {
+    const events: string[] = [];
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["telegram"],
+        configReloader: {
+          stop: vi.fn(async () => {
+            events.push("config-reloader");
+          }),
+        },
+        stopChannel: vi.fn(async () => {
+          events.push("channel");
+        }),
+      }),
+    );
+
+    await close({ reason: "gateway restarting", restartExpectedMs: 1_000 });
+
+    expect(events).toEqual(["config-reloader", "channel"]);
+  });
+
   it("emits gateway shutdown and pre-restart hooks", async () => {
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
 

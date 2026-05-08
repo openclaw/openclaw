@@ -21,12 +21,13 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
   diffConfigPaths,
-  type GatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
   resolveGatewayReloadSettings,
   shouldInvalidateSkillsSnapshotForPaths,
   startGatewayConfigReloader,
+  type GatewayConfigReloadContext,
+  type GatewayReloadPlan,
 } from "./config-reload.js";
 
 describe("diffConfigPaths", () => {
@@ -588,8 +589,14 @@ function createReloaderHarness(
 ) {
   const watcher = createWatcherMock();
   vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
-  const onHotReload = vi.fn(async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
-  const onRestart = vi.fn((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
+  const onHotReload = vi.fn(
+    async (
+      _plan: GatewayReloadPlan,
+      _nextConfig: OpenClawConfig,
+      _context: GatewayConfigReloadContext,
+    ) => {},
+  );
+  const onRestart = vi.fn();
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
   const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
     writeListener = listener;
@@ -641,7 +648,9 @@ function getOnlyRestartCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenC
   return call;
 }
 
-function getOnlyHotReloadCall(harness: ReloaderHarness): [GatewayReloadPlan, OpenClawConfig] {
+function getOnlyHotReloadCall(
+  harness: ReloaderHarness,
+): [GatewayReloadPlan, OpenClawConfig, GatewayConfigReloadContext] {
   expect(harness.onHotReload).toHaveBeenCalledTimes(1);
   const call = harness.onHotReload.mock.calls[0];
   if (!call) {
@@ -686,6 +695,46 @@ describe("startGatewayConfigReloader", () => {
     expect(log.warn).not.toHaveBeenCalledWith("config reload skipped (config file not found)");
 
     await reloader.stop();
+  });
+
+  it("aborts and drains an in-flight hot reload during stop", async () => {
+    const nextConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true },
+    };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: nextConfig,
+        hash: "reload-stop-1",
+      }),
+    );
+    const { watcher, onHotReload, reloader } = createReloaderHarness(readSnapshot);
+    let abortSeen = false;
+    onHotReload.mockImplementationOnce(
+      async (_plan, _nextConfig, context) =>
+        await new Promise<void>((resolve) => {
+          context.signal.addEventListener(
+            "abort",
+            () => {
+              abortSeen = true;
+              resolve();
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    watcher.emit("change");
+    vi.advanceTimersByTime(0);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    const stopPromise = reloader.stop();
+    await stopPromise;
+
+    expect(abortSeen).toBe(true);
   });
 
   it("caps missing-file retries and skips reload after retry budget is exhausted", async () => {
@@ -1267,12 +1316,20 @@ describe("startGatewayConfigReloader", () => {
     await vi.runOnlyPendingTimersAsync();
 
     expect(harness.onRestart).not.toHaveBeenCalled();
-    const [plan, hotConfig] = getOnlyHotReloadCall(harness);
-    expect(plan.changedPaths).toEqual(["plugins.entries.telegram.enabled"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.reloadPlugins).toBe(true);
-    expect(plan.hotReasons).toEqual(["plugins.entries.telegram.enabled"]);
-    expect(hotConfig).toBe(nextConfig);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedPaths: ["plugins.entries.telegram.enabled"],
+        restartGateway: false,
+        reloadPlugins: true,
+        hotReasons: ["plugins.entries.telegram.enabled"],
+      }),
+      nextConfig,
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        isStopped: expect.any(Function),
+      }),
+    );
 
     await harness.reloader.stop();
   });

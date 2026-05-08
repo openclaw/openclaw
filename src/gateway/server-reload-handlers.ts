@@ -26,7 +26,11 @@ import {
 } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
-import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
+import {
+  startGatewayConfigReloader,
+  type GatewayConfigReloadContext,
+  type GatewayReloadPlan,
+} from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -190,10 +194,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
     nextConfig: OpenClawConfig,
-  ) => {
+    context?: GatewayConfigReloadContext,
+  ): Promise<boolean> => {
+    const isCancelled = () => context?.signal.aborted || context?.isStopped();
     const initial = getActiveCounts();
     if (initial.totalActive <= 0) {
-      return;
+      return !isCancelled();
     }
     const channelNames = [...channels].join(", ");
     const initialDetails = formatActiveDetails(initial);
@@ -208,14 +214,26 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
     while (true) {
+      if (isCancelled()) {
+        params.logReload.info(
+          `channel reload cancelled during gateway shutdown/restart (${channelNames})`,
+        );
+        return false;
+      }
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
         timer.unref?.();
       });
+      if (isCancelled()) {
+        params.logReload.info(
+          `channel reload cancelled during gateway shutdown/restart (${channelNames})`,
+        );
+        return false;
+      }
       const current = getActiveCounts();
       if (current.totalActive <= 0) {
         params.logReload.info("active operations and replies completed; reloading channels now");
-        return;
+        return true;
       }
       const elapsedMs = Date.now() - startedAt;
       if (timeoutMs !== undefined && elapsedMs >= timeoutMs) {
@@ -225,7 +243,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             ", ",
           )} still active; reloading channels anyway`,
         );
-        return;
+        return true;
       }
       if (Date.now() >= nextStillPendingAt) {
         const remaining = formatActiveDetails(current);
@@ -237,7 +255,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
   };
 
-  const applyHotReload = async (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
+  const applyHotReload = async (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+    context?: GatewayConfigReloadContext,
+  ) => {
+    const isCancelled = () => context?.signal.aborted || context?.isStopped();
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
     const nextState = { ...state };
@@ -286,7 +309,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (channelsToRestart.size === 0 || shouldSkipChannelRestart()) {
           return;
         }
-        await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+        const shouldReloadChannels = await waitForActiveWorkBeforeChannelReload(
+          channelsToRestart,
+          nextConfig,
+          context,
+        );
+        if (!shouldReloadChannels || isCancelled()) {
+          return;
+        }
         for (const channel of channelsToRestart) {
           if (channelsStoppedBeforePluginReload.has(channel)) {
             continue;
@@ -305,6 +335,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         channelsToRestart.add(channel);
       }
       activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+    }
+
+    if (isCancelled()) {
+      return;
     }
 
     if (plan.restartCron) {
@@ -358,15 +392,28 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         );
       } else {
         if (!plan.reloadPlugins) {
-          await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+          const shouldReloadChannels = await waitForActiveWorkBeforeChannelReload(
+            channelsToRestart,
+            nextConfig,
+            context,
+          );
+          if (!shouldReloadChannels || isCancelled()) {
+            return;
+          }
         }
         const restartChannel = async (name: ChannelKind) => {
+          if (isCancelled()) {
+            return;
+          }
           if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
             return;
           }
           params.logChannels.info(`restarting ${name} channel`);
           if (!channelsStoppedBeforePluginReload.has(name)) {
             await params.stopChannel(name);
+          }
+          if (isCancelled()) {
+            return;
           }
           await params.startChannel(name);
         };
@@ -503,7 +550,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
-    onHotReload: async (plan, nextConfig) => {
+    onHotReload: async (plan, nextConfig, context) => {
       const previousSharedGatewaySessionGeneration =
         params.sharedGatewaySessionGenerationState.current;
       const previousSnapshot = getActiveSecretsRuntimeSnapshot();
@@ -523,7 +570,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         });
       }
       try {
-        await applyHotReload(plan, prepared.config);
+        await applyHotReload(plan, prepared.config, context);
       } catch (err) {
         if (previousSnapshot) {
           activateSecretsRuntimeSnapshot(previousSnapshot);

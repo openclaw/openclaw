@@ -71,6 +71,11 @@ type GatewayConfigReloader = {
   stop: () => Promise<void>;
 };
 
+export type GatewayConfigReloadContext = {
+  signal: AbortSignal;
+  isStopped: () => boolean;
+};
+
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
 
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
@@ -86,7 +91,11 @@ export function startGatewayConfigReloader(opts: {
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
-  onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
+  onHotReload: (
+    plan: GatewayReloadPlan,
+    nextConfig: OpenClawConfig,
+    context: GatewayConfigReloadContext,
+  ) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
   initialPluginInstallRecords?: PluginInstallRecords;
@@ -108,6 +117,8 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let activeReload: Promise<void> | null = null;
+  const stopController = new AbortController();
   let pendingInProcessConfig: {
     config: OpenClawConfig;
     compareConfig: OpenClawConfig;
@@ -182,6 +193,9 @@ export function startGatewayConfigReloader(opts: {
     nextCompareConfig: OpenClawConfig,
     afterWrite?: ConfigWriteNotification["afterWrite"],
   ) => {
+    if (stopped) {
+      return;
+    }
     const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
     const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
       currentCompareConfig,
@@ -283,7 +297,13 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
 
-    await opts.onHotReload(plan, nextConfig);
+    if (stopped) {
+      return;
+    }
+    await opts.onHotReload(plan, nextConfig, {
+      signal: stopController.signal,
+      isStopped: () => stopped,
+    });
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
@@ -312,7 +332,7 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const runReload = async () => {
+  const runReloadImpl = async () => {
     if (stopped) {
       return;
     }
@@ -365,6 +385,21 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
+  const runReload = () => {
+    const wasRunning = running;
+    const promise = runReloadImpl();
+    if (wasRunning && activeReload) {
+      return activeReload;
+    }
+    activeReload = promise;
+    void promise.finally(() => {
+      if (activeReload === promise) {
+        activeReload = null;
+      }
+    });
+    return promise;
+  };
+
   const watcher = chokidar.watch(opts.watchPath, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
@@ -406,6 +441,7 @@ export function startGatewayConfigReloader(opts: {
   return {
     stop: async () => {
       stopped = true;
+      stopController.abort();
       if (debounceTimer) {
         clearTimeout(debounceTimer);
       }
@@ -413,6 +449,7 @@ export function startGatewayConfigReloader(opts: {
       watcherClosed = true;
       unsubscribeFromWrites();
       await watcher.close().catch(() => {});
+      await activeReload?.catch(() => {});
     },
   };
 }

@@ -262,6 +262,7 @@ export function createGatewayCloseHandler(params: {
       if (params.tailscaleCleanup) {
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
+      await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings);
       const channelIds = params.channelIds ?? listChannelPlugins().map((plugin) => plugin.id);
       for (const channelId of channelIds) {
         await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
@@ -334,7 +335,6 @@ export function createGatewayCloseHandler(params: {
         recordShutdownWarning(warnings, "ws-clients");
       }
       params.clients.clear();
-      await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings);
       const wsClients = params.wss.clients ?? new Set();
       const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
       const websocketGraceTimeout = createTimeoutRace(
