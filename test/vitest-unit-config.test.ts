@@ -134,14 +134,15 @@ describe("unit vitest config", () => {
   it("scopes default coverage to source files owned by the unit lane", () => {
     const unitConfig = createUnitVitestConfig({});
     const testConfig = requireTestConfig(unitConfig);
-    expect(testConfig.coverage?.include).toEqual(
+    const coverageInclude = testConfig.coverage?.include;
+    expect(coverageInclude).toEqual(
       expect.arrayContaining([
         "src/commitments/runtime.ts",
         "src/media-generation/runtime-shared.ts",
         "src/web-search/runtime.ts",
       ]),
     );
-    expect(testConfig.coverage?.include).not.toEqual(
+    expect(coverageInclude).not.toEqual(
       expect.arrayContaining(["src/markdown/render.ts", "src/security/audit-workspace-skills.ts"]),
     );
   });
