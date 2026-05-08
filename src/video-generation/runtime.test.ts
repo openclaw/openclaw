@@ -29,6 +29,18 @@ function runGenerateVideo(params: GenerateVideoParams) {
   return generateVideo(params, runtimeDeps);
 }
 
+function requireAttempt(
+  result: Awaited<ReturnType<typeof runGenerateVideo>>,
+  index: number,
+): NonNullable<(typeof result.attempts)[number]> {
+  const attempt = result.attempts[index];
+  expect(attempt).toBeDefined();
+  if (!attempt) {
+    throw new Error(`expected video generation attempt ${index}`);
+  }
+  return attempt;
+}
+
 function createProviderOptionsCaptureProvider(
   capabilities: VideoGenerationProvider["capabilities"],
 ): { provider: VideoGenerationProvider; getSeenProviderOptions: () => unknown } {
@@ -330,8 +342,9 @@ describe("video-generation runtime", () => {
 
     expect(result.provider).toBe("byteplus");
     expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0]?.provider).toBe("openai");
-    expect(result.attempts[0]?.error).toMatch(/does not accept providerOptions/);
+    const attempt = requireAttempt(result, 0);
+    expect(attempt.provider).toBe("openai");
+    expect(attempt.error).toMatch(/does not accept providerOptions/);
   });
 
   it("skips providers that cannot satisfy reference audio inputs and falls back", async () => {
@@ -376,8 +389,9 @@ describe("video-generation runtime", () => {
 
     expect(result.provider).toBe("byteplus");
     expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0]?.provider).toBe("openai");
-    expect(result.attempts[0]?.error).toMatch(/does not support reference audio inputs/);
+    const attempt = requireAttempt(result, 0);
+    expect(attempt.provider).toBe("openai");
+    expect(attempt.error).toMatch(/does not support reference audio inputs/);
   });
 
   it("forwards mixed image, video, and audio references when explicitly supported", async () => {
@@ -498,8 +512,9 @@ describe("video-generation runtime", () => {
     expect(result.provider).toBe("runway");
     expect(seenDurationSeconds).toBe(6);
     expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0]?.provider).toBe("openai");
-    expect(result.attempts[0]?.error).toMatch(/supports at most 4s per video, 6s requested/);
+    const attempt = requireAttempt(result, 0);
+    expect(attempt.provider).toBe("openai");
+    expect(attempt.error).toMatch(/supports at most 4s per video, 6s requested/);
   });
 
   it("fails when every candidate is skipped for exceeding hard duration caps", async () => {
