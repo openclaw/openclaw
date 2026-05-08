@@ -293,7 +293,8 @@ export async function maybeRepairLegacyCronStore(params: {
     notifyMigration.changed ||
     dreamingMigration.changed ||
     hasLegacyStoreFile;
-  if (!changed && notifyMigration.warnings.length === 0) {
+  const hasLegacyImportWork = hasLegacyStateSidecar || hasLegacyRunLogs;
+  if (!changed && !hasLegacyImportWork && notifyMigration.warnings.length === 0) {
     return;
   }
 

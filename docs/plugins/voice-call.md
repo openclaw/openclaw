@@ -733,7 +733,7 @@ openclaw voicecall dtmf --call-id <id> --digits "ww123456#"
 openclaw voicecall end --call-id <id>
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
-openclaw voicecall latency                      # summarize turn latency from logs
+openclaw voicecall latency                      # summarize turn latency from SQLite call records
 openclaw voicecall expose --mode funnel
 ```
 
@@ -742,9 +742,8 @@ to the Gateway-owned voice-call runtime so the CLI does not bind a second
 webhook server. If no Gateway is reachable, the commands fall back to a
 standalone CLI runtime.
 
-`latency` reads `calls.jsonl` from the default voice-call storage path.
-Use `--file <path>` to point at a different log and `--last <n>` to limit
-analysis to the last N records (default 200). Output includes p50/p90/p99
+`latency` reads the SQLite-backed voice-call plugin state. Use `--last <n>` to
+limit analysis to the last N records (default 200). Output includes p50/p90/p99
 for turn latency and listen-wait times.
 
 ## Agent tool
