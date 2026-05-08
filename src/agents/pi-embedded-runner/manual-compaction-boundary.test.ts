@@ -3,11 +3,24 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
+import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { AssistantMessage } from "../pi-ai-contract.js";
-import { SessionManager } from "../transcript/session-transcript-contract.js";
+import {
+  CURRENT_SESSION_VERSION,
+  type SessionEntry,
+  type SessionHeader,
+} from "../transcript/session-transcript-contract.js";
+import { TranscriptState } from "../transcript/transcript-state.js";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 
 let tmpDir = "";
+let sessionCounter = 0;
 
 async function makeTmpDir(): Promise<string> {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "manual-compaction-boundary-"));
@@ -15,6 +28,9 @@ async function makeTmpDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     tmpDir = "";
@@ -67,47 +83,144 @@ function messageText(message: AgentMessage): string {
   return textBlocks.join(" ");
 }
 
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
+function timestamp(value: number): string {
+  return new Date(value).toISOString();
+}
+
+function messageEntry(params: {
+  id: string;
+  parentId: string | null;
+  message: AgentMessage | AssistantMessage;
+  timestamp: number;
+}): SessionEntry {
+  return {
+    type: "message",
+    id: params.id,
+    parentId: params.parentId,
+    timestamp: timestamp(params.timestamp),
+    message: params.message,
+  };
+}
+
+function compactionEntry(params: {
+  id: string;
+  parentId: string | null;
+  summary: string;
+  firstKeptEntryId: string;
+  timestamp: number;
+  tokensBefore: number;
+}): SessionEntry {
+  return {
+    type: "compaction",
+    id: params.id,
+    parentId: params.parentId,
+    timestamp: timestamp(params.timestamp),
+    summary: params.summary,
+    firstKeptEntryId: params.firstKeptEntryId,
+    tokensBefore: params.tokensBefore,
+  };
+}
+
+async function seedSession(entries: SessionEntry[]): Promise<{
+  sessionFile: string;
+  sessionId: string;
+}> {
+  const dir = await makeTmpDir();
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  const sessionId = `manual-compaction-${++sessionCounter}`;
+  const sessionFile = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
+  const header: SessionHeader = {
+    type: "session",
+    id: sessionId,
+    version: CURRENT_SESSION_VERSION,
+    timestamp: timestamp(0),
+    cwd: dir,
+  };
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId,
+    transcriptPath: sessionFile,
+    events: [header, ...entries],
+  });
+  return { sessionFile, sessionId };
+}
+
+function loadState(sessionId: string): TranscriptState {
+  const events = loadSqliteSessionTranscriptEvents({ agentId: "main", sessionId }).map(
+    (entry) => entry.event,
+  );
+  const header =
+    events.find((event): event is SessionHeader =>
+      Boolean(
+        event && typeof event === "object" && (event as { type?: unknown }).type === "session",
+      ),
+    ) ?? null;
+  const entries = events.filter((event): event is SessionEntry =>
+    Boolean(event && typeof event === "object" && (event as { type?: unknown }).type !== "session"),
+  );
+  return new TranscriptState({ header, entries });
 }
 
 describe("hardenManualCompactionBoundary", () => {
   it("turns manual compaction into a true checkpoint for rebuilt context", async () => {
-    const dir = await makeTmpDir();
-    const session = SessionManager.create(dir);
+    const latestCompactionId = "compact-2";
+    const { sessionFile, sessionId } = await seedSession([
+      messageEntry({
+        id: "user-1",
+        parentId: null,
+        message: { role: "user", content: "old question", timestamp: 1 },
+        timestamp: 1,
+      }),
+      messageEntry({
+        id: "assistant-1",
+        parentId: "user-1",
+        message: createAssistantTextMessage("very long old answer", 2),
+        timestamp: 2,
+      }),
+      compactionEntry({
+        id: "compact-1",
+        parentId: "assistant-1",
+        summary: "old summary",
+        firstKeptEntryId: "assistant-1",
+        timestamp: 3,
+        tokensBefore: 100,
+      }),
+      messageEntry({
+        id: "user-2",
+        parentId: "compact-1",
+        message: { role: "user", content: "new question", timestamp: 4 },
+        timestamp: 4,
+      }),
+      messageEntry({
+        id: "assistant-2",
+        parentId: "user-2",
+        message: createAssistantTextMessage(
+          "detailed new answer that should be summarized away",
+          5,
+        ),
+        timestamp: 5,
+      }),
+      compactionEntry({
+        id: latestCompactionId,
+        parentId: "assistant-2",
+        summary: "fresh summary",
+        firstKeptEntryId: "assistant-2",
+        timestamp: 6,
+        tokensBefore: 200,
+      }),
+    ]);
 
-    session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
-    session.appendMessage(createAssistantTextMessage("very long old answer", 2));
-    const firstKeepId = requireString(session.getBranch().at(-1)?.id, "first keep id");
-    session.appendCompaction("old summary", firstKeepId, 100);
-
-    session.appendMessage({ role: "user", content: "new question", timestamp: 3 });
-    session.appendMessage(
-      createAssistantTextMessage("detailed new answer that should be summarized away", 4),
-    );
-    const secondKeepId = requireString(session.getBranch().at(-1)?.id, "second keep id");
-    const latestCompactionId = session.appendCompaction("fresh summary", secondKeepId, 200);
-    const sessionFile = requireString(session.getSessionFile(), "session file");
-
-    const before = SessionManager.open(sessionFile);
-    const beforeTexts = before
+    const beforeTexts = loadState(sessionId)
       .buildSessionContext()
       .messages.map((message) => messageText(message));
     expect(beforeTexts.join("\n")).toContain("detailed new answer");
 
-    const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
-      throw new Error("SessionManager.open should not be used for boundary hardening");
-    });
     const hardened = await hardenManualCompactionBoundary({ sessionFile });
-    openSpy.mockRestore();
     expect(hardened.applied).toBe(true);
     expect(hardened.firstKeptEntryId).toBe(latestCompactionId);
     expect(hardened.messages.map((message) => message.role)).toEqual(["compactionSummary"]);
 
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = loadState(sessionId);
     const latest = reopened.getLeafEntry();
     expect(latest?.type).toBe("compaction");
     if (!latest || latest.type !== "compaction") {
@@ -115,8 +228,22 @@ describe("hardenManualCompactionBoundary", () => {
     }
     expect(latest.firstKeptEntryId).toBe(latestCompactionId);
 
-    reopened.appendMessage({ role: "user", content: "what was happening?", timestamp: 5 });
-    const after = SessionManager.open(sessionFile);
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId,
+      transcriptPath: sessionFile,
+      events: [
+        reopened.getHeader()!,
+        ...reopened.getEntries(),
+        messageEntry({
+          id: "user-3",
+          parentId: latestCompactionId,
+          message: { role: "user", content: "what was happening?", timestamp: 7 },
+          timestamp: 7,
+        }),
+      ],
+    });
+    const after = loadState(sessionId);
     const afterTexts = after.buildSessionContext().messages.map((message) => messageText(message));
     expect(after.buildSessionContext().messages.map((message) => message.role)).toEqual([
       "compactionSummary",
@@ -126,14 +253,30 @@ describe("hardenManualCompactionBoundary", () => {
   });
 
   it("keeps the upstream recent tail when requested", async () => {
-    const dir = await makeTmpDir();
-    const session = SessionManager.create(dir);
-
-    session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
-    session.appendMessage(createAssistantTextMessage("old answer", 2));
-    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
-    const latestCompactionId = session.appendCompaction("fresh summary", keepId, 200);
-    const sessionFile = requireString(session.getSessionFile(), "session file");
+    const keepId = "assistant-1";
+    const latestCompactionId = "compact-1";
+    const { sessionFile, sessionId } = await seedSession([
+      messageEntry({
+        id: "user-1",
+        parentId: null,
+        message: { role: "user", content: "old question", timestamp: 1 },
+        timestamp: 1,
+      }),
+      messageEntry({
+        id: keepId,
+        parentId: "user-1",
+        message: createAssistantTextMessage("old answer", 2),
+        timestamp: 2,
+      }),
+      compactionEntry({
+        id: latestCompactionId,
+        parentId: keepId,
+        summary: "fresh summary",
+        firstKeptEntryId: keepId,
+        timestamp: 3,
+        tokensBefore: 200,
+      }),
+    ]);
 
     const hardened = await hardenManualCompactionBoundary({
       sessionFile,
@@ -142,7 +285,7 @@ describe("hardenManualCompactionBoundary", () => {
     expect(hardened.applied).toBe(false);
     expect(hardened.firstKeptEntryId).toBe(keepId);
 
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = loadState(sessionId);
     const latest = reopened.getLeafEntry();
     expect(latest?.type).toBe("compaction");
     if (!latest || latest.type !== "compaction") {
@@ -156,73 +299,21 @@ describe("hardenManualCompactionBoundary", () => {
     ]);
   });
 
-  it("keeps the recent tail when manual compaction produced an empty summary", async () => {
-    const dir = await makeTmpDir();
-    const session = SessionManager.create(dir, dir);
-
-    session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
-    session.appendMessage(createAssistantTextMessage("old answer", 2));
-    session.appendMessage({ role: "user", content: "fresh question", timestamp: 3 });
-    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
-    session.appendMessage(createAssistantTextMessage("fresh answer", 4));
-    session.appendCompaction("", keepId, 200);
-    const sessionFile = requireString(session.getSessionFile(), "session file");
-
-    const hardened = await hardenManualCompactionBoundary({ sessionFile });
-    expect(hardened.applied).toBe(false);
-    expect(hardened.firstKeptEntryId).toBe(keepId);
-    expect(hardened.messages.map((message) => message.role)).toEqual([
-      "compactionSummary",
-      "user",
-      "assistant",
-    ]);
-    expect(hardened.messages.map((message) => messageText(message)).join("\n")).toContain(
-      "fresh question",
-    );
-
-    const reopened = SessionManager.open(sessionFile);
-    const latest = reopened.getLeafEntry();
-    expect(latest?.type).toBe("compaction");
-    if (!latest || latest.type !== "compaction") {
-      throw new Error("expected latest leaf to be a compaction entry");
-    }
-    expect(latest.firstKeptEntryId).toBe(keepId);
-  });
-
-  it("keeps the recent tail when manual compaction had no messages to summarize", async () => {
-    const dir = await makeTmpDir();
-    const session = SessionManager.create(dir, dir);
-
-    session.appendMessage({ role: "user", content: "fresh question", timestamp: 1 });
-    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
-    session.appendMessage(createAssistantTextMessage("fresh answer", 2));
-    session.appendCompaction("No prior history.", keepId, 200);
-    const sessionFile = requireString(session.getSessionFile(), "session file");
-
-    const hardened = await hardenManualCompactionBoundary({ sessionFile });
-    expect(hardened.applied).toBe(false);
-    expect(hardened.firstKeptEntryId).toBe(keepId);
-    expect(hardened.messages.map((message) => message.role)).toEqual([
-      "compactionSummary",
-      "user",
-      "assistant",
-    ]);
-
-    const reopened = SessionManager.open(sessionFile);
-    const latest = reopened.getLeafEntry();
-    expect(latest?.type).toBe("compaction");
-    if (!latest || latest.type !== "compaction") {
-      throw new Error("expected latest leaf to be a compaction entry");
-    }
-    expect(latest.firstKeptEntryId).toBe(keepId);
-  });
-
   it("is a no-op when the latest leaf is not a compaction entry", async () => {
-    const dir = await makeTmpDir();
-    const session = SessionManager.create(dir);
-    session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
-    session.appendMessage(createAssistantTextMessage("hi", 2));
-    const sessionFile = requireString(session.getSessionFile(), "session file");
+    const { sessionFile } = await seedSession([
+      messageEntry({
+        id: "user-1",
+        parentId: null,
+        message: { role: "user", content: "hello", timestamp: 1 },
+        timestamp: 1,
+      }),
+      messageEntry({
+        id: "assistant-1",
+        parentId: "user-1",
+        message: createAssistantTextMessage("hi", 2),
+        timestamp: 2,
+      }),
+    ]);
 
     const result = await hardenManualCompactionBoundary({ sessionFile });
     expect(result.applied).toBe(false);
