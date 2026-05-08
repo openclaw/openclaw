@@ -409,6 +409,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   }
 
+  function createReasoningDefaultContext(): TelegramMessageContext {
+    loadSessionStore.mockReturnValue({
+      s1: {},
+    });
+    return createContext({
+      ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      route: { agentId: "ops" } as unknown as TelegramMessageContext["route"],
+    });
+  }
+
   it("streams drafts in private threads and forwards thread id", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -1147,6 +1157,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.update).toHaveBeenCalledWith("Reasoning:\n_Thinking_");
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("streams reasoning from configured defaults", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "<think>Thinking</think>" });
+        await dispatcherOptions.deliver({ text: "Answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createReasoningDefaultContext(),
+      cfg: {
+        agents: {
+          defaults: { reasoningDefault: "off" },
+          list: [{ id: "Ops", reasoningDefault: "stream" }],
+        },
+      },
+    });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Reasoning:\n_Thinking_");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
   });
 
   it("suppresses reasoning-only finals without raw text fallback", async () => {
