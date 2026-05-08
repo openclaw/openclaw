@@ -951,10 +951,10 @@ async function agentCommandInternal(
       sessionKey,
       workspaceDir,
     });
-    const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
+    const { resolveSessionTranscriptTarget } = await loadTranscriptResolveRuntime();
     let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
-      const resolvedSessionFile = await resolveSessionTranscriptFile({
+      const resolvedTranscriptTarget = await resolveSessionTranscriptTarget({
         sessionId,
         sessionKey,
         sessionStore,
@@ -962,19 +962,19 @@ async function agentCommandInternal(
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });
-      sessionFile = resolvedSessionFile.sessionFile;
-      sessionEntry = resolvedSessionFile.sessionEntry;
+      sessionFile = resolvedTranscriptTarget.sessionFile;
+      sessionEntry = resolvedTranscriptTarget.sessionEntry;
     }
     if (!sessionFile) {
-      const resolvedSessionFile = await resolveSessionTranscriptFile({
+      const resolvedTranscriptTarget = await resolveSessionTranscriptTarget({
         sessionId,
         sessionKey: sessionKey ?? sessionId,
         sessionEntry,
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });
-      sessionFile = resolvedSessionFile.sessionFile;
-      sessionEntry = resolvedSessionFile.sessionEntry;
+      sessionFile = resolvedTranscriptTarget.sessionFile;
+      sessionEntry = resolvedTranscriptTarget.sessionEntry;
     }
 
     const startedAt = Date.now();

@@ -5,7 +5,7 @@ import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import {
   readTailAssistantTextFromSessionTranscript,
-  resolveSessionTranscriptFile,
+  resolveSessionTranscriptTarget,
 } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -194,7 +194,7 @@ async function persistTextTurnTranscript(
     return params.sessionEntry;
   }
 
-  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
+  const { sessionFile, sessionEntry } = await resolveSessionTranscriptTarget({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,

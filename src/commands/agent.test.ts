@@ -230,11 +230,15 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
     }
     return normalizedParts.join(separator);
   };
-  const resolveSessionFile = (sessionId: string, agentId: string, sessionsDir?: string): string =>
+  const resolveTranscriptLocator = (
+    sessionId: string,
+    agentId: string,
+    sessionsDir?: string,
+  ): string =>
     joinPath(sessionsDir ?? ".openclaw", "agents", agentId, "sessions", `${sessionId}.jsonl`);
 
   return {
-    resolveSessionTranscriptFile: vi.fn(
+    resolveSessionTranscriptTarget: vi.fn(
       async (params: {
         sessionId: string;
         sessionKey: string;
@@ -244,10 +248,11 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
         threadId?: string | number;
       }) => {
         const sessionFileFromStorePath =
-          params.sessionEntry?.sessionFile ?? resolveSessionFile(params.sessionId, params.agentId);
+          params.sessionEntry?.sessionFile ??
+          resolveTranscriptLocator(params.sessionId, params.agentId);
         const sessionFile = params.sessionEntry?.sessionFile
           ? sessionFileFromStorePath
-          : resolveSessionFile(params.sessionId, params.agentId);
+          : resolveTranscriptLocator(params.sessionId, params.agentId);
         let sessionEntry = params.sessionEntry;
         if (params.sessionStore && params.sessionKey) {
           const existingEntry =

@@ -251,10 +251,10 @@ The remaining cleanup is mostly consolidation and deletion:
   Zalo Personal, QA Channel, Microsoft Teams, Mattermost, Synology Chat, Tlon,
   Twitch, and QQBot recording paths now read updated-at metadata and record
   inbound session rows through SQLite identity.
-- Transcript path persistence no longer uses `sessions.json` to find the
-  sibling JSONL location. `resolveSessionTranscriptFile` and
-  `resolveAndPersistSessionFile` derive transcript identity from `agentId`,
-  `sessionId`, and the stored SQLite session row.
+- Transcript locator persistence no longer uses `sessions.json` to find a
+  sibling JSONL location. `resolveSessionTranscriptTarget` and
+  `resolveAndPersistSessionTranscriptLocator` derive transcript identity from
+  `agentId`, `sessionId`, and the stored SQLite session row.
 - Cron persistence now reconciles SQLite `cron_jobs` rows instead of
   deleting/reinserting the whole job table on each save. Plugin target
   writebacks update matching cron rows directly and keep `cron.jobs.state` in
@@ -271,16 +271,16 @@ The remaining cleanup is mostly consolidation and deletion:
 - Gateway transcript reader helpers now live in
   `src/gateway/session-transcript-readers.ts` instead of the old
   `session-utils.fs` module name. The fallback retry history check is named for
-  SQLite transcript content instead of session-file content.
+  SQLite transcript content instead of transcript-file content.
 - Bootstrap continuation detection now checks SQLite transcript locators through
-  `hasCompletedBootstrapTranscriptTurn`; it no longer exposes a
-  session-file-shaped helper name.
+  `hasCompletedBootstrapTranscriptTurn`; it no longer exposes a file-shaped
+  helper name.
 - Embedded-runner tests now use virtual SQLite transcript locators, and opening
   a new locator without a duplicate `sessionId` uses the locator's session id
   as the database row identity.
 - Memory indexing helpers now use SQLite transcript terminology end to end:
   host exports list/build session transcript entries, targeted sync queues
-  `sessionTranscripts`, and QMD/builtin indexers no longer expose session-file
+  `sessionTranscripts`, and QMD/builtin indexers no longer expose file-shaped
   helper names.
 - The generic plugin SDK persistent-dedupe helper no longer exposes file-shaped
   options. Callers provide SQLite scope keys and durable dedupe rows live in
@@ -317,7 +317,7 @@ The remaining cleanup is mostly consolidation and deletion:
   files. It imports the active branch into SQLite and removes the legacy source.
 - Session-memory hook transcript lookup and context-engine transcript rewrite
   helpers are now named around SQLite transcript paths/state instead of runtime
-  session-file reads or file rewrites.
+  transcript-file reads or file rewrites.
 - Codex app-server conversation bindings now key SQLite plugin state by
   OpenClaw session key when available, with transcript-path lookups kept only as
   a legacy fallback for existing bindings.

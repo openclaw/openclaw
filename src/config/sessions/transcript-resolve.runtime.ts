@@ -1,1 +1,1 @@
-export { resolveSessionTranscriptFile } from "./transcript.js";
+export { resolveSessionTranscriptTarget } from "./transcript.js";
