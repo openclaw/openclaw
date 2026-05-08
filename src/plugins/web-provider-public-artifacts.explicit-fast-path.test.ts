@@ -77,7 +77,7 @@ import {
   resolveBundledWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.js";
 
-function expectSingleProvider<T>(providers: T[] | undefined): T {
+function expectSingleProvider<T>(providers: T[] | null | undefined): T {
   expect(providers).toHaveLength(1);
   const provider = providers?.[0];
   if (provider === undefined) {
@@ -117,7 +117,10 @@ describe("web provider public artifacts explicit fast path", () => {
     );
 
     expect(provider.pluginId).toBe("google");
-    expect(provider.createTool({ config: {} as never })).toEqual(expect.any(Object));
+    expect(provider.createTool({ config: {} as never })).toEqual({
+      description: "fixture",
+      parameters: {},
+    });
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "google",
       artifactBasename: "web-search-provider.js",
