@@ -1,10 +1,12 @@
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -17,7 +19,6 @@ import {
 } from "./harness/lifecycle-hook-helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
-import { SessionManager } from "./transcript/session-manager-contract.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 
@@ -241,19 +242,25 @@ export async function runPreparedCliAgent(
   }): Promise<void> => {
     try {
       const nowMs = Date.now();
-      const sessionManager = SessionManager.open(params.sessionFile);
-      sessionManager.appendMessage({
-        role: "user",
-        content: [{ type: "text", text: block.message }],
-        timestamp: nowMs,
-        idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
-        __openclaw: {
-          beforeAgentRunBlocked: {
-            blockedBy: block.pluginId,
-            blockedAt: nowMs,
+      await appendSessionTranscriptMessage({
+        agentId: params.agentId ?? DEFAULT_AGENT_ID,
+        sessionId: params.sessionId,
+        transcriptPath: params.sessionFile,
+        cwd: params.workspaceDir,
+        now: nowMs,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: block.message }],
+          timestamp: nowMs,
+          idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
+          __openclaw: {
+            beforeAgentRunBlocked: {
+              blockedBy: block.pluginId,
+              blockedAt: nowMs,
+            },
           },
         },
-      } as Parameters<typeof sessionManager.appendMessage>[0]);
+      });
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(
