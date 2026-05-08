@@ -1343,14 +1343,12 @@
                 ]
               },
               {
-                "group": "API and operations",
+                "group": "API and trust",
                 "pages": [
                   "clawhub/api",
                   "clawhub/http-api",
                   "clawhub/security",
-                  "clawhub/acceptable-usage",
-                  "clawhub/deploy",
-                  "clawhub/webhook"
+                  "clawhub/acceptable-usage"
                 ]
               }
             ]
