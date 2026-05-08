@@ -754,16 +754,22 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   }
   const icon = line.icon?.trim();
   const prefix = icon ? `${icon} ` : "";
+  const label = line.label.trim();
   const detail = line.detail?.trim();
   if (detail) {
+    if (line.kind !== "patch" && label) {
+      return `${prefix}${label}: ${detail}`;
+    }
     return `${prefix}${detail}`;
   }
   const status = line.status?.trim();
   if (status) {
+    if (label) {
+      return `${prefix}${label}: ${status}`;
+    }
     return `${prefix}${status}`;
   }
   const text = line.text.trim();
-  const label = line.label.trim();
   if (!icon && text && text !== label) {
     return text;
   }

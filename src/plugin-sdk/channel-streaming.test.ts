@@ -273,9 +273,7 @@ describe("channel-streaming", () => {
       lines: line ? [line] : [],
     });
 
-    expect(text).toBe(
-      "Shelling\n🛠️ run node script scripts/check-something-with-a-very-long-path, node…",
-    );
+    expect(text).toBe("Shelling\n🛠️ Exec: run node script…that/keeps/going/and/going/index…");
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
 
