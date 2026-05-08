@@ -2,8 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { SessionManager } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resetAgentEventsForTest } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  appendSqliteSessionTranscriptEvent,
+  createSqliteSessionTranscriptLocator,
+  resetAgentEventsForTest,
+  SessionManager,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -46,11 +50,35 @@ function assistantMessage(text: string, timestamp: number) {
 async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-projector-"));
   tempDirs.add(tempDir);
-  const sessionFile = path.join(tempDir, "session.jsonl");
-  SessionManager.open(sessionFile).appendMessage(assistantMessage("history", Date.now()));
+  const sessionId = "session-1";
+  const transcriptSessionId = `${sessionId}-${path
+    .basename(tempDir)
+    .replace(/[^a-z0-9]/giu, "")
+    .toLowerCase()}`;
+  const sessionFile = createSqliteSessionTranscriptLocator({
+    agentId: "main",
+    sessionId: transcriptSessionId,
+  });
+  appendSqliteSessionTranscriptEvent({
+    agentId: "main",
+    sessionId: transcriptSessionId,
+    transcriptPath: sessionFile,
+    event: { type: "session", version: 1, id: sessionId },
+  });
+  appendSqliteSessionTranscriptEvent({
+    agentId: "main",
+    sessionId: transcriptSessionId,
+    transcriptPath: sessionFile,
+    event: {
+      type: "message",
+      id: "history",
+      parentId: null,
+      message: assistantMessage("history", Date.now()),
+    },
+  });
   return {
     prompt: "hello",
-    sessionId: "session-1",
+    sessionId,
     sessionFile,
     workspaceDir: tempDir,
     runId: "run-1",
@@ -1096,7 +1124,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(beforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
         messageCount: 1,
-        sessionFile: expect.stringContaining("session.jsonl"),
+        sessionFile: expect.stringMatching(/^sqlite-transcript:\/\/main\/session-1-.+\.jsonl$/u),
         messages: [expect.objectContaining({ role: "assistant" })],
       }),
       expect.objectContaining({
@@ -1108,7 +1136,7 @@ describe("CodexAppServerEventProjector", () => {
       expect.objectContaining({
         messageCount: 1,
         compactedCount: -1,
-        sessionFile: expect.stringContaining("session.jsonl"),
+        sessionFile: expect.stringMatching(/^sqlite-transcript:\/\/main\/session-1-.+\.jsonl$/u),
       }),
       expect.objectContaining({
         runId: "run-1",
