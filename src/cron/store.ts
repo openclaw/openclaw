@@ -27,6 +27,7 @@ const CRON_STATE_KV_SCOPE = "cron.jobs.state";
 type CronStateKvDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
 type CronJobsTable = OpenClawStateKyselyDatabase["cron_jobs"];
 type CronJobsDatabase = Pick<OpenClawStateKyselyDatabase, "cron_jobs">;
+type CronStoreUpdateDatabase = Pick<OpenClawStateKyselyDatabase, "cron_jobs" | "kv">;
 
 type CronJobRow = {
   job_id: string;
@@ -125,6 +126,32 @@ function writeStateDatabase(storePath: string, stateFile: CronStateFile) {
     CRON_STATE_KV_SCOPE,
     cronStoreKey(storePath),
     stateFile as unknown as OpenClawStateJsonValue,
+  );
+}
+
+function writeStateDatabaseInTransaction(params: {
+  database: import("node:sqlite").DatabaseSync;
+  storePath: string;
+  stateFile: CronStateFile;
+  updatedAt: number;
+}): void {
+  const db = getNodeSqliteKysely<CronStoreUpdateDatabase>(params.database);
+  executeSqliteQuerySync(
+    params.database,
+    db
+      .insertInto("kv")
+      .values({
+        scope: CRON_STATE_KV_SCOPE,
+        key: cronStoreKey(params.storePath),
+        value_json: JSON.stringify(params.stateFile),
+        updated_at: params.updatedAt,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["scope", "key"]).doUpdateSet({
+          value_json: JSON.stringify(params.stateFile),
+          updated_at: params.updatedAt,
+        }),
+      ),
   );
 }
 
@@ -392,4 +419,72 @@ export async function saveCronStore(
     return;
   }
   writeCronJobsToSqlite(storePath, store);
+}
+
+export async function updateCronStoreJobs(
+  storePath: string,
+  updateJob: (job: CronJob) => CronJob | undefined,
+): Promise<{ updatedJobs: number }> {
+  const store = await loadCronStore(storePath);
+  const stateFile = extractStateFile(store);
+  const updates: Array<{ previousJobId: string; job: CronJob; sortOrder: number }> = [];
+
+  for (const [index, job] of store.jobs.entries()) {
+    const nextJob = updateJob(structuredClone(job) as CronJob);
+    if (!nextJob) {
+      continue;
+    }
+    ensureJobStateObject(nextJob as CronStoreFile["jobs"][number]);
+    if (nextJob.id !== job.id) {
+      delete stateFile.jobs[job.id];
+    }
+    stateFile.jobs[nextJob.id] = {
+      updatedAtMs: nextJob.updatedAtMs,
+      scheduleIdentity: tryCronScheduleIdentity(nextJob as unknown as Record<string, unknown>),
+      state: nextJob.state ?? {},
+    };
+    updates.push({ previousJobId: job.id, job: nextJob, sortOrder: index });
+  }
+
+  if (updates.length === 0) {
+    return { updatedJobs: 0 };
+  }
+
+  const storeKey = cronStoreKey(storePath);
+  const updatedAt = Date.now();
+  runOpenClawStateWriteTransaction((database) => {
+    writeStateDatabaseInTransaction({
+      database: database.db,
+      storePath,
+      stateFile,
+      updatedAt,
+    });
+    const db = getNodeSqliteKysely<CronStoreUpdateDatabase>(database.db);
+    for (const update of updates) {
+      if (update.previousJobId !== update.job.id) {
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .deleteFrom("cron_jobs")
+            .where("store_key", "=", storeKey)
+            .where("job_id", "=", update.previousJobId),
+        );
+      }
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .insertInto("cron_jobs")
+          .values(cronJobRow(storePath, update.job, update.sortOrder))
+          .onConflict((conflict) =>
+            conflict.columns(["store_key", "job_id"]).doUpdateSet({
+              job_json: JSON.stringify(stripRuntimeOnlyCronJobFields(update.job)),
+              sort_order: update.sortOrder,
+              updated_at: updatedAt,
+            }),
+          ),
+      );
+    }
+  });
+
+  return { updatedJobs: updates.length };
 }
