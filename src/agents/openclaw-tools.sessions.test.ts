@@ -1325,7 +1325,7 @@ describe("sessions tools", () => {
         ),
     );
     expect(replyPromptAgentCalls).toEqual([]);
-    expect(calls.filter((call) => call.method === "send")).toEqual([]);
+    expect(calls.some((call) => call.method === "send")).toBe(false);
   });
 
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
