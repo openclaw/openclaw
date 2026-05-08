@@ -2704,7 +2704,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
       // The failed manager is closed before the replacement session manager is installed.
       expect(
-        MockManager.instances.filter((instance) => instance.closeCallCount >= 1).length,
+        countMatching(MockManager.instances, (instance) => instance.closeCallCount >= 1),
       ).toBeGreaterThanOrEqual(1);
     } finally {
       MockManager.globalConnectShouldFail = false;
