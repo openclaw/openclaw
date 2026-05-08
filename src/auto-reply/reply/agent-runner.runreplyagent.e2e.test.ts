@@ -384,6 +384,33 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("visible final");
   });
+
+  it("keeps heartbeat replies with real content in pending final delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Sent daily summary to channel." }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDeliveryText).toBe("Sent daily summary to channel.");
+  });
 });
 
 describe("runReplyAgent typing (heartbeat)", () => {
