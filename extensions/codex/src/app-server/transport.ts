@@ -5,6 +5,8 @@ export type CodexAppServerTransport = {
     destroy?: () => unknown;
     unref?: () => unknown;
     on?: (event: "error", listener: (error: Error) => void) => unknown;
+    once?: (event: "drain", listener: () => void) => unknown;
+    off?: (event: "drain", listener: () => void) => unknown;
   };
   stdout: NodeJS.ReadableStream & {
     destroy?: () => unknown;
