@@ -113,10 +113,6 @@ export async function resolveSessionTranscriptFile(params: {
   agentId: string;
   threadId?: string | number;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry | undefined }> {
-  const sessionPathOpts = resolveSessionFilePathOptions({
-    agentId: params.agentId,
-  });
-  let sessionFile = resolveSessionFilePath(params.sessionId, params.sessionEntry, sessionPathOpts);
   let sessionEntry = params.sessionEntry;
 
   const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
@@ -131,11 +127,10 @@ export async function resolveSessionTranscriptFile(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry,
-    agentId: sessionPathOpts?.agentId,
-    sessionsDir: sessionPathOpts?.sessionsDir,
+    agentId: params.agentId,
     fallbackSessionFile,
   });
-  sessionFile = resolvedSessionFile.sessionFile;
+  const sessionFile = resolvedSessionFile.sessionFile;
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (params.sessionStore) {
     params.sessionStore[params.sessionKey] = sessionEntry;

@@ -1,6 +1,6 @@
 import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
+  createSqliteSessionTranscriptLocator,
+  isSqliteSessionTranscriptLocator,
   type SessionFilePathOptions,
 } from "./paths.js";
 import {
@@ -38,17 +38,11 @@ export function readSessionHeaderStartedAtMs(params: {
   if (!sessionId) {
     return undefined;
   }
-  const pathOptions =
-    params.pathOptions ??
-    resolveSessionFilePathOptions({
-      agentId: params.agentId,
-    });
-  let sessionFile: string;
-  try {
-    sessionFile = resolveSessionFilePath(sessionId, params.entry, pathOptions);
-  } catch {
-    return undefined;
-  }
+  void params.pathOptions;
+  const storedSessionFile = params.entry?.sessionFile?.trim();
+  const sessionFile = isSqliteSessionTranscriptLocator(storedSessionFile)
+    ? storedSessionFile
+    : createSqliteSessionTranscriptLocator({ agentId: params.agentId, sessionId });
   const scope = resolveSqliteSessionTranscriptScope({
     agentId: params.agentId,
     sessionId,
