@@ -16,6 +16,36 @@ CREATE TABLE IF NOT EXISTS kv (
   PRIMARY KEY (scope, key)
 );
 
+CREATE TABLE IF NOT EXISTS acp_replay_sessions (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  cwd TEXT NOT NULL,
+  complete INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  next_seq INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_acp_replay_sessions_key_updated
+  ON acp_replay_sessions(session_key, complete, updated_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_acp_replay_sessions_updated
+  ON acp_replay_sessions(updated_at DESC, session_id);
+
+CREATE TABLE IF NOT EXISTS acp_replay_events (
+  session_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  at INTEGER NOT NULL,
+  session_key TEXT NOT NULL,
+  run_id TEXT,
+  update_json TEXT NOT NULL,
+  PRIMARY KEY (session_id, seq),
+  FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_acp_replay_events_session_seq
+  ON acp_replay_events(session_id, seq);
+
 CREATE TABLE IF NOT EXISTS agents (
   agent_id TEXT NOT NULL PRIMARY KEY,
   config_json TEXT NOT NULL,

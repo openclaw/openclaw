@@ -698,8 +698,9 @@ Move these into agent databases:
   the per-agent `cache_entries` table. Gateway-wide model caches stay in the
   global database unless they become agent-specific.
 - ACP parent stream logs. Done for runtime writes.
-- ACP replay ledger sessions. Done for runtime writes; legacy
-  `acp/event-ledger.json` remains only as doctor/migrate input.
+- ACP replay ledger sessions. Done for runtime writes via
+  `acp_replay_sessions` and `acp_replay_events`; legacy `acp/event-ledger.json`
+  remains only as doctor/migrate input.
 - Trajectory sidecars when they are not explicit export files. Done for runtime
   writes: trajectory capture writes agent-database `trajectory_runtime_events`
   rows and mirrors run-scoped artifacts into SQLite. Legacy sidecars remain

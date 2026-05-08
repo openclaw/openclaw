@@ -9,6 +9,25 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
 
+export interface AcpReplayEvents {
+  at: number;
+  run_id: string | null;
+  seq: number;
+  session_id: string;
+  session_key: string;
+  update_json: string;
+}
+
+export interface AcpReplaySessions {
+  complete: number;
+  created_at: number;
+  cwd: string;
+  next_seq: number;
+  session_id: string;
+  session_key: string;
+  updated_at: number;
+}
+
 export interface AgentDatabases {
   agent_id: string;
   last_seen_at: number;
@@ -256,6 +275,8 @@ export interface TranscriptFiles {
 }
 
 export interface DB {
+  acp_replay_events: AcpReplayEvents;
+  acp_replay_sessions: AcpReplaySessions;
   agent_databases: AgentDatabases;
   agents: Agents;
   backup_runs: BackupRuns;
