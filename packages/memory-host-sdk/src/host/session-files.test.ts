@@ -164,24 +164,24 @@ describe("buildSessionEntry", () => {
     fsSync.writeFileSync(bakPath, content);
     fsSync.writeFileSync(checkpointPath, content);
 
-    const resetEntry = await buildSessionEntry(resetPath);
-    const deletedEntry = await buildSessionEntry(deletedPath);
-    const bakEntry = await buildSessionEntry(bakPath);
-    const checkpointEntry = await buildSessionEntry(checkpointPath);
+    const resetEntry = requireSessionEntry(await buildSessionEntry(resetPath));
+    const deletedEntry = requireSessionEntry(await buildSessionEntry(deletedPath));
+    const bakEntry = requireSessionEntry(await buildSessionEntry(bakPath));
+    const checkpointEntry = requireSessionEntry(await buildSessionEntry(checkpointPath));
 
     // Usage-counted archives (reset, deleted) must surface real content so
     // post-reset memory_search can recover prior session history.
-    expect(resetEntry?.content).toContain("User: Archived hello");
-    expect(resetEntry?.lineMap).toEqual([1]);
-    expect(deletedEntry?.content).toContain("User: Archived hello");
-    expect(deletedEntry?.lineMap).toEqual([1]);
+    expect(resetEntry.content).toContain("User: Archived hello");
+    expect(resetEntry.lineMap).toEqual([1]);
+    expect(deletedEntry.content).toContain("User: Archived hello");
+    expect(deletedEntry.lineMap).toEqual([1]);
 
     // .bak and compaction checkpoints remain opaque pre-archive / snapshot
     // artifacts and stay empty so they do not get double-indexed.
-    expect(bakEntry?.content).toBe("");
-    expect(bakEntry?.lineMap).toEqual([]);
-    expect(checkpointEntry?.content).toBe("");
-    expect(checkpointEntry?.lineMap).toEqual([]);
+    expect(bakEntry.content).toBe("");
+    expect(bakEntry.lineMap).toEqual([]);
+    expect(checkpointEntry.content).toBe("");
+    expect(checkpointEntry.lineMap).toEqual([]);
   });
 
   it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
