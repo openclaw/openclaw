@@ -781,6 +781,80 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("applies per-agent tools.deny before writing CLI bundle MCP config", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "test-cli",
+            pluginId: "test",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "test-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              sessionMode: "existing",
+              output: "text",
+              input: "arg",
+            },
+          },
+        ],
+      });
+      const config = createCliBackendConfig({ bundleMcp: true });
+      config.agents = {
+        ...config.agents,
+        list: [
+          {
+            id: "sales",
+            tools: { deny: ["mcp__twenty-crm"] },
+          },
+        ],
+      };
+      config.mcp = {
+        servers: {
+          "twenty-crm": {
+            type: "sse",
+            url: "https://crm.example.com/mcp",
+          },
+          calendar: {
+            type: "sse",
+            url: "https://calendar.example.com/mcp",
+          },
+        },
+      };
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-agent-mcp-policy",
+        agentId: "sales",
+        config,
+      });
+
+      const configFlagIndex = context.preparedBackend.backend.args?.indexOf("--mcp-config") ?? -1;
+      expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+      const generatedConfigPath = context.preparedBackend.backend.args?.[configFlagIndex + 1];
+      const raw = JSON.parse(fs.readFileSync(generatedConfigPath as string, "utf-8")) as {
+        mcpServers?: Record<string, unknown>;
+      };
+
+      expect(Object.keys(raw.mcpServers ?? {})).toEqual(["calendar"]);
+
+      await context.preparedBackend.cleanup?.();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when a runtime toolsAllow is requested for CLI backends", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

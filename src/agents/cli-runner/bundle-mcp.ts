@@ -8,7 +8,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
-import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
+import {
+  filterBundleMcpConfigByToolPolicies,
+  loadMergedBundleMcpConfig,
+  toCliBundleMcpServerConfig,
+} from "../bundle-mcp-config.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import { findClaudeMcpConfigPath, injectClaudeMcpConfigArgs } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
@@ -143,6 +147,7 @@ export async function prepareCliBundleMcpConfig(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   additionalConfig?: BundleMcpConfig;
+  toolPolicies?: Array<{ allow?: string[]; deny?: string[] } | undefined>;
   env?: Record<string, string>;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
@@ -180,6 +185,10 @@ export async function prepareCliBundleMcpConfig(params: {
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
+  mergedConfig = filterBundleMcpConfigByToolPolicies({
+    config: mergedConfig,
+    policies: params.toolPolicies,
+  });
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,

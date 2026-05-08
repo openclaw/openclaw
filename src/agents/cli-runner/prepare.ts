@@ -40,11 +40,13 @@ import { resolvePromptBuildHookResult } from "../pi-embedded-runner/run/attempt.
 import { resolveAttemptPrependSystemContext } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
 import { buildCurrentTurnPrompt } from "../pi-embedded-runner/run/runtime-context-prompt.js";
+import { resolveEffectiveToolPolicy } from "../pi-tools.policy.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../tool-policy.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
@@ -196,6 +198,38 @@ export async function prepareCliRunContext(
     }
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
+  let bundleMcpToolPolicies: Array<{ allow?: string[]; deny?: string[] } | undefined> | undefined;
+  if (bundleMcpEnabled) {
+    const {
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      profile,
+      providerProfile,
+      profileAlsoAllow,
+      providerProfileAlsoAllow,
+    } = resolveEffectiveToolPolicy({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      agentId: sessionAgentId,
+      modelProvider: params.provider,
+      modelId,
+    });
+    const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+    const providerProfilePolicy = mergeAlsoAllowPolicy(
+      resolveToolProfilePolicy(providerProfile),
+      providerProfileAlsoAllow,
+    );
+    bundleMcpToolPolicies = [
+      profilePolicy,
+      providerProfilePolicy,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+    ];
+  }
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
@@ -217,6 +251,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
         }
       : undefined,
+    toolPolicies: bundleMcpToolPolicies,
     warn: (message) => cliBackendLog.warn(message),
   });
   const preparedExecution = await backendResolved.prepareExecution?.({
