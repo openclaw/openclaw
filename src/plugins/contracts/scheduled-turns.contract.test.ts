@@ -931,6 +931,9 @@ describe("plugin scheduled turns", () => {
       if (method === "cron.list") {
         return { jobs: [] };
       }
+      if (method === "cron.remove") {
+        return { ok: true, removed: true };
+      }
       return { ok: true };
     });
     const { config, registry } = createPluginRegistryFixture();
@@ -980,6 +983,14 @@ describe("plugin scheduled turns", () => {
   });
 
   it("blocks registration-time schedule and unschedule calls before activation", async () => {
+    // Drain any cleanup microtasks queued by the previous test's
+    // setActivePluginRegistry calls; setActivePluginRegistry schedules
+    // cleanup via fire-and-forget dynamic imports that may resolve and
+    // invoke callGatewayTool after this test's mockReset.
+    for (let i = 0; i < 8; i++) {
+      await Promise.resolve();
+    }
+    workflowMocks.callGatewayTool.mockReset();
     workflowMocks.callGatewayTool.mockResolvedValue({ ok: true });
     const activeFixture = createPluginRegistryFixture();
     setActivePluginRegistry(activeFixture.registry.registry);
