@@ -7,7 +7,6 @@ import {
   listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
@@ -342,7 +341,10 @@ describe("memory index", () => {
     now?: number;
   }): string {
     const transcriptPath = path.join(
-      resolveSessionTranscriptsDirForAgent("main"),
+      workspaceDir,
+      ".state",
+      "transcript-fixtures",
+      "main",
       `${params.sessionId}.jsonl`,
     );
     replaceSqliteSessionTranscriptEvents({

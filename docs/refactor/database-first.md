@@ -263,7 +263,9 @@ The remaining cleanup is mostly consolidation and deletion:
   files; reset only rotates the SQLite session row and transcript identity.
 - Memory-core dreaming no longer prunes session rows by probing for missing
   JSONL files. Subagent cleanup goes through the session runtime API instead of
-  filesystem existence checks.
+  filesystem existence checks. Its transcript-ingestion tests seed SQLite rows
+  through neutral test locators instead of creating `agents/<id>/sessions`
+  fixtures.
 - Sandbox container/browser registries now use the shared
   `sandbox_registry_entries` SQLite table. Doctor imports legacy monolithic and
   sharded JSON registry files and removes successful sources.
