@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -16,11 +17,26 @@ import {
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
+  readWorkspaceSetupStateForTests,
   reconcileWorkspaceBootstrapCompletion,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
+
+const stateDirs: string[] = [];
+
+beforeEach(async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-state-"));
+  stateDirs.push(stateDir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+});
+
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  closeOpenClawStateDatabaseForTest();
+  await Promise.all(stateDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
 
 describe("resolveDefaultAgentWorkspaceDir", () => {
   it("uses OPENCLAW_HOME for default workspace resolution", () => {
@@ -40,12 +56,7 @@ async function readWorkspaceState(dir: string): Promise<{
   bootstrapSeededAt?: string;
   setupCompletedAt?: string;
 }> {
-  const raw = await fs.readFile(path.join(dir, ...WORKSPACE_STATE_PATH_SEGMENTS), "utf-8");
-  return JSON.parse(raw) as {
-    version: number;
-    bootstrapSeededAt?: string;
-    setupCompletedAt?: string;
-  };
+  return await readWorkspaceSetupStateForTests(dir);
 }
 
 async function expectBootstrapSeeded(dir: string) {
@@ -219,11 +230,9 @@ describe("ensureAgentWorkspace", () => {
 
     const state = await readWorkspaceState(tempDir);
     expect(state.setupCompletedAt).toBe("2026-03-15T02:30:00.000Z");
-    const persisted = await fs.readFile(
-      path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS),
-      "utf-8",
-    );
-    expect(persisted).toContain('"setupCompletedAt": "2026-03-15T02:30:00.000Z"');
+    await expect(
+      fs.stat(path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reports bootstrap pending while BOOTSTRAP.md exists and setup is incomplete", async () => {

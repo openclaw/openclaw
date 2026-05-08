@@ -114,6 +114,8 @@ The branch already has a real shared SQLite base:
   over the agent database `vfs_entries` table.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
   run artifact, and scoped cache stores for workers.
+- Workspace bootstrap completion markers now live in shared SQLite KV keyed by
+  resolved workspace path instead of `.openclaw/workspace-state.json`.
 - `src/commands/doctor-sqlite-state.ts` already imports several legacy JSON
   state files, including node host config, into SQLite from doctor.
 - `src/infra/state-migrations.ts` already imports legacy `sessions.json` and
