@@ -47,7 +47,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
+  expect(typeof value, label).toBe("object");
   expect(value, label).not.toBeNull();
   expect(Array.isArray(value), label).toBe(false);
   return value as Record<string, unknown>;
