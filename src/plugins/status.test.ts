@@ -726,8 +726,8 @@ describe("plugin status reports", () => {
       capabilityMode: "hybrid",
       capabilityKinds: ["text-inference", "media-understanding", "image-generation", "web-search"],
     });
-    expect(inspect?.usesLegacyBeforeAgentStart).toBe(true);
-    expect(inspect?.compatibility).toEqual([
+    expect(inspect.usesLegacyBeforeAgentStart).toBe(true);
+    expect(inspect.compatibility).toEqual([
       createCompatibilityNotice({ pluginId: "google", code: "legacy-before-agent-start" }),
     ]);
     expectInspectPolicy(inspect, {
@@ -739,7 +739,7 @@ describe("plugin status reports", () => {
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
     });
-    expect(inspect?.diagnostics).toEqual([
+    expect(inspect.diagnostics).toEqual([
       { level: "warn", pluginId: "google", message: "watch this surface" },
     ]);
   });
