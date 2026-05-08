@@ -643,6 +643,27 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
   });
 
+  it("keeps legacy cli tasks live when a non-chat child session has recent activity", async () => {
+    const childSessionKey = "agent:main:legacy-worker:child-1";
+    const task = makeStaleTask({
+      runtime: "cli",
+      taskKind: "legacy_worker",
+      sourceId: undefined,
+      runId: undefined,
+      ownerKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: { [childSessionKey]: { sessionId: childSessionKey, updatedAt: Date.now() } },
+    });
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
   it("skips markTaskLost and counts recovered when recovery hook recovers a stale task", async () => {
     const task = makeStaleTask({
       runtime: "cron",

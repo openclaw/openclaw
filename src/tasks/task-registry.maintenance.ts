@@ -342,7 +342,13 @@ function hasFreshActiveWorkEvidence(
   }
 
   if (task.runtime === "cli") {
-    return hasActiveCliRun(task);
+    if (hasActiveCliRun(task)) {
+      return true;
+    }
+    if (hasCliRunIdentity(task)) {
+      return false;
+    }
+    return hasFreshSessionActivity(findTaskSessionEntry(task, context), now);
   }
 
   if (task.runtime === "subagent") {
