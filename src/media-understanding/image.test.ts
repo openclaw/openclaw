@@ -388,7 +388,6 @@ describe("describeImageWithModel", () => {
     }
     const [, context] = firstCall;
     const userMessage = context.messages[0];
-    expect(userMessage).toBeDefined();
     if (!userMessage) {
       throw new Error("expected image completion user message");
     }
@@ -438,7 +437,6 @@ describe("describeImageWithModel", () => {
     const [, context] = firstCall;
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages[0];
-    expect(userMessage).toBeDefined();
     if (!userMessage) {
       throw new Error("expected OpenRouter image completion user message");
     }

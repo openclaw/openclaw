@@ -4,7 +4,6 @@ import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./us
 
 function requireFirstTool(tools: Array<[string, number]>): [string, number] {
   const tool = tools[0];
-  expect(tool).toBeDefined();
   if (!tool) {
     throw new Error("expected parsed tool summary entry");
   }

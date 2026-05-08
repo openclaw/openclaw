@@ -255,7 +255,7 @@ describe("renderApp assistant avatar routing", () => {
   });
 
   it("renders stale cron state containing a job without a payload", () => {
-    expect(
+    expect(() =>
       renderApp(
         createState({
           cronJobs: [
@@ -273,6 +273,6 @@ describe("renderApp assistant avatar routing", () => {
           ],
         }),
       ),
-    ).toBeDefined();
+    ).not.toThrow();
   });
 });

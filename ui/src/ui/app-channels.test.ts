@@ -34,7 +34,6 @@ function createChannelsSnapshot(name = "saved"): ChannelsStatusSnapshot {
 function requireConfigSnapshot(
   host: ChannelsActionHostForTest,
 ): NonNullable<ConfigState["configSnapshot"]> {
-  expect(host.configSnapshot).toBeDefined();
   if (!host.configSnapshot) {
     throw new Error("expected config snapshot");
   }

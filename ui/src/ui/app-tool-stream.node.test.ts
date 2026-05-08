@@ -66,7 +66,6 @@ function expectCompactionCompleteAndAutoClears(host: MutableHost) {
 }
 
 function requireFallbackStatus(host: MutableHost): FallbackStatus {
-  expect(host.fallbackStatus).toBeTruthy();
   if (!host.fallbackStatus) {
     throw new Error("expected fallback status");
   }
