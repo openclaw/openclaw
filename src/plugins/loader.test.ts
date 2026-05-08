@@ -94,6 +94,16 @@ import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 
+type GlobalHookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
+
+function expectGlobalHookRunner(runner: ReturnType<typeof getGlobalHookRunner>): GlobalHookRunner {
+  expect(runner).toEqual(expect.objectContaining({ hasHooks: expect.any(Function) }));
+  if (runner === null) {
+    throw new Error("Expected global hook runner");
+  }
+  return runner;
+}
+
 function createDetachedTaskRuntimeStub(id: string): DetachedTaskLifecycleRuntime {
   const fail = (name: string): never => {
     throw new Error(`detached runtime ${id} should not execute ${name} in this test`);
@@ -3274,14 +3284,14 @@ module.exports = { id: "throws-after-import", register() {} };`,
     };
 
     const first = loadOpenClawPlugins(options);
-    expect(getGlobalHookRunner()).not.toBeNull();
+    expectGlobalHookRunner(getGlobalHookRunner());
 
     resetGlobalHookRunner();
     expect(getGlobalHookRunner()).toBeNull();
 
     const second = loadOpenClawPlugins(options);
     expect(second).toBe(first);
-    expect(getGlobalHookRunner()).not.toBeNull();
+    expectGlobalHookRunner(getGlobalHookRunner());
 
     resetGlobalHookRunner();
   });
@@ -3322,7 +3332,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
     expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
-    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
+    expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
 
     const defaultRegistry = loadOpenClawPlugins({
       workspaceDir: defaultPlugin.dir,
@@ -3342,8 +3352,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(getActivePluginRegistry()).toBe(defaultRegistry);
     expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
-    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
-    expect(getGlobalHookRunner()?.hasHooks("message_sent")).toBe(false);
+    const globalHookRunner = expectGlobalHookRunner(getGlobalHookRunner());
+    expect(globalHookRunner.hasHooks("subagent_ended")).toBe(true);
+    expect(globalHookRunner.hasHooks("message_sent")).toBe(false);
   });
 
   it.each([
