@@ -324,7 +324,7 @@ describe("session store writer queue", () => {
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
   });
 
-  it("skips session store disk writes when payload is unchanged", async () => {
+  it("writes legacy JSON fallback stores directly even when payload is unchanged", async () => {
     const key = "agent:main:no-op-save";
     const { storePath } = await makeTmpStore({
       [key]: { sessionId: "s-noop", updatedAt: Date.now() },
@@ -334,7 +334,7 @@ describe("session store writer queue", () => {
     await updateSessionStore(storePath, async () => {
       // Intentionally no-op mutation.
     });
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(writeSpy).toHaveBeenCalledTimes(1);
     writeSpy.mockRestore();
   });
 

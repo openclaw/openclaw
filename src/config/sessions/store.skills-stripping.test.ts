@@ -59,7 +59,6 @@ function makeEntry(sessionId: string, snapshot?: SessionSkillSnapshot): SessionE
 describe("session store strips resolvedSkills from persistence", () => {
   let testDir: string;
   let storePath: string;
-  let savedCacheTtl: string | undefined;
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
@@ -72,18 +71,11 @@ describe("session store strips resolvedSkills from persistence", () => {
   beforeEach(async () => {
     testDir = await suiteRootTracker.make("case");
     storePath = path.join(testDir, "sessions.json");
-    savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
-    process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
   });
 
   afterEach(() => {
     clearSessionStoreCacheForTest();
-    if (savedCacheTtl === undefined) {
-      delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
-    } else {
-      process.env.OPENCLAW_SESSION_CACHE_TTL_MS = savedCacheTtl;
-    }
   });
 
   it("does not write resolvedSkills to disk", async () => {

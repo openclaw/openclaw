@@ -1,6 +1,8 @@
 import { drainSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
-import { clearSessionStoreCaches } from "../config/sessions/store-cache.js";
-import { drainSessionStoreWriterQueuesForTest } from "../config/sessions/store-writer-state.js";
+import {
+  clearSessionStoreCacheForTest,
+  drainSessionStoreWriterQueuesForTest,
+} from "../config/sessions/store-writer-state.js";
 import { drainFileLockStateForTest } from "../infra/file-lock.js";
 
 let fileLockDrainerForTests: typeof drainFileLockStateForTest | null = null;
@@ -32,7 +34,7 @@ export function resetSessionStateCleanupRuntimeForTests(): void {
 
 export async function cleanupSessionStateForTest(): Promise<void> {
   await (sessionStoreWriterQueueDrainerForTests ?? drainSessionStoreWriterQueuesForTest)();
-  clearSessionStoreCaches();
+  clearSessionStoreCacheForTest();
   await (fileLockDrainerForTests ?? drainFileLockStateForTest)();
   await (sessionWriteLockDrainerForTests ?? drainSessionWriteLockStateForTest)();
 }

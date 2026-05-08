@@ -1,5 +1,3 @@
-import { clearSessionStoreCaches } from "./store-cache.js";
-
 export type SessionStoreWriterTask = {
   fn: () => Promise<unknown>;
   resolve: (value: unknown) => void;
@@ -15,7 +13,6 @@ export type SessionStoreWriterQueue = {
 export const WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();
 
 export function clearSessionStoreCacheForTest(): void {
-  clearSessionStoreCaches();
   for (const queue of WRITER_QUEUES.values()) {
     for (const task of queue.pending) {
       task.reject(new Error("session store queue cleared for test"));
