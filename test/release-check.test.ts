@@ -22,6 +22,7 @@ import {
   createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
   MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES,
+  PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS,
   PACKED_CLI_SMOKE_COMMANDS,
   PACKED_COMPLETION_SMOKE_ARGS,
   packageNameFromSpecifier,
@@ -82,6 +83,14 @@ describe("packed CLI smoke", () => {
     ]);
   });
 
+  it("repairs bundled runtime deps before the read-only plugin doctor smoke", () => {
+    expect(PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS).toEqual([
+      "doctor",
+      "--fix",
+      "--non-interactive",
+    ]);
+  });
+
   it("keeps packed completion smoke scoped to one shell cache", () => {
     expect(PACKED_COMPLETION_SMOKE_ARGS).toEqual(["completion", "--write-state", "--shell", "zsh"]);
   });
@@ -118,6 +127,7 @@ describe("packed CLI smoke", () => {
       SystemRoot: "C:\\Windows",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       OPENCLAW_NO_ONBOARD: "1",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
       OPENCLAW_SUPPRESS_NOTES: "1",
       OPENCLAW_STATE_DIR: "/tmp/smoke-state",
     });
@@ -282,12 +292,12 @@ describe("bundled plugin package dependency checks", () => {
       );
       writeFileSync(
         join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
         "utf8",
       );
       writeFileSync(
         join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"),
-        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("@lancedb/lancedb");\n`,
+        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("root-owned-test-dep");\n`,
         "utf8",
       );
 
@@ -309,17 +319,17 @@ describe("bundled plugin package dependency checks", () => {
       );
       writeFileSync(
         join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
         "utf8",
       );
       writeFileSync(
         join(tempRoot, "dist", "root-runtime.js"),
-        `import("@lancedb/lancedb");\n`,
+        `import("root-owned-test-dep");\n`,
         "utf8",
       );
 
       expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([
-        "installed package root is missing declared runtime dependency '@lancedb/lancedb' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'root-owned-test-dep' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -480,19 +490,18 @@ describe("collectMissingPackPaths", () => {
         "dist/control-ui/index.html",
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
+        "scripts/lib/official-external-channel-catalog.json",
+        "scripts/lib/official-external-plugin-catalog.json",
+        "scripts/lib/official-external-provider-catalog.json",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/task-registry-control.runtime.js",
-        bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
-        bundledDistPluginFile("matrix", "helper-api.js"),
-        bundledDistPluginFile("matrix", "runtime-api.js"),
-        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
-        bundledDistPluginFile("matrix", "openclaw.plugin.json"),
-        bundledDistPluginFile("matrix", "package.json"),
-        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "openclaw.plugin.json"),
-        bundledDistPluginFile("whatsapp", "package.json"),
+        bundledDistPluginFile("slack", "runtime-api.js"),
+        bundledDistPluginFile("slack", "openclaw.plugin.json"),
+        bundledDistPluginFile("slack", "package.json"),
+        bundledDistPluginFile("telegram", "runtime-api.js"),
+        bundledDistPluginFile("telegram", "openclaw.plugin.json"),
+        bundledDistPluginFile("telegram", "package.json"),
       ]),
     );
   });
@@ -506,12 +515,14 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/error-format.mjs",
         "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
-        bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
+        "scripts/lib/official-external-channel-catalog.json",
+        "scripts/lib/official-external-plugin-catalog.json",
+        "scripts/lib/official-external-provider-catalog.json",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
@@ -526,11 +537,8 @@ describe("collectMissingPackPaths", () => {
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
     expect(requiredBundledPluginPackPaths).toEqual(
       expect.arrayContaining([
-        bundledDistPluginFile("matrix", "helper-api.js"),
-        bundledDistPluginFile("matrix", "runtime-api.js"),
-        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
-        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "runtime-api.js"),
+        bundledDistPluginFile("slack", "runtime-api.js"),
+        bundledDistPluginFile("telegram", "runtime-api.js"),
       ]),
     );
   });

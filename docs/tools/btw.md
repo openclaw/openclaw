@@ -7,7 +7,7 @@ title: "BTW side questions"
 ---
 
 `/btw` lets you ask a quick side question about the **current session** without
-turning that question into normal conversation history.
+turning that question into normal conversation history. `/side` is an alias.
 
 It is modeled after Claude Code's `/btw` behavior, but adapted to OpenClaw's
 Gateway and multi-channel architecture.
@@ -121,6 +121,7 @@ Examples:
 
 ```text
 /btw what file are we editing?
+/side what changed while the main run continued?
 /btw what does this error mean?
 /btw summarize the current task in one sentence
 /btw what is 17 * 19?
@@ -135,6 +136,17 @@ In that case, ask normally in the main session instead of using BTW.
 
 ## Related
 
-- [Slash commands](/tools/slash-commands)
-- [Thinking Levels](/tools/thinking)
-- [Session](/concepts/session)
+<CardGroup cols={2}>
+  <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
+    Native command catalog and chat directives.
+  </Card>
+  <Card title="Thinking levels" href="/tools/thinking" icon="brain">
+    Reasoning effort levels for the side-question model call.
+  </Card>
+  <Card title="Session" href="/concepts/session" icon="comments">
+    Session keys, history, and persistence semantics.
+  </Card>
+  <Card title="Steer command" href="/tools/steer" icon="arrow-right">
+    Inject a steering message into the active run without ending it.
+  </Card>
+</CardGroup>

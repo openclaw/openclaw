@@ -2,15 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 let fixtureRoot = "";
 let tinyPngFile = "";
@@ -18,6 +20,21 @@ let stateDir = "";
 let canvasPngFile = "";
 let workspaceDir = "";
 let workspacePngFile = "";
+
+function installCanvasMediaResolver() {
+  const registry = createEmptyPluginRegistry();
+  registry.hostedMediaResolvers = [
+    {
+      pluginId: "canvas",
+      resolver: (mediaUrl) =>
+        mediaUrl === `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`
+          ? canvasPngFile
+          : null,
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+}
 
 beforeAll(async () => {
   ({ loadWebMedia, optimizeImageToJpeg } = await import("./web-media.js"));
@@ -39,9 +56,11 @@ beforeAll(async () => {
   );
   await fs.mkdir(path.dirname(canvasPngFile), { recursive: true });
   await fs.writeFile(canvasPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
+  installCanvasMediaResolver();
 });
 
 afterAll(async () => {
+  resetPluginRuntimeStateForTest();
   if (fixtureRoot) {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
@@ -149,10 +168,41 @@ describe("loadWebMedia", () => {
   });
 
   it("loads browser-style canvas media paths as managed local files", async () => {
+    installCanvasMediaResolver();
     const result = await loadWebMedia(
       `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`,
       { maxBytes: 1024 * 1024 },
     );
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("keeps trying hosted media resolvers after one throws", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.hostedMediaResolvers = [
+      {
+        pluginId: "broken",
+        resolver: () => {
+          throw new Error("resolver failed");
+        },
+        source: "test",
+      },
+      {
+        pluginId: "canvas",
+        resolver: (mediaUrl) =>
+          mediaUrl === `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`
+            ? canvasPngFile
+            : null,
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const result = await loadWebMedia(
+      `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`,
+      { maxBytes: 1024 * 1024 },
+    );
+
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
   });
@@ -163,6 +213,66 @@ describe("loadWebMedia", () => {
     );
   });
 
+  async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
+    vi.resetModules();
+    vi.doMock("./image-ops.js", () => ({
+      convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
+      hasAlphaChannel: vi.fn(async () => {
+        throw new Error(
+          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+        );
+      }),
+      optimizeImageToPng: vi.fn(async () => {
+        throw new Error("should not optimize png");
+      }),
+      resizeToJpeg: vi.fn(async () => {
+        throw new Error(
+          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+        );
+      }),
+    }));
+    try {
+      return await fn();
+    } finally {
+      vi.doUnmock("./image-ops.js");
+      vi.resetModules();
+    }
+  }
+
+  it("sends an in-limit original image when optional sharp optimization is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
+      const result = await loadWebMediaWithMissingOptimizer(
+        tinyPngFile,
+        createLocalWebMediaOptions(),
+      );
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/png");
+      expect(result.fileName).toBe("tiny.png");
+      expect(result.buffer.equals(Buffer.from(TINY_PNG_BASE64, "base64"))).toBe(true);
+    });
+  });
+
+  it("does not bypass the size cap when optional sharp optimization is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
+      await expect(
+        loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
+      ).rejects.toThrow(/Optional dependency sharp is required/);
+    });
+  });
+
+  it("does not send original HEIC media when optional sharp conversion is unavailable", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const heicFile = path.join(fixtureRoot, "photo.heic");
+      await fs.writeFile(heicFile, Buffer.from("heic-source"));
+      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
+      await expect(
+        loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
+      ).rejects.toThrow(/Optional dependency sharp is required/);
+    });
+  });
+
   it("resolves relative local media paths against the provided workspace directory", async () => {
     const result = await loadWebMedia("chart.png", {
       maxBytes: 1024 * 1024,
@@ -171,6 +281,20 @@ describe("loadWebMedia", () => {
     });
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("resolves home-relative local media paths through allowed local roots", async () => {
+    vi.stubEnv("OPENCLAW_HOME", fixtureRoot);
+    try {
+      const result = await loadWebMedia("~/workspace/chart.png", {
+        maxBytes: 1024 * 1024,
+        localRoots: [workspaceDir],
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("rejects host-read text files outside local roots", async () => {

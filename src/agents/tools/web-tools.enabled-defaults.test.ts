@@ -8,8 +8,40 @@ import {
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 
 const runWebSearchCalls = vi.hoisted(
-  () => [] as Array<{ config?: unknown; runtimeWebSearch?: unknown }>,
+  () =>
+    [] as Array<{
+      config?: unknown;
+      preferRuntimeProviders?: boolean;
+      runtimeWebSearch?: unknown;
+    }>,
 );
+const activeSecretsRuntimeSnapshot = vi.hoisted(() => ({
+  current: null as null | { config: unknown },
+}));
+
+function readConfiguredSearchProvider(config: unknown): string | undefined {
+  if (!config || typeof config !== "object") {
+    return undefined;
+  }
+  const tools = (config as { tools?: unknown }).tools;
+  if (!tools || typeof tools !== "object") {
+    return undefined;
+  }
+  const web = (tools as { web?: unknown }).web;
+  if (!web || typeof web !== "object") {
+    return undefined;
+  }
+  const search = (web as { search?: unknown }).search;
+  if (!search || typeof search !== "object") {
+    return undefined;
+  }
+  const provider = (search as { provider?: unknown }).provider;
+  return typeof provider === "string" ? provider : undefined;
+}
+
+vi.mock("../../secrets/runtime.js", () => ({
+  getActiveSecretsRuntimeSnapshot: () => activeSecretsRuntimeSnapshot.current,
+}));
 
 vi.mock("../../web-search/runtime.js", async () => {
   const { getActivePluginRegistry } = await import("../../plugins/runtime.js");
@@ -23,7 +55,8 @@ vi.mock("../../web-search/runtime.js", async () => {
       options?.runtimeWebSearch?.selectedProvider ??
       options?.runtimeWebSearch?.providerConfigured ??
       getActiveRuntimeWebToolsMetadata()?.search?.selectedProvider ??
-      getActiveRuntimeWebToolsMetadata()?.search?.providerConfigured;
+      getActiveRuntimeWebToolsMetadata()?.search?.providerConfigured ??
+      readConfiguredSearchProvider(options?.config);
     const registration = getActivePluginRegistry()?.webSearchProviders.find(
       (entry) => entry.provider.id === providerId,
     );
@@ -47,10 +80,12 @@ vi.mock("../../web-search/runtime.js", async () => {
     runWebSearch: async (options: {
       config?: unknown;
       args: Record<string, unknown>;
+      preferRuntimeProviders?: boolean;
       runtimeWebSearch?: unknown;
     }) => {
       runWebSearchCalls.push({
         config: options.config,
+        preferRuntimeProviders: options.preferRuntimeProviders,
         runtimeWebSearch: options.runtimeWebSearch,
       });
       const resolved = resolveRuntimeDefinition(options as never);
@@ -68,12 +103,14 @@ vi.mock("../../web-search/runtime.js", async () => {
 beforeEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
+  activeSecretsRuntimeSnapshot.current = null;
   runWebSearchCalls.length = 0;
 });
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   clearActiveRuntimeWebToolsMetadata();
+  activeSecretsRuntimeSnapshot.current = null;
 });
 
 describe("web tools defaults", () => {
@@ -131,6 +168,52 @@ describe("web tools defaults", () => {
 
     expect(tool?.description).toContain("Search the web");
     expect(result?.details).toMatchObject({ ok: true });
+  });
+
+  it("keeps runtime provider discovery enabled when runtime web_search metadata is missing", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({
+      pluginId: "custom-search",
+      pluginName: "Custom Search",
+      source: "test",
+      provider: {
+        id: "custom",
+        label: "Custom Search",
+        hint: "Custom runtime provider",
+        envVars: ["CUSTOM_SEARCH_API_KEY"],
+        placeholder: "custom-...",
+        signupUrl: "https://example.com/signup",
+        autoDetectOrder: 1,
+        credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
+        getCredentialValue: () => "configured",
+        setCredentialValue: () => {},
+        createTool: () => ({
+          description: "custom runtime tool",
+          parameters: {},
+          execute: async () => ({ provider: "custom" }),
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "custom",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+    });
+
+    const result = await tool?.execute?.("call-runtime-provider-without-metadata", {});
+
+    expect(result?.details).toMatchObject({ provider: "custom" });
+    expect(runWebSearchCalls).toHaveLength(1);
+    expect(runWebSearchCalls[0]?.preferRuntimeProviders).toBe(true);
   });
 
   it("late-binds managed web_search execution to the current runtime snapshot", async () => {
@@ -196,6 +279,10 @@ describe("web tools defaults", () => {
       },
       diagnostics: [],
     });
+    const runtimeConfig = {
+      tools: { web: { search: { provider: "fresh", fresh: { apiKey: "runtime-key" } } } },
+    };
+    activeSecretsRuntimeSnapshot.current = { config: runtimeConfig };
 
     const tool = createWebSearchTool({
       config: { tools: { web: { search: { provider: "stale" } } } },
@@ -214,7 +301,7 @@ describe("web tools defaults", () => {
 
     expect(result?.details).toMatchObject({ provider: "fresh" });
     expect(runWebSearchCalls).toHaveLength(1);
-    expect(runWebSearchCalls[0]?.config).toBeUndefined();
+    expect(runWebSearchCalls[0]?.config).toBe(runtimeConfig);
     expect(runWebSearchCalls[0]?.runtimeWebSearch).toMatchObject({
       selectedProvider: "fresh",
     });

@@ -11,6 +11,7 @@ import {
 } from "../../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
+import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
@@ -59,6 +60,13 @@ function formatCapabilityLabel(capability?: string) {
     return null;
   }
   return capability.replaceAll("_", "-");
+}
+
+function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
+  if (!cli) {
+    return null;
+  }
+  return cli.entrypoint ? `${cli.version} (${shortenHomePath(cli.entrypoint)})` : cli.version;
 }
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
@@ -175,10 +183,35 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  const gatewayVersion = rpc?.server?.version?.trim();
+  const cliVersionLine = formatCliVersionLine(status.cli);
+  if (gatewayVersion) {
+    if (cliVersionLine) {
+      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
+    }
+    defaultRuntime.log(`${label("Gateway version:")} ${infoText(gatewayVersion)}`);
+    if (status.cli?.version && status.cli.version !== gatewayVersion) {
+      defaultRuntime.error(
+        warnText(
+          `Warning: CLI/runtime version skew detected. CLI is ${status.cli.version}; gateway is ${gatewayVersion}.`,
+        ),
+      );
+      defaultRuntime.error(
+        warnText(
+          `Fix: check for stale PATH/global wrappers with \`command -v openclaw\`, \`readlink -f "$(command -v openclaw)"\`, and \`openclaw --version\`; reinstall the gateway service from the intended binary if needed.`,
+        ),
+      );
+    }
+    spacer();
+  }
+
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
     const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
+  }
+  if (service.restartHandoff) {
+    defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
   }
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {

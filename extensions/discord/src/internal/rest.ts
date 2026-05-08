@@ -9,14 +9,21 @@ import {
   readRetryAfter,
 } from "./rest-errors.js";
 import { appendQuery, createRouteKey } from "./rest-routes.js";
-import { RestScheduler, type RequestQuery } from "./rest-scheduler.js";
+import {
+  RestScheduler,
+  type RequestPriority as RestRequestPriority,
+  type RequestQuery,
+} from "./rest-scheduler.js";
 import { isDiscordRateLimitBody } from "./schemas.js";
 
 export { DiscordError, RateLimitError } from "./rest-errors.js";
 
 export type RuntimeProfile = "serverless" | "persistent";
-export type RequestPriority = "critical" | "standard" | "background";
+export type RequestPriority = RestRequestPriority;
 export type RequestSchedulerOptions = {
+  lanes?: Partial<
+    Record<RequestPriority, { maxQueueSize?: number; staleAfterMs?: number; weight?: number }>
+  >;
   maxConcurrency?: number;
   maxRateLimitRetries?: number;
 };
@@ -63,6 +70,11 @@ const defaultOptions = {
 };
 
 const DEFAULT_MAX_CONCURRENT_WORKERS = 4;
+const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; weight: number }> = {
+  critical: { weight: 6 },
+  standard: { weight: 3 },
+  background: { staleAfterMs: 20_000, weight: 1 },
+};
 
 function coerceResponseBody(raw: string): unknown {
   if (!raw) {
@@ -134,9 +146,13 @@ export class RequestClient {
     this.options = { ...defaultOptions, ...options };
     this.scheduler = new RestScheduler<RequestData>(
       {
+        lanes: normalizeSchedulerLanes(
+          this.options.maxQueueSize ?? defaultOptions.maxQueueSize,
+          this.options.scheduler?.lanes,
+        ),
         maxConcurrency: this.options.scheduler?.maxConcurrency ?? DEFAULT_MAX_CONCURRENT_WORKERS,
-        maxRateLimitRetries: this.options.scheduler?.maxRateLimitRetries ?? 3,
         maxQueueSize: this.options.maxQueueSize ?? defaultOptions.maxQueueSize,
+        maxRateLimitRetries: this.options.scheduler?.maxRateLimitRetries ?? 3,
       },
       async (request) =>
         await this.executeRequest(
@@ -177,7 +193,12 @@ export class RequestClient {
     if (!this.options.queueRequests) {
       return await this.executeRequest(method, path, params, routeKey);
     }
-    return await this.scheduler.enqueue({ method, path, ...params });
+    return await this.scheduler.enqueue({
+      method,
+      path,
+      priority: getRequestPriority(method, path),
+      ...params,
+    });
   }
 
   protected async executeRequest(
@@ -257,4 +278,45 @@ export class RequestClient {
     }
     this.requestControllers.clear();
   }
+}
+
+function normalizeSchedulerLanes(
+  maxQueueSize: number,
+  lanes?: RequestSchedulerOptions["lanes"],
+): Record<RestRequestPriority, { maxQueueSize: number; staleAfterMs?: number; weight: number }> {
+  const fallbackMaxQueueSize = Math.max(1, Math.floor(maxQueueSize));
+  return {
+    critical: normalizeSchedulerLane("critical", fallbackMaxQueueSize, lanes?.critical),
+    standard: normalizeSchedulerLane("standard", fallbackMaxQueueSize, lanes?.standard),
+    background: normalizeSchedulerLane("background", fallbackMaxQueueSize, lanes?.background),
+  };
+}
+
+function normalizeSchedulerLane(
+  lane: RestRequestPriority,
+  maxQueueSize: number,
+  options?: { maxQueueSize?: number; staleAfterMs?: number; weight?: number },
+): { maxQueueSize: number; staleAfterMs?: number; weight: number } {
+  const defaults = defaultLaneOptions[lane];
+  return {
+    maxQueueSize:
+      options?.maxQueueSize !== undefined
+        ? Math.max(1, Math.floor(options.maxQueueSize))
+        : maxQueueSize,
+    staleAfterMs:
+      options?.staleAfterMs !== undefined
+        ? Math.max(0, Math.floor(options.staleAfterMs))
+        : defaults.staleAfterMs,
+    weight:
+      options?.weight !== undefined ? Math.max(1, Math.floor(options.weight)) : defaults.weight,
+  };
+}
+
+function getRequestPriority(method: string, path: string): RestRequestPriority {
+  const normalizedMethod = method.toUpperCase();
+  const normalizedPath = path.toLowerCase();
+  if (/^\/interactions\/\d+\/[^/]+\/callback$/.test(normalizedPath)) {
+    return "critical";
+  }
+  return normalizedMethod === "GET" ? "background" : "standard";
 }

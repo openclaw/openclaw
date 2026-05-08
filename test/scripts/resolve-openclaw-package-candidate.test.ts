@@ -1,35 +1,43 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   parseArgs,
   readArtifactPackageCandidateMetadata,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
 
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
 describe("resolve-openclaw-package-candidate", () => {
   it("accepts only OpenClaw release package specs for npm candidates", () => {
     expect(() => validateOpenClawPackageSpec("openclaw@beta")).not.toThrow();
+    expect(() => validateOpenClawPackageSpec("openclaw@alpha")).not.toThrow();
     expect(() => validateOpenClawPackageSpec("openclaw@latest")).not.toThrow();
     expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27")).not.toThrow();
     expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27-1")).not.toThrow();
     expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27-beta.2")).not.toThrow();
+    expect(() => validateOpenClawPackageSpec("openclaw@2026.4.27-alpha.2")).not.toThrow();
 
     expect(() => validateOpenClawPackageSpec("@evil/openclaw@1.0.0")).toThrow(
-      "package_spec must be openclaw@beta",
+      "package_spec must be openclaw@alpha",
     );
     expect(() => validateOpenClawPackageSpec("openclaw@canary")).toThrow(
-      "package_spec must be openclaw@beta",
+      "package_spec must be openclaw@alpha",
     );
     expect(() => validateOpenClawPackageSpec("openclaw@2026.04.27")).toThrow(
-      "package_spec must be openclaw@beta",
+      "package_spec must be openclaw@alpha",
     );
     expect(() => validateOpenClawPackageSpec("openclaw@npm:other-package")).toThrow(
-      "package_spec must be openclaw@beta",
+      "package_spec must be openclaw@alpha",
     );
     expect(() => validateOpenClawPackageSpec("openclaw@file:../other-package.tgz")).toThrow(
-      "package_spec must be openclaw@beta",
+      "package_spec must be openclaw@alpha",
     );
   });
 
@@ -64,6 +72,7 @@ describe("resolve-openclaw-package-candidate", () => {
 
   it("reads package source metadata from package artifacts", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-"));
+    tempDirs.push(dir);
     await writeFile(
       path.join(dir, "package-candidate.json"),
       JSON.stringify(

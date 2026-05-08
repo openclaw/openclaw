@@ -251,6 +251,7 @@ export async function collectStatusScanOverview(params: {
           showSecrets: params.showSecrets,
           sourceConfig,
           includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
+          liveChannelStatus: channelsStatus,
         });
         params.progress?.tick();
         return { channelsStatus, channelIssues, channels };

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { readJsonIfExists, writeJson } from "./json-files.js";
 
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
@@ -75,6 +76,27 @@ export function isLegacyPluginDependencyInstallStagePath(relativePath: string): 
   );
 }
 
+function collectExcludedPackagedExtensionDirs(rootPackageJson: unknown): Set<string> {
+  if (!rootPackageJson || typeof rootPackageJson !== "object") {
+    return new Set();
+  }
+  const files = (rootPackageJson as { files?: unknown }).files;
+  if (!Array.isArray(files)) {
+    return new Set();
+  }
+  const excluded = new Set<string>();
+  for (const entry of files) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
+    if (match?.[1]) {
+      excluded.add(match[1]);
+    }
+  }
+  return excluded;
+}
+
 function isExternalizedBundledExtensionDistPath(
   relativePath: string,
   externalizedExtensionIds: ExternalizedBundledExtensionIds,
@@ -92,65 +114,11 @@ function isExternalizedBundledExtensionDistPath(
   );
 }
 
-function isPublishableExternalizedBundledManifest(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const openclaw = (value as { openclaw?: unknown }).openclaw;
-  if (!openclaw || typeof openclaw !== "object") {
-    return false;
-  }
-  const release = (openclaw as { release?: unknown }).release;
-  if (!release || typeof release !== "object") {
-    return false;
-  }
-  const bundle = (openclaw as { bundle?: unknown }).bundle;
-  if (
-    bundle &&
-    typeof bundle === "object" &&
-    (bundle as { includeInCore?: unknown }).includeInCore === true
-  ) {
-    return false;
-  }
-  const typedRelease = release as { publishToClawHub?: unknown; publishToNpm?: unknown };
-  return typedRelease.publishToNpm === true || typedRelease.publishToClawHub === true;
-}
-
 async function collectExternalizedBundledExtensionIds(
   packageRoot: string,
 ): Promise<ExternalizedBundledExtensionIds> {
-  const extensionsDir = path.join(packageRoot, "extensions");
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = await fs.readdir(extensionsDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return new Set();
-    }
-    throw error;
-  }
-
-  const ids = new Set<string>();
-  await Promise.all(
-    entries.map(async (entry) => {
-      if (!entry.isDirectory()) {
-        return;
-      }
-      const packageJsonPath = path.join(extensionsDir, entry.name, "package.json");
-      try {
-        const parsed = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as unknown;
-        if (isPublishableExternalizedBundledManifest(parsed)) {
-          ids.add(entry.name);
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return;
-        }
-        throw error;
-      }
-    }),
-  );
-  return ids;
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  return collectExcludedPackagedExtensionDirs(await readJsonIfExists<unknown>(packageJsonPath));
 }
 
 function isPackagedDistPath(
@@ -346,15 +314,16 @@ export async function writePackageDistInventory(packageRoot: string): Promise<st
     (left, right) => left.localeCompare(right),
   );
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  await fs.mkdir(path.dirname(inventoryPath), { recursive: true });
-  await fs.writeFile(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
+  await writeJson(inventoryPath, inventory, { trailingNewline: true });
   return inventory;
 }
 
-async function readPackageDistInventory(packageRoot: string): Promise<string[]> {
+async function readPackageDistInventoryOptional(packageRoot: string): Promise<string[] | null> {
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  const raw = await fs.readFile(inventoryPath, "utf8");
-  const parsed = JSON.parse(raw) as unknown;
+  const parsed = await readJsonIfExists<unknown>(inventoryPath);
+  if (parsed === null) {
+    return null;
+  }
   if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
     throw new Error(`Invalid package dist inventory at ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
   }
@@ -366,14 +335,7 @@ async function readPackageDistInventory(packageRoot: string): Promise<string[]> 
 export async function readPackageDistInventoryIfPresent(
   packageRoot: string,
 ): Promise<string[] | null> {
-  try {
-    return await readPackageDistInventory(packageRoot);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
+  return await readPackageDistInventoryOptional(packageRoot);
 }
 
 export async function collectPackageDistInventoryErrors(packageRoot: string): Promise<string[]> {

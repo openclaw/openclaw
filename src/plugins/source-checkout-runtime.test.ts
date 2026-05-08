@@ -1,27 +1,40 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setBundledPluginsDirOverrideForTest } from "./bundled-dir.js";
 import { loadOpenClawPlugins } from "./loader.js";
 
 describe("source checkout bundled plugin runtime", () => {
-  it("loads enabled bundled plugins from the pnpm workspace source tree", () => {
+  beforeEach(() => {
+    setBundledPluginsDirOverrideForTest(path.join(process.cwd(), "extensions"));
+  });
+
+  afterEach(() => {
+    setBundledPluginsDirOverrideForTest(undefined);
+  });
+
+  it("loads enabled bundled plugins from source checkout", () => {
     const registry = loadOpenClawPlugins({
       cache: false,
-      onlyPluginIds: ["twitch"],
+      onlyPluginIds: ["tokenjuice"],
       config: {
         plugins: {
           entries: {
-            twitch: { enabled: true },
+            tokenjuice: { enabled: true },
           },
         },
       },
     });
 
-    const twitch = registry.plugins.find((plugin) => plugin.id === "twitch");
-    expect(twitch).toMatchObject({
+    const tokenjuice = registry.plugins.find((plugin) => plugin.id === "tokenjuice");
+    expect(tokenjuice).toMatchObject({
       status: "loaded",
       origin: "bundled",
     });
-    expect(twitch?.source).toContain(`${path.sep}extensions${path.sep}twitch${path.sep}index.ts`);
-    expect(twitch?.rootDir).toContain(`${path.sep}extensions${path.sep}twitch`);
+
+    const expectedRuntime = `${path.sep}extensions${path.sep}tokenjuice${path.sep}index.ts`;
+    const expectedRoot = `${path.sep}extensions${path.sep}tokenjuice`;
+
+    expect(tokenjuice?.source).toContain(expectedRuntime);
+    expect(tokenjuice?.rootDir).toContain(expectedRoot);
   });
 });

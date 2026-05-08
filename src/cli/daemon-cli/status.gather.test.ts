@@ -3,16 +3,24 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 
 const callGatewayStatusProbe = vi.fn<
-  (opts?: unknown) => Promise<{ ok: boolean; url?: string; error?: string | null }>
+  (opts?: unknown) => Promise<{
+    ok: boolean;
+    url?: string;
+    error?: string | null;
+    server?: { version?: string | null; connId?: string | null };
+  }>
 >(async (_opts?: unknown) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
+  server: { version: "2026.5.6", connId: "conn-1" },
 }));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
@@ -27,6 +35,9 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   hints: [],
 }));
 const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
+const readGatewayRestartHandoffSync = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
+>(() => null);
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
 const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
@@ -136,6 +147,10 @@ vi.mock("../../infra/ports.js", () => ({
   formatPortDiagnostics: () => [],
 }));
 
+vi.mock("../../infra/restart-handoff.js", () => ({
+  readGatewayRestartHandoffSync: (env?: NodeJS.ProcessEnv) => readGatewayRestartHandoffSync(env),
+}));
+
 vi.mock("../../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: () => pickPrimaryTailnetIPv4(),
 }));
@@ -173,6 +188,7 @@ describe("gatherDaemonStatus", () => {
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
+    readGatewayRestartHandoffSync.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
     daemonLoadedConfig = {
@@ -212,6 +228,11 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.tlsEnabled).toBe(true);
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
+    expect(status.rpc?.server).toEqual({ version: "2026.5.6", connId: "conn-1" });
+    expect(status.cli?.version).toBe(VERSION);
+    if (process.argv[1]) {
+      expect(status.cli?.entrypoint).toBe(process.argv[1]);
+    }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 
@@ -367,6 +388,49 @@ describe("gatherDaemonStatus", () => {
       status: "running",
       detail: "19001",
     });
+  });
+
+  it("surfaces recent service restart handoffs only during deep status", async () => {
+    readGatewayRestartHandoffSync.mockReturnValueOnce({
+      kind: "gateway-supervisor-restart-handoff",
+      version: 1,
+      intentId: "intent-1",
+      pid: 12_345,
+      createdAt: 10_000,
+      expiresAt: 70_000,
+      reason: "plugin source changed",
+      source: "plugin-change",
+      restartKind: "full-process",
+      supervisorMode: "launchd",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: true,
+    });
+
+    expect(readGatewayRestartHandoffSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+      }),
+    );
+    expect(status.service.restartHandoff).toMatchObject({
+      reason: "plugin source changed",
+      restartKind: "full-process",
+      supervisorMode: "launchd",
+    });
+  });
+
+  it("does not read restart handoffs during normal status", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
   });
 
   it("uses the fast config path for plain same-file status reads", async () => {

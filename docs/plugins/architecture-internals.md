@@ -35,6 +35,11 @@ The safety gates happen **before** runtime execution. Candidates are blocked
 when the entry escapes the plugin root, the path is world-writable, or path
 ownership looks suspicious for non-bundled plugins.
 
+Blocked candidates remain tied to their plugin id for diagnostics. If config
+still references that id, validation reports the plugin as present but blocked
+and points back to the path-safety warning instead of treating the config entry
+as stale.
+
 ### Manifest-first behavior
 
 The manifest is the control-plane source of truth. OpenClaw uses it to:
@@ -63,6 +68,12 @@ to narrow plugin loading before broader registry materialization:
 - Gateway startup planning uses `activation.onStartup` for explicit startup
   imports and startup opt-outs; plugins without startup metadata load only
   through narrower activation triggers
+
+Request-time runtime preloads that ask for the broad `all` scope still derive an
+explicit effective plugin id set from config, startup planning, configured
+channels, slots, and auto-enable rules. If that derived set is empty, OpenClaw
+loads an empty runtime registry instead of widening to every discoverable
+plugin.
 
 The activation planner exposes both an ids-only API for existing callers and a
 plan API for new diagnostics. Plan entries report why a plugin was selected,

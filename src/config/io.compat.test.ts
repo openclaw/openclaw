@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
+import { normalizeCompatibilityConfigValues } from "../commands/doctor-legacy-config.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -109,6 +109,45 @@ describe("config io paths", () => {
     });
   });
 
+  it("hints at stale wrappers when config was written by a newer OpenClaw", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: { lastTouchedVersion: "9999.1.1" },
+            gateway: { mode: "local" },
+          },
+          null,
+          2,
+        ),
+      );
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const io = createConfigIO({
+        configPath,
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+      io.loadConfig();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("stale PATH or global wrappers"),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("command -v openclaw"));
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw --version"));
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw gateway status --deep"),
+      );
+    });
+  });
+
   it("normalizes safe-bin config entries at config load time", async () => {
     const cfg = {
       tools: {
@@ -155,7 +194,7 @@ describe("config io paths", () => {
   });
 
   it("moves WhatsApp shared access defaults into accounts.default during runtime compat", () => {
-    const migrated = applyRuntimeLegacyConfigMigrations({
+    const migrated = normalizeCompatibilityConfigValues({
       channels: {
         whatsapp: {
           enabled: true,
@@ -171,9 +210,8 @@ describe("config io paths", () => {
           },
         },
       },
-    });
-    const next = migrated.next as OpenClawConfig | null;
-    expect(next?.channels?.whatsapp?.accounts?.default).toMatchObject({
+    } as OpenClawConfig);
+    expect(migrated.config.channels?.whatsapp?.accounts?.default).toMatchObject({
       dmPolicy: "allowlist",
       allowFrom: ["+15550001111"],
       groupPolicy: "open",

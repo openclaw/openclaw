@@ -6,6 +6,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
+  type ProviderRuntimePluginHandle,
   resolveProviderExtraParamsForTransport as resolveProviderExtraParamsForTransportRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
@@ -21,6 +22,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAICompletionsToolsCompatWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "./openai-stream-wrappers.js";
@@ -38,6 +40,8 @@ const providerRuntimeDeps = {
   ...defaultProviderRuntimeDeps,
 };
 
+let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
+
 export const __testing = {
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
@@ -51,6 +55,7 @@ export const __testing = {
       deps?.wrapProviderStreamFn ?? defaultProviderRuntimeDeps.wrapProviderStreamFn;
   },
   resetProviderRuntimeDepsForTest(): void {
+    clearPreparedExtraParamsCache();
     providerRuntimeDeps.prepareProviderExtraParams =
       defaultProviderRuntimeDeps.prepareProviderExtraParams;
     providerRuntimeDeps.resolveProviderExtraParamsForTransport =
@@ -113,6 +118,9 @@ export function resolveExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
+  if (params.provider === "openrouter") {
+    canonicalizeOpenRouterResponseCacheParams(merged, [defaultParams, globalParams, agentParams]);
+  }
 
   applyDefaultOpenAIGptRuntimeParams(params, merged);
 
@@ -134,6 +142,60 @@ function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean
   return Object.hasOwn(settings, "transport");
 }
 
+function clearPreparedExtraParamsCache(): void {
+  preparedExtraParamsCache = new WeakMap();
+}
+
+function fingerprintPreparedExtraParamsModel(model?: ProviderRuntimeModel): unknown {
+  if (!model) {
+    return null;
+  }
+  const record = model as unknown as Record<string, unknown>;
+  return {
+    api: model.api,
+    provider: model.provider,
+    id: model.id,
+    name: model.name,
+    baseUrl: model.baseUrl,
+    reasoning: model.reasoning,
+    input: model.input,
+    cost: model.cost,
+    compat: record.compat ?? null,
+    contextWindow: model.contextWindow,
+    contextTokens: model.contextTokens ?? null,
+    headers: record.headers ?? null,
+    maxTokens: model.maxTokens,
+    params: model.params ?? null,
+    requestTimeoutMs: model.requestTimeoutMs ?? null,
+  };
+}
+
+function resolvePreparedExtraParamsCacheKey(params: {
+  provider: string;
+  modelId: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  extraParamsOverride?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+  agentId?: string;
+  resolvedExtraParams?: Record<string, unknown>;
+  model?: ProviderRuntimeModel;
+  resolvedTransport?: SupportedTransport;
+}): string {
+  return JSON.stringify({
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId ?? "",
+    agentDir: params.agentDir ?? "",
+    workspaceDir: params.workspaceDir ?? "",
+    thinkingLevel: params.thinkingLevel ?? "",
+    resolvedTransport: params.resolvedTransport ?? "",
+    extraParamsOverride: params.extraParamsOverride ?? null,
+    resolvedExtraParams: params.resolvedExtraParams ?? null,
+    model: fingerprintPreparedExtraParamsModel(params.model),
+  });
+}
+
 export function resolvePreparedExtraParams(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -146,6 +208,7 @@ export function resolvePreparedExtraParams(params: {
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
   resolvedTransport?: SupportedTransport;
+  providerRuntimeHandle?: ProviderRuntimePluginHandle;
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -176,11 +239,23 @@ export function resolvePreparedExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
+  if (params.provider === "openrouter") {
+    canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
+  }
+  const cfg = params.cfg;
+  const cacheKey = cfg ? resolvePreparedExtraParamsCacheKey(params) : undefined;
+  if (cacheKey) {
+    const cached = preparedExtraParamsCache.get(cfg!)?.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const prepared =
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
+      runtimeHandle: params.providerRuntimeHandle,
       context: {
         config: params.cfg,
         agentDir: params.agentDir,
@@ -195,6 +270,7 @@ export function resolvePreparedExtraParams(params: {
     provider: params.provider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    runtimeHandle: params.providerRuntimeHandle,
     context: {
       config: params.cfg,
       agentDir: params.agentDir,
@@ -207,7 +283,16 @@ export function resolvePreparedExtraParams(params: {
       transport: params.resolvedTransport ?? resolveSupportedTransport(prepared.transport),
     },
   })?.patch;
-  return transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  const result = transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  if (cacheKey) {
+    let bucket = preparedExtraParamsCache.get(cfg!);
+    if (!bucket) {
+      bucket = new Map();
+      preparedExtraParamsCache.set(cfg!, bucket);
+    }
+    bucket.set(cacheKey, result);
+  }
+  return result;
 }
 
 function sanitizeExtraParamsRecord(
@@ -359,21 +444,74 @@ function resolveAliasedParamValue(
   snakeCaseKey: string,
   camelCaseKey: string,
 ): unknown {
+  return resolveAliasedParamValueFromKeys(sources, [snakeCaseKey, camelCaseKey]);
+}
+
+function resolveAliasedParamValueFromKeys(
+  sources: Array<Record<string, unknown> | undefined>,
+  keys: readonly string[],
+): unknown {
   let resolved: unknown = undefined;
   let seen = false;
   for (const source of sources) {
     if (!source) {
       continue;
     }
-    const hasSnakeCaseKey = Object.hasOwn(source, snakeCaseKey);
-    const hasCamelCaseKey = Object.hasOwn(source, camelCaseKey);
-    if (!hasSnakeCaseKey && !hasCamelCaseKey) {
-      continue;
+    for (const key of keys) {
+      if (!Object.hasOwn(source, key)) {
+        continue;
+      }
+      resolved = source[key];
+      seen = true;
+      break;
     }
-    resolved = hasSnakeCaseKey ? source[snakeCaseKey] : source[camelCaseKey];
-    seen = true;
   }
   return seen ? resolved : undefined;
+}
+
+function applyCanonicalAliasedParamValue(params: {
+  merged: Record<string, unknown>;
+  sources: Array<Record<string, unknown> | undefined>;
+  keys: readonly string[];
+  canonicalKey: string;
+}): void {
+  const resolved = resolveAliasedParamValueFromKeys(params.sources, params.keys);
+  if (resolved === undefined) {
+    return;
+  }
+  for (const key of params.keys) {
+    delete params.merged[key];
+  }
+  params.merged[params.canonicalKey] = resolved;
+}
+
+function canonicalizeOpenRouterResponseCacheParams(
+  merged: Record<string, unknown>,
+  sources: Array<Record<string, unknown> | undefined>,
+): void {
+  applyCanonicalAliasedParamValue({
+    merged,
+    sources,
+    keys: ["responseCache", "response_cache"],
+    canonicalKey: "responseCache",
+  });
+  applyCanonicalAliasedParamValue({
+    merged,
+    sources,
+    keys: [
+      "responseCacheTtlSeconds",
+      "response_cache_ttl_seconds",
+      "responseCacheTtl",
+      "response_cache_ttl",
+    ],
+    canonicalKey: "responseCacheTtlSeconds",
+  });
+  applyCanonicalAliasedParamValue({
+    merged,
+    sources,
+    keys: ["responseCacheClear", "response_cache_clear"],
+    canonicalKey: "responseCacheClear",
+  });
 }
 
 function createParallelToolCallsWrapper(
@@ -554,6 +692,7 @@ function applyPostPluginStreamWrappers(
 ): void {
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
+  ctx.agent.streamFn = createOpenAICompletionsToolsCompatWrapper(ctx.agent.streamFn);
 
   if (!ctx.providerWrapperHandled) {
     // Guard Google-family payloads against invalid negative thinking budgets

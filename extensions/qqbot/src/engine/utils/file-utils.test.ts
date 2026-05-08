@@ -13,7 +13,31 @@ vi.mock("../adapter/index.js", () => ({
   }),
 }));
 
-import { QQBOT_MEDIA_SSRF_POLICY, downloadFile } from "./file-utils.js";
+import {
+  QQBOT_MEDIA_SSRF_POLICY,
+  checkFileSize,
+  downloadFile,
+  fileExistsAsync,
+  getImageMimeType,
+  getMimeType,
+  readFileAsync,
+} from "./file-utils.js";
+
+describe("qqbot file-utils MIME helpers", () => {
+  it("uses the shared media MIME table for extension inference", () => {
+    expect(getMimeType("voice.mp3")).toBe("audio/mpeg");
+    expect(getMimeType("clip.webm")).toBe("video/webm");
+    expect(getMimeType("clip.avi")).toBe("video/x-msvideo");
+    expect(getMimeType("clip.mkv")).toBe("video/x-matroska");
+    expect(getMimeType("archive.unknown")).toBe("application/octet-stream");
+  });
+
+  it("keeps the image-only gate for image MIME inference", () => {
+    expect(getImageMimeType("photo.PNG")).toBe("image/png");
+    expect(getImageMimeType("clip.webm")).toBeNull();
+    expect(getImageMimeType("archive.unknown")).toBeNull();
+  });
+});
 
 describe("qqbot file-utils downloadFile", () => {
   let tempDir: string;
@@ -68,5 +92,16 @@ describe("qqbot file-utils downloadFile", () => {
 
     expect(savedPath).toBeNull();
     expect(adapterMocks.fetchMedia).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === "win32")("rejects symlinked local media helpers", async () => {
+    const targetPath = path.join(tempDir, "target.png");
+    const linkPath = path.join(tempDir, "link.png");
+    await fs.promises.writeFile(targetPath, "image-bytes");
+    await fs.promises.symlink(targetPath, linkPath);
+
+    expect(checkFileSize(linkPath).ok).toBe(false);
+    await expect(readFileAsync(linkPath)).rejects.toThrow();
+    await expect(fileExistsAsync(linkPath)).resolves.toBe(false);
   });
 });

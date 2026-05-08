@@ -1,7 +1,9 @@
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   Client,
@@ -14,7 +16,7 @@ import {
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { VoicePlugin } from "../internal/voice.js";
 import { parseApplicationIdFromToken } from "../probe.js";
-import { createDiscordRequestClient, DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
+import { DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import type { DiscordDmPolicy } from "./dm-command-auth.js";
@@ -86,7 +88,7 @@ export async function createDiscordMonitorClient(params: {
   accountId: string;
   applicationId: string;
   token: string;
-  proxyFetch?: typeof fetch;
+  restFetch?: typeof fetch;
   commands: BaseCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
@@ -136,10 +138,16 @@ export async function createDiscordMonitorClient(params: {
       publicKey: "a",
       token: params.token,
       autoDeploy: false,
+      commandDeployHashStorePath: path.join(
+        resolveStateDir(process.env),
+        "discord",
+        "command-deploy-cache.json",
+      ),
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
         runtimeProfile: "persistent",
         maxQueueSize: 1000,
+        ...(params.restFetch ? { fetch: params.restFetch } : {}),
       },
       eventQueue: eventQueueOpts,
     },
@@ -153,14 +161,6 @@ export async function createDiscordMonitorClient(params: {
   );
   if (voicePlugin) {
     registerLatePlugin(client, voicePlugin);
-  }
-  if (params.proxyFetch) {
-    client.rest = createDiscordRequestClient(params.token, {
-      fetch: params.proxyFetch,
-      timeout: DISCORD_REST_TIMEOUT_MS,
-      runtimeProfile: "persistent",
-      maxQueueSize: 1000,
-    });
   }
   const gateway = client.getPlugin<GatewayPlugin>("gateway") as MutableDiscordGateway | undefined;
   await waitForDiscordGatewayPluginRegistration(gateway);

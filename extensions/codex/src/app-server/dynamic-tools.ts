@@ -6,6 +6,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   HEARTBEAT_RESPONSE_TOOL_NAME,
+  type EmbeddedRunAttemptParams,
   isToolWrappedWithBeforeToolCallHook,
   isMessagingTool,
   isMessagingToolSendAction,
@@ -16,6 +17,7 @@ import {
   type MessagingToolSend,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexDynamicToolsLoading } from "./config.js";
 import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexDynamicToolCallParams,
@@ -23,6 +25,16 @@ import {
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
+
+type CodexDynamicToolHookContext = {
+  agentId?: string;
+  config?: EmbeddedRunAttemptParams["config"];
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
 export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
@@ -42,16 +54,18 @@ export type CodexDynamicToolBridge = {
   };
 };
 
+export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+
+const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
+
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   signal: AbortSignal;
-  hookContext?: {
-    agentId?: string;
-    sessionId?: string;
-    sessionKey?: string;
-    runId?: string;
-  };
+  hookContext?: CodexDynamicToolHookContext;
+  loading?: CodexDynamicToolsLoading;
+  directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
+  const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const tools = params.tools.map((tool) =>
     isToolWrappedWithBeforeToolCallHook(tool)
       ? tool
@@ -68,18 +82,23 @@ export function createCodexDynamicToolBridge(params: {
   };
   const middlewareRunner = createAgentToolResultMiddlewareRunner({
     runtime: "codex",
-    ...params.hookContext,
+    ...toolResultHookContext,
   });
-  const legacyExtensionRunner = createCodexAppServerToolResultExtensionRunner(
-    params.hookContext ?? {},
-  );
+  const legacyExtensionRunner =
+    createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
+  const directToolNames = new Set([
+    ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
+    ...(params.directToolNames ?? []),
+  ]);
 
   return {
-    specs: tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: toJsonValue(tool.parameters),
-    })),
+    specs: tools.map((tool) =>
+      createCodexDynamicToolSpec({
+        tool,
+        loading: params.loading ?? "searchable",
+        directToolNames,
+      }),
+    ),
     telemetry,
     handleToolCall: async (call, options) => {
       const tool = toolMap.get(call.tool);
@@ -113,28 +132,29 @@ export function createCodexDynamicToolBridge(params: {
           args,
           result: middlewareResult,
         });
+        const resultIsError = rawIsError || isToolResultError(result);
         collectToolTelemetry({
           toolName: tool.name,
           args,
           result,
           mediaTrustResult: rawResult,
           telemetry,
-          isError: rawIsError || isToolResultError(result),
+          isError: resultIsError,
         });
         void runAgentHarnessAfterToolCallHook({
           toolName: tool.name,
           toolCallId: call.callId,
-          runId: params.hookContext?.runId,
-          agentId: params.hookContext?.agentId,
-          sessionId: params.hookContext?.sessionId,
-          sessionKey: params.hookContext?.sessionKey,
+          runId: toolResultHookContext.runId,
+          agentId: toolResultHookContext.agentId,
+          sessionId: toolResultHookContext.sessionId,
+          sessionKey: toolResultHookContext.sessionKey,
           startArgs: args,
           result,
           startedAt,
         });
         return {
           contentItems: result.content.flatMap(convertToolContent),
-          success: true,
+          success: !resultIsError,
         };
       } catch (error) {
         collectToolTelemetry({
@@ -147,10 +167,10 @@ export function createCodexDynamicToolBridge(params: {
         void runAgentHarnessAfterToolCallHook({
           toolName: tool.name,
           toolCallId: call.callId,
-          runId: params.hookContext?.runId,
-          agentId: params.hookContext?.agentId,
-          sessionId: params.hookContext?.sessionId,
-          sessionKey: params.hookContext?.sessionKey,
+          runId: toolResultHookContext.runId,
+          agentId: toolResultHookContext.agentId,
+          sessionId: toolResultHookContext.sessionId,
+          sessionKey: toolResultHookContext.sessionKey,
           startArgs: args,
           error: error instanceof Error ? error.message : String(error),
           startedAt,
@@ -166,6 +186,38 @@ export function createCodexDynamicToolBridge(params: {
         };
       }
     },
+  };
+}
+
+function createCodexDynamicToolSpec(params: {
+  tool: AnyAgentTool;
+  loading: CodexDynamicToolsLoading;
+  directToolNames: ReadonlySet<string>;
+}): CodexDynamicToolSpec {
+  const base = {
+    name: params.tool.name,
+    description: params.tool.description,
+    inputSchema: toJsonValue(params.tool.parameters),
+  };
+  if (params.loading === "direct" || params.directToolNames.has(params.tool.name)) {
+    return base;
+  }
+  return {
+    ...base,
+    namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+    deferLoading: true,
+  };
+}
+
+function toToolResultHookContext(
+  ctx: CodexDynamicToolHookContext | undefined,
+): CodexToolResultHookContext {
+  const { agentId, sessionId, sessionKey, runId } = ctx ?? {};
+  return {
+    ...(agentId && { agentId }),
+    ...(sessionId && { sessionId }),
+    ...(sessionKey && { sessionKey }),
+    ...(runId && { runId }),
   };
 }
 
@@ -231,13 +283,16 @@ function collectToolTelemetry(params: {
   if (text) {
     params.telemetry.messagingToolSentTexts.push(text);
   }
-  params.telemetry.messagingToolSentMediaUrls.push(...collectMediaUrls(params.args));
+  const mediaUrls = collectMediaUrls(params.args);
+  params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
   params.telemetry.messagingToolSentTargets.push({
     tool: params.toolName,
     provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
     accountId: readFirstString(params.args, ["accountId", "account_id"]),
     to: readFirstString(params.args, ["to", "target", "recipient"]),
     threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
+    ...(text ? { text } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
   });
 }
 

@@ -5,7 +5,6 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
@@ -24,8 +23,6 @@ import {
   startConnectedServerWithClient,
   startGatewayServer,
   startServerWithClient,
-  testState,
-  testTailnetIPv4,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
@@ -518,7 +515,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view includes auth-backed provider catalog entries", async () => {
+  test("models.list configured view does not run runtime discovery without a read-only catalog", async () => {
     await withEnvAsync(
       {
         ANTHROPIC_API_KEY: undefined,
@@ -528,21 +525,11 @@ describe("gateway server models + voicewake", () => {
       async () => {
         await withModelsConfig({}, async () => {
           await seedPiCatalog();
+          const discoverCallsBefore = piSdkMock.discoverCalls;
           const res = await listModels({ view: "configured" });
           expect(res.ok).toBe(true);
-          expect(res.payload?.models).toEqual([
-            {
-              id: "gpt-test-a",
-              name: "A-Model",
-              provider: "openai",
-              contextWindow: 8000,
-            },
-            {
-              id: "gpt-test-z",
-              name: "gpt-test-z",
-              provider: "openai",
-            },
-          ]);
+          expect(res.payload?.models).toEqual([]);
+          expect(piSdkMock.discoverCalls).toBe(discoverCallsBefore);
         });
       },
     );
@@ -654,9 +641,8 @@ describe("gateway server models + voicewake", () => {
       expected: [
         {
           id: "claude-test-a",
-          name: "A-Model",
+          name: "claude-test-a",
           provider: "anthropic",
-          contextWindow: 200_000,
         },
         {
           id: "gpt-test-z",
@@ -780,24 +766,6 @@ describe("gateway server models + voicewake", () => {
 });
 
 describe("gateway server misc", () => {
-  test("hello-ok advertises the gateway port for canvas host", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "secret" }, async () => {
-      testTailnetIPv4.value = "100.64.0.1";
-      testState.gatewayBind = "lan";
-      const canvasPort = await getFreePort();
-      testState.canvasHostPort = canvasPort;
-      await withEnvAsync({ OPENCLAW_CANVAS_HOST_PORT: String(canvasPort) }, async () => {
-        const testPort = await getFreePort();
-        const canvasHostUrl = resolveCanvasHostUrl({
-          canvasPort,
-          requestHost: `100.64.0.1:${testPort}`,
-          localAddress: "127.0.0.1",
-        });
-        expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
-      });
-    });
-  });
-
   test("send dedupes by idempotencyKey", { timeout: 15_000 }, async () => {
     let dedicatedServer: Awaited<ReturnType<typeof startServerWithClient>>["server"] | undefined;
     let dedicatedWs: WebSocket | undefined;

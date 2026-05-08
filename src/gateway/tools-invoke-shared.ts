@@ -183,6 +183,9 @@ export async function invokeGatewayTool(params: {
     }
   }
 
+  const knownCoreTool = isKnownCoreToolId(toolName);
+  const gatewayRequestedTools = knownCoreTool ? [] : [toolName];
+
   const action = normalizeOptionalString(params.input.action);
   const argsRaw = params.input.args;
   const args =
@@ -203,9 +206,9 @@ export async function invokeGatewayTool(params: {
       surface: "http",
       disablePluginTools,
       senderIsOwner: params.senderIsOwner,
+      gatewayRequestedTools,
     });
 
-  const knownCoreTool = isKnownCoreToolId(toolName);
   let { agentId, tools } = resolveTools(knownCoreTool);
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools } = resolveTools(false));
@@ -251,6 +254,7 @@ export async function invokeGatewayTool(params: {
       toolCallId,
       ctx: {
         agentId,
+        config: params.cfg,
         sessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },

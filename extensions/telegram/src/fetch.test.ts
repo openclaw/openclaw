@@ -787,8 +787,11 @@ describe("resolveTelegramFetch", () => {
     );
   });
 
-  it("retries once and then keeps sticky IPv4 dispatcher for subsequent requests", async () => {
-    primeStickyFallbackRetry("ETIMEDOUT");
+  it("retries once, keeps sticky IPv4, then recovers to primary dispatcher", async () => {
+    undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"));
+    for (let i = 0; i < 7; i += 1) {
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    }
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
       network: {
@@ -797,20 +800,30 @@ describe("resolveTelegramFetch", () => {
     });
 
     await resolved("https://api.telegram.org/botx/sendMessage");
-    await resolved("https://api.telegram.org/botx/sendChatAction");
+    for (let i = 0; i < 4; i += 1) {
+      await resolved(`https://api.telegram.org/botx/sendChatAction?sticky=${i}`);
+    }
+    await resolved("https://api.telegram.org/botx/getMe");
+    await resolved("https://api.telegram.org/botx/deleteWebhook");
 
-    expect(undiciFetch).toHaveBeenCalledTimes(3);
+    expect(undiciFetch).toHaveBeenCalledTimes(8);
 
     const firstDispatcher = getDispatcherFromUndiciCall(1);
     const secondDispatcher = getDispatcherFromUndiciCall(2);
-    const thirdDispatcher = getDispatcherFromUndiciCall(3);
+    const sixthDispatcher = getDispatcherFromUndiciCall(6);
+    const seventhDispatcher = getDispatcherFromUndiciCall(7);
+    const eighthDispatcher = getDispatcherFromUndiciCall(8);
 
     expect(firstDispatcher).toBeDefined();
     expect(secondDispatcher).toBeDefined();
-    expect(thirdDispatcher).toBeDefined();
+    expect(sixthDispatcher).toBeDefined();
+    expect(seventhDispatcher).toBeDefined();
+    expect(eighthDispatcher).toBeDefined();
 
     expect(firstDispatcher).not.toBe(secondDispatcher);
-    expect(secondDispatcher).toBe(thirdDispatcher);
+    expect(secondDispatcher).toBe(sixthDispatcher);
+    expect(seventhDispatcher).toBe(firstDispatcher);
+    expect(eighthDispatcher).toBe(firstDispatcher);
 
     expectStickyAutoSelectDispatcher(firstDispatcher);
     expect(secondDispatcher?.options?.connect).toEqual(
@@ -822,17 +835,21 @@ describe("resolveTelegramFetch", () => {
     expect(loggerDebug).toHaveBeenCalledWith(
       expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
     );
+    expect(loggerDebug).toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: recovered from attempt 1 to attempt 0"),
+    );
     expect(loggerWarn).not.toHaveBeenCalledWith(
       expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
     );
   });
 
-  it("escalates from IPv4 fallback to pinned Telegram IP and keeps it sticky", async () => {
+  it("escalates from IPv4 fallback to pinned Telegram IP and recovers to primary", async () => {
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
-      .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))
-      .mockResolvedValueOnce({ ok: true } as Response)
-      .mockResolvedValueOnce({ ok: true } as Response);
+      .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"));
+    for (let i = 0; i < 7; i += 1) {
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    }
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
       network: {
@@ -842,19 +859,71 @@ describe("resolveTelegramFetch", () => {
     });
 
     await resolved("https://api.telegram.org/botx/sendMessage");
-    await resolved("https://api.telegram.org/botx/sendChatAction");
+    for (let i = 0; i < 4; i += 1) {
+      await resolved(`https://api.telegram.org/botx/sendChatAction?sticky=${i}`);
+    }
+    await resolved("https://api.telegram.org/botx/getMe");
+    await resolved("https://api.telegram.org/botx/deleteWebhook");
 
-    expect(undiciFetch).toHaveBeenCalledTimes(4);
+    expect(undiciFetch).toHaveBeenCalledTimes(9);
 
+    const firstDispatcher = getDispatcherFromUndiciCall(1);
     const secondDispatcher = getDispatcherFromUndiciCall(2);
     const thirdDispatcher = getDispatcherFromUndiciCall(3);
-    const fourthDispatcher = getDispatcherFromUndiciCall(4);
+    const seventhDispatcher = getDispatcherFromUndiciCall(7);
+    const eighthDispatcher = getDispatcherFromUndiciCall(8);
+    const ninthDispatcher = getDispatcherFromUndiciCall(9);
 
     expect(secondDispatcher).not.toBe(thirdDispatcher);
-    expect(thirdDispatcher).toBe(fourthDispatcher);
+    expect(thirdDispatcher).toBe(seventhDispatcher);
+    expect(eighthDispatcher).toBe(firstDispatcher);
+    expect(ninthDispatcher).toBe(firstDispatcher);
     expectPinnedFallbackIpDispatcher(3);
     expect(loggerWarn).toHaveBeenCalledWith(
       expect.stringContaining("fetch fallback: DNS-resolved IP unreachable"),
+    );
+    expect(loggerDebug).toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: recovered from attempt 2 to attempt 0"),
+    );
+  });
+
+  it("keeps sticky fallback after a failed primary recovery probe", async () => {
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/sendMessage");
+    for (let i = 0; i < 4; i += 1) {
+      await resolved(`https://api.telegram.org/botx/sendChatAction?sticky=${i}`);
+    }
+    await resolved("https://api.telegram.org/botx/getMe");
+    await resolved("https://api.telegram.org/botx/deleteWebhook");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(9);
+
+    const firstDispatcher = getDispatcherFromUndiciCall(1);
+    const secondDispatcher = getDispatcherFromUndiciCall(2);
+
+    expect(firstDispatcher).not.toBe(secondDispatcher);
+    expect(getDispatcherFromUndiciCall(6)).toBe(secondDispatcher);
+    expect(getDispatcherFromUndiciCall(7)).toBe(firstDispatcher);
+    expect(getDispatcherFromUndiciCall(8)).toBe(secondDispatcher);
+    expect(getDispatcherFromUndiciCall(9)).toBe(secondDispatcher);
+    expect(loggerDebug).toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: re-probing primary dispatcher"),
     );
   });
 

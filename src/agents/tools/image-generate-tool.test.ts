@@ -8,6 +8,40 @@ let webMedia: typeof import("../../media/web-media.js");
 let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
 let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
 
+const GENERATION_PROVIDER_ENV_VARS = [
+  "BYTEPLUS_API_KEY",
+  "COMFY_API_KEY",
+  "COMFY_CLOUD_API_KEY",
+  "DASHSCOPE_API_KEY",
+  "DEEPINFRA_API_KEY",
+  "FAL_API_KEY",
+  "FAL_KEY",
+  "GCLOUD_PROJECT",
+  "GEMINI_API_KEY",
+  "GEMINI_API_KEYS",
+  "GOOGLE_API_KEY",
+  "GOOGLE_API_KEYS",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_API_KEY",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_CLOUD_PROJECT",
+  "LITELLM_API_KEY",
+  "MINIMAX_API_KEY",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+  "MODELSTUDIO_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
+  "OPENROUTER_API_KEY",
+  "QWEN_API_KEY",
+  "RUNWAY_API_KEY",
+  "RUNWAYML_API_SECRET",
+  "TOGETHER_API_KEY",
+  "VYDRA_API_KEY",
+  "XAI_API_KEY",
+];
+
 function hasStubbedImageProviderAuth(providerId: string): boolean {
   if (providerId === "openai") {
     return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.OPENAI_API_KEYS?.trim());
@@ -217,12 +251,9 @@ describe("createImageGenerateTool", () => {
   });
 
   beforeEach(() => {
-    vi.stubEnv("OPENAI_API_KEY", "");
-    vi.stubEnv("OPENAI_API_KEYS", "");
-    vi.stubEnv("GEMINI_API_KEY", "");
-    vi.stubEnv("GEMINI_API_KEYS", "");
-    vi.stubEnv("GOOGLE_API_KEY", "");
-    vi.stubEnv("GOOGLE_API_KEYS", "");
+    for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
+      vi.stubEnv(envVar, "");
+    }
   });
 
   afterEach(() => {
@@ -317,6 +348,29 @@ describe("createImageGenerateTool", () => {
       primary: "openai/gpt-image-1",
     });
     expect(createImageGenerateTool({ config: {} })).not.toBeNull();
+  });
+
+  it("does not load runtime providers while resolving an explicitly configured model", () => {
+    const listProviders = vi
+      .spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders")
+      .mockImplementation(() => {
+        throw new Error("runtime provider list should not run for explicit image model config");
+      });
+
+    expect(
+      resolveImageGenerationModelConfigForTool({
+        cfg: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({ primary: "openai/gpt-image-1" });
+    expect(listProviders).not.toHaveBeenCalled();
   });
 
   it("infers the canonical OpenAI image model from provider readiness without explicit config", () => {
@@ -1099,6 +1153,7 @@ describe("createImageGenerateTool", () => {
 
     expect(generateImage).toHaveBeenCalledWith(
       expect.objectContaining({
+        autoProviderFallback: false,
         aspectRatio: "16:9",
         inputImages: expect.arrayContaining([
           expect.objectContaining({ buffer: Buffer.from("input-image"), mimeType: "image/png" }),
@@ -1455,6 +1510,31 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-fal-edit", {
         prompt: "combine",
+        images: ["./fixtures/a.png", "./fixtures/b.png"],
+      }),
+    ).rejects.toThrow("fal edit supports at most 1 reference image");
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("uses registered provider metadata for slash-containing model overrides", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider(),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
+      workspaceDir: process.cwd(),
+    });
+
+    await expect(
+      tool.execute("call-fal-model-only-edit", {
+        prompt: "combine",
+        model: "fal-ai/flux/dev",
         images: ["./fixtures/a.png", "./fixtures/b.png"],
       }),
     ).rejects.toThrow("fal edit supports at most 1 reference image");

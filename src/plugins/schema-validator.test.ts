@@ -65,6 +65,29 @@ function expectUriValidationCase(params: {
 
 describe("schema validator", () => {
   it("can apply JSON Schema defaults while validating", () => {
+    const value = {};
+    const result = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.defaults.clone",
+      schema: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+            default: "auto",
+          },
+        },
+        additionalProperties: false,
+      },
+      value,
+      applyDefaults: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({ mode: "auto" });
+      expect(result.value).not.toBe(value);
+    }
+    expect(value).toEqual({});
+
     expectSuccessfulValidationValue({
       input: {
         cacheKey: "schema-validator.test.defaults",
@@ -83,6 +106,74 @@ describe("schema validator", () => {
       },
       expectedValue: { mode: "auto" },
     });
+  });
+
+  it("does not clone values when default application has no defaults to inject", () => {
+    const value = { mode: "manual" };
+    const result = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.defaults.no-clone",
+      schema: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+          },
+        },
+        additionalProperties: false,
+      },
+      value,
+      applyDefaults: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toBe(value);
+    }
+  });
+
+  it("recompiles when a stable cache key receives a different schema shape", () => {
+    const cacheKey = "schema-validator.test.cache-key-drift";
+    expectValidationSuccess({
+      cacheKey,
+      schema: { type: "string" },
+      value: "ok",
+    });
+
+    const result = expectValidationFailure({
+      cacheKey,
+      schema: { type: "number" },
+      value: "not-a-number",
+    });
+    expectValidationIssue(result, "<root>");
+  });
+
+  it("can isolate caller schemas that reuse the same $id with different shapes", () => {
+    const first = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.same-id.uncached",
+      schema: {
+        $id: "https://example.test/shared-schema",
+        type: "object",
+        properties: { foo: { type: "string" } },
+        required: ["foo"],
+        additionalProperties: false,
+      },
+      value: { foo: "ok" },
+      cache: false,
+    });
+    expect(first.ok).toBe(true);
+
+    const second = validateJsonSchemaValue({
+      cacheKey: "schema-validator.test.same-id.uncached",
+      schema: {
+        $id: "https://example.test/shared-schema",
+        type: "object",
+        properties: { bar: { type: "number" } },
+        required: ["bar"],
+        additionalProperties: false,
+      },
+      value: { bar: 1 },
+      cache: false,
+    });
+    expect(second.ok).toBe(true);
   });
 
   it.each([

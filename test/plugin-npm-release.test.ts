@@ -134,7 +134,7 @@ describe("collectPublishablePluginPackageErrors", () => {
       'package name must start with "@openclaw/"; found "broken".',
       "package.json private must not be true.",
       `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
-      'package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "latest".',
+      'package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
       "openclaw.install.npmSpec must be a non-empty string for publishable plugins.",
     ]);
@@ -313,6 +313,37 @@ describe("collectPublishablePluginPackages", () => {
         extensionIds: [],
       }),
     ).toEqual([]);
+  });
+
+  it("publishes alpha plugin packages to the alpha dist-tag", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10-alpha.1",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(collectPublishablePluginPackages(repoDir)).toEqual([
+      expect.objectContaining({
+        channel: "alpha",
+        packageName: "@openclaw/demo-plugin",
+        publishTag: "alpha",
+        version: "2026.4.10-alpha.1",
+      }),
+    ]);
   });
 });
 

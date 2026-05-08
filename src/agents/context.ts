@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -156,6 +156,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "hooks",
   "logs",
   "memory",
+  "message",
   "models",
   "pairing",
   "plugins",
@@ -239,7 +240,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
     try {
       const { discoverAuthStorage, discoverModels } =
         await import("./pi-model-discovery-runtime.js");
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir, {
         normalizeModels: false,
@@ -268,10 +269,13 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
 export function lookupContextTokens(
   modelId?: string,
-  options?: { allowAsyncLoad?: boolean },
+  options?: { allowAsyncLoad?: boolean; skipRuntimeConfigLoad?: boolean },
 ): number | undefined {
   if (!modelId) {
     return undefined;
+  }
+  if (options?.skipRuntimeConfigLoad) {
+    return lookupCachedContextTokens(modelId);
   }
   if (options?.allowAsyncLoad === false) {
     // Read-only callers still need synchronous config-backed overrides, but they
@@ -514,7 +518,10 @@ export function resolveContextTokensForModel(params: {
   if (params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      { allowAsyncLoad: params.allowAsyncLoad },
+      {
+        allowAsyncLoad: params.allowAsyncLoad,
+        skipRuntimeConfigLoad: Boolean(params.cfg),
+      },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;
@@ -525,6 +532,7 @@ export function resolveContextTokensForModel(params: {
   // (e.g. "google/gemini-2.5-pro") this IS the raw discovery cache key.
   const bareResult = lookupContextTokens(params.model, {
     allowAsyncLoad: params.allowAsyncLoad,
+    skipRuntimeConfigLoad: Boolean(params.cfg),
   });
   if (bareResult !== undefined) {
     return bareResult;
@@ -536,7 +544,10 @@ export function resolveContextTokensForModel(params: {
   if (!params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      { allowAsyncLoad: params.allowAsyncLoad },
+      {
+        allowAsyncLoad: params.allowAsyncLoad,
+        skipRuntimeConfigLoad: Boolean(params.cfg),
+      },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;

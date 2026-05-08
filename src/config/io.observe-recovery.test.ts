@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
@@ -69,6 +70,12 @@ describe("config observe recovery", () => {
     return lines
       .map((line) => JSON.parse(line) as Record<string, unknown>)
       .filter((line) => line.event === "config.observe");
+  }
+
+  async function listClobberFiles(configPath: string): Promise<string[]> {
+    const entries = await fsp.readdir(path.dirname(configPath));
+    const prefix = `${path.basename(configPath)}.clobbered.`;
+    return entries.filter((entry) => entry.startsWith(prefix));
   }
 
   async function readLastObserveEvent(
@@ -268,6 +275,22 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("hardens async backup restores to owner-only config permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+      await fsp.chmod(configPath, 0o644);
+
+      await recoverClobberedUpdateChannel({ deps, configPath });
+
+      expect((await fsp.stat(configPath)).mode & 0o777).toBe(0o600);
+    });
+  });
+
   it("auto-restores after a large size drop against last-good config", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
@@ -409,6 +432,31 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("caps concurrent recovery clobber snapshots while preserving audit records", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+
+      await Promise.all(
+        Array.from({ length: CONFIG_CLOBBER_SNAPSHOT_LIMIT + 18 }, async () => {
+          await recoverClobberedUpdateChannel({ deps, configPath });
+        }),
+      );
+
+      const clobberFiles = await listClobberFiles(configPath);
+      expect(clobberFiles.length).toBeLessThanOrEqual(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
+      const observeEvents = await readObserveEvents(auditPath);
+      expect(observeEvents.length).toBeGreaterThan(0);
+      expect(observeEvents.at(-1)).toHaveProperty("clobberedPath");
+      const capWarnings = warn.mock.calls.filter(
+        ([message]) =>
+          typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
+      );
+      expect(capWarnings.length).toBeLessThanOrEqual(1);
+    });
+  });
+
   it("sync recovery uses backup baseline when health state is absent", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
@@ -421,6 +469,22 @@ describe("config observe recovery", () => {
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.backupHash).toBeTypeOf("string");
       expect(observe?.lastKnownGoodIno ?? null).toBeNull();
+    });
+  });
+
+  it("hardens sync backup restores to owner-only config permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+      await fsp.chmod(configPath, 0o644);
+
+      recoverClobberedUpdateChannelSync({ deps, configPath });
+
+      expect((await fsp.stat(configPath)).mode & 0o777).toBe(0o600);
     });
   });
 

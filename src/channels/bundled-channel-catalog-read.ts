@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../plugins/channel-catalog-registry.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
@@ -19,6 +20,7 @@ type BundledChannelCatalogEntry = {
 };
 
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
+const officialCatalogFileCache = new Map<string, ChannelCatalogEntryLike[] | null>();
 
 function listPackageRoots(): string[] {
   return [
@@ -38,17 +40,26 @@ function readBundledExtensionCatalogEntriesSync(): PluginPackageChannel[] {
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
   for (const packageRoot of listPackageRoots()) {
     const candidate = path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
+    const cached = officialCatalogFileCache.get(candidate);
+    if (cached !== undefined) {
+      if (cached) {
+        return cached;
+      }
+      continue;
+    }
     if (!fs.existsSync(candidate)) {
+      officialCatalogFileCache.set(candidate, null);
       continue;
     }
-    try {
-      const payload = JSON.parse(fs.readFileSync(candidate, "utf8")) as {
-        entries?: unknown;
-      };
-      return Array.isArray(payload.entries) ? (payload.entries as ChannelCatalogEntryLike[]) : [];
-    } catch {
-      continue;
+    const payload = tryReadJsonSync<{ entries?: unknown }>(candidate);
+    if (payload) {
+      const entries = Array.isArray(payload.entries)
+        ? (payload.entries as ChannelCatalogEntryLike[])
+        : [];
+      officialCatalogFileCache.set(candidate, entries);
+      return entries;
     }
+    officialCatalogFileCache.set(candidate, null);
   }
   return [];
 }

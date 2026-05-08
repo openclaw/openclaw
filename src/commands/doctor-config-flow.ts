@@ -1,6 +1,5 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { findLegacyConfigIssues } from "../config/legacy.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -77,6 +76,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let pendingChanges = false;
   let fixHints: string[] = [];
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const sourceMeta = (snapshot.sourceConfig as { meta?: { lastTouchedVersion?: unknown } })?.meta;
+  const sourceLastTouchedVersion =
+    typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
   const legacyStep = applyLegacyCompatibilityStep({
     snapshot,
@@ -85,19 +87,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const pluginLegacyIssues = await (async () => {
     if (snapshot.parsed === snapshot.sourceConfig) {
       return [];
     }
-    const { collectRelevantDoctorPluginIds, listPluginDoctorLegacyConfigRules } =
-      await import("../plugins/doctor-contract-registry.js");
-    return findLegacyConfigIssues(
-      snapshot.parsed,
-      snapshot.parsed,
-      listPluginDoctorLegacyConfigRules({
-        pluginIds: collectRelevantDoctorPluginIds(snapshot.parsed),
-      }),
-    );
+    const { findDoctorLegacyConfigIssues } =
+      await import("./doctor/shared/legacy-config-issues.js");
+    return findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed);
   })();
   const seenLegacyIssues = new Set(
     snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
@@ -164,12 +161,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  const { collectPluginToolAllowlistWarnings } =
+  const { collectBundledProviderAllowlistPolicyWarnings, collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
-  const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
-    cfg: candidate,
-    env: process.env,
-  });
+  const pluginToolAllowlistWarnings = [
+    ...collectPluginToolAllowlistWarnings({
+      cfg: candidate,
+      env: process.env,
+    }),
+    ...collectBundledProviderAllowlistPolicyWarnings({ cfg: candidate }),
+  ];
   if (pluginToolAllowlistWarnings.length > 0) {
     note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
@@ -260,9 +260,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
-  if (unknownStep.removed.length > 0) {
-    const lines = unknownStep.removed.map((path) => `- ${path}`).join("\n");
+  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
+    const lines = [
+      ...unknownStep.removed.map((path) => `- ${path}`),
+      ...unknownStep.repairs.map((change) => `- ${change}`),
+    ].join("\n");
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
+  }
+  if (unknownStep.warnings.length > 0) {
+    note(unknownStep.warnings.join("\n"), "Doctor warnings");
   }
 
   const finalized = await finalizeDoctorConfigFlow({
@@ -283,5 +289,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
+    ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
+    ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
   };
 }

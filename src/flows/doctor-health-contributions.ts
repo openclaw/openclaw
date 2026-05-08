@@ -13,6 +13,8 @@ type DoctorConfigResult = {
   path?: string;
   shouldWriteConfig?: boolean;
   sourceConfigValid?: boolean;
+  sourceLastTouchedVersion?: string;
+  skipPluginValidationOnWrite?: boolean;
 };
 
 type DoctorHealthFlowContext = {
@@ -27,6 +29,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
 };
 
@@ -268,9 +271,63 @@ async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<vo
   });
 }
 
+async function runReleaseConfiguredPluginInstallsHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  if (!ctx.sourceConfigValid) {
+    return;
+  }
+  if (!ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { maybeRunConfiguredPluginInstallReleaseStep } =
+    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
+  const { note } = await import("../terminal/note.js");
+  const { VERSION } = await import("../version.js");
+  const result = await maybeRunConfiguredPluginInstallReleaseStep({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
+  });
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+  if (!result.touchedConfig) {
+    return;
+  }
+  ctx.cfg = {
+    ...ctx.cfg,
+    meta: {
+      ...ctx.cfg.meta,
+      lastTouchedVersion: VERSION,
+      lastTouchedAt: new Date().toISOString(),
+    },
+  };
+}
+
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
+}
+
+async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairCodexSessionRoutes } =
+    await import("../commands/doctor/shared/codex-route-warnings.js");
+  const { note } = await import("../terminal/note.js");
+  const result = await maybeRepairCodexSessionRoutes({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
 }
 
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -295,8 +352,9 @@ async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> 
 }
 
 async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairSandboxImages, noteSandboxScopeWarnings } =
+  const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles, noteSandboxScopeWarnings } =
     await import("../commands/doctor-sandbox.js");
+  await maybeRepairSandboxRegistryFiles(ctx.prompter);
   ctx.cfg = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
   noteSandboxScopeWarnings(ctx.cfg);
 }
@@ -430,6 +488,14 @@ async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<v
   noteWorkspaceStatus(ctx.cfg);
 }
 
+async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairSkillReadiness } = await import("../commands/doctor-skills.js");
+  ctx.cfg = await maybeRepairSkillReadiness({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+  });
+}
+
 async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteBootstrapFileSize } = await import("../commands/doctor-bootstrap-size.js");
   await noteBootstrapFileSize(ctx.cfg);
@@ -445,18 +511,29 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const { healthOk } = await checkGatewayHealth({
+  const { healthOk, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
   ctx.healthOk = healthOk;
+  ctx.gatewayStatus = status;
   ctx.gatewayMemoryProbe = healthOk
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
       })
     : { checked: false, ready: false, skipped: false };
+}
+
+async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteWhatsappResponsivenessHealth } =
+    await import("../commands/doctor-whatsapp-responsiveness.js");
+  await noteWhatsappResponsivenessHealth({
+    cfg: ctx.cfg,
+    status: ctx.gatewayStatus,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -519,6 +596,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       afterWrite: { mode: "auto" },
       writeOptions: {
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true,
+        skipPluginValidation: ctx.configResult.skipPluginValidationOnWrite === true,
       },
     });
     logConfigUpdated(ctx.runtime);
@@ -600,6 +678,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:release-configured-plugin-installs",
+      label: "Configured plugin repair",
+      run: runReleaseConfiguredPluginInstallsHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:plugin-registry",
       label: "Plugin registry",
       run: runPluginRegistryHealth,
@@ -608,6 +691,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:state-integrity",
       label: "State integrity",
       run: runStateIntegrityHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:codex-session-routes",
+      label: "Codex session routes",
+      run: runCodexSessionRouteHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-locks",
@@ -670,6 +758,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:skills",
+      label: "Skills",
+      run: runSkillsHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
       label: "Bootstrap size",
       run: runBootstrapSizeHealth,
@@ -683,6 +776,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-health",
       label: "Gateway health",
       run: runGatewayHealthChecks,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:whatsapp-responsiveness",
+      label: "WhatsApp responsiveness",
+      run: runWhatsappResponsivenessHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:memory-search",

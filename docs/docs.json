@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/channels/bluebubbles",
+      "destination": "/channels/imessage"
+    },
+    {
       "source": "/install/migrating-matrix",
       "destination": "/channels/matrix-migration"
     },
@@ -102,7 +106,7 @@
     },
     {
       "source": "/tools/capability-cookbook",
-      "destination": "/plugins/architecture"
+      "destination": "/plugins/adding-capabilities"
     },
     {
       "source": "/brave-search",
@@ -389,16 +393,16 @@
       "destination": "/channels/pairing"
     },
     {
-      "source": "/clawhub",
-      "destination": "/tools/clawhub"
+      "source": "/clawdhub",
+      "destination": "/clawhub"
     },
     {
-      "source": "/clawdhub",
-      "destination": "/tools/clawhub"
+      "source": "/tools/clawhub",
+      "destination": "/clawhub"
     },
     {
       "source": "/tools/clawdhub",
-      "destination": "/tools/clawhub"
+      "destination": "/clawhub"
     },
     {
       "source": "/configuration",
@@ -1059,7 +1063,7 @@
                   "channels/msteams",
                   "channels/googlechat",
                   "channels/imessage",
-                  "channels/bluebubbles",
+                  "channels/imessage-from-bluebubbles",
                   "channels/matrix",
                   "channels/matrix-migration",
                   "channels/matrix-push-rules"
@@ -1163,7 +1167,9 @@
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
+                  "concepts/message-lifecycle-refactor",
                   "concepts/streaming",
+                  "concepts/progress-drafts",
                   "concepts/retry",
                   "concepts/queue",
                   "concepts/queue-steering"
@@ -1182,8 +1188,10 @@
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
+                  "plugins/manage-plugins",
                   "plugins/community",
                   "plugins/plugin-inventory",
+                  "plugins/reference",
                   "plugins/bundles",
                   "plugins/dependency-resolution",
                   "plugins/codex-harness",
@@ -1202,7 +1210,10 @@
                       "plugins/building-plugins",
                       "plugins/hooks",
                       "plugins/sdk-channel-plugins",
+                      "plugins/sdk-channel-message",
                       "plugins/sdk-provider-plugins",
+                      "plugins/cli-backend-plugins",
+                      "plugins/adding-capabilities",
                       "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
@@ -1232,7 +1243,6 @@
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
-                  "tools/clawhub",
                   "prose"
                 ]
               },
@@ -1306,10 +1316,41 @@
                 "group": "Agent coordination",
                 "pages": [
                   "tools/agent-send",
+                  "tools/steer",
                   "tools/subagents",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "ClawHub",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": ["clawhub/index", "clawhub/quickstart", "clawhub/how-it-works"]
+              },
+              {
+                "group": "Using ClawHub",
+                "pages": [
+                  "clawhub/cli",
+                  "clawhub/publishing",
+                  "clawhub/skill-format",
+                  "clawhub/soul-format",
+                  "clawhub/auth",
+                  "clawhub/telemetry",
+                  "clawhub/troubleshooting"
+                ]
+              },
+              {
+                "group": "API and trust",
+                "pages": [
+                  "clawhub/api",
+                  "clawhub/http-api",
+                  "clawhub/security",
+                  "clawhub/acceptable-usage"
                 ]
               }
             ]
@@ -1334,6 +1375,7 @@
                   "providers/anthropic",
                   "providers/arcee",
                   "providers/azure-speech",
+                  "providers/cerebras",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
@@ -1368,6 +1410,7 @@
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",
+                  "providers/senseaudio",
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
@@ -1492,7 +1535,9 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/secure-file-operations",
                       "gateway/security/audit-checks",
+                      "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
@@ -1512,13 +1557,7 @@
                   },
                   {
                     "group": "Networking and discovery",
-                    "pages": [
-                      "network",
-                      "gateway/network-model",
-                      "gateway/pairing",
-                      "gateway/discovery",
-                      "gateway/bonjour"
-                    ]
+                    "pages": ["network", "gateway/pairing", "gateway/discovery", "gateway/bonjour"]
                   }
                 ]
               },
@@ -1573,6 +1612,7 @@
                     "group": "Gateway and service",
                     "pages": [
                       "cli/backup",
+                      "cli/crestodian",
                       "cli/daemon",
                       "cli/doctor",
                       "cli/gateway",
@@ -1708,7 +1748,7 @@
               },
               {
                 "group": "Project",
-                "pages": ["reference/credits"]
+                "pages": ["reference/application-modernization-plan", "reference/credits"]
               },
               {
                 "group": "Release and CI",

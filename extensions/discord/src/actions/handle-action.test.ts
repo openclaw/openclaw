@@ -216,6 +216,68 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("maps thread-reply filePath to Discord threadReply with media read context", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("report"));
+
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        threadId: "thread-123",
+        message: "thread update",
+        filePath: "/tmp/agent-root/report.md",
+      },
+      cfg: {
+        channels: { discord: { token: "tok", actions: { threads: true } } },
+      } as OpenClawConfig,
+      mediaLocalRoots: ["/tmp/agent-root"],
+      mediaReadFile,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "threadReply",
+        channelId: "thread-123",
+        content: "thread update",
+        mediaUrl: "/tmp/agent-root/report.md",
+      }),
+      expect.any(Object),
+      {
+        mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile,
+      },
+    );
+  });
+
+  it("forwards top-level components on sends", async () => {
+    const components = { blocks: [{ type: "text", text: "Pick one" }] };
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        message: "hello",
+        components,
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        content: "hello",
+        components,
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({

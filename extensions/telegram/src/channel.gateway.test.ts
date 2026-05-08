@@ -81,6 +81,15 @@ afterEach(() => {
 });
 
 describe("telegramPlugin gateway startup", () => {
+  it("routes message actions through the gateway", () => {
+    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
+      "gateway",
+    );
+    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
+      "gateway",
+    );
+  });
+
   it("stops before monitor startup when getMe rejects the token", async () => {
     installTelegramRuntime();
     probeTelegram.mockResolvedValue({
@@ -143,6 +152,45 @@ describe("telegramPlugin gateway startup", () => {
       expect.objectContaining({
         accountId: "default",
         includeWebhookInfo: false,
+      }),
+    );
+  });
+
+  it("passes successful startup probe botInfo into the polling monitor", async () => {
+    installTelegramRuntime();
+    const botInfo = {
+      id: 123456,
+      is_bot: true,
+      first_name: "OpenClaw",
+      username: "openclaw_bot",
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      can_manage_bots: false,
+      supports_inline_queries: false,
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+    } as const;
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+      bot: {
+        id: botInfo.id,
+        username: botInfo.username,
+      },
+      botInfo,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount();
+
+    await expect(task).resolves.toBeUndefined();
+    expect(monitorTelegramProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botInfo,
       }),
     );
   });

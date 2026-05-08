@@ -239,10 +239,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
   const emitBlockReply = (
     payload: BlockReplyPayload,
-    options?: { assistantMessageIndex?: number },
+    options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => {
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
-    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, withAssistantDirectives), options);
+    const withToolMedia =
+      options?.consumePendingToolMedia === false
+        ? withAssistantDirectives
+        : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    emitBlockReplySafely(withToolMedia, options);
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -729,9 +733,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
 
-    state.lastBlockReplyText = chunk;
-    pushAssistantText(chunk);
     if (!params.onBlockReply) {
+      pushAssistantText(chunk);
       return;
     }
     const splitResult = replyDirectiveAccumulator.consume(chunk);
@@ -746,10 +749,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       replyToTag,
       replyToCurrent,
     } = splitResult;
-    // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       return;
     }
+    pushAssistantText(chunk);
     emitBlockReply(
       {
         text: cleanedText,
@@ -761,8 +764,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       },
       {
         assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
+        consumePendingToolMedia:
+          options?.final === true || Boolean(mediaUrls?.length || audioAsVoice),
       },
     );
+    state.lastBlockReplyText = chunk;
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>

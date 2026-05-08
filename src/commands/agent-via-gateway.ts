@@ -105,6 +105,10 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
+function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
+  return isGatewayTransportError(err);
+}
+
 function createGatewayTimeoutFallbackSessionId(): string {
   return `${GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX}${randomUUID()}`;
 }
@@ -201,7 +205,9 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? response.summary : "No reply from agent.");
+    if (response?.status !== "ok") {
+      runtime.log(response?.summary ? response.summary : "No reply from agent.");
+    }
     return response;
   }
 
@@ -252,6 +258,10 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
         runtime,
         deps,
       );
+    }
+
+    if (!isGatewayAgentEmbeddedFallbackError(err)) {
+      throw err;
     }
 
     runtime.error?.(

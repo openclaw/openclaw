@@ -119,7 +119,7 @@ export function shouldUseEnvHttpProxyForUrl(
  * - Entries separated by commas OR whitespace (undici splits on `/[,\s]/`)
  * - Case-insensitive
  * - Empty or missing → no bypass
- * - `*` → bypass everything
+ * - Bare `*` value → bypass everything
  * - Exact hostname match
  * - Leading-dot match (`.example.com` matches `foo.example.com`)
  * - Leading `*.` wildcard match (`*.example.com` matches `foo.example.com`);
@@ -128,6 +128,9 @@ export function shouldUseEnvHttpProxyForUrl(
  * - Subdomain suffix match (`openai.com` matches `api.openai.com`)
  * - Optional `:port` suffix; when present, must match target port
  * - IPv6 literals in bracketed form (`[::1]`)
+ * - OpenClaw extension: IPv4 CIDR and octet-wildcard entries
+ *   (`100.64.0.0/10`, `100.64.*`) bypass the trusted env proxy mode before
+ *   undici's EnvHttpProxyAgent is selected.
  *
  * Undici does not export its matcher, so this is a targeted reimplementation
  * kept in sync with the upstream file above. Paired with
@@ -153,6 +156,10 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     return false;
   }
 
+  if (raw === "*") {
+    return true;
+  }
+
   const targetPort =
     parsed.port !== ""
       ? parsed.port
@@ -170,10 +177,6 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     if (!entry) {
       continue;
     }
-    if (entry === "*") {
-      return true;
-    }
-
     let entryHost: string;
     let entryPort: string | undefined;
     if (entry.startsWith("[")) {
@@ -198,10 +201,15 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
     }
 
     // Mirror undici: strip optional leading `*` followed by `.` so both
-    // `.example.com` and `*.example.com` normalize to `example.com`.
-    const normalizedEntry = entryHost.replace(/^\*?\./, "");
-    if (!normalizedEntry) {
+    // `.example.com` and `*.example.com` normalize to `example.com`. That also
+    // means apex hosts still match those entries after normalization.
+    const normalizedEntry = entryHost.replace(/^\*\./, "").replace(/^\./, "");
+    if (!normalizedEntry || normalizedEntry === "*") {
       continue;
+    }
+
+    if (matchesIpv4NoProxyPattern(targetHost, normalizedEntry)) {
+      return true;
     }
 
     if (targetHost === normalizedEntry) {
@@ -211,6 +219,64 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
       return true;
     }
   }
-
   return false;
+}
+
+function parseIpv4Address(host: string): number | undefined {
+  const parts = host.split(".");
+  if (parts.length !== 4) {
+    return undefined;
+  }
+  let value = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) {
+      return undefined;
+    }
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) {
+      return undefined;
+    }
+    value = (value << 8) | octet;
+  }
+  return value >>> 0;
+}
+
+function matchesIpv4NoProxyPattern(targetHost: string, entryHost: string): boolean {
+  const target = parseIpv4Address(targetHost);
+  if (target === undefined) {
+    return false;
+  }
+
+  const cidrMatch = entryHost.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+  if (cidrMatch) {
+    const network = parseIpv4Address(cidrMatch[1]);
+    const prefixLength = Number(cidrMatch[2]);
+    if (network === undefined || prefixLength < 0 || prefixLength > 32) {
+      return false;
+    }
+    const mask = prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
+    return (target & mask) === (network & mask);
+  }
+
+  if (!entryHost.includes("*")) {
+    return false;
+  }
+  const targetParts = targetHost.split(".");
+  const patternParts = entryHost.split(".");
+  if (patternParts.length > 4 || patternParts.length === 0) {
+    return false;
+  }
+  for (let index = 0; index < patternParts.length; index += 1) {
+    const part = patternParts[index];
+    if (part === "*") {
+      if (index === patternParts.length - 1) {
+        return true;
+      }
+      continue;
+    }
+    if (!/^\d{1,3}$/.test(part) || Number(part) !== Number(targetParts[index])) {
+      return false;
+    }
+  }
+  return patternParts.length === targetParts.length;
 }

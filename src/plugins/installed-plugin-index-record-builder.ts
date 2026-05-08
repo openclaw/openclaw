@@ -3,10 +3,11 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
-import { hashJson, safeHashFile } from "./installed-plugin-index-hash.js";
+import { hashJson, safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import type {
   InstalledPluginIndexRecord,
@@ -109,9 +110,11 @@ function resolvePackageJsonRecord(params: {
   if (!hash) {
     return undefined;
   }
+  const fileSignature = safeFileSignature(params.packageJsonPath);
   return {
     path: resolvePackageJsonRelativePath(params.candidate.rootDir, params.packageJsonPath),
     hash,
+    ...(fileSignature ? { fileSignature } : {}),
   };
 }
 
@@ -210,6 +213,9 @@ export function buildInstalledPluginIndexRecords(params: {
       record.packageChannel ?? candidate?.packageManifest?.channel,
     );
     const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
+    const manifestFile = hasOptionalMissingPluginManifestFile(record)
+      ? undefined
+      : safeFileSignature(record.manifestPath);
     const packageJson = resolvePackageJsonRecord({
       candidate,
       packageJsonPath,
@@ -221,12 +227,13 @@ export function buildInstalledPluginIndexRecords(params: {
       origin: record.origin,
       config: normalizedConfig,
       rootConfig: params.config,
-      enabledByDefault: record.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     }).enabled;
     const indexRecord: InstalledPluginIndexRecord = {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
+      ...(manifestFile ? { manifestFile } : {}),
       source: record.source,
       rootDir: record.rootDir,
       origin: record.origin,
@@ -242,6 +249,9 @@ export function buildInstalledPluginIndexRecords(params: {
     }
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
+    }
+    if (record.enabledByDefaultOnPlatforms?.length) {
+      indexRecord.enabledByDefaultOnPlatforms = [...record.enabledByDefaultOnPlatforms];
     }
     if (record.syntheticAuthRefs?.length) {
       indexRecord.syntheticAuthRefs = [...record.syntheticAuthRefs];
