@@ -1,6 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
@@ -9,6 +7,7 @@ import type { AgentMessage, StreamFn } from "./agent-core-contract.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import type { Api, Model } from "./pi-ai-contract.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import { getStateDiagnosticWriter } from "./state-diagnostic-writer.js";
 
 type PayloadLogStage = "request" | "usage";
 
@@ -31,24 +30,33 @@ type PayloadLogEvent = {
 type PayloadLogConfig = {
   enabled: boolean;
   filePath: string;
+  fileOverride: boolean;
 };
 
 type PayloadLogWriter = QueuedFileWriter;
 
 const writers = new Map<string, PayloadLogWriter>();
+const stateWriters = new Map<string, PayloadLogWriter>();
 const log = createSubsystemLogger("agent/anthropic-payload");
+const ANTHROPIC_PAYLOAD_SQLITE_LABEL = "sqlite://state/diagnostics/anthropic-payload";
+const ANTHROPIC_PAYLOAD_SQLITE_SCOPE = "diagnostics.anthropic_payload";
 
 function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
   const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
   const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
-  const filePath = fileOverride
-    ? resolveUserPath(fileOverride)
-    : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
-  return { enabled, filePath };
+  const filePath = fileOverride ? resolveUserPath(fileOverride) : ANTHROPIC_PAYLOAD_SQLITE_LABEL;
+  return { enabled, filePath, fileOverride: Boolean(fileOverride) };
 }
 
-function getWriter(filePath: string): PayloadLogWriter {
-  return getQueuedFileWriter(writers, filePath);
+function getWriter(cfg: PayloadLogConfig, env: NodeJS.ProcessEnv): PayloadLogWriter {
+  if (cfg.fileOverride) {
+    return getQueuedFileWriter(writers, cfg.filePath);
+  }
+  return getStateDiagnosticWriter(stateWriters, {
+    env,
+    label: cfg.filePath,
+    scope: ANTHROPIC_PAYLOAD_SQLITE_SCOPE,
+  });
 }
 
 function formatError(error: unknown): string | undefined {
@@ -112,7 +120,7 @@ export function createAnthropicPayloadLogger(params: {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg.filePath);
+  const writer = params.writer ?? getWriter(cfg, env);
   const base: Omit<PayloadLogEvent, "ts" | "stage"> = {
     runId: params.runId,
     sessionId: params.sessionId,
