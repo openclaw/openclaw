@@ -581,21 +581,16 @@ function createCachedDescriptorPluginTool(params: {
           candidate.names.some((name) => normalizeToolName(name) === requestedToolName),
       );
       const unnamedCandidates = candidates.filter((candidate) => candidate.names.length === 0);
-      let matchedTool: AnyAgentTool | undefined;
       for (const candidate of [...matchingNamedCandidates, ...unnamedCandidates]) {
+        let matchedTool: AnyAgentTool | undefined;
         try {
           matchedTool = resolveCandidateTool(candidate);
-          if (matchedTool) {
-            break;
-          }
         } catch {
-          // Continue to next candidate if factory/materialization fails
           continue;
         }
-      }
-      if (matchedTool) {
-        // Return outside try blocks to preserve tool execution errors
-        return matchedTool.execute(toolCallId, executeParams, signal, onUpdate);
+        if (matchedTool) {
+          return matchedTool.execute(toolCallId, executeParams, signal, onUpdate);
+        }
       }
       throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
     },
