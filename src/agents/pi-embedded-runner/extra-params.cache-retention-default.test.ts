@@ -26,7 +26,9 @@ function applyAndExpectWrapped(params: {
     params.model,
   );
 
-  expect(agent.streamFn).toEqual(expect.any(Function));
+  if (!agent.streamFn) {
+    throw new Error("expected extra params to wrap streamFn");
+  }
 }
 
 // Mock the logger to avoid noise in tests
