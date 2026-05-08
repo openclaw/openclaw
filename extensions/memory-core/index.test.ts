@@ -115,7 +115,6 @@ describe("buildMemoryFlushPlan", () => {
 
   it("defaults to safe prompts and gating values", () => {
     const plan = buildMemoryFlushPlan();
-    expect(plan).not.toBeNull();
     expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
     expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(plan?.prompt).toContain("memory/");
