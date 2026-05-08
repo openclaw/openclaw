@@ -28,7 +28,6 @@ import {
   resolveDmGroupAccessWithLists,
   evaluateSupplementalContextVisibility,
 } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
@@ -130,6 +129,31 @@ function hasIMessageEchoMatch(params: {
     }
   }
   return false;
+}
+
+/**
+ * Per-group `systemPrompt` resolution. Mirrors `resolveWhatsAppGroupSystemPrompt`
+ * in `extensions/whatsapp/src/system-prompt.ts`:
+ *
+ * 1. If the matched per-`chat_id` entry exists AND defines `systemPrompt` (key
+ *    is present, value is non-null), use it. Trim whitespace; if the trim
+ *    leaves an empty string, return `undefined` and DO NOT fall through to the
+ *    wildcard. This is how operators say "this specific group has no prompt"
+ *    without inheriting from `groups["*"]`.
+ * 2. Otherwise, return the wildcard `groups["*"].systemPrompt` (trimmed; empty
+ *    after trim → `undefined`).
+ */
+export function resolveIMessageGroupSystemPrompt(params: {
+  groupConfig: unknown;
+  defaultConfig: unknown;
+}): string | undefined {
+  const specific = params.groupConfig as { systemPrompt?: string | null } | undefined;
+  if (specific != null && specific.systemPrompt != null) {
+    return specific.systemPrompt.trim() || undefined;
+  }
+  const wildcard = (params.defaultConfig as { systemPrompt?: string | null } | undefined)
+    ?.systemPrompt;
+  return wildcard != null ? wildcard.trim() || undefined : undefined;
 }
 
 type IMessageInboundDispatchDecision = {
@@ -532,16 +556,15 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   // Per-chat_id `systemPrompt` wins; fall back to the `groups["*"]` wildcard
-  // entry when the matched group has no explicit prompt. Mirrors the per-group
-  // systemPrompt pattern already supported by Telegram, IRC, Discord, Slack,
-  // GoogleChat, and the retired BlueBubbles channel.
+  // ONLY when the matched group does not define the key at all. If the matched
+  // group sets `systemPrompt: ""` the wildcard is suppressed (no prompt is
+  // applied to that specific group). Mirrors the resolution semantic in
+  // `extensions/whatsapp/src/system-prompt.ts`.
   const groupSystemPrompt = isGroup
-    ? (normalizeOptionalString(
-        (groupListPolicy.groupConfig as { systemPrompt?: unknown } | undefined)?.systemPrompt,
-      ) ??
-      normalizeOptionalString(
-        (groupListPolicy.defaultConfig as { systemPrompt?: unknown } | undefined)?.systemPrompt,
-      ))
+    ? resolveIMessageGroupSystemPrompt({
+        groupConfig: groupListPolicy.groupConfig,
+        defaultConfig: groupListPolicy.defaultConfig,
+      })
     : undefined;
 
   return {

@@ -92,10 +92,14 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
     expect(decision.groupSystemPrompt).toBe("Specific group voice.");
   });
 
-  it("treats whitespace-only systemPrompt as undefined", () => {
+  it("treats whitespace-only per-chat_id systemPrompt as suppression of the wildcard", () => {
+    // Mirrors WhatsApp semantic: defining the systemPrompt key on a specific
+    // group entry (even as whitespace) means "this group has no prompt" and
+    // suppresses the groups["*"] fallback.
     const decision = resolveIMessageInboundDecision(
       buildDecisionParams({
         cfg: buildCfgWithGroups({
+          "*": { systemPrompt: "Wildcard." },
           "7": { systemPrompt: "   " },
         }),
       }),
@@ -103,6 +107,34 @@ describe("resolveIMessageInboundDecision per-group systemPrompt", () => {
     expect(decision.kind).toBe("dispatch");
     if (decision.kind !== "dispatch") return;
     expect(decision.groupSystemPrompt).toBeUndefined();
+  });
+
+  it("treats explicit empty-string per-chat_id systemPrompt as suppression of the wildcard", () => {
+    const decision = resolveIMessageInboundDecision(
+      buildDecisionParams({
+        cfg: buildCfgWithGroups({
+          "*": { systemPrompt: "Wildcard." },
+          "7": { systemPrompt: "" },
+        }),
+      }),
+    );
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") return;
+    expect(decision.groupSystemPrompt).toBeUndefined();
+  });
+
+  it("falls back to the wildcard when the per-chat_id entry has no systemPrompt key at all", () => {
+    const decision = resolveIMessageInboundDecision(
+      buildDecisionParams({
+        cfg: buildCfgWithGroups({
+          "*": { systemPrompt: "Wildcard." },
+          "7": { requireMention: true },
+        }),
+      }),
+    );
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") return;
+    expect(decision.groupSystemPrompt).toBe("Wildcard.");
   });
 
   it("does not set groupSystemPrompt on true DM decisions", () => {
