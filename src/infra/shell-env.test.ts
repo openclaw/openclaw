@@ -67,12 +67,14 @@ describe("shell env fallback", () => {
   }
 
   function expectSanitizedStartupEnv(receivedEnv: NodeJS.ProcessEnv | undefined) {
-    expect(receivedEnv).toBeDefined();
-    expect(receivedEnv?.BASH_ENV).toBeUndefined();
-    expect(receivedEnv?.PS4).toBeUndefined();
-    expect(receivedEnv?.ZDOTDIR).toBeUndefined();
-    expect(receivedEnv?.SHELL).toBeUndefined();
-    expect(receivedEnv?.HOME).toBe(os.homedir());
+    if (receivedEnv === undefined) {
+      throw new Error("expected sanitized startup env");
+    }
+    expect(receivedEnv.BASH_ENV).toBeUndefined();
+    expect(receivedEnv.PS4).toBeUndefined();
+    expect(receivedEnv.ZDOTDIR).toBeUndefined();
+    expect(receivedEnv.SHELL).toBeUndefined();
+    expect(receivedEnv.HOME).toBe(os.homedir());
   }
 
   function withEtcShells(shells: string[], fn: () => void) {
