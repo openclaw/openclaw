@@ -164,8 +164,9 @@ describe("unit vitest config", () => {
         includePatterns: ["src/commitments/runtime.test.ts"],
       },
     );
+    const testConfig = requireTestConfig(unitConfig);
 
-    expect(unitConfig.test?.coverage?.include).toBeUndefined();
+    expect(testConfig.coverage?.include).toBeUndefined();
   });
 
   it("keeps bundled unit include files out of the resolved exclude list", () => {
@@ -179,13 +180,14 @@ describe("unit vitest config", () => {
         ],
       },
     );
+    const testConfig = requireTestConfig(unitConfig);
 
-    expect(unitConfig.test?.include).toEqual([
+    expect(testConfig.include).toEqual([
       "src/infra/matrix-plugin-helper.test.ts",
       "src/plugin-sdk/facade-runtime.test.ts",
       "src/plugins/loader.test.ts",
     ]);
-    expect(unitConfig.test?.exclude).not.toEqual(
+    expect(testConfig.exclude).not.toEqual(
       expect.arrayContaining([
         "src/infra/**",
         "src/plugin-sdk/**",
