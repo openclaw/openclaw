@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveMemoryHostEventLogPath } from "openclaw/plugin-sdk/memory-core-host-events";
+import {
+  readMemoryHostEvents,
+  renderMemoryHostEventsJsonl,
+  resolveMemoryHostEventLogPath,
+} from "openclaw/plugin-sdk/memory-core-host-events";
 import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenClawConfig } from "../api.js";
 
 async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
@@ -60,8 +63,17 @@ async function collectWorkspaceArtifacts(params: {
     });
   }
 
-  const eventLogPath = resolveMemoryHostEventLogPath(params.workspaceDir);
-  if (await pathExists(eventLogPath)) {
+  const eventContent = renderMemoryHostEventsJsonl(
+    await readMemoryHostEvents({ workspaceDir: params.workspaceDir }),
+  );
+  if (eventContent.trim()) {
+    const eventLogPath = resolveMemoryHostEventLogPath(params.workspaceDir);
+    const eventLines = eventContent.trim().split(/\r?\n/u);
+    const lastEvent = JSON.parse(eventLines.at(-1) ?? "{}") as { timestamp?: string };
+    const updatedAtMs =
+      typeof lastEvent.timestamp === "string" && Number.isFinite(Date.parse(lastEvent.timestamp))
+        ? Date.parse(lastEvent.timestamp)
+        : Date.now();
     artifacts.push({
       kind: "event-log",
       workspaceDir: params.workspaceDir,
@@ -69,6 +81,9 @@ async function collectWorkspaceArtifacts(params: {
       absolutePath: eventLogPath,
       agentIds: [...params.agentIds],
       contentType: "json",
+      content: eventContent,
+      updatedAtMs,
+      sizeBytes: Buffer.byteLength(eventContent),
     });
   }
 
