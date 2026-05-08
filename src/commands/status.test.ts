@@ -87,7 +87,6 @@ function getRuntimeLogs() {
 
 function getRuntimeLog(index: number): string {
   const call = runtimeLogMock.mock.calls[index];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`expected runtime log call ${index}`);
   }

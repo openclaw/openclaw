@@ -43,7 +43,6 @@ describe("plugins cli policy mutations", () => {
 
   function requireFirstWrittenConfig(): OpenClawConfig {
     const [config] = writeConfigFile.mock.calls[0] ?? [];
-    expect(config).toBeDefined();
     if (!config) {
       throw new Error("expected writeConfigFile to receive a config");
     }
@@ -53,7 +52,6 @@ describe("plugins cli policy mutations", () => {
   function requirePluginEntries(
     config: OpenClawConfig,
   ): NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]> {
-    expect(config.plugins?.entries).toBeDefined();
     if (!config.plugins?.entries) {
       throw new Error("expected plugin entries in config");
     }

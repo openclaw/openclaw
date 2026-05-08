@@ -303,12 +303,12 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const fallbackOpts = requireFirstCallArg<{
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
         sessionId?: string;
         sessionKey?: string;
         runId?: string;
         resultMetaOverrides?: unknown;
-      }>(agentCommand, "embedded agent");
+      };
       expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
       expect(fallbackOpts.sessionId).not.toBe("locked-session");
       expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackOpts.sessionId}`);
@@ -342,11 +342,11 @@ describe("agentCliCommand", () => {
         runtime,
       );
 
-      const fallbackOpts = requireFirstCallArg<{
+      const fallbackOpts = requireFirstCallArg(agentCommand, "embedded agent") as {
         sessionId?: string;
         sessionKey?: string;
         to?: string;
-      }>(agentCommand, "embedded agent");
+      };
       expect(fallbackOpts.to).toBe("+1555");
       expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
       expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackOpts.sessionId}`);
