@@ -56,7 +56,6 @@ const { CLAWHUB_INSTALL_ERROR_CODE, formatClawHubSpecifier, installPluginFromCla
   await import("./clawhub.js");
 
 const DEMO_ARCHIVE_INTEGRITY = "sha256-qerEjGEpvES2+Tyan0j2xwDRkbcnmh4ZFfKN9vWbsa8=";
-const DEMO_ARCHIVE_SHA256 = "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af";
 const DEMO_CLAWPACK_SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const DEMO_CLAWPACK_INTEGRITY = `sha256-${Buffer.from(DEMO_CLAWPACK_SHA256, "hex").toString(
   "base64",
@@ -517,8 +516,7 @@ describe("installPluginFromClawHub", () => {
     );
   });
 
-  it("accepts the live ClawHub legacy zip resolver shape with kind/sha256 field names", async () => {
-    fetchClawHubPackageVersionMock.mockClear();
+  it("does not trust summary legacy zip sha256 as archive integrity", async () => {
     fetchClawHubPackageArtifactMock.mockResolvedValueOnce({
       package: {
         name: "demo",
@@ -528,18 +526,14 @@ describe("installPluginFromClawHub", () => {
       version: "2026.3.22",
       artifact: {
         kind: "legacy-zip",
-        sha256: DEMO_ARCHIVE_SHA256,
-      } as unknown as ClawHubResolvedArtifact,
-    });
-    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath: "/tmp/clawhub-demo/archive.zip",
-      integrity: DEMO_ARCHIVE_INTEGRITY,
-      cleanup: archiveCleanupMock,
+        format: "zip",
+        sha256: "1111111111111111111111111111111111111111111111111111111111111111",
+        downloadUrl: "https://clawhub.ai/api/v1/packages/demo/download?version=2026.3.22",
+      },
     });
 
     const result = await installPluginFromClawHub({
       spec: "clawhub:demo",
-      baseUrl: "https://clawhub.ai",
     });
 
     expect(result).toMatchObject({
@@ -551,7 +545,12 @@ describe("installPluginFromClawHub", () => {
         integrity: DEMO_ARCHIVE_INTEGRITY,
       },
     });
-    expect(fetchClawHubPackageVersionMock).not.toHaveBeenCalled();
+    expect(fetchClawHubPackageVersionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
     expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
       expect.objectContaining({
         artifact: "archive",

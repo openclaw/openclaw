@@ -113,7 +113,7 @@ export type ClawHubPackageArtifactResolverResponse = {
       } & Record<string, unknown>)
     | string
     | null;
-  artifact?: ClawHubResolvedArtifact | null;
+  artifact?: ClawHubResolvedArtifact | ClawHubPackageArtifactSummary | null;
 };
 export type ClawHubPackageSecurityResponse = {
   packageId?: string | null;
