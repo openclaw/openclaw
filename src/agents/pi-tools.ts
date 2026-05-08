@@ -203,6 +203,10 @@ function isApplyPatchAllowedForModel(params: {
   });
 }
 
+function hasWritableSandboxWorkspaceTarget(sandbox: SandboxContext): boolean {
+  return sandbox.workspaceAccess === "rw";
+}
+
 function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const cfg = params.cfg;
   const globalExec = cfg?.tools?.exec;
@@ -473,7 +477,7 @@ export function createOpenClawCodingTools(options?: {
   });
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
-  const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
+  const allowWorkspaceWrites = sandbox ? hasWritableSandboxWorkspaceTarget(sandbox) : true;
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
   const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
