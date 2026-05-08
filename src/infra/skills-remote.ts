@@ -20,12 +20,19 @@ type RemoteNodeRecord = {
   bins: Set<string>;
   connected: boolean;
   remoteIp?: string;
+  probeSignature?: string;
+  lastProbeAtMs?: number;
+  nextProbeAfterMs?: number;
+  failedProbeCount?: number;
 };
 
 const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
 const remoteBinProbeInflight = new Map<string, Promise<void>>();
 let remoteRegistry: NodeRegistry | null = null;
+const REMOTE_BIN_PROBE_SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
+const REMOTE_BIN_PROBE_FAILURE_BASE_BACKOFF_MS = 60 * 60 * 1000;
+const REMOTE_BIN_PROBE_FAILURE_MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;
 
 function describeNode(nodeId: string): string {
   const record = remoteNodes.get(nodeId);
@@ -150,6 +157,70 @@ function clearRemoteNodeBins(nodeId: string): boolean {
   }
   existing.bins = new Set();
   return true;
+}
+
+function buildRemoteProbeSignature(params: {
+  command: string;
+  platform?: string;
+  deviceFamily?: string;
+  commands?: string[];
+  bins: string[];
+}): string {
+  const commands = [...(params.commands ?? [])].sort().join(",");
+  const bins = [...params.bins].sort().join(",");
+  return [
+    params.command,
+    normalizeLowercaseStringOrEmpty(params.platform),
+    normalizeLowercaseStringOrEmpty(params.deviceFamily),
+    commands,
+    bins,
+  ].join("|");
+}
+
+function shouldSkipRemoteNodeProbe(
+  record: RemoteNodeRecord | undefined,
+  signature: string,
+  nowMs: number,
+  force: boolean,
+): boolean {
+  if (force) {
+    return false;
+  }
+  if (!record?.probeSignature || record.probeSignature !== signature) {
+    return false;
+  }
+  if (typeof record.nextProbeAfterMs !== "number") {
+    return false;
+  }
+  return nowMs < record.nextProbeAfterMs;
+}
+
+function markRemoteNodeProbeSuccess(nodeId: string, signature: string, nowMs: number) {
+  const existing = remoteNodes.get(nodeId);
+  if (!existing) {
+    return;
+  }
+  existing.probeSignature = signature;
+  existing.lastProbeAtMs = nowMs;
+  existing.nextProbeAfterMs = nowMs + REMOTE_BIN_PROBE_SUCCESS_TTL_MS;
+  existing.failedProbeCount = 0;
+}
+
+function markRemoteNodeProbeFailure(nodeId: string, signature: string, nowMs: number) {
+  const existing = remoteNodes.get(nodeId);
+  if (!existing) {
+    return;
+  }
+  const failedProbeCount = (existing.failedProbeCount ?? 0) + 1;
+  const exponent = Math.max(0, failedProbeCount - 1);
+  const backoffMs = Math.min(
+    REMOTE_BIN_PROBE_FAILURE_MAX_BACKOFF_MS,
+    REMOTE_BIN_PROBE_FAILURE_BASE_BACKOFF_MS * 2 ** exponent,
+  );
+  existing.probeSignature = signature;
+  existing.lastProbeAtMs = nowMs;
+  existing.nextProbeAfterMs = nowMs + backoffMs;
+  existing.failedProbeCount = failedProbeCount;
 }
 
 export function setSkillsRemoteRegistry(registry: NodeRegistry | null) {
@@ -294,6 +365,7 @@ export async function refreshRemoteNodeBins(params: {
   commands?: string[];
   cfg: OpenClawConfig;
   timeoutMs?: number;
+  force?: boolean;
 }) {
   const existing = remoteBinProbeInflight.get(params.nodeId);
   if (existing) {
@@ -316,6 +388,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
   commands?: string[];
   cfg: OpenClawConfig;
   timeoutMs?: number;
+  force?: boolean;
 }) {
   if (!remoteRegistry) {
     return;
@@ -344,6 +417,24 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
   const binsList = [...requiredBins];
   const timeoutMs = params.timeoutMs ?? 15_000;
   const command = canWhich ? "system.which" : "system.run";
+  const probeSignature = buildRemoteProbeSignature({
+    command,
+    platform: params.platform,
+    deviceFamily: params.deviceFamily,
+    commands: params.commands,
+    bins: binsList,
+  });
+  const nowMs = Date.now();
+  if (
+    shouldSkipRemoteNodeProbe(
+      remoteNodes.get(params.nodeId),
+      probeSignature,
+      nowMs,
+      params.force === true,
+    )
+  ) {
+    return;
+  }
   const logContext = { command, timeoutMs, requiredBinCount: binsList.length };
   try {
     const res = await remoteRegistry.invoke(
@@ -365,6 +456,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     );
     if (!res.ok) {
       const cleared = clearRemoteNodeBins(params.nodeId);
+      markRemoteNodeProbeFailure(params.nodeId, probeSignature, nowMs);
       logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown", logContext);
       if (cleared) {
         bumpSkillsSnapshotVersion({ reason: "remote-node" });
@@ -376,6 +468,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     const nextBins = new Set(bins);
     const hasChanged = !areBinSetsEqual(existingBins, nextBins);
     recordRemoteNodeBins(params.nodeId, bins);
+    markRemoteNodeProbeSuccess(params.nodeId, probeSignature, nowMs);
     if (!hasChanged) {
       return;
     }
@@ -383,6 +476,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
     const cleared = clearRemoteNodeBins(params.nodeId);
+    markRemoteNodeProbeFailure(params.nodeId, probeSignature, nowMs);
     logRemoteBinProbeFailure(params.nodeId, err, logContext);
     if (cleared) {
       bumpSkillsSnapshotVersion({ reason: "remote-node" });

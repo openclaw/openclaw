@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSkillsSnapshotVersion, resetSkillsRefreshForTest } from "../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
@@ -18,6 +18,7 @@ import {
 describe("skills-remote", () => {
   afterEach(() => {
     setSkillsRemoteRegistry(null);
+    vi.restoreAllMocks();
   });
 
   it("removes disconnected nodes from remote skill eligibility", () => {
@@ -355,6 +356,238 @@ describe("skills-remote", () => {
       expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
       expect(getRemoteSkillEligibility()?.hasBin("missing")).toBe(false);
       expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("caches successful remote bin probes for 24 hours", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(1_000_000);
+    let invokeCount = 0;
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () => undefined,
+        invoke: async () => {
+          invokeCount += 1;
+          return {
+            ok: true,
+            payload: { bins: [bin] },
+            payloadJSON: JSON.stringify({ bins: [bin] }),
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+      nowSpy.mockReturnValue(1_000_000 + 60_000);
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      expect(invokeCount).toBe(1);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("backs off repeated failed probes until the retry window expires", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(2_000_000);
+    let invokeCount = 0;
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () => undefined,
+        invoke: async () => {
+          invokeCount += 1;
+          return {
+            ok: false,
+            error: { code: "TIMEOUT", message: "node invoke timed out" },
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+      nowSpy.mockReturnValue(2_000_000 + 60_000);
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+      nowSpy.mockReturnValue(2_000_000 + 60 * 60 * 1000 + 1);
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      expect(invokeCount).toBe(2);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-probes immediately when the required remote bins change", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const firstBin = `bin-${randomUUID()}`;
+    const secondBin = `bin-${randomUUID()}`;
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(3_000_000);
+    const requestedBins: string[][] = [];
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      const skillPath = path.join(workspaceDir, "remote-skill", "SKILL.md");
+      fs.writeFileSync(
+        skillPath,
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${firstBin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () => undefined,
+        invoke: async (params: { params?: { bins?: string[] } }) => {
+          requestedBins.push([...(params.params?.bins ?? [])].sort());
+          return {
+            ok: true,
+            payload: { bins: [firstBin, secondBin] },
+            payloadJSON: JSON.stringify({ bins: [firstBin, secondBin] }),
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      fs.writeFileSync(
+        skillPath,
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs remote bins",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${firstBin}", "${secondBin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      nowSpy.mockReturnValue(3_000_000 + 60_000);
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      expect(requestedBins).toEqual([[firstBin], [firstBin, secondBin].sort()]);
     } finally {
       removeRemoteNodeInfo(nodeId);
       fs.rmSync(workspaceDir, { recursive: true, force: true });
