@@ -54,12 +54,14 @@ describe("msteams channel message adapter", () => {
     if (!adapter?.send?.text || !adapter.send.media) {
       throw new Error("expected msteams channel message adapter with text and media senders");
     }
+    const sendText = adapter.send.text;
+    const sendMedia = adapter.send.media;
     expect(adapter.durableFinal?.capabilities?.replyTo).toBeUndefined();
     expect(adapter.durableFinal?.capabilities?.thread).toBeUndefined();
 
     const proveText = async () => {
       mocks.sendText.mockClear();
-      const result = await adapter.send.text({
+      const result = await sendText({
         cfg,
         to: "conversation:abc",
         text: "hello",
@@ -79,7 +81,7 @@ describe("msteams channel message adapter", () => {
 
     const proveMedia = async () => {
       mocks.sendMedia.mockClear();
-      const result = await adapter.send.media({
+      const result = await sendMedia({
         cfg,
         to: "conversation:abc",
         text: "photo",
@@ -107,7 +109,7 @@ describe("msteams channel message adapter", () => {
         text: proveText,
         media: proveMedia,
         messageSendingHooks: () => {
-          expect(adapter.send.text).toBeTypeOf("function");
+          expect(sendText).toBeTypeOf("function");
         },
       },
     });

@@ -49,10 +49,10 @@ describe("checkGatewayHealth", () => {
       timeoutMs: 6000,
     });
     expect(runtime.error).not.toHaveBeenCalled();
-    expect(note).not.toHaveBeenCalledWith(expect.any(String), "Gateway version skew");
+    expect(note).not.toHaveBeenCalledWith(expect.any(String), "OpenClaw version mismatch");
   });
 
-  it("notes CLI and gateway version skew when the gateway reports another runtime version", async () => {
+  it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
     callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
@@ -61,12 +61,22 @@ describe("checkGatewayHealth", () => {
     ).resolves.toEqual({ healthOk: true, status: { runtimeVersion: "2026.4.23" } });
 
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway version: 2026.4.23"),
-      "Gateway version skew",
+      expect.stringContaining("the running Gateway is OpenClaw 2026.4.23"),
+      "OpenClaw version mismatch",
     );
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("stale global wrapper"),
-      "Gateway version skew",
+      expect.not.stringContaining("That usually means"),
+      "OpenClaw version mismatch",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Check `openclaw --version`, `which openclaw`"),
+      "OpenClaw version mismatch",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want",
+      ),
+      "OpenClaw version mismatch",
     );
   });
 

@@ -25,6 +25,17 @@ function isCombinedCommandFlag(token: string): boolean {
   return parseCombinedCommandFlag(token) !== null;
 }
 
+function countSeparateValueOptionChars(token: string): number {
+  let count = 0;
+  for (let index = 1; index < token.length; index += 1) {
+    const char = token[index];
+    if (char === "o" || char === "O") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function parseCombinedCommandFlag(
   token: string,
 ): { attachedCommand: string | null; separateValueCount: number } | null {
@@ -42,7 +53,7 @@ function parseCombinedCommandFlag(
   }
   return {
     attachedCommand: null,
-    separateValueCount: [...optionChars].filter((char) => char === "o" || char === "O").length,
+    separateValueCount: countSeparateValueOptionChars(token),
   };
 }
 
@@ -55,7 +66,7 @@ function combinedSeparateValueOptionCount(token: string): number {
   ) {
     return 0;
   }
-  return [...token.slice(1)].filter((char) => char === "o" || char === "O").length;
+  return countSeparateValueOptionChars(token);
 }
 
 function consumesSeparateValue(token: string): boolean {
@@ -70,8 +81,17 @@ function isPosixShortOption(token: string, option: string): boolean {
   if (token.length < 2 || token[0] !== "-" || token[1] === "-") {
     return false;
   }
-  const optionChars = token.slice(1);
-  return !optionChars.includes("-") && optionChars.includes(option);
+  let hasOption = false;
+  for (let index = 1; index < token.length; index += 1) {
+    const char = token[index];
+    if (char === "-") {
+      return false;
+    }
+    if (char === option) {
+      hasOption = true;
+    }
+  }
+  return hasOption;
 }
 
 function advancePosixInlineOptionScan(token: string): number {

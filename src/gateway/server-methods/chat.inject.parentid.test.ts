@@ -19,7 +19,11 @@ describe("gateway chat.inject transcript writes", () => {
       });
       expect(appended.ok).toBe(true);
       expect(appended.messageId).toEqual(expect.any(String));
-      expect(appended.messageId.length).toBeGreaterThan(0);
+      const messageId = appended.messageId;
+      if (!messageId) {
+        throw new Error("expected appended message id");
+      }
+      expect(messageId.length).toBeGreaterThan(0);
 
       const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/).filter(Boolean);
       expect(lines.length).toBeGreaterThanOrEqual(2);
@@ -62,13 +66,17 @@ describe("gateway chat.inject transcript writes", () => {
       });
       expect(appended.ok).toBe(true);
       expect(appended.messageId).toEqual(expect.any(String));
-      expect(appended.messageId.length).toBeGreaterThan(0);
+      const messageId = appended.messageId;
+      if (!messageId) {
+        throw new Error("expected appended message id");
+      }
+      expect(messageId.length).toBeGreaterThan(0);
 
       const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/).filter(Boolean);
       const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
 
       expect(last.type).toBe("message");
-      expect(last).toHaveProperty("id", appended.messageId);
+      expect(last).toHaveProperty("id", messageId);
       expect(last).toHaveProperty("message");
       expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(false);
     } finally {

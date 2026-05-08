@@ -18,7 +18,9 @@ describe("legacy root entry", () => {
   it("does not run CLI bootstrap when imported as a library dependency", async () => {
     const runCli = vi.fn(async () => undefined);
 
-    expect(applyTemplate("Hello {{Name}}", { Name: "operator" })).toBe("Hello operator");
+    expect(applyTemplate("Hello {{MessageSid}}", { MessageSid: "operator" })).toBe(
+      "Hello operator",
+    );
 
     await runLegacyCliEntry(["openclaw", "status"], { runCli });
     expect(runCli).toHaveBeenCalledWith(["openclaw", "status"]);

@@ -208,7 +208,11 @@ describe("agentCommand runtime config", () => {
 
       expect(resolved.storePath).toBe(store);
       expect(resolved.sessionKey).toEqual(expect.any(String));
-      expect(resolved.sessionKey.length).toBeGreaterThan(0);
+      const sessionKey = resolved.sessionKey;
+      if (!sessionKey) {
+        throw new Error("expected session key");
+      }
+      expect(sessionKey.length).toBeGreaterThan(0);
       expect(resolved.sessionId).toEqual(expect.any(String));
       expect(resolved.sessionId.length).toBeGreaterThan(0);
       expect(resolved.isNewSession).toBe(true);

@@ -276,7 +276,7 @@ describe("DiscordVoiceManager", () => {
 
   const getLastAudioPlayer = () => {
     const player = createAudioPlayerMock.mock.results.at(-1)?.value as
-      | { state: { status: string } }
+      | { state: { status: string }; stop: ReturnType<typeof vi.fn> }
       | undefined;
     if (!player) {
       throw new Error("expected Discord voice audio player to be created");

@@ -752,7 +752,7 @@ describe("web auto-reply connection", () => {
           spies,
         });
         await sendWebDirectInboundMessage({
-          onMessage: capturedOnMessage!,
+          onMessage: capturedOnMessage,
           body: "second",
           from: "+1",
           to: "+2",

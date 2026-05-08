@@ -67,13 +67,21 @@ function unifiedDistGraph(): TsdownConfigEntry | undefined {
   );
 }
 
+function requireUnifiedDistGraph(): TsdownConfigEntry {
+  const distGraph = unifiedDistGraph();
+  if (!distGraph) {
+    throw new Error("expected unified dist graph");
+  }
+  return distGraph;
+}
+
 function readGatewayRunLoopSource(): string {
   return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
 describe("tsdown config", () => {
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
-    const distGraph = unifiedDistGraph();
+    const distGraph = requireUnifiedDistGraph();
 
     expect(entryKeys(distGraph)).toEqual(
       expect.arrayContaining([
@@ -102,9 +110,9 @@ describe("tsdown config", () => {
   });
 
   it("keeps gateway lifecycle lazy runtime behind one stable dist entry", () => {
-    const distGraph = unifiedDistGraph();
+    const distGraph = requireUnifiedDistGraph();
 
-    expect(entrySources(distGraph as TsdownConfigEntry)).toEqual(
+    expect(entrySources(distGraph)).toEqual(
       expect.objectContaining({
         "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
       }),
@@ -112,9 +120,9 @@ describe("tsdown config", () => {
   });
 
   it("keeps reply dispatcher lazy runtime behind one root stable dist entry", () => {
-    const distGraph = unifiedDistGraph();
+    const distGraph = requireUnifiedDistGraph();
 
-    expect(entrySources(distGraph as TsdownConfigEntry)).toEqual(
+    expect(entrySources(distGraph)).toEqual(
       expect.objectContaining({
         "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
       }),
@@ -175,7 +183,7 @@ describe("tsdown config", () => {
     if (typeof external !== "function") {
       throw new Error("expected unified graph external predicate");
     }
-    const externalize = external as TsdownExternalFunction;
+    const externalize = external;
     expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
   });
 

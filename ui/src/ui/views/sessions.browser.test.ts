@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures";
+import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 
 const VIEWPORTS = [
   [375, 812],
