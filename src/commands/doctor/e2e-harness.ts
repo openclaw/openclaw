@@ -2,14 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
 import {
   readEmbeddedGatewayTokenForTest,
   testServiceAuditCodes,
-} from "./doctor-service-audit.test-helpers.js";
-import type { LegacyStateDetection } from "./doctor-state-migrations.js";
+} from "../doctor-service-audit.test-helpers.js";
+import type { LegacyStateDetection } from "./state-migrations.js";
 
 let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
@@ -141,46 +141,17 @@ export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
   changes: [],
   warnings: [],
 }) as unknown as MockFn;
-export const runChannelPluginStartupMaintenance = vi
+export const createPreMigrationBackup = vi
   .fn()
-  .mockResolvedValue(undefined) as unknown as MockFn;
+  .mockResolvedValue("/tmp/openclaw-backup.tgz") as unknown as MockFn;
 
 function defaultRunDoctorHealthContributions(ctx: {
   cfg: Record<string, unknown>;
   runtime: { log: (message: string) => void; error: (message: string) => void };
   prompter?: { shouldRepair?: boolean };
 }) {
-  if (ctx.prompter?.shouldRepair !== true) {
-    return Promise.resolve();
-  }
-  const channels =
-    ctx.cfg.channels && typeof ctx.cfg.channels === "object" && !Array.isArray(ctx.cfg.channels)
-      ? Object.fromEntries(
-          Object.entries(ctx.cfg.channels).map(([channelId, value]) => {
-            if (!value || typeof value !== "object" || Array.isArray(value)) {
-              return [channelId, value];
-            }
-            const channelConfig = { ...(value as Record<string, unknown>) };
-            if (channelConfig.enabled === true) {
-              delete channelConfig.enabled;
-            }
-            return [channelId, channelConfig];
-          }),
-        )
-      : ctx.cfg.channels;
-  return runChannelPluginStartupMaintenance({
-    cfg: {
-      ...ctx.cfg,
-      ...(channels !== undefined ? { channels } : {}),
-    },
-    env: process.env,
-    log: {
-      info: (message: string) => ctx.runtime.log(message),
-      warn: (message: string) => ctx.runtime.error(message),
-    },
-    trigger: "doctor-fix",
-    logPrefix: "doctor",
-  });
+  void ctx;
+  return Promise.resolve();
 }
 
 function createLegacyStateMigrationDetectionResult(params?: {
@@ -198,8 +169,8 @@ function createLegacyStateMigrationDetectionResult(params?: {
     sessions: {
       legacyDir: "/tmp/state/sessions",
       legacyStorePath: "/tmp/state/sessions/sessions.json",
-      targetDir: "/tmp/state/agents/main/sessions",
-      targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
+      agentLegacyDir: "/tmp/state/agents/main/sessions",
+      agentLegacyStorePath: "/tmp/state/agents/main/sessions/sessions.json",
       hasLegacy: params?.hasLegacySessions ?? false,
       legacyKeys: [],
     },
@@ -211,10 +182,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
     channelPlans: {
       hasLegacy: false,
       plans: [],
-    },
-    sqlite: {
-      hasLegacy: false,
-      legacyTables: [],
     },
     preview: params?.preview ?? [],
   };
@@ -248,18 +215,19 @@ vi.mock("@clack/prompts", () => ({
   select,
 }));
 
-vi.mock("../agents/skills-status.js", () => ({
+vi.mock("../../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 
-vi.mock("../plugins/loader.js", () => ({
+vi.mock("../../plugins/loader.js", () => ({
   isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
   resolveRuntimePluginRegistry: () => null,
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
     CONFIG_PATH: "/tmp/openclaw.json",
@@ -270,8 +238,8 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
-vi.mock("../config/io.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+vi.mock("../../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/io.js")>("../../config/io.js");
   return {
     ...actual,
     createConfigIO,
@@ -280,46 +248,47 @@ vi.mock("../config/io.js", async () => {
   };
 });
 
-vi.mock("../daemon/legacy.js", () => ({
+vi.mock("../../daemon/legacy.js", () => ({
   findLegacyGatewayServices,
   uninstallLegacyGatewayServices,
 }));
 
-vi.mock("../daemon/inspect.js", () => ({
+vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices,
   findSystemGatewayServices,
   renderGatewayServiceCleanupHints,
 }));
 
-vi.mock("../daemon/service-audit.js", () => ({
+vi.mock("../../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration: vi.fn(() => false),
   readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   SERVICE_AUDIT_CODES: testServiceAuditCodes,
 }));
 
-vi.mock("../daemon/program-args.js", () => ({
+vi.mock("../../daemon/program-args.js", () => ({
   resolveGatewayProgramArguments,
 }));
 
-vi.mock("./daemon-install-helpers.js", () => ({
+vi.mock("../daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan,
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 
-vi.mock("./doctor-gateway-auth-token.js", () => ({
+vi.mock("../doctor-gateway-auth-token.js", () => ({
   resolveGatewayAuthTokenForService,
 }));
 
-vi.mock("../gateway/call.js", async () => {
-  const actual = await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
+vi.mock("../../gateway/call.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../gateway/call.js")>("../../gateway/call.js");
   return {
     ...actual,
     callGateway,
   };
 });
 
-vi.mock("../process/exec.js", () => ({
+vi.mock("../../process/exec.js", () => ({
   runExec,
   runCommandWithTimeout,
 }));
@@ -348,26 +317,26 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   }),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
+vi.mock("../../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot,
   resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
 }));
 
-vi.mock("../infra/update-runner.js", () => ({
+vi.mock("../../infra/update-runner.js", () => ({
   runGatewayUpdate,
 }));
 
-vi.mock("../flows/doctor-health-contributions.js", () => ({
+vi.mock("../../flows/doctor-health-contributions.js", () => ({
   runDoctorHealthContributions,
 }));
 
-vi.mock("./doctor-memory-search.js", () => ({
+vi.mock("../doctor-memory-search.js", () => ({
   maybeRepairMemoryRecallHealth,
   noteMemorySearchHealth,
   noteMemoryRecallHealth,
 }));
 
-vi.mock("../plugins/doctor-contract-registry.js", () => ({
+vi.mock("../../plugins/doctor-contract-registry.js", () => ({
   applyPluginDoctorCompatibilityMigrations: (config: unknown) => ({
     config,
     changes: [],
@@ -376,17 +345,17 @@ vi.mock("../plugins/doctor-contract-registry.js", () => ({
   listPluginDoctorLegacyConfigRules,
 }));
 
-vi.mock("../channels/plugins/doctor-contract-api.js", () => ({
+vi.mock("../../channels/plugins/doctor-contract-api.js", () => ({
   loadBundledChannelDoctorContractApi: vi.fn(() => undefined),
 }));
 
-vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
+vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: vi.fn(() => undefined),
 }));
 
-vi.mock("../agents/auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
-    "../agents/auth-profiles.js",
+vi.mock("../../agents/auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
+    "../../agents/auth-profiles.js",
   );
   return {
     ...actual,
@@ -394,9 +363,9 @@ vi.mock("../agents/auth-profiles.js", async () => {
   };
 });
 
-vi.mock("../agents/auth-profiles/store.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store.js")>(
-    "../agents/auth-profiles/store.js",
+vi.mock("../../agents/auth-profiles/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/auth-profiles/store.js")>(
+    "../../agents/auth-profiles/store.js",
   );
   return {
     ...actual,
@@ -404,7 +373,7 @@ vi.mock("../agents/auth-profiles/store.js", async () => {
   };
 });
 
-vi.mock("../daemon/service.js", () => ({
+vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
@@ -419,13 +388,13 @@ vi.mock("../daemon/service.js", () => ({
   }),
 }));
 
-vi.mock("../pairing/pairing-store.js", () => ({
+vi.mock("../../pairing/pairing-store.js", () => ({
   legacyChannelPairingFilesExist: vi.fn().mockResolvedValue(false),
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
     log: () => {},
     error: () => {},
@@ -435,8 +404,8 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
-vi.mock("../utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
+vi.mock("../../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
   return {
     ...actual,
     resolveUserPath: (value: string) => value,
@@ -444,11 +413,11 @@ vi.mock("../utils.js", async () => {
   };
 });
 
-vi.mock("./health.js", () => ({
+vi.mock("../health.js", () => ({
   healthCommand: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./onboard-helpers.js", () => ({
+vi.mock("../onboard-helpers.js", () => ({
   applyWizardMetadata: (cfg: Record<string, unknown>) => cfg,
   DEFAULT_WORKSPACE: "/tmp",
   guardCancel: (value: unknown) => value,
@@ -456,14 +425,14 @@ vi.mock("./onboard-helpers.js", () => ({
   randomToken: vi.fn(() => "test-gateway-token"),
 }));
 
-vi.mock("./doctor-state-migrations.js", () => ({
+vi.mock("./state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 }));
 
-vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
-  runChannelPluginStartupMaintenance,
+vi.mock("../migrate/apply.js", () => ({
+  createPreMigrationBackup,
 }));
 
 export function mockDoctorConfigSnapshot(
@@ -498,14 +467,16 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
   runtime: { log: MockFn; error: MockFn; exit: MockFn };
   detectLegacyStateMigrations: MockFn;
   runLegacyStateMigrations: MockFn;
+  createPreMigrationBackup: MockFn;
 }> {
   mockDoctorConfigSnapshot();
 
-  const { doctorCommand } = await import("./doctor.js");
+  const { doctorCommand } = await import("../doctor.js");
   const runtime = createDoctorRuntime();
 
   detectLegacyStateMigrations.mockClear();
   runLegacyStateMigrations.mockClear();
+  createPreMigrationBackup.mockClear();
   detectLegacyStateMigrations.mockResolvedValueOnce(
     createLegacyStateMigrationDetectionResult({
       hasLegacySessions: true,
@@ -524,6 +495,7 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
     runtime,
     detectLegacyStateMigrations,
     runLegacyStateMigrations,
+    createPreMigrationBackup,
   };
 }
 
@@ -573,7 +545,6 @@ beforeEach(() => {
   serviceUninstall.mockReset().mockResolvedValue(undefined);
   serviceReadCommand.mockReset().mockResolvedValue(null);
   callGateway.mockReset().mockRejectedValue(new Error("gateway closed"));
-  runChannelPluginStartupMaintenance.mockReset().mockResolvedValue(undefined);
 
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);
