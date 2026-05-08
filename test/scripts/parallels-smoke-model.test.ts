@@ -481,7 +481,7 @@ console.log(JSON.stringify(result));
     ) as { status: number; stdout: string };
 
     expect(result.status).toBe(124);
-    expect(result.stdout).toEqual(expect.any(String));
+    expect(result.stdout).toBeTypeOf("string");
   });
 
   it("runs the Windows agent turn through the detached done-file runner", () => {
