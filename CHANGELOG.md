@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Voice Call: route final provider webhook speech events through the inbound auto-response path while skipping speech that resolves an active `continueCall` waiter. Fixes #79118. Thanks @dvy.
 - Google/Gemini: normalize retired `google/gemini-3-pro-preview` catalog selections to `google/gemini-3.1-pro-preview` before they are written to model config.
 - Control UI: read the Quick Settings exec policy badge from `tools.exec.security` instead of the non-schema `agents.defaults.exec.security` path, so configured `full`/`deny` values render accurately. Fixes #78311. Thanks @FriedBack.
 - Control UI/usage: add transcript-backed historical lineage rollups for rotated logical sessions, with current-instance vs historical-lineage scope controls and long-range presets so usage history stays visible after restarts and updates. Fixes #50701. Thanks @dev-gideon-llc and @BunsDev.
