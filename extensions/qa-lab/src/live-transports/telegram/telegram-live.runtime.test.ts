@@ -496,7 +496,7 @@ describe("telegram live qa runtime", () => {
   });
 
   it("asserts long Telegram final replies reuse the streamed preview message", () => {
-    expect(() =>
+    expect(
       __testing.assertTelegramScenarioMessageSet({
         expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
         expectedSutMessageCount: 2,
@@ -534,7 +534,7 @@ describe("telegram live qa runtime", () => {
           },
         ],
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(() =>
       __testing.assertTelegramScenarioMessageSet({
@@ -591,7 +591,7 @@ describe("telegram live qa runtime", () => {
   });
 
   it("accepts legitimate three-chunk Telegram final replies", () => {
-    expect(() =>
+    expect(
       __testing.assertTelegramScenarioMessageSet({
         expectedJoinedSutTextIncludes: [
           "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
@@ -646,7 +646,7 @@ describe("telegram live qa runtime", () => {
           },
         ],
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("matches scenario replies by thread or exact marker", () => {
@@ -716,7 +716,7 @@ describe("telegram live qa runtime", () => {
   });
 
   it("validates expected Telegram reply markers", () => {
-    expect(() =>
+    expect(
       __testing.assertTelegramScenarioReply({
         expectedTextIncludes: ["🧭 Identity", "Channel: telegram"],
         message: {
@@ -733,7 +733,7 @@ describe("telegram live qa runtime", () => {
           mediaKinds: [],
         },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
     expect(() =>
       __testing.assertTelegramScenarioReply({
         expectedTextIncludes: ["Use /tools verbose for descriptions."],
