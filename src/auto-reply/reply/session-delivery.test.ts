@@ -59,7 +59,7 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
       isInterSession: true,
     });
     // No external route existed — falls through to normal resolution (webchat or undefined).
-    expect(result === "webchat" || result === undefined).toBe(true);
+    expect(["webchat", undefined]).toContain(result);
   });
 
   it("inter-session on session with no persisted lastTo preserves session route", () => {
@@ -73,7 +73,7 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
       isInterSession: true,
     });
     // No external route — falls through to normal resolution
-    expect(result === "session:somekey" || result === undefined).toBe(true);
+    expect(["session:somekey", undefined]).toContain(result);
   });
 });
 
