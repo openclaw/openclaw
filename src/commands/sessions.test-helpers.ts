@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { upsertSessionEntry } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 
 const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknown> }>(() => ({
   loadConfig: () => ({
@@ -18,6 +21,7 @@ const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknow
 }));
 
 const defaultSessionsConfigLoader = sessionsConfigState.loadConfig;
+const writtenStateRoots = new Set<string>();
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => sessionsConfigState.loadConfig(),
@@ -36,6 +40,15 @@ export function setMockSessionsConfig(loader: () => Record<string, unknown>) {
 
 export function resetMockSessionsConfig() {
   sessionsConfigState.loadConfig = defaultSessionsConfigLoader;
+}
+
+export function cleanupWrittenSessionState() {
+  closeOpenClawAgentDatabasesForTest();
+  for (const root of writtenStateRoots) {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  writtenStateRoots.clear();
+  vi.unstubAllEnvs();
 }
 
 export function makeRuntime(params?: { throwOnError?: boolean }): {
@@ -64,19 +77,24 @@ export function makeRuntime(params?: { throwOnError?: boolean }): {
   };
 }
 
-export function writeStore(data: unknown, prefix = "sessions"): string {
-  const fileName = `${[prefix, Date.now(), randomUUID()].join("-")}.json`;
-  const file = path.join(os.tmpdir(), fileName);
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
-  return file;
+export function seedSessionRows(data: unknown, prefix = "sessions"): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-${Date.now()}-${randomUUID()}-`));
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  writtenStateRoots.add(root);
+  const entries =
+    data && typeof data === "object" && !Array.isArray(data)
+      ? (data as Record<string, SessionEntry>)
+      : {};
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    upsertSessionEntry({ agentId: "main", sessionKey, entry });
+  }
 }
 
 export async function runSessionsJson<T>(
   run: (
-    opts: { json?: boolean; store?: string; active?: string; limit?: string | number },
+    opts: { json?: boolean; active?: string; limit?: string | number },
     runtime: RuntimeEnv,
   ) => Promise<void>,
-  store: string,
   options?: {
     active?: string;
     limit?: string | number;
@@ -86,7 +104,6 @@ export async function runSessionsJson<T>(
   try {
     await run(
       {
-        store,
         json: true,
         active: options?.active,
         limit: options?.limit,
@@ -94,7 +111,7 @@ export async function runSessionsJson<T>(
       runtime,
     );
   } finally {
-    fs.rmSync(store, { force: true });
+    cleanupWrittenSessionState();
   }
   return JSON.parse(logs[0] ?? "{}") as T;
 }
