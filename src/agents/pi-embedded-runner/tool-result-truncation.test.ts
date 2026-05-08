@@ -4,9 +4,12 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "../pi-ai-contract.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { SessionManager } from "../transcript/session-transcript-contract.js";
+import { readTranscriptState } from "../transcript/transcript-state.js";
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
@@ -50,6 +53,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     tmpDir = undefined;
@@ -94,7 +100,12 @@ function getFirstToolResultText(message: AgentMessage | ToolResultMessage): stri
 
 async function createTmpDir(): Promise<string> {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tool-result-truncation-test-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
   return tmpDir;
+}
+
+async function loadBranch(sessionFile: string) {
+  return (await readTranscriptState(sessionFile)).getBranch();
 }
 
 describe("truncateToolResultText", () => {
@@ -432,7 +443,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     sm.appendMessage(makeToolResult(medium, "call_3"));
     const sessionFile = sm.getSessionFile()!;
 
-    const beforeBranch = SessionManager.open(sessionFile).getBranch();
+    const beforeBranch = await loadBranch(sessionFile);
     const beforeLengths = beforeBranch
       .filter((entry) => entry.type === "message")
       .map((entry) =>
@@ -459,7 +470,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(result.truncatedCount).toBeGreaterThan(0);
     expect(listener).toHaveBeenCalledWith({ sessionFile, sessionKey: "agent:main:test" });
 
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const afterBranch = await loadBranch(sessionFile);
     const afterToolResults = afterBranch.filter(
       (entry) => entry.type === "message" && entry.message.role === "toolResult",
     );
@@ -497,7 +508,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     sm.appendMessage(makeToolResult(newerEnough, "call_2"));
     const sessionFile = sm.getSessionFile()!;
 
-    const beforeBranch = SessionManager.open(sessionFile).getBranch();
+    const beforeBranch = await loadBranch(sessionFile);
     const beforeToolResults = beforeBranch.filter(
       (entry) => entry.type === "message" && entry.message.role === "toolResult",
     );
@@ -513,7 +524,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(result.truncated).toBe(true);
     expect(result.truncatedCount).toBe(1);
 
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const afterBranch = await loadBranch(sessionFile);
     const afterToolResults = afterBranch.filter(
       (entry) => entry.type === "message" && entry.message.role === "toolResult",
     );
@@ -540,7 +551,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     });
 
     expect(result.truncated).toBe(true);
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const afterBranch = await loadBranch(sessionFile);
     const toolResult = afterBranch.find(
       (entry) => entry.type === "message" && entry.message.role === "toolResult",
     );
@@ -571,7 +582,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(result.truncated).toBe(true);
     expect(result.truncatedCount).toBe(3);
 
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const afterBranch = await loadBranch(sessionFile);
     const toolResults = afterBranch.filter(
       (entry) => entry.type === "message" && entry.message.role === "toolResult",
     );
@@ -602,7 +613,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     });
 
     expect(result.truncated).toBe(true);
-    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const afterBranch = await loadBranch(sessionFile);
     const toolResults = afterBranch.filter(
       (entry) => entry.type === "message" && entry.message.role === "toolResult",
     );
