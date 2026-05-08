@@ -6,6 +6,8 @@ import {
   isStableTag,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
+  resolveNpmPackageTargetRegistryUrl,
+  resolveNpmRegistryBaseUrl,
   resolveRegistryUpdateChannel,
   resolveUpdateChannelDisplay,
   type UpdateChannel,
@@ -54,6 +56,51 @@ describe("channelToNpmTag", () => {
       expect(channelToNpmTag(channel)).toBe(expected);
     },
   );
+});
+
+describe("npm registry url resolution", () => {
+  it("defaults to the public npm registry", () => {
+    expect(resolveNpmRegistryBaseUrl({})).toBe("https://registry.npmjs.org");
+    expect(resolveNpmPackageTargetRegistryUrl({ target: "latest", env: {} })).toBe(
+      "https://registry.npmjs.org/openclaw/latest",
+    );
+  });
+
+  it("prefers npm_config_registry and trims trailing slashes", () => {
+    expect(
+      resolveNpmPackageTargetRegistryUrl({
+        target: "latest",
+        env: {
+          npm_config_registry: " https://registry.npmmirror.com// ",
+          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/",
+        },
+      }),
+    ).toBe("https://registry.npmmirror.com/openclaw/latest");
+  });
+
+  it("falls back to uppercase and userconfig registry env vars", () => {
+    expect(
+      resolveNpmPackageTargetRegistryUrl({
+        target: "beta",
+        env: { NPM_CONFIG_REGISTRY: "https://mirror.example/npm/" },
+      }),
+    ).toBe("https://mirror.example/npm/openclaw/beta");
+    expect(
+      resolveNpmPackageTargetRegistryUrl({
+        target: "dev",
+        env: { npm_config_userconfig_registry: "http://127.0.0.1:4873/" },
+      }),
+    ).toBe("http://127.0.0.1:4873/openclaw/dev");
+  });
+
+  it("ignores invalid registry values", () => {
+    expect(
+      resolveNpmPackageTargetRegistryUrl({
+        target: "latest",
+        env: { npm_config_registry: "file:///tmp/registry" },
+      }),
+    ).toBe("https://registry.npmjs.org/openclaw/latest");
+  });
 });
 
 describe("resolveEffectiveUpdateChannel", () => {

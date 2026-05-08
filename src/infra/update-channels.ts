@@ -1,4 +1,7 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type UpdateChannel = "stable" | "beta" | "dev";
 export type UpdateChannelSource =
@@ -11,6 +14,50 @@ export type UpdateChannelSource =
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
 export const DEV_BRANCH = "main";
+export const DEFAULT_NPM_REGISTRY_URL = "https://registry.npmjs.org";
+
+const NPM_REGISTRY_ENV_KEYS = [
+  "npm_config_registry",
+  "NPM_CONFIG_REGISTRY",
+  "npm_config_userconfig_registry",
+] as const;
+
+function normalizeNpmRegistryBaseUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url.toString().replace(/\/+$/u, "");
+  } catch {
+    return null;
+  }
+}
+
+export function resolveNpmRegistryBaseUrl(
+  env: Partial<Record<(typeof NPM_REGISTRY_ENV_KEYS)[number], string | undefined>> = process.env,
+): string {
+  const configured =
+    normalizeOptionalString(env.npm_config_registry) ??
+    normalizeOptionalString(env.NPM_CONFIG_REGISTRY) ??
+    normalizeOptionalString(env.npm_config_userconfig_registry);
+  return (
+    normalizeNpmRegistryBaseUrl(configured ?? DEFAULT_NPM_REGISTRY_URL) ?? DEFAULT_NPM_REGISTRY_URL
+  );
+}
+
+export function resolveNpmPackageTargetRegistryUrl(params: {
+  packageName?: string;
+  target: string;
+  registryBaseUrl?: string;
+  env?: Parameters<typeof resolveNpmRegistryBaseUrl>[0];
+}): string {
+  const registryBaseUrl =
+    (params.registryBaseUrl ? normalizeNpmRegistryBaseUrl(params.registryBaseUrl) : null) ??
+    resolveNpmRegistryBaseUrl(params.env);
+  const packageName = params.packageName ?? "openclaw";
+  return `${registryBaseUrl}/${encodeURIComponent(packageName)}/${encodeURIComponent(params.target)}`;
+}
 
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);
