@@ -66,7 +66,6 @@ type OpenRouterVideoResult = Awaited<ReturnType<OpenRouterVideoProvider["generat
 
 function requireGenerateCapabilities(provider: OpenRouterVideoProvider) {
   const capabilities = provider.capabilities.generate;
-  expect(capabilities).toBeDefined();
   if (!capabilities) {
     throw new Error("expected OpenRouter generate capabilities");
   }
@@ -75,12 +74,10 @@ function requireGenerateCapabilities(provider: OpenRouterVideoProvider) {
 
 function requireFetchCallHeaders(index: number): Headers {
   const call = fetchWithTimeoutGuardedMock.mock.calls[index];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`expected OpenRouter fetch call ${index + 1}`);
   }
   const init = call[1] as { headers?: HeadersInit } | undefined;
-  expect(init).toBeDefined();
   if (!init) {
     throw new Error(`expected OpenRouter fetch call ${index + 1} init`);
   }
@@ -89,7 +86,6 @@ function requireFetchCallHeaders(index: number): Headers {
 
 function requireGeneratedVideo(result: OpenRouterVideoResult, index: number) {
   const video = result.videos[index];
-  expect(video).toBeDefined();
   if (!video) {
     throw new Error(`expected OpenRouter generated video at index ${index}`);
   }

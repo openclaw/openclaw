@@ -45,11 +45,9 @@ function requireBytePlusPostBody(): Record<string, unknown> {
   const request = postJsonRequestMock.mock.calls[0]?.[0] as
     | { body?: Record<string, unknown> }
     | undefined;
-  expect(request).toBeDefined();
   if (!request) {
     throw new Error("expected BytePlus video request");
   }
-  expect(request.body).toBeDefined();
   if (!request.body) {
     throw new Error("expected BytePlus video request body");
   }

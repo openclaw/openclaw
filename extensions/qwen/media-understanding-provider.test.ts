@@ -36,7 +36,6 @@ describe("describeQwenVideo", () => {
     expect(result.model).toBe("qwen-vl-max");
     expect(result.text).toBe("first\nsecond");
     expect(url).toBe("https://example.com/v1/chat/completions");
-    expect(init).toBeDefined();
     if (!init) {
       throw new Error("expected Qwen request init");
     }
@@ -58,18 +57,15 @@ describe("describeQwenVideo", () => {
     const body = JSON.parse(bodyText);
     expect(body.model).toBe("qwen-vl-max");
     const content = body.messages?.[0]?.content;
-    expect(content).toBeDefined();
     if (!content) {
       throw new Error("expected Qwen user content");
     }
     expect(content[0]?.text).toBe("summarize the clip");
     const videoContent = content[1];
-    expect(videoContent).toBeDefined();
     if (!videoContent) {
       throw new Error("expected Qwen video content");
     }
     expect(videoContent.type).toBe("video_url");
-    expect(videoContent.video_url).toBeDefined();
     if (!videoContent.video_url) {
       throw new Error("expected Qwen video URL payload");
     }

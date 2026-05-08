@@ -35,7 +35,6 @@ function requireOpenRouterPostBody(): {
   messages?: Array<{ content?: unknown }>;
 } {
   const request = postJsonRequestMock.mock.calls[0]?.[0];
-  expect(request).toBeDefined();
   if (!request) {
     throw new Error("expected OpenRouter image generation request");
   }
@@ -49,7 +48,6 @@ function requireGeneratedImage(
   index: number,
 ) {
   const image = result.images[index];
-  expect(image).toBeDefined();
   if (!image) {
     throw new Error(`expected OpenRouter generated image at index ${index}`);
   }

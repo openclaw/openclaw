@@ -28,7 +28,6 @@ describe("describeMoonshotVideo", () => {
     expect(result.text).toBe("video ok");
     expect(result.model).toBe("kimi-k2.6");
     expect(url).toBe("https://api.moonshot.ai/v1/chat/completions");
-    expect(init).toBeDefined();
     if (!init) {
       throw new Error("expected Moonshot request init");
     }
@@ -52,7 +51,6 @@ describe("describeMoonshotVideo", () => {
     };
     expect(body.model).toBe("kimi-k2.6");
     const content = body.messages?.[0]?.content;
-    expect(content).toBeDefined();
     if (!content) {
       throw new Error("expected Moonshot user content");
     }
@@ -61,12 +59,10 @@ describe("describeMoonshotVideo", () => {
       text: "Describe the video.",
     });
     const videoContent = content[1];
-    expect(videoContent).toBeDefined();
     if (!videoContent) {
       throw new Error("expected Moonshot video content");
     }
     expect(videoContent.type).toBe("video_url");
-    expect(videoContent.video_url).toBeDefined();
     if (!videoContent.video_url) {
       throw new Error("expected Moonshot video URL payload");
     }

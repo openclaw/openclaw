@@ -73,7 +73,6 @@ describe("runway video generation provider", () => {
     );
     expect(result.videos).toHaveLength(1);
     const video = result.videos[0];
-    expect(video).toBeDefined();
     if (!video) {
       throw new Error("expected Runway generated video");
     }
