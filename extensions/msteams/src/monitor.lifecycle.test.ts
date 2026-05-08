@@ -276,7 +276,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     abort.abort();
     const result = await task;
-    expect(result.app).not.toBeNull();
+    if (!result.app) {
+      throw new Error("expected Teams monitor app after startup abort");
+    }
     await expect(result.shutdown()).resolves.toBeUndefined();
   });
 
