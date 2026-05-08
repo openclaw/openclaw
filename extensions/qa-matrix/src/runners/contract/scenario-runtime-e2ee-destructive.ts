@@ -56,7 +56,7 @@ const matrixStorageMetaStore = createPluginStateKeyedStore<MatrixQaStorageMetada
   maxEntries: 10_000,
 });
 
-const matrixIdbSnapshotStore = createPluginBlobStore<Record<string, unknown>>("matrix", {
+const matrixIdbSnapshotStore = createPluginBlobStore("matrix", {
   namespace: MATRIX_IDB_SNAPSHOT_NAMESPACE,
   maxEntries: 1_000,
 });

@@ -4,9 +4,9 @@ import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginCandidate } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
+import type { PluginDiagnostic, PluginBundleFormat, PluginFormat } from "./manifest-types.js";
 import type { PluginPackageChannel } from "./manifest.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
 export const INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION = 1;
@@ -88,8 +88,8 @@ export type InstalledPluginIndexRecord = {
   manifestPath: string;
   manifestHash: string;
   manifestFile?: InstalledPluginFileSignature;
-  format?: PluginManifestRecord["format"];
-  bundleFormat?: PluginManifestRecord["bundleFormat"];
+  format?: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
   source?: string;
   setupSource?: string;
   packageJson?: {
@@ -98,7 +98,7 @@ export type InstalledPluginIndexRecord = {
     fileSignature?: InstalledPluginFileSignature;
   };
   rootDir: string;
-  origin: PluginManifestRecord["origin"];
+  origin: PluginOrigin;
   enabled: boolean;
   enabledByDefault?: boolean;
   enabledByDefaultOnPlatforms?: readonly string[];

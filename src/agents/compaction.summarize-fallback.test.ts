@@ -1,8 +1,8 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { summarizeWithFallback } from "./compaction.js";
+import type { ExtensionContext } from "./agent-extension-contract.js";
 import type { UserMessage } from "./pi-ai-contract.js";
-import type { ExtensionContext } from "./transcript/session-transcript-contract.js";
 
 const piCodingAgentMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),

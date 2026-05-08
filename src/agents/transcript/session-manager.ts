@@ -13,6 +13,7 @@ import {
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { CURRENT_SESSION_VERSION } from "./session-transcript-format.js";
 import type {
   FileEntry,
   SessionContext,
@@ -22,8 +23,7 @@ import type {
   SessionListProgress,
   SessionManager,
   SessionTreeNode,
-} from "./session-transcript-contract.js";
-import { CURRENT_SESSION_VERSION } from "./session-transcript-format.js";
+} from "./session-transcript-types.js";
 import { TranscriptState } from "./transcript-state.js";
 
 function createSessionHeader(params: {

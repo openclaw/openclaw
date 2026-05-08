@@ -5,6 +5,7 @@ import {
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionContext } from "./agent-extension-contract.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -17,7 +18,6 @@ import type {
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
-import type { ExtensionContext } from "./transcript/session-transcript-contract.js";
 
 function createContractTool(name: string, execute: AgentTool["execute"]): AgentTool {
   return {

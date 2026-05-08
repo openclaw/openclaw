@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   closeOpenClawStateDatabaseForTest,
   replaceSqliteSessionTranscriptEvents,
-} from "./openclaw-runtime.js";
+} from "./openclaw-runtime-session.js";
 import {
   buildSessionTranscriptEntry,
   listSessionTranscriptsForAgent,

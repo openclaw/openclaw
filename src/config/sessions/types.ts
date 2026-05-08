@@ -243,7 +243,7 @@ export type SessionEntry = {
   /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
-  /** Legacy alias migrated to lastChannel by doctor session migration. */
+  /** @deprecated Legacy alias migrated to lastChannel by doctor session migration. */
   lastProvider?: string;
   thinkingLevel?: string;
   fastMode?: boolean;

@@ -36,6 +36,7 @@ export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-respons
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 export type { NormalizedUsage } from "../agents/usage.js";
+export { listTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 export type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareContext,

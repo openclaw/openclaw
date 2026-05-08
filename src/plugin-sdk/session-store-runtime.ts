@@ -1,6 +1,14 @@
 // Narrow SQLite session row helpers for channel hot paths.
 
-export { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+export {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
+export {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 export { resolveSessionRowEntry } from "../config/sessions/store-entry.js";
 export { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 export { resolveAndPersistSessionTranscriptLocator } from "../config/sessions/session-locator.js";
@@ -17,6 +25,10 @@ export {
   updateLastRoute,
   upsertSessionEntry,
 } from "../config/sessions/store.js";
+export {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
 export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,

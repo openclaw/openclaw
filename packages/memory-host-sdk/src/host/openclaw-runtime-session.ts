@@ -13,6 +13,8 @@ export {
   loadSqliteSessionTranscriptEvents,
   onSessionTranscriptUpdate,
   parseUsageCountedSessionIdFromFileName,
+  closeOpenClawStateDatabaseForTest,
+  replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
   stripInboundMetadata,
   stripInternalRuntimeContext,
