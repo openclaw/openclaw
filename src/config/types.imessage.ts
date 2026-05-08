@@ -12,6 +12,20 @@ import type {
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
+export type IMessageActionConfig = {
+  reactions?: boolean;
+  edit?: boolean;
+  unsend?: boolean;
+  reply?: boolean;
+  sendWithEffect?: boolean;
+  renameGroup?: boolean;
+  setGroupIcon?: boolean;
+  addParticipant?: boolean;
+  removeParticipant?: boolean;
+  leaveGroup?: boolean;
+  sendAttachment?: boolean;
+};
+
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -30,19 +44,7 @@ export type IMessageAccountConfig = {
   /** Remote SSH host token for SCP attachment fetches (`host` or `user@host`). */
   remoteHost?: string;
   /** Enable or disable private API message actions. */
-  actions?: {
-    reactions?: boolean;
-    edit?: boolean;
-    unsend?: boolean;
-    reply?: boolean;
-    sendWithEffect?: boolean;
-    renameGroup?: boolean;
-    setGroupIcon?: boolean;
-    addParticipant?: boolean;
-    removeParticipant?: boolean;
-    leaveGroup?: boolean;
-    sendAttachment?: boolean;
-  };
+  actions?: IMessageActionConfig;
   /** Optional default send service (imessage|sms|auto). */
   service?: "imessage" | "sms" | "auto";
   /** Optional default region (used when sending SMS). */
