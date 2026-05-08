@@ -287,6 +287,67 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
 
+CREATE TABLE IF NOT EXISTS subagent_runs (
+  run_id TEXT NOT NULL PRIMARY KEY,
+  child_session_key TEXT NOT NULL,
+  controller_session_key TEXT,
+  requester_session_key TEXT NOT NULL,
+  requester_display_key TEXT NOT NULL,
+  requester_origin_json TEXT,
+  task TEXT NOT NULL,
+  cleanup TEXT NOT NULL,
+  label TEXT,
+  model TEXT,
+  agent_dir TEXT,
+  workspace_dir TEXT,
+  run_timeout_seconds INTEGER,
+  spawn_mode TEXT,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  session_started_at INTEGER,
+  accumulated_runtime_ms INTEGER,
+  ended_at INTEGER,
+  outcome_json TEXT,
+  archive_at_ms INTEGER,
+  cleanup_completed_at INTEGER,
+  cleanup_handled INTEGER,
+  suppress_announce_reason TEXT,
+  expects_completion_message INTEGER,
+  announce_retry_count INTEGER,
+  last_announce_retry_at INTEGER,
+  last_announce_delivery_error TEXT,
+  ended_reason TEXT,
+  pause_reason TEXT,
+  wake_on_descendant_settle INTEGER,
+  frozen_result_text TEXT,
+  frozen_result_captured_at INTEGER,
+  fallback_frozen_result_text TEXT,
+  fallback_frozen_result_captured_at INTEGER,
+  ended_hook_emitted_at INTEGER,
+  pending_final_delivery INTEGER,
+  pending_final_delivery_created_at INTEGER,
+  pending_final_delivery_last_attempt_at INTEGER,
+  pending_final_delivery_attempt_count INTEGER,
+  pending_final_delivery_last_error TEXT,
+  pending_final_delivery_payload_json TEXT,
+  completion_announced_at INTEGER,
+  attachments_dir TEXT,
+  attachments_root_dir TEXT,
+  retain_attachments_on_keep INTEGER,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_subagent_runs_child_session_key
+  ON subagent_runs(child_session_key, created_at DESC, run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_runs_requester_session_key
+  ON subagent_runs(requester_session_key, created_at DESC, run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_runs_controller_session_key
+  ON subagent_runs(controller_session_key, created_at DESC, run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_runs_archive_at
+  ON subagent_runs(archive_at_ms, cleanup_handled, run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_runs_ended_cleanup
+  ON subagent_runs(ended_at, cleanup_handled, run_id);
+
 CREATE TABLE IF NOT EXISTS task_delivery_state (
   task_id TEXT NOT NULL PRIMARY KEY,
   requester_origin_json TEXT,

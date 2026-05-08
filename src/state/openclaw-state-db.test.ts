@@ -157,7 +157,7 @@ describe("openclaw state database", () => {
 
     expect(columns.some((column) => column.name === "sort_order")).toBe(true);
     expect(index?.sql).toContain("sort_order ASC");
-    expect(version.user_version).toBe(19);
+    expect(version.user_version).toBe(20);
   });
 
   it("migrates legacy cron runtime state from kv into cron job columns", () => {
@@ -215,7 +215,56 @@ describe("openclaw state database", () => {
         .prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?")
         .get("cron.jobs.state"),
     ).toEqual({ count: 0 });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+  });
+
+  it("migrates persisted subagent runs from kv into subagent run rows", () => {
+    const stateDir = createTempStateDir();
+    const dbPath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const sqlite = requireNodeSqlite();
+    const oldDb = new sqlite.DatabaseSync(dbPath);
+    oldDb.exec(`
+      CREATE TABLE kv (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      );
+      INSERT INTO kv (scope, key, value_json, updated_at)
+      VALUES (
+        'subagent_runs',
+        'run-1',
+        '{"runId":"run-1","childSessionKey":"agent:main:subagent:child","requesterSessionKey":"agent:main:main","requesterDisplayKey":"main","task":"migrate subagent","cleanup":"keep","createdAt":1,"startedAt":2,"cleanupHandled":false,"requesterOrigin":{"channel":"telegram","accountId":"acct-1"}}',
+        3
+      );
+      PRAGMA user_version = 19;
+    `);
+    oldDb.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      database.db
+        .prepare(
+          "SELECT run_id, child_session_key, requester_session_key, task, cleanup_handled, requester_origin_json FROM subagent_runs WHERE run_id = ?",
+        )
+        .get("run-1"),
+    ).toEqual({
+      run_id: "run-1",
+      child_session_key: "agent:main:subagent:child",
+      requester_session_key: "agent:main:main",
+      task: "migrate subagent",
+      cleanup_handled: 0,
+      requester_origin_json: '{"channel":"telegram","accountId":"acct-1"}',
+    });
+    expect(
+      database.db.prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?").get("subagent_runs"),
+    ).toEqual({ count: 0 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
   });
 
   it("upgrades task delivery state with task-run cascade integrity", () => {

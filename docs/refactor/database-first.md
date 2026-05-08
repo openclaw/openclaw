@@ -105,13 +105,16 @@ The branch already has a real shared SQLite base:
   `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_run_logs`, `cron_jobs`, `commitments`,
   `delivery_queue_entries`, `task_runs`, `task_delivery_state`, `flow_runs`,
-  `migration_runs`, and `backup_runs`.
+  `subagent_runs`, `migration_runs`, and `backup_runs`.
 - `src/state/openclaw-agent-db.ts` opens
   `agents/<agentId>/agent/openclaw-agent.sqlite`, registers the database in the
   global DB, and owns agent-local session, transcript, VFS, artifact, and cache
   tables. Shared runtime discovery now reads the generated-typed
   `agent_databases` registry instead of reimplementing that query at each call
   site.
+- Subagent run recovery state now lives in typed shared `subagent_runs` rows
+  with indexed child, requester, and controller session keys. The old
+  `subagent_runs` KV scope is migration input only.
 - `src/agents/filesystem/virtual-agent-fs.sqlite.ts` implements a SQLite VFS
   over the agent database `vfs_entries` table.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
@@ -525,6 +528,7 @@ agent_databases(agent_id, path, schema_version, last_seen_at, size_bytes)
 task_runs(...)
 task_delivery_state(...)
 flow_runs(...)
+subagent_runs(run_id, child_session_key, requester_session_key, controller_session_key, created_at, ended_at, cleanup_handled, payload_json)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)

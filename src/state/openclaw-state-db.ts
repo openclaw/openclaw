@@ -17,7 +17,7 @@ import {
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
-const OPENCLAW_STATE_SCHEMA_VERSION = 19;
+const OPENCLAW_STATE_SCHEMA_VERSION = 20;
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
@@ -190,6 +190,162 @@ function migrateCronJobRuntimeStateColumns(db: DatabaseSync): void {
   db.prepare("DELETE FROM kv WHERE scope = 'cron.jobs.state'").run();
 }
 
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readBooleanInteger(value: unknown): number | null {
+  return typeof value === "boolean" ? (value ? 1 : 0) : null;
+}
+
+function readJsonText(value: unknown): string | null {
+  return value === undefined || value === null ? null : JSON.stringify(value);
+}
+
+function migrateSubagentRunsFromKv(db: DatabaseSync): void {
+  const legacyRows = db
+    .prepare("SELECT key, value_json FROM kv WHERE scope = 'subagent_runs'")
+    .all() as Array<{ key?: unknown; value_json?: unknown }>;
+  if (legacyRows.length === 0) {
+    return;
+  }
+
+  const insert = db.prepare(`
+    INSERT OR REPLACE INTO subagent_runs (
+      run_id,
+      child_session_key,
+      controller_session_key,
+      requester_session_key,
+      requester_display_key,
+      requester_origin_json,
+      task,
+      cleanup,
+      label,
+      model,
+      agent_dir,
+      workspace_dir,
+      run_timeout_seconds,
+      spawn_mode,
+      created_at,
+      started_at,
+      session_started_at,
+      accumulated_runtime_ms,
+      ended_at,
+      outcome_json,
+      archive_at_ms,
+      cleanup_completed_at,
+      cleanup_handled,
+      suppress_announce_reason,
+      expects_completion_message,
+      announce_retry_count,
+      last_announce_retry_at,
+      last_announce_delivery_error,
+      ended_reason,
+      pause_reason,
+      wake_on_descendant_settle,
+      frozen_result_text,
+      frozen_result_captured_at,
+      fallback_frozen_result_text,
+      fallback_frozen_result_captured_at,
+      ended_hook_emitted_at,
+      pending_final_delivery,
+      pending_final_delivery_created_at,
+      pending_final_delivery_last_attempt_at,
+      pending_final_delivery_attempt_count,
+      pending_final_delivery_last_error,
+      pending_final_delivery_payload_json,
+      completion_announced_at,
+      attachments_dir,
+      attachments_root_dir,
+      retain_attachments_on_keep,
+      payload_json
+    )
+    VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    )
+  `);
+
+  for (const row of legacyRows) {
+    if (typeof row.key !== "string" || typeof row.value_json !== "string") {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.value_json);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      continue;
+    }
+    const record = parsed as Record<string, unknown>;
+    const runId = readString(record.runId) ?? row.key.trim();
+    const childSessionKey = readString(record.childSessionKey);
+    const requesterSessionKey = readString(record.requesterSessionKey);
+    if (!runId || !childSessionKey || !requesterSessionKey) {
+      continue;
+    }
+    insert.run(
+      runId,
+      childSessionKey,
+      readString(record.controllerSessionKey) ?? requesterSessionKey,
+      requesterSessionKey,
+      readString(record.requesterDisplayKey) ?? "",
+      readJsonText(record.requesterOrigin),
+      readString(record.task) ?? "",
+      record.cleanup === "delete" ? "delete" : "keep",
+      readString(record.label),
+      readString(record.model),
+      readString(record.agentDir),
+      readString(record.workspaceDir),
+      readFiniteNumber(record.runTimeoutSeconds),
+      record.spawnMode === "session" ? "session" : "run",
+      readFiniteNumber(record.createdAt) ?? Date.now(),
+      readFiniteNumber(record.startedAt),
+      readFiniteNumber(record.sessionStartedAt),
+      readFiniteNumber(record.accumulatedRuntimeMs),
+      readFiniteNumber(record.endedAt),
+      readJsonText(record.outcome),
+      readFiniteNumber(record.archiveAtMs),
+      readFiniteNumber(record.cleanupCompletedAt),
+      readBooleanInteger(record.cleanupHandled),
+      readString(record.suppressAnnounceReason),
+      readBooleanInteger(record.expectsCompletionMessage),
+      readFiniteNumber(record.announceRetryCount),
+      readFiniteNumber(record.lastAnnounceRetryAt),
+      readString(record.lastAnnounceDeliveryError),
+      readString(record.endedReason),
+      readString(record.pauseReason),
+      readBooleanInteger(record.wakeOnDescendantSettle),
+      typeof record.frozenResultText === "string" ? record.frozenResultText : null,
+      readFiniteNumber(record.frozenResultCapturedAt),
+      typeof record.fallbackFrozenResultText === "string" ? record.fallbackFrozenResultText : null,
+      readFiniteNumber(record.fallbackFrozenResultCapturedAt),
+      readFiniteNumber(record.endedHookEmittedAt),
+      readBooleanInteger(record.pendingFinalDelivery),
+      readFiniteNumber(record.pendingFinalDeliveryCreatedAt),
+      readFiniteNumber(record.pendingFinalDeliveryLastAttemptAt),
+      readFiniteNumber(record.pendingFinalDeliveryAttemptCount),
+      typeof record.pendingFinalDeliveryLastError === "string"
+        ? record.pendingFinalDeliveryLastError
+        : null,
+      readJsonText(record.pendingFinalDeliveryPayload),
+      readFiniteNumber(record.completionAnnouncedAt),
+      readString(record.attachmentsDir),
+      readString(record.attachmentsRootDir),
+      readBooleanInteger(record.retainAttachmentsOnKeep),
+      row.value_json,
+    );
+  }
+
+  db.prepare("DELETE FROM kv WHERE scope = 'subagent_runs'").run();
+}
+
 function rebuildTaskDeliveryStateWithForeignKey(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_delivery_state_next (
@@ -265,6 +421,9 @@ function migrateStateSchema(db: DatabaseSync, fromVersion: number): void {
   }
   if (fromVersion < 19) {
     migrateCronJobRuntimeStateColumns(db);
+  }
+  if (fromVersion < 20) {
+    migrateSubagentRunsFromKv(db);
   }
 }
 
