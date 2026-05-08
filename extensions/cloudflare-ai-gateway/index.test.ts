@@ -42,6 +42,10 @@ describe("cloudflare-ai-gateway plugin", () => {
       model: { api: "anthropic-messages" },
       streamFn: baseStreamFn,
     } as never);
+    expect(wrapped).toBeTypeOf("function");
+    if (!wrapped) {
+      throw new Error("expected Cloudflare AI Gateway wrapped stream function");
+    }
 
     void wrapped(
       { provider: "cloudflare-ai-gateway", api: "anthropic-messages" } as never,
