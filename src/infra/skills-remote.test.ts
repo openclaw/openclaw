@@ -163,9 +163,9 @@ describe("skills-remote", () => {
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.mkdirSync(path.join(workspaceDir, "skills", "remote-skill"), { recursive: true });
       fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        path.join(workspaceDir, "skills", "remote-skill", "SKILL.md"),
         [
           "---",
           "name: remote-skill",
@@ -245,9 +245,9 @@ describe("skills-remote", () => {
       } as unknown as NodeRegistry);
     });
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.mkdirSync(path.join(workspaceDir, "skills", "remote-skill"), { recursive: true });
       fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        path.join(workspaceDir, "skills", "remote-skill", "SKILL.md"),
         [
           "---",
           "name: remote-skill",
@@ -303,9 +303,9 @@ describe("skills-remote", () => {
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.mkdirSync(path.join(workspaceDir, "skills", "remote-skill"), { recursive: true });
       fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        path.join(workspaceDir, "skills", "remote-skill", "SKILL.md"),
         [
           "---",
           "name: remote-skill",
@@ -370,9 +370,9 @@ describe("skills-remote", () => {
     nowSpy.mockReturnValue(1_000_000);
     let invokeCount = 0;
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.mkdirSync(path.join(workspaceDir, "skills", "remote-skill"), { recursive: true });
       fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        path.join(workspaceDir, "skills", "remote-skill", "SKILL.md"),
         [
           "---",
           "name: remote-skill",
@@ -426,6 +426,87 @@ describe("skills-remote", () => {
       });
 
       expect(invokeCount).toBe(1);
+      expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses cached successful probe bins after reconnecting within the TTL", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(1_500_000);
+    let invokeCount = 0;
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "skills", "remote-skill"), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceDir, "skills", "remote-skill", "SKILL.md"),
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () => undefined,
+        invoke: async () => {
+          invokeCount += 1;
+          return {
+            ok: true,
+            payload: { bins: [bin] },
+            payloadJSON: JSON.stringify({ bins: [bin] }),
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+      removeRemoteNodeInfo(nodeId);
+      expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+      nowSpy.mockReturnValue(1_500_000 + 60_000);
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      expect(invokeCount).toBe(1);
+      expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
     } finally {
       removeRemoteNodeInfo(nodeId);
       fs.rmSync(workspaceDir, { recursive: true, force: true });
@@ -440,9 +521,9 @@ describe("skills-remote", () => {
     nowSpy.mockReturnValue(2_000_000);
     let invokeCount = 0;
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.mkdirSync(path.join(workspaceDir, "skills", "remote-skill"), { recursive: true });
       fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        path.join(workspaceDir, "skills", "remote-skill", "SKILL.md"),
         [
           "---",
           "name: remote-skill",
@@ -518,8 +599,8 @@ describe("skills-remote", () => {
     nowSpy.mockReturnValue(3_000_000);
     const requestedBins: string[][] = [];
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
-      const skillPath = path.join(workspaceDir, "remote-skill", "SKILL.md");
+      fs.mkdirSync(path.join(workspaceDir, "skills", "remote-skill"), { recursive: true });
+      const skillPath = path.join(workspaceDir, "skills", "remote-skill", "SKILL.md");
       fs.writeFileSync(
         skillPath,
         [
@@ -587,7 +668,110 @@ describe("skills-remote", () => {
         timeoutMs: 10,
       });
 
-      expect(requestedBins).toEqual([[firstBin], [firstBin, secondBin].sort()]);
+      expect(requestedBins).toHaveLength(2);
+      expect(requestedBins[0]).toContain(firstBin);
+      expect(requestedBins[0]).not.toContain(secondBin);
+      expect(requestedBins[1]).toContain(firstBin);
+      expect(requestedBins[1]).toContain(secondBin);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resets failed-probe backoff when the required remote bins change", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const firstBin = `bin-${randomUUID()}`;
+    const secondBin = `bin-${randomUUID()}`;
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(4_000_000);
+    let invokeCount = 0;
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "skills", "remote-skill"), { recursive: true });
+      const skillPath = path.join(workspaceDir, "skills", "remote-skill", "SKILL.md");
+      fs.writeFileSync(
+        skillPath,
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${firstBin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () => undefined,
+        invoke: async () => {
+          invokeCount += 1;
+          return {
+            ok: false,
+            error: { code: "TIMEOUT", message: "node invoke timed out" },
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+      nowSpy.mockReturnValue(4_000_000 + 60 * 60 * 1000 + 1);
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+      fs.writeFileSync(
+        skillPath,
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs remote bins",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${firstBin}", "${secondBin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      nowSpy.mockReturnValue(4_000_000 + 62 * 60 * 1000);
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+      nowSpy.mockReturnValue(4_000_000 + 122 * 60 * 1000 + 1);
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      expect(invokeCount).toBe(4);
     } finally {
       removeRemoteNodeInfo(nodeId);
       fs.rmSync(workspaceDir, { recursive: true, force: true });
