@@ -476,27 +476,27 @@ describe("scoped vitest configs", () => {
   });
 
   it("normalizes extension provider include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionProvidersConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionProvidersConfig.test?.include).toEqual(
+    const providersTestConfig = requireTestConfig(defaultExtensionProvidersConfig);
+    expect(providersTestConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(providersTestConfig.include).toEqual(
       expect.arrayContaining(["xai/**/*.test.ts", "google/**/*.test.ts"]),
     );
-    expect(defaultExtensionProvidersConfig.test?.include).not.toContain("openai/**/*.test.ts");
-    expect(defaultExtensionProviderOpenAiConfig.test?.dir).toBe(
-      path.join(process.cwd(), "extensions"),
-    );
-    expect(defaultExtensionProviderOpenAiConfig.test?.include).toEqual(["openai/**/*.test.ts"]);
+    expect(providersTestConfig.include).not.toContain("openai/**/*.test.ts");
+    const openAiTestConfig = requireTestConfig(defaultExtensionProviderOpenAiConfig);
+    expect(openAiTestConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(openAiTestConfig.include).toEqual(["openai/**/*.test.ts"]);
   });
 
   it("normalizes extension messaging include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionMessagingConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionMessagingConfig.test?.include).toEqual(
-      expect.arrayContaining(["googlechat/**/*.test.ts"]),
-    );
+    const testConfig = requireTestConfig(defaultExtensionMessagingConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(expect.arrayContaining(["googlechat/**/*.test.ts"]));
   });
 
   it("normalizes matrix extension include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionMatrixConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionMatrixConfig.test?.include).toEqual(["matrix/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultExtensionMatrixConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
+    expect(testConfig.include).toEqual(["matrix/**/*.test.ts"]);
   });
 
   it("normalizes mattermost extension include patterns relative to the scoped dir", () => {
