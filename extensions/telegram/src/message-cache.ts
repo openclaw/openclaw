@@ -235,6 +235,36 @@ function persistMessages(params: {
   }
 }
 
+export function importTelegramMessageCacheEntries(scopeKey: string, entries: unknown): number {
+  if (!Array.isArray(entries)) {
+    return 0;
+  }
+  let imported = 0;
+  const bucket = persistedMessageCacheBuckets.get(scopeKey);
+  for (const entry of entries) {
+    if (!isRecord(entry) || !isString(entry.key)) {
+      continue;
+    }
+    const node = parsePersistedNode(entry.node);
+    if (!node) {
+      continue;
+    }
+    MESSAGE_CACHE_STORE.register(
+      persistedMessageEntryKey(scopeKey, entry.key),
+      {
+        scopeKey,
+        cacheKey: entry.key,
+        sourceMessage: node.sourceMessage,
+        ...(node.threadId ? { threadId: node.threadId } : {}),
+      },
+      { ttlMs: DEFAULT_TTL_MS },
+    );
+    bucket?.messages.set(entry.key, node);
+    imported += 1;
+  }
+  return imported;
+}
+
 function resolveMessageCacheBucket(params: {
   scopeKey?: string;
   maxMessages: number;

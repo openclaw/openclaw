@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Message } from "@grammyjs/types";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTelegramMessageCache, resolveTelegramMessageCachePath } from "./message-cache.js";
 import {
   clearSentMessageCache,
   resetSentMessageCacheForTest,
@@ -174,6 +176,49 @@ describe("Telegram legacy state migrations", () => {
     expect(result.changes.join("\n")).toContain("Imported 1 Telegram sent-message cache");
     resetSentMessageCacheForTest();
     expect(wasSentByBot("-100123", 77, { accountId: "default" })).toBe(true);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("imports message cache sidecars into plugin state and removes the JSON files", async () => {
+    const stateDir = makeStateDir();
+    const legacyStorePath = path.join(stateDir, "sessions", "work.json");
+    const sourcePath = `${legacyStorePath}.telegram-messages.json`;
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(
+      sourcePath,
+      `${JSON.stringify([
+        {
+          key: "work:-100123:77",
+          node: {
+            messageId: "77",
+            sourceMessage: {
+              chat: { id: -100123, type: "supergroup", title: "Deployments" },
+              message_id: 77,
+              date: 1_700_000_000,
+              text: "Ship the cache migration",
+              from: { id: 1234, is_bot: false, first_name: "Ada" },
+            } satisfies Partial<Message>,
+            threadId: "42",
+          },
+        },
+      ])}\n`,
+    );
+
+    const plan = detectTelegramLegacyStateMigrations({ stateDir }).find(
+      (entry) => entry.label === "Telegram message cache",
+    );
+    expect(plan).toBeTruthy();
+    const result = await plan!.apply(applyContext(stateDir));
+
+    expect(result.changes.join("\n")).toContain("Imported 1 Telegram message cache");
+    const cache = createTelegramMessageCache({
+      persistedPath: resolveTelegramMessageCachePath(legacyStorePath),
+    });
+    expect(cache.get({ accountId: "work", chatId: "-100123", messageId: "77" })).toMatchObject({
+      body: "Ship the cache migration",
+      messageId: "77",
+      threadId: "42",
+    });
     expect(fs.existsSync(sourcePath)).toBe(false);
   });
 

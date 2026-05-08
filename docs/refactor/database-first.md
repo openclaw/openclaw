@@ -611,11 +611,12 @@ Move these into the global database:
   instead of `bluebubbles/catchup/*.json` and
   `bluebubbles/inbound-dedupe/*.json`; the BlueBubbles doctor/setup migration
   imports and removes the legacy files.
-- Telegram update offsets, sticker cache entries, sent-message cache entries,
-  topic-name cache entries, and thread bindings now use SQLite plugin state
-  under `telegram` namespaces (`update-offsets`, `sticker-cache`,
-  `sent-messages`, `topic-names`, `thread-bindings`) instead of
-  `update-offset-*.json`, `sticker-cache.json`,
+- Telegram update offsets, sticker cache entries, reply-chain message cache
+  entries, sent-message cache entries, topic-name cache entries, and thread
+  bindings now use SQLite plugin state under `telegram` namespaces
+  (`update-offsets`, `sticker-cache`, `message-cache`, `sent-messages`,
+  `topic-names`, `thread-bindings`) instead of `update-offset-*.json`,
+  `sticker-cache.json`, `*.telegram-messages.json`,
   `*.telegram-sent-messages.json`, `*.telegram-topic-names.json`, and
   `thread-bindings-*.json`; the Telegram doctor/setup migration imports and
   removes the legacy files.
@@ -1028,6 +1029,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - BlueBubbles `bluebubbles/inbound-dedupe/*.json`
 - Telegram `update-offset-*.json`
 - Telegram `sticker-cache.json`
+- Telegram `*.telegram-messages.json`
 - Telegram `*.telegram-sent-messages.json`
 - Telegram `*.telegram-topic-names.json`
 - Telegram `thread-bindings-*.json`

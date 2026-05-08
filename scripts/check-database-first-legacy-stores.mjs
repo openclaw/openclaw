@@ -88,6 +88,7 @@ const legacyStoreMarkers = [
   { label: "generic thread bindings JSON", pattern: /\bthread-bindings\.json\b/u },
   { label: "Telegram thread bindings JSON", pattern: /\bthread-bindings-[A-Za-z0-9._-]+\.json\b/u },
   { label: "Telegram sent-message cache JSON", pattern: /\.telegram-sent-messages\.json\b/u },
+  { label: "Telegram message cache JSON", pattern: /\.telegram-messages\.json\b/u },
   { label: "Telegram topic-name cache JSON", pattern: /\.telegram-topic-names\.json\b/u },
   { label: "Feishu dedupe cache JSON", pattern: /\bfeishu[/\\]dedup[/\\][A-Za-z0-9_-]+\.json\b/u },
   {
