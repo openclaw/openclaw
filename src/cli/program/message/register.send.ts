@@ -9,7 +9,16 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           message
             .command("send")
             .description("Send a message")
-            .option("-m, --message <text>", "Message body (required unless --media is set)"),
+            .option("-m, --message <text>", "Message body (mutually exclusive with --message-file)")
+            .option(
+              "--message-file <path>",
+              "Read message body from a UTF-8 file (alternative to --message)",
+            )
+            .option(
+              "--allow-empty",
+              "Allow sending an empty message file (default: error on empty)",
+              false,
+            ),
         )
         .option(
           "--media <path-or-url>",

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import {
@@ -30,6 +32,46 @@ type MessagePluginLoadOptions = { scope: PluginRegistryScope; onlyChannelIds?: s
 type MessagePluginPreloadPlan =
   | { preload: true; loadOptions: MessagePluginLoadOptions }
   | { preload: false };
+
+/**
+ * Resolves --message-file into opts.message synchronously.
+ * Does not truncate content — if the content exceeds the platform max length,
+ * downstream send logic handles truncation. Passes the full file content through.
+ */
+export function resolveMessageFromFile(opts: Record<string, unknown>): Record<string, unknown> {
+  const messageFile = opts.messageFile as string | undefined;
+  const message = opts.message as string | undefined;
+
+  if (messageFile !== undefined && message !== undefined) {
+    throw new Error("Cannot supply both --message and --message-file. Use one or the other.");
+  }
+
+  if (messageFile === undefined) {
+    return opts;
+  }
+
+  const absPath = resolve(messageFile);
+
+  if (!existsSync(absPath)) {
+    throw new Error(`--message-file: file not found: ${absPath}`);
+  }
+
+  const stat = statSync(absPath);
+  if (!stat.isFile()) {
+    throw new Error(`--message-file: path is not a regular file: ${absPath}`);
+  }
+
+  const content = readFileSync(absPath, "utf-8");
+
+  if (content.length === 0 && !opts.allowEmpty) {
+    throw new Error(
+      `--message-file: file is empty: ${absPath}\n(use --allow-empty to send an empty message)`,
+    );
+  }
+
+  const { messageFile: _mf, allowEmpty: _ae, ...rest } = opts;
+  return { ...rest, message: content };
+}
 
 function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
   const { account, ...rest } = opts;
@@ -128,14 +170,15 @@ export function createMessageCliHelpers(
     await runCommandWithRuntime(
       defaultRuntime,
       async () => {
-        const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
+        const resolvedOpts = resolveMessageFromFile(opts);
+        const preloadPlan = resolveMessagePluginPreloadPlan(action, resolvedOpts);
         if (preloadPlan.preload) {
           ensurePluginRegistryLoaded(preloadPlan.loadOptions);
         }
         const deps = createDefaultDeps();
         await messageCommand(
           {
-            ...normalizeMessageOptions(opts),
+            ...normalizeMessageOptions(resolvedOpts),
             action,
           },
           deps,
