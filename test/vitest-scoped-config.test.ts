@@ -545,7 +545,10 @@ describe("scoped vitest configs", () => {
   });
 
   it("keeps telegram plugin tests out of the shared extensions lane", () => {
-    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    const extensionsTestConfig = requireTestConfig(defaultExtensionsConfig);
+    const channelsTestConfig = requireTestConfig(defaultChannelsConfig);
+    const telegramTestConfig = requireTestConfig(defaultExtensionTelegramConfig);
+    const extensionExcludes = extensionsTestConfig.exclude ?? [];
     expect(
       extensionExcludes.some((pattern) => path.matchesGlob("telegram/src/fetch.test.ts", pattern)),
     ).toBe(true);
@@ -554,16 +557,16 @@ describe("scoped vitest configs", () => {
         path.matchesGlob("telegram/src/bot/delivery.resolve-media-retry.test.ts", pattern),
       ),
     ).toBe(true);
-    expect(defaultChannelsConfig.test?.include).not.toContain("extensions/telegram/**/*.test.ts");
-    expect(defaultChannelsConfig.test?.exclude).not.toContain(
+    expect(channelsTestConfig.include).not.toContain("extensions/telegram/**/*.test.ts");
+    expect(channelsTestConfig.exclude).not.toContain(
       bundledPluginFile("telegram", "src/fetch.test.ts"),
     );
-    expect(normalizeConfigPaths(defaultExtensionsConfig.test?.setupFiles)).toEqual([
+    expect(normalizeConfigPaths(extensionsTestConfig.setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
-    expect(normalizeConfigPaths(defaultExtensionTelegramConfig.test?.setupFiles)).toEqual([
+    expect(normalizeConfigPaths(telegramTestConfig.setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
