@@ -122,6 +122,37 @@ describe("TranscriptSessionManager", () => {
     ]);
   });
 
+  it("creates, branches, lists, and forks default sessions with virtual sqlite locators", async () => {
+    await makeTempSessionFile();
+    const sessionManager = SessionManager.create("/tmp/sqlite-workspace");
+    const sessionFile = sessionManager.getSessionFile();
+    if (!sessionFile) {
+      throw new Error("expected session file");
+    }
+    expect(sessionFile).toMatch(/^sqlite-transcript:\/\/main\//);
+
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "sqlite default",
+      timestamp: 3,
+    });
+    const branchFile = sessionManager.createBranchedSession(userId);
+    if (!branchFile) {
+      throw new Error("expected branch file");
+    }
+    expect(branchFile).toMatch(/^sqlite-transcript:\/\/main\//);
+
+    const listed = await SessionManager.list("/tmp/sqlite-workspace");
+    expect(listed.map((session) => session.id)).toContain(sessionManager.getSessionId());
+
+    const forked = SessionManager.forkFrom(sessionFile, "/tmp/sqlite-fork");
+    expect(forked.getSessionFile()).toMatch(/^sqlite-transcript:\/\/main\//);
+    expect(forked.getHeader()).toMatchObject({
+      cwd: "/tmp/sqlite-fork",
+      parentSession: sessionFile,
+    });
+  });
+
   it("persists initial user messages synchronously before the first assistant message", async () => {
     const sessionFile = await makeTempSessionFile();
     const sessionManager = openTranscriptSessionManager({
