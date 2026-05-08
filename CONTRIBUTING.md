@@ -86,6 +86,9 @@ Welcome to the lobster tank! 🦞
 - **Mason Huang** - Stability, Security, Speed
   - GitHub: [@hxy91819](https://github.com/hxy91819) · X: [@chenjingtalk](https://x.com/chenjingtalk)
 
+- **Maurice Niu** - ClawHub, Security, Stability, Data integrity
+  - GitHub: [@momothemage](https://github.com/momothemage) · X: [@MomoPsicasso](https://x.com/MomoPsicasso)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
