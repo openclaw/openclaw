@@ -186,7 +186,10 @@ describe("resolveMemoryBackendConfig", () => {
       },
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-    const custom = resolved.qmd?.collections.find((c) => c.name.startsWith("custom-notes"));
+    const custom = requireQmdConfig(resolved).collections.find((c) =>
+      c.name.startsWith("custom-notes"),
+    );
+    expect(custom).toBeDefined();
     expect(custom).toMatchObject({ path: path.resolve("/workspace/root", "notes") });
   });
 
@@ -363,10 +366,11 @@ describe("resolveMemoryBackendConfig", () => {
       },
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-    expect(resolved.qmd?.update.waitForBootSync).toBe(true);
-    expect(resolved.qmd?.update.commandTimeoutMs).toBe(12_000);
-    expect(resolved.qmd?.update.updateTimeoutMs).toBe(480_000);
-    expect(resolved.qmd?.update.embedTimeoutMs).toBe(360_000);
+    const update = requireQmdConfig(resolved).update;
+    expect(update.waitForBootSync).toBe(true);
+    expect(update.commandTimeoutMs).toBe(12_000);
+    expect(update.updateTimeoutMs).toBe(480_000);
+    expect(update.embedTimeoutMs).toBe(360_000);
   });
 
   it("resolves qmd startup refresh overrides", () => {
@@ -383,9 +387,10 @@ describe("resolveMemoryBackendConfig", () => {
       },
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-    expect(resolved.qmd?.update.startup).toBe("idle");
-    expect(resolved.qmd?.update.startupDelayMs).toBe(45_000);
-    expect(resolved.qmd?.update.onBoot).toBe(true);
+    const update = requireQmdConfig(resolved).update;
+    expect(update.startup).toBe("idle");
+    expect(update.startupDelayMs).toBe(45_000);
+    expect(update.onBoot).toBe(true);
   });
 
   it("resolves qmd search mode override", () => {
@@ -399,7 +404,7 @@ describe("resolveMemoryBackendConfig", () => {
       },
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-    expect(resolved.qmd?.searchMode).toBe("vsearch");
+    expect(requireQmdConfig(resolved).searchMode).toBe("vsearch");
   });
 
   it("resolves qmd mcporter search tool override", () => {
@@ -414,8 +419,9 @@ describe("resolveMemoryBackendConfig", () => {
       },
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-    expect(resolved.qmd?.searchMode).toBe("query");
-    expect(resolved.qmd?.searchTool).toBe("hybrid_search");
+    const qmd = requireQmdConfig(resolved);
+    expect(qmd.searchMode).toBe("query");
+    expect(qmd.searchTool).toBe("hybrid_search");
   });
 });
 
