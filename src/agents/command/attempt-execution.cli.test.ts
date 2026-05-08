@@ -647,7 +647,7 @@ describe("CLI attempt execution", () => {
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await writeStore(sessionStore);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("restricted cli"));
 
     await runAgentAttempt({
@@ -679,7 +679,6 @@ describe("CLI attempt execution", () => {
       onAgentEvent: vi.fn(),
       authProfileProvider: "claude-cli",
       sessionStore,
-      storePath,
       sessionHasHistory: false,
     });
 

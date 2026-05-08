@@ -1,4 +1,5 @@
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { AgentMessage } from "../agent-core-contract.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
@@ -22,7 +23,7 @@ export async function bootstrapHarnessContextEngine(params: {
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
-  config?: unknown;
+  config?: OpenClawConfig;
   warn: (message: string) => void;
 }): Promise<void> {
   if (
@@ -101,7 +102,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   sessionManager?: unknown;
-  config?: unknown;
+  config?: OpenClawConfig;
   warn: (message: string) => void;
 }) {
   if (!params.contextEngine) {
@@ -229,7 +230,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode?: "foreground" | "background";
-  config?: unknown;
+  config?: OpenClawConfig;
 }) {
   return await runContextEngineMaintenance({
     contextEngine: params.contextEngine,

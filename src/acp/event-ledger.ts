@@ -1,25 +1,23 @@
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
 import { resolveStateDir } from "../config/paths.js";
-import { withFileLock } from "../infra/file-lock.js";
-import { readJsonFile, writeTextAtomic } from "../infra/json-files.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
 import { isRecord } from "../utils.js";
 
 const LEDGER_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
 const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
-const FILE_LEDGER_LOCK_OPTIONS = {
-  retries: {
-    retries: 8,
-    factor: 2,
-    minTimeout: 50,
-    maxTimeout: 5_000,
-    randomize: true,
-  },
-  stale: 15_000,
-} as const;
+const ACP_EVENT_LEDGER_KV_SCOPE = "acp_event_ledger";
 
 export type AcpEventLedgerEntry = {
   seq: number;
@@ -84,6 +82,13 @@ type LedgerOptions = {
   maxEventsPerSession?: number;
   maxSerializedBytes?: number;
   now?: () => number;
+};
+
+type AcpEventLedgerKvDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
+
+type LedgerKvRow = {
+  key: string;
+  value_json: string;
 };
 
 type MutableLedgerState = {
@@ -433,53 +438,162 @@ export function resolveDefaultAcpEventLedgerPath(env: NodeJS.ProcessEnv = proces
   return path.join(resolveStateDir(env), "acp", "event-ledger.json");
 }
 
-export function createFileAcpEventLedger(
-  params: { filePath: string } & LedgerOptions,
+function dbOptionsFromParams(
+  params: OpenClawStateDatabaseOptions & LedgerOptions,
+): OpenClawStateDatabaseOptions {
+  return {
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.path ? { path: params.path } : {}),
+  };
+}
+
+function loadStoreFromSqliteDb(database: DatabaseSync): LedgerStore {
+  const db = getNodeSqliteKysely<AcpEventLedgerKvDatabase>(database);
+  const rows = executeSqliteQuerySync<LedgerKvRow>(
+    database,
+    db
+      .selectFrom("kv")
+      .select(["key", "value_json"])
+      .where("scope", "=", ACP_EVENT_LEDGER_KV_SCOPE)
+      .orderBy("key", "asc"),
+  ).rows;
+  const sessions: Record<string, LedgerSession> = {};
+  for (const row of rows) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.value_json) as unknown;
+    } catch {
+      continue;
+    }
+    const session = normalizeSession(parsed);
+    if (session && session.sessionId === row.key) {
+      sessions[session.sessionId] = session;
+    }
+  }
+  return { version: LEDGER_VERSION, sessions };
+}
+
+function writeStoreToSqliteDb(
+  database: DatabaseSync,
+  store: LedgerStore,
+  updatedAt: number,
+  options: { pruneMissing?: boolean } = {},
+): void {
+  const db = getNodeSqliteKysely<AcpEventLedgerKvDatabase>(database);
+  if (options.pruneMissing !== false) {
+    const existing = executeSqliteQuerySync<LedgerKvRow>(
+      database,
+      db
+        .selectFrom("kv")
+        .select(["key", "value_json"])
+        .where("scope", "=", ACP_EVENT_LEDGER_KV_SCOPE),
+    ).rows;
+    const retained = new Set(Object.keys(store.sessions));
+    for (const row of existing) {
+      if (!retained.has(row.key)) {
+        executeSqliteQuerySync(
+          database,
+          db
+            .deleteFrom("kv")
+            .where("scope", "=", ACP_EVENT_LEDGER_KV_SCOPE)
+            .where("key", "=", row.key),
+        );
+      }
+    }
+  }
+  for (const session of Object.values(store.sessions)) {
+    executeSqliteQuerySync(
+      database,
+      db
+        .insertInto("kv")
+        .values({
+          scope: ACP_EVENT_LEDGER_KV_SCOPE,
+          key: session.sessionId,
+          value_json: JSON.stringify(session),
+          updated_at: updatedAt,
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["scope", "key"]).doUpdateSet({
+            value_json: JSON.stringify(session),
+            updated_at: updatedAt,
+          }),
+        ),
+    );
+  }
+}
+
+function writeStoreToSqlite(
+  store: LedgerStore,
+  options: OpenClawStateDatabaseOptions & { now?: () => number } = {},
+): void {
+  runOpenClawStateWriteTransaction((database) => {
+    writeStoreToSqliteDb(database.db, store, options.now?.() ?? Date.now(), {
+      pruneMissing: false,
+    });
+  }, options);
+}
+
+export function legacyAcpEventLedgerFileExists(env: NodeJS.ProcessEnv = process.env): boolean {
+  try {
+    return statSync(resolveDefaultAcpEventLedgerPath(env)).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export async function importLegacyAcpEventLedgerFileToSqlite(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ imported: boolean; sessions: number; events: number }> {
+  const filePath = resolveDefaultAcpEventLedgerPath(env);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { imported: false, sessions: 0, events: 0 };
+    }
+    throw error;
+  }
+  if (!isRecord(parsed) || parsed.version !== LEDGER_VERSION || !isRecord(parsed.sessions)) {
+    return { imported: false, sessions: 0, events: 0 };
+  }
+  const store = normalizeStore(parsed);
+  writeStoreToSqlite(store, dbOptionsFromParams({ env }));
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
+  return {
+    imported: true,
+    sessions: Object.keys(store.sessions).length,
+    events: Object.values(store.sessions).reduce(
+      (count, session) => count + session.events.length,
+      0,
+    ),
+  };
+}
+
+export function createSqliteAcpEventLedger(
+  params: OpenClawStateDatabaseOptions & LedgerOptions = {},
 ): AcpEventLedger {
   const normalized = normalizeLedgerOptions(params);
   const state: MutableLedgerState = {
     store: createEmptyStore(),
     ...normalized,
   };
-  let operation = Promise.resolve();
-
-  const load = async () => {
-    state.store = normalizeStore(await readJsonFile(params.filePath));
-  };
-  const ensureParentDir = async () => {
-    await fs.mkdir(path.dirname(params.filePath), { recursive: true, mode: 0o700 });
-  };
-
-  const enqueue = async <T>(fn: () => Promise<T>): Promise<T> => {
-    const task = operation.then(fn, fn);
-    operation = task.then(
-      () => {},
-      () => {},
-    );
-    return task;
-  };
+  const dbOptions = dbOptionsFromParams(params);
 
   return createLedgerApi({
     state,
     mutate: async (fn) =>
-      enqueue(async () => {
-        await ensureParentDir();
-        await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
-          await load();
-          fn();
-          await writeTextAtomic(params.filePath, serializeLedgerStore(state.store), {
-            mode: 0o600,
-            dirMode: 0o700,
-          });
-        });
-      }),
-    read: async (fn) =>
-      enqueue(async () => {
-        await ensureParentDir();
-        return await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
-          await load();
-          return fn();
-        });
-      }),
+      runOpenClawStateWriteTransaction((database) => {
+        state.store = loadStoreFromSqliteDb(database.db);
+        fn();
+        writeStoreToSqliteDb(database.db, state.store, normalized.now());
+      }, dbOptions),
+    read: async (fn) => {
+      state.store = loadStoreFromSqliteDb(openOpenClawStateDatabase(dbOptions).db);
+      return fn();
+    },
   });
 }
