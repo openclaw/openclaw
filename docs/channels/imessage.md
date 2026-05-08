@@ -13,7 +13,7 @@ For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host
 </Note>
 
 <Warning>
-BlueBubbles is deprecated and no longer ships as a bundled OpenClaw channel. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw now supports iMessage through `imsg` only. If you still need a BlueBubbles-backed bridge, publish or install it as a third-party plugin outside core.
+BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only.
 </Warning>
 
 Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port). Advanced actions require `imsg launch` and a successful private API probe.
@@ -150,12 +150,12 @@ To reach the advanced action surface that this channel page documents, you need 
 
 > Advanced features such as `read`, `typing`, `launch`, bridge-backed rich send, message mutation, and chat management are opt-in. They require SIP to be disabled and a helper dylib to be injected into `Messages.app`. `imsg launch` refuses to inject when SIP is enabled.
 
-The helper-injection technique is a manual port of the BlueBubbles private-API surface (Apache-2.0 inspired) into `imsg`'s own dylib — no third-party binary, but the same SIP-disabled requirement that BlueBubbles' Private API mode has. There is no SIP-asymmetry between the two channels.
+The helper-injection technique uses `imsg`'s own dylib to reach Messages private APIs. There is no third-party server or BlueBubbles runtime in the OpenClaw iMessage path.
 
 <Warning>
 **Disabling SIP is a real security tradeoff.** SIP is one of macOS's core protections against running modified system code; turning it off system-wide opens up additional attack surface and side effects. Notably, **disabling SIP on Apple Silicon Macs also disables the ability to install and run iOS apps on your Mac**.
 
-Treat this as a deliberate operational choice, not a default. If your threat model can't tolerate SIP being off, both bundled iMessage and BlueBubbles will be limited to their basic modes — text and media send/receive only, no reactions / edit / unsend / effects / group ops on either channel.
+Treat this as a deliberate operational choice, not a default. If your threat model can't tolerate SIP being off, bundled iMessage is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
 </Warning>
 
 ### Setup
@@ -170,13 +170,13 @@ Treat this as a deliberate operational choice, not a default. If your threat mod
 
    The `imsg status --json` output reports `bridge_version`, `rpc_methods`, and per-method `selectors` so you can see what the current build supports before you start.
 
-2. **Disable System Integrity Protection.** This is macOS-version-specific, identical to the BlueBubbles flow because the underlying Apple requirement is the same:
+2. **Disable System Integrity Protection.** This is macOS-version-specific because the underlying Apple requirement depends on the OS and hardware:
    - **macOS 10.13–10.15 (Sierra–Catalina):** disable Library Validation via Terminal, reboot to Recovery Mode, run `csrutil disable`, restart.
    - **macOS 11+ (Big Sur and later), Intel:** Recovery Mode (or Internet Recovery), `csrutil disable`, restart.
    - **macOS 11+, Apple Silicon:** power-button startup sequence to enter Recovery; on recent macOS versions hold the **Left Shift** key when you click Continue, then `csrutil disable`. Virtual-machine setups follow a separate flow — take a VM snapshot first.
    - **macOS 26 / Tahoe:** library-validation policies and `imagent` private-entitlement checks have tightened further; `imsg` may need an updated build to keep up. If `imsg launch` injection or specific `selectors` start returning false after a macOS major upgrade, check `imsg`'s release notes before assuming the SIP step succeeded.
 
-   The [BlueBubbles Private API installation guide](https://docs.bluebubbles.app/private-api/installation) is the canonical step-by-step for the SIP-disable flow itself; the macOS-side steps are not specific to BB, only the helper that gets injected differs.
+   Follow Apple's Recovery-mode flow for your Mac to disable SIP before running `imsg launch`.
 
 3. **Inject the helper.** With SIP disabled and Messages.app signed in:
 
@@ -200,7 +200,7 @@ If `openclaw channels status --probe` reports the channel as `works` but specifi
 
 If SIP-disabled isn't acceptable for your threat model:
 
-- Both `imsg` and BlueBubbles fall back to basic mode — text + media + receive only.
+- `imsg` falls back to basic mode — text + media + receive only.
 - The OpenClaw plugin still advertises text/media send and inbound monitoring; it just hides `react`, `edit`, `unsend`, `reply`, `sendWithEffect`, and group ops from the action surface (per the per-method capability gate).
 - You can run a separate non-Apple-Silicon Mac (or a dedicated bot Mac) with SIP off for the iMessage workload, while keeping SIP enabled on your primary devices. See [Dedicated bot macOS user (separate iMessage identity)](#deployment-patterns) below.
 
@@ -533,7 +533,7 @@ When a user types a command and a URL together — e.g. `Dump https://example.co
 1. A text message (`"Dump"`).
 2. A URL-preview balloon (`"https://..."`) with OG-preview images as attachments.
 
-The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent receives the command alone on turn 1, replies (often "send me the URL"), and only sees the URL on turn 2 — at which point the command context is already lost. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces, so the same fix applies as it does on the BlueBubbles channel.
+The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent receives the command alone on turn 1, replies (often "send me the URL"), and only sees the URL on turn 2 — at which point the command context is already lost. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces.
 
 `channels.imessage.coalesceSameSenderDms` opts a DM into merging consecutive same-sender rows into a single agent turn. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
 
@@ -586,7 +586,7 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
     - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a payload row is coming. Group-chat messages keep instant dispatch.
     - **Merged output is bounded.** Merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source GUID is tracked in `coalescedMessageGuids` for downstream telemetry.
     - **DM-only.** Group chats fall through to per-message dispatch so the bot stays responsive when multiple people are typing.
-    - **Opt-in, per-channel.** Other channels (Telegram, WhatsApp, Slack, …) are unaffected. The BlueBubbles channel has the same opt-in under `channels.bluebubbles.coalesceSameSenderDms`.
+    - **Opt-in, per-channel.** Other channels (Telegram, WhatsApp, Slack, …) are unaffected. Legacy BlueBubbles configs that set `channels.bluebubbles.coalesceSameSenderDms` should migrate that value to `channels.imessage.coalesceSameSenderDms`.
 
   </Tab>
 </Tabs>
