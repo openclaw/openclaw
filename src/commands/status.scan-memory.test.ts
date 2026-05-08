@@ -64,4 +64,12 @@ describe("status.scan-memory", () => {
       requireDefaultStore,
     });
   });
+
+  it("uses the per-agent runtime database as the default memory store", async () => {
+    const { resolveDefaultMemoryStorePath } = await import("./status.scan-memory.ts");
+
+    expect(resolveDefaultMemoryStorePath("main")).toMatch(
+      /agents[/\\]main[/\\]agent[/\\]openclaw-agent\.sqlite$/,
+    );
+  });
 });

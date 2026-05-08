@@ -464,10 +464,10 @@ When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similar
 
 ## Index storage
 
-| Key                   | Type     | Default                               | Description                                 |
-| --------------------- | -------- | ------------------------------------- | ------------------------------------------- |
-| `store.path`          | `string` | `~/.openclaw/memory/{agentId}.sqlite` | Index location (supports `{agentId}` token) |
-| `store.fts.tokenizer` | `string` | `unicode61`                           | FTS5 tokenizer (`unicode61` or `trigram`)   |
+| Key                   | Type     | Default                       | Description                                                  |
+| --------------------- | -------- | ----------------------------- | ------------------------------------------------------------ |
+| `store.path`          | `string` | agent `openclaw-agent.sqlite` | Optional sidecar index location (supports `{agentId}` token) |
+| `store.fts.tokenizer` | `string` | `unicode61`                   | FTS5 tokenizer (`unicode61` or `trigram`)                    |
 
 ---
 
