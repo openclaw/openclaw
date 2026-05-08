@@ -6,7 +6,6 @@ import {
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
   createGatewaySuiteHarness,

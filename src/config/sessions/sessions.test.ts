@@ -544,7 +544,7 @@ describe("SQLite session store patch retries", () => {
 
   it("allows explicit ACP metadata removal through the ACP session helper", async () => {
     const key = "agent:codex:acp:binding:discord:default:deadbeef";
-    const { agentId, sessionsDir } = await makeTmpStore(
+    const { agentId } = await makeTmpStore(
       {
         [key]: {
           sessionId: "sess-acp-clear",
@@ -625,7 +625,6 @@ describe("resolveAndPersistSessionFile", () => {
   it("creates and persists entry when session is not yet present", async () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
-    const sessionStore = readFixtureSessionEntries();
     const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
 
     const result = await resolveAndPersistSessionFile({

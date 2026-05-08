@@ -646,8 +646,7 @@ describe("initSessionState thread forking", () => {
   });
 
   it("records topic-specific session files when MessageThreadId is present", async () => {
-    const root = await makeCaseDir("openclaw-topic-session-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    await makeCaseDir("openclaw-topic-session-");
 
     const cfg = {
       session: {},
@@ -668,8 +667,7 @@ describe("initSessionState thread forking", () => {
   });
 
   it("records topic-specific session files from SessionKey when MessageThreadId is absent", async () => {
-    const root = await makeCaseDir("openclaw-topic-session-key-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    await makeCaseDir("openclaw-topic-session-key-");
 
     const cfg = {
       session: {},
@@ -696,8 +694,7 @@ describe("initSessionState thread forking", () => {
 
 describe("initSessionState RawBody", () => {
   it("uses RawBody for command extraction and reset triggers when Body contains wrapped context", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    await makeCaseDir("openclaw-rawbody-");
     const cfg = { session: {} } as OpenClawConfig;
 
     const statusResult = await initSessionState({
@@ -727,8 +724,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("preserves argument casing while still matching reset triggers case-insensitively", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-reset-case-");
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(root);
+    await makeCaseDir("openclaw-rawbody-reset-case-");
 
     const cfg = {
       session: {
@@ -1190,7 +1186,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("prefers native command target sessions over bound slash sessions", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("native-command-target-session-");
+    await createSessionRowsTarget("native-command-target-session-");
     const boundSlashSessionKey = "slack:slash:123";
     const targetSessionKey = "agent:main:main";
     const cfg = {
@@ -1334,7 +1330,7 @@ describe("initSessionState RawBody", () => {
       channel: conversation.channel as "slack" | "signal" | "googlechat",
       accountId: "default",
     });
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-generic-current-binding-");
+    await createSessionRowsTarget("openclaw-generic-current-binding-");
     const boundSessionKey = `agent:codex:acp:binding:${conversation.channel}:default:test`;
 
     await getSessionBindingService().bind({
@@ -1862,7 +1858,7 @@ describe("initSessionState browser tab cleanup", () => {
   });
 
   it("does not close browser tabs for a fresh session without previous state", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-tab-cleanup-fresh-");
+    await createSessionRowsTarget("openclaw-tab-cleanup-fresh-");
     const sessionKey = "agent:main:telegram:dm:tab-fresh";
 
     const cfg = {
@@ -2071,7 +2067,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
     const existingSessionId = "existing-session-123";
     const sessionKey = "agent:main:slack:channel:c2";
     const body = "<@U123> /new take notes";
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-slack-channel-new-");
+    await createSessionRowsTarget("openclaw-slack-channel-new-");
     await seedSessionStore({
       sessionKey,
       sessionId: existingSessionId,
@@ -2124,7 +2120,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   }
 
   it("preserves behavior overrides across /new and /reset", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-reset-overrides-");
+    await createSessionRowsTarget("openclaw-reset-overrides-");
     const sessionKey = "agent:main:telegram:dm:user-overrides";
     const existingSessionId = "existing-session-overrides";
     const overrides = {
@@ -2320,7 +2316,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("clears auto-sourced model/provider/auth overrides on /new and /reset (#69301)", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-reset-auto-overrides-");
+    await createSessionRowsTarget("openclaw-reset-auto-overrides-");
     const sessionKey = "agent:main:telegram:direct:6761477233";
     const existingSessionId = "existing-session-auto-overrides";
     const autoOverrides = {
@@ -2379,7 +2375,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("preserves spawned session ownership metadata across /new and /reset", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-reset-spawned-metadata-");
+    await createSessionRowsTarget("openclaw-reset-spawned-metadata-");
     const sessionKey = "subagent:owned-child";
     const existingSessionId = "existing-session-owned-child";
     const overrides = {
@@ -2432,9 +2428,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("requires operator.admin when Provider is internal even if Surface carries external metadata", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget(
-      "openclaw-internal-reset-provider-authoritative-",
-    );
+    await createSessionRowsTarget("openclaw-internal-reset-provider-authoritative-");
     const sessionKey = "agent:main:telegram:dm:provider-authoritative";
     const existingSessionId = "existing-session-provider-authoritative";
 
@@ -2470,7 +2464,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("keeps the existing session for /reset soft", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-soft-reset-session-");
+    await createSessionRowsTarget("openclaw-soft-reset-session-");
     const sessionKey = "agent:main:telegram:dm:user-soft-reset";
     const existingSessionId = "existing-session-soft-reset";
 
@@ -2512,7 +2506,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("keeps the existing session for /reset newline soft", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-reset-newline-soft-");
+    await createSessionRowsTarget("openclaw-reset-newline-soft-");
     const sessionKey = "agent:main:telegram:dm:user-reset-newline-soft";
     const existingSessionId = "existing-session-reset-newline-soft";
 
@@ -2799,7 +2793,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-idle-no-preserve-");
+    await createSessionRowsTarget("openclaw-idle-no-preserve-");
     const sessionKey = "agent:main:telegram:dm:new-user";
 
     const cfg = {
@@ -3173,7 +3167,7 @@ describe("persistSessionUsageUpdate", () => {
 
 describe("initSessionState stale threadId fallback", () => {
   it("does not inherit lastThreadId from a previous thread interaction in non-thread sessions", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("stale-thread-");
+    await createSessionRowsTarget("stale-thread-");
     const cfg = { session: {} } as OpenClawConfig;
 
     // First interaction: inside a DM topic (thread session)
@@ -3203,7 +3197,7 @@ describe("initSessionState stale threadId fallback", () => {
   });
 
   it("preserves lastThreadId within the same thread session", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("preserve-thread-");
+    await createSessionRowsTarget("preserve-thread-");
     const cfg = { session: {} } as OpenClawConfig;
 
     // First message in thread
@@ -3611,7 +3605,7 @@ describe("initSessionState internal channel routing preservation", () => {
   });
 
   it("uses session key channel hint when first turn is internal webchat", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("session-key-channel-hint-");
+    await createSessionRowsTarget("session-key-channel-hint-");
     const sessionKey = "agent:main:telegram:group:98765";
     const cfg = { session: {} } as OpenClawConfig;
 
@@ -3630,7 +3624,7 @@ describe("initSessionState internal channel routing preservation", () => {
   });
 
   it("keeps internal route when there is no persisted external fallback", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("no-external-fallback-");
+    await createSessionRowsTarget("no-external-fallback-");
     const cfg = { session: {} } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -3649,7 +3643,7 @@ describe("initSessionState internal channel routing preservation", () => {
   });
 
   it("keeps webchat channel for webchat/main sessions", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("preserve-webchat-main-");
+    await createSessionRowsTarget("preserve-webchat-main-");
     const cfg = { session: {} } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -3735,7 +3729,7 @@ describe("initSessionState internal channel routing preservation", () => {
   });
 
   it("uses the configured default account for persisted routing when AccountId is omitted", async () => {
-    const sessionRowsTarget = await createSessionRowsTarget("default-account-routing-context-");
+    await createSessionRowsTarget("default-account-routing-context-");
     const cfg = {
       session: {},
       channels: {

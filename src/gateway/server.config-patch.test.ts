@@ -529,7 +529,7 @@ describe("gateway server sessions", () => {
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await resetTempDir("main-alias");
+    await resetTempDir("main-alias");
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
 

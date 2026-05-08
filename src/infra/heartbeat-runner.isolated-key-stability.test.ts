@@ -66,7 +66,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     return replySpy.mock.calls[0]?.[0];
   }
 
-  function makeIsolatedHeartbeatConfig(tmpDir: string, agentId: string): OpenClawConfig {
+  function makeIsolatedHeartbeatConfig(tmpDir: string): OpenClawConfig {
     return {
       agents: {
         defaults: {
@@ -106,8 +106,8 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   }
 
   it("does not accumulate :heartbeat suffix when wake passes an already-suffixed key", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, agentId);
+    await withTempHeartbeatSandbox(async ({ tmpDir }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const baseSessionKey = resolveMainSessionKey(cfg);
 
       // Simulate wake-request path: key already has :heartbeat from a previous tick.
@@ -140,8 +140,8 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   });
 
   it("appends :heartbeat exactly once from a clean base key", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, agentId);
+    await withTempHeartbeatSandbox(async ({ tmpDir }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const baseSessionKey = resolveMainSessionKey(cfg);
 
       const ctx = await runIsolatedHeartbeat({
@@ -157,7 +157,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
   it("stays stable even with multiply-accumulated suffixes", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, agentId);
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const baseSessionKey = resolveMainSessionKey(cfg);
 
       // Simulate a key that already accumulated several :heartbeat suffixes
@@ -204,8 +204,8 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   });
 
   it("consumes base-session cron events when isolated heartbeat runs on a :heartbeat session", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, agentId);
+    await withTempHeartbeatSandbox(async ({ tmpDir }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const baseSessionKey = resolveMainSessionKey(cfg);
       const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
       replySpy
@@ -292,7 +292,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
   it("classifies hook:wake exec events when they are queued on the active isolated session", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, agentId);
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const baseSessionKey = resolveMainSessionKey(cfg);
       const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
       await seedHeartbeatSessionRows(agentId, {
@@ -333,7 +333,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
   it("keeps a forced real :heartbeat session distinct from the heartbeat-isolated sibling", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, agentId);
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const realSessionKey = "agent:main:alerts:heartbeat";
 
       const ctx = await runIsolatedHeartbeat({
@@ -349,7 +349,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
   it("stays stable when a forced real :heartbeat session re-enters through its isolated sibling", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, agentId);
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const realSessionKey = "agent:main:alerts:heartbeat";
       const isolatedSessionKey = `${realSessionKey}:heartbeat`;
 
@@ -448,7 +448,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     // the next wake re-entry would stabilise at "<base>:heartbeat:heartbeat"
     // instead of converging back to "<base>:heartbeat".
     await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, agentId);
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const baseSessionKey = resolveMainSessionKey(cfg);
       const legacyIsolatedKey = `${baseSessionKey}:heartbeat`;
 

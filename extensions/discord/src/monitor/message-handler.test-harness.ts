@@ -1,13 +1,9 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export async function createBaseDiscordMessageContext(
   overrides: Record<string, unknown> = {},
 ): Promise<DiscordMessagePreflightContext> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-"));
   return {
     cfg: { messages: { ackReaction: "👀" } },
     discordConfig: {},

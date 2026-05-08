@@ -57,7 +57,7 @@ describe("Telegram direct session recreation after delete", () => {
   });
 
   it("records a deleted direct session again when the next DM is processed", async () => {
-    const tempDir = await suiteRootTracker.make("direct");
+    await suiteRootTracker.make("direct");
     const cfg = {
       agents: {
         defaults: {

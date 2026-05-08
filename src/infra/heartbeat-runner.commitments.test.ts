@@ -324,7 +324,7 @@ describe("runHeartbeatOnce commitments", () => {
     vi.useFakeTimers();
     vi.setSystemTime(nowMs);
 
-    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
       const dueSessionKey = "agent:main:telegram:user-155462274";
       const cfg: OpenClawConfig = {

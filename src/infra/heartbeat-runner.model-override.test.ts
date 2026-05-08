@@ -86,7 +86,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     lightContext?: boolean;
     isolatedSession?: boolean;
   }) {
-    return withHeartbeatFixture(async ({ tmpDir, agentId, replySpy, seedSession }) => {
+    return withHeartbeatFixture(async ({ tmpDir, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -121,7 +121,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     expectedOptions: Record<string, unknown>;
     heartbeat: Partial<HeartbeatConfig>;
   }): Promise<void> {
-    await withHeartbeatFixture(async ({ tmpDir, agentId, replySpy, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -208,7 +208,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("uses isolated session key when isolatedSession is enabled", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, agentId, replySpy, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -237,7 +237,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("uses main session key when isolatedSession is not set", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, agentId, replySpy, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {

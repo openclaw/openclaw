@@ -452,11 +452,11 @@ export async function updateCronStoreJobs(
   const updates: Array<{ previousJobId: string; job: CronJob; sortOrder: number }> = [];
 
   for (const [index, job] of store.jobs.entries()) {
-    const nextJob = updateJob(structuredClone(job) as CronJob);
+    const nextJob = updateJob(structuredClone(job));
     if (!nextJob) {
       continue;
     }
-    ensureJobStateObject(nextJob as CronStoreFile["jobs"][number]);
+    ensureJobStateObject(nextJob);
     if (nextJob.id !== job.id) {
       delete stateFile.jobs[job.id];
     }

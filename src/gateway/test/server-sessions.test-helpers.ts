@@ -15,7 +15,6 @@ import {
   installGatewayTestHooks,
   piSdkMock,
   rpcReq,
-  testState,
   seedGatewaySessionEntries,
 } from "../test-helpers.js";
 

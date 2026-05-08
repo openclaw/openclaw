@@ -750,53 +750,48 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
-    let directAnnounceResponse: unknown;
-    try {
-      directAnnounceResponse = await runAnnounceDeliveryWithRetry({
-        operation: params.expectsCompletionMessage
-          ? "completion direct announce agent call"
-          : "direct announce agent call",
-        signal: params.signal,
-        run: async () =>
-          await subagentAnnounceDeliveryDeps.callGateway({
-            method: "agent",
-            params: {
-              sessionKey: canonicalRequesterSessionKey,
-              message: params.triggerMessage,
-              deliver: shouldDeliverAgentFinal,
-              bestEffortDeliver: params.bestEffortDeliver,
-              internalEvents: params.internalEvents,
-              channel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
-              accountId: shouldDeliverAgentFinal
-                ? deliveryTarget.accountId
-                : sessionOnlyOriginChannel
-                  ? sessionOnlyOrigin?.accountId
-                  : undefined,
-              to: shouldDeliverAgentFinal
-                ? deliveryTarget.to
-                : sessionOnlyOriginChannel
-                  ? sessionOnlyOrigin?.to
-                  : undefined,
-              threadId: shouldDeliverAgentFinal
-                ? deliveryTarget.threadId
-                : sessionOnlyOriginChannel
-                  ? sessionOnlyOrigin?.threadId
-                  : undefined,
-              inputProvenance: {
-                kind: "inter_session",
-                sourceSessionKey: params.sourceSessionKey,
-                sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
-                sourceTool: params.sourceTool ?? "subagent_announce",
-              },
-              idempotencyKey: params.directIdempotencyKey,
+    const directAnnounceResponse = await runAnnounceDeliveryWithRetry({
+      operation: params.expectsCompletionMessage
+        ? "completion direct announce agent call"
+        : "direct announce agent call",
+      signal: params.signal,
+      run: async () =>
+        await subagentAnnounceDeliveryDeps.callGateway({
+          method: "agent",
+          params: {
+            sessionKey: canonicalRequesterSessionKey,
+            message: params.triggerMessage,
+            deliver: shouldDeliverAgentFinal,
+            bestEffortDeliver: params.bestEffortDeliver,
+            internalEvents: params.internalEvents,
+            channel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
+            accountId: shouldDeliverAgentFinal
+              ? deliveryTarget.accountId
+              : sessionOnlyOriginChannel
+                ? sessionOnlyOrigin?.accountId
+                : undefined,
+            to: shouldDeliverAgentFinal
+              ? deliveryTarget.to
+              : sessionOnlyOriginChannel
+                ? sessionOnlyOrigin?.to
+                : undefined,
+            threadId: shouldDeliverAgentFinal
+              ? deliveryTarget.threadId
+              : sessionOnlyOriginChannel
+                ? sessionOnlyOrigin?.threadId
+                : undefined,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: params.sourceSessionKey,
+              sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+              sourceTool: params.sourceTool ?? "subagent_announce",
             },
-            expectFinal: true,
-            timeoutMs: announceTimeoutMs,
-          }),
-      });
-    } catch (err) {
-      throw err;
-    }
+            idempotencyKey: params.directIdempotencyKey,
+          },
+          expectFinal: true,
+          timeoutMs: announceTimeoutMs,
+        }),
+    });
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
