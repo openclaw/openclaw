@@ -629,8 +629,11 @@ describe("sessions view", () => {
     const checkbox = rows[0]?.querySelector<HTMLInputElement>("input[type=checkbox]");
     expect(checkbox).toBeInstanceOf(HTMLInputElement);
     expect(rows[1]).toBeInstanceOf(HTMLTableRowElement);
-    checkbox!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    rows[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    if (!(checkbox instanceof HTMLInputElement) || !(rows[1] instanceof HTMLTableRowElement)) {
+      throw new Error("Expected checkpoint toggle row controls");
+    }
+    checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleCheckpointDetails).not.toHaveBeenCalled();
   });
