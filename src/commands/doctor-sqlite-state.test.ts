@@ -757,4 +757,49 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
       });
     });
   });
+
+  it("imports legacy memory-core session corpus when it is the only dreaming file", async () => {
+    await withTempDir("openclaw-doctor-memory-core-corpus-", async (rootDir) => {
+      const stateDir = path.join(rootDir, "state");
+      const workspaceDir = path.join(rootDir, "workspace");
+      const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST_FAST: "1" };
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      };
+      await withEnvAsync(env, async () => {
+        await fs.mkdir(sessionCorpusDir, { recursive: true });
+        await fs.writeFile(
+          path.join(sessionCorpusDir, "2026-04-06.txt"),
+          "User: Store the legacy corpus in SQLite.\n",
+          "utf8",
+        );
+
+        await maybeRepairLegacyRuntimeStateFiles({
+          prompter: { shouldRepair: true },
+          env,
+          cfg,
+        });
+
+        expect(noteMock).toHaveBeenCalledWith(
+          expect.stringContaining("memory-core dreaming checkpoint row"),
+          "Doctor changes",
+        );
+        await expect(fs.stat(path.join(sessionCorpusDir, "2026-04-06.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        await expect(
+          readDreamingSessionCorpusText({
+            workspaceDir,
+            relativePath: "memory/.dreams/session-corpus/2026-04-06.txt",
+            env,
+          }),
+        ).resolves.toBe("User: Store the legacy corpus in SQLite.\n");
+      });
+    });
+  });
 });

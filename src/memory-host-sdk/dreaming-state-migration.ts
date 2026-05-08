@@ -151,7 +151,12 @@ export async function legacyMemoryCoreDreamingStateFilesExist(params: {
 }): Promise<boolean> {
   for (const workspaceDir of configuredDreamingWorkspaces(params.cfg)) {
     for (const relativePath of Object.values(DREAMING_STATE_RELATIVE_PATHS)) {
-      if (await fileExists(path.join(workspaceDir, relativePath))) {
+      const absolutePath = path.join(workspaceDir, relativePath);
+      const exists =
+        relativePath === DREAMING_STATE_RELATIVE_PATHS.sessionCorpusDir
+          ? await dirExists(absolutePath)
+          : await fileExists(absolutePath);
+      if (exists) {
         return true;
       }
     }
