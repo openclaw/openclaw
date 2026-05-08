@@ -269,7 +269,11 @@ describe("discord allowlist helpers", () => {
       allowFrom: ["*", "user:123"],
       sender: { id: "123" },
     });
-    expect(explicitOwner.ownerAllowList).not.toBeNull();
+    if (explicitOwner.ownerAllowList === null) {
+      throw new Error("Expected explicit owner allowlist");
+    }
+    expect(explicitOwner.ownerAllowList.allowAll).toBe(false);
+    expect(explicitOwner.ownerAllowList.ids).toEqual(new Set(["123"]));
     expect(explicitOwner.ownerAllowed).toBe(true);
   });
 });
