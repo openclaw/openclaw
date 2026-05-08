@@ -45,6 +45,10 @@ async function seedQaSessionTranscript(
     lastChannel?: string;
     lastProvider?: string;
     lastTo?: string;
+    spawnedBy?: string;
+    parentSessionKey?: string;
+    status?: "running" | "done" | "failed" | "killed" | "timeout";
+    endedAt?: number;
   },
 ) {
   const agentId = params.agentId?.trim() || "qa";
@@ -104,6 +108,10 @@ async function seedQaSessionTranscript(
       ...(params.lastChannel ? { lastChannel: params.lastChannel } : {}),
       ...(params.lastProvider ? { lastProvider: params.lastProvider } : {}),
       ...(params.lastTo ? { lastTo: params.lastTo } : {}),
+      ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),
+      ...(params.parentSessionKey ? { parentSessionKey: params.parentSessionKey } : {}),
+      ...(params.status ? { status: params.status } : {}),
+      ...(typeof params.endedAt === "number" ? { endedAt: params.endedAt } : {}),
       origin: {
         label: params.originLabel ?? "QA seeded SQLite transcript",
       },
