@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { upsertSessionEntry } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type * as ManifestRegistryModule from "../plugins/manifest-registry.js";
@@ -26,6 +27,10 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
 );
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+const AUTH_PROFILE_RUNTIME_CONTRACT_SESSION_FILE = createSqliteSessionTranscriptLocator({
+  agentId: "main",
+  sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
+});
 
 vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
@@ -173,7 +178,7 @@ async function runAuthContractAttempt(params: {
     sessionId: sessionEntry.sessionId,
     sessionKey: AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey,
     sessionAgentId: "main",
-    sessionFile: path.join(params.tmpDir, "session.jsonl"),
+    sessionFile: AUTH_PROFILE_RUNTIME_CONTRACT_SESSION_FILE,
     workspaceDir: params.tmpDir,
     body: AUTH_PROFILE_RUNTIME_CONTRACT.workspacePrompt,
     isFallbackRetry: false,
