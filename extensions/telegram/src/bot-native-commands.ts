@@ -42,7 +42,7 @@ import {
   createSqliteSessionTranscriptLocator,
   getSessionEntry,
   listSessionEntries,
-  resolveAndPersistSessionFile,
+  resolveAndPersistSessionTranscriptLocator,
   resolveSessionRowEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -168,7 +168,7 @@ function resolveTelegramProgressPlaceholder(command: {
   return text ? text : null;
 }
 
-async function resolveTelegramCommandSessionFile(params: {
+async function resolveTelegramCommandTranscriptLocator(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
@@ -185,19 +185,19 @@ async function resolveTelegramCommandSessionFile(params: {
       sessionKey,
     });
     const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const fallbackSessionFile = createSqliteSessionTranscriptLocator({
+    const fallbackTranscriptLocator = createSqliteSessionTranscriptLocator({
       sessionId,
       agentId: params.agentId,
       topicId: params.threadId,
     });
-    const persisted = await resolveAndPersistSessionFile({
+    const persisted = await resolveAndPersistSessionTranscriptLocator({
       sessionId,
       sessionKey: resolved.normalizedKey,
       sessionEntry: resolved.existing,
       agentId: params.agentId,
-      fallbackSessionFile,
+      fallbackTranscriptLocator,
     });
-    return { sessionId, sessionFile: persisted.sessionFile };
+    return { sessionId, sessionFile: persisted.transcriptLocator };
   } catch {
     return {};
   }
@@ -1333,7 +1333,7 @@ export const registerTelegramNativeCommands = ({
           } catch {}
         }
 
-        const sessionFileContext = await resolveTelegramCommandSessionFile({
+        const sessionFileContext = await resolveTelegramCommandTranscriptLocator({
           cfg: runtimeCfg,
           agentId: route.agentId,
           sessionKey: route.sessionKey,

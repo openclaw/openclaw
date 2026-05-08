@@ -102,7 +102,7 @@ export async function exportTrajectoryCommand(
       sessionId: entry.sessionId,
     });
   } catch (error) {
-    runtime.error(`Failed to resolve session file: ${formatErrorMessage(error)}`);
+    runtime.error(`Failed to resolve session transcript: ${formatErrorMessage(error)}`);
     runtime.exit(1);
     return;
   }
