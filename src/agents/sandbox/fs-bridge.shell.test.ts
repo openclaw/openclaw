@@ -13,11 +13,11 @@ import {
 } from "./fs-bridge.test-helpers.js";
 
 function expectNoScriptsContaining(scripts: string[], needle: string) {
-  expect(scripts.filter((script) => script.includes(needle))).toEqual([]);
+  expect(scripts.some((script) => script.includes(needle))).toBe(false);
 }
 
 function expectSomeScriptContaining(scripts: string[], needle: string) {
-  expect(scripts.filter((script) => script.includes(needle)).length).toBeGreaterThan(0);
+  expect(scripts.some((script) => script.includes(needle))).toBe(true);
 }
 
 describe("sandbox fs bridge shell compatibility", () => {
@@ -49,8 +49,8 @@ describe("sandbox fs bridge shell compatibility", () => {
       const scripts = getScriptsFromCalls();
       const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
 
-      expect(executables.filter((shell) => shell !== "sh")).toEqual([]);
-      expect(scripts.filter((script) => !/set -eu[;\n]/.test(script))).toEqual([]);
+      expect(executables.every((shell) => shell === "sh")).toBe(true);
+      expect(scripts.every((script) => /set -eu[;\n]/.test(script))).toBe(true);
       expectNoScriptsContaining(scripts, "pipefail");
     });
   });
