@@ -1049,7 +1049,6 @@ export const usageHandlers: GatewayRequestHandlers = {
           ? merged.sessionFile
           : resolveExistingUsageSessionFile({
               sessionId: includedSessionId,
-              config,
               agentId,
             });
         if (!includedSessionFile) {
