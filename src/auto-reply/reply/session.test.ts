@@ -119,9 +119,7 @@ afterAll(async () => {
 async function makeCaseDir(prefix: string): Promise<string> {
   const stateDir = path.join(suiteRoot, `${prefix}${++suiteCase}`);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-  await fs.mkdir(sessionsDir, { recursive: true });
-  return sessionsDir;
+  return path.join(stateDir, "transcript-fixtures", "main");
 }
 
 type TestSessionRowsTarget = {
@@ -353,11 +351,10 @@ describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "thread-transcripts");
 
     const parentSessionId = "parent-session";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    const parentSessionFile = path.join(transcriptDir, "parent.jsonl");
     const header = {
       type: "session",
       version: 3,
@@ -438,11 +435,10 @@ describe("initSessionState thread forking", () => {
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-existing-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "thread-transcripts");
 
     const parentSessionId = "parent-session";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    const parentSessionFile = path.join(transcriptDir, "parent.jsonl");
     const header = {
       type: "session",
       version: 3,
@@ -520,11 +516,10 @@ describe("initSessionState thread forking", () => {
 
   it("skips fork and creates fresh session when parent tokens exceed threshold", async () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "thread-transcripts");
 
     const parentSessionId = "parent-overflow";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    const parentSessionFile = path.join(transcriptDir, "parent.jsonl");
     const header = {
       type: "session",
       version: 3,
@@ -590,11 +585,10 @@ describe("initSessionState thread forking", () => {
 
   it("skips fork when resolved parent token estimate exceeds threshold", async () => {
     const root = await makeCaseDir("openclaw-thread-session-overflow-estimated-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
+    const transcriptDir = path.join(root, "thread-transcripts");
 
     const parentSessionId = "parent-overflow-estimated";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    const parentSessionFile = path.join(transcriptDir, "parent.jsonl");
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: parentSessionId,
@@ -1244,15 +1238,13 @@ describe("initSessionState RawBody", () => {
 
   it("uses the default per-agent sessions store when config store is unset", async () => {
     const root = await makeCaseDir("openclaw-session-store-default-");
-    const stateDir = path.join(root, ".openclaw");
+    const stateDir = path.dirname(path.dirname(root));
     const agentId = "worker1";
     const sessionKey = `agent:${agentId}:telegram:12345`;
     const sessionId = "sess-worker-1";
-    const sessionFile = path.join(stateDir, "agents", agentId, "sessions", `${sessionId}.jsonl`);
-    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(
-      path.join(stateDir, "agents", agentId, "sessions"),
-      agentId,
-    );
+    const transcriptDir = path.join(stateDir, "transcript-fixtures", agentId);
+    const sessionFile = path.join(transcriptDir, `${sessionId}.jsonl`);
+    const sessionRowsTarget = createSessionRowsTargetFromSessionsDir(transcriptDir, agentId);
 
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
