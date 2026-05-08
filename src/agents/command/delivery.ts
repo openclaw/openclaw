@@ -474,7 +474,9 @@ export async function deliverAgentCommandResult(params: {
     requested: true as const,
     attempted: deliveryAttempted,
     succeeded: deliverySucceeded,
-    ...(deliveryThrewError || (preDeliveryError && !deliverySucceeded)
+    ...(deliveryThrewError ||
+    (preDeliveryError && !deliverySucceeded) ||
+    (hadPartialFailure && deliverySucceeded === false)
       ? { error: true as const }
       : {}),
   };

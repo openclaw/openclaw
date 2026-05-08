@@ -266,6 +266,10 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
 
     expect(delivered.deliveryStatus?.succeeded).toBe(false);
+    // When best-effort delivery records onError(s) AND yields zero successful
+    // results, distinguish the all-errored case from a plain zero-result/
+    // cancelled delivery by setting error: true on the status.
+    expect(delivered.deliveryStatus?.error).toBe(true);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("send failed"));
   });
 
