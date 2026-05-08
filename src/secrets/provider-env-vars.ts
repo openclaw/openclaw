@@ -32,15 +32,23 @@ export type ProviderEnvVarLookupParams = {
   includeUntrustedWorkspacePlugins?: boolean;
 };
 
-export type ProviderAuthEvidence = {
-  type: "local-file-with-env";
-  fileEnvVar?: string;
-  fallbackPaths?: readonly string[];
-  requiresAnyEnv?: readonly string[];
-  requiresAllEnv?: readonly string[];
-  credentialMarker: string;
-  source?: string;
-};
+export type ProviderAuthEvidence =
+  | {
+      type: "local-file-with-env";
+      fileEnvVar?: string;
+      fallbackPaths?: readonly string[];
+      requiresAnyEnv?: readonly string[];
+      requiresAllEnv?: readonly string[];
+      credentialMarker: string;
+      source?: string;
+    }
+  | {
+      type: "gce-metadata-token";
+      requiresAnyEnv?: readonly string[];
+      requiresAllEnv?: readonly string[];
+      credentialMarker: string;
+      source?: string;
+    };
 
 function isWorkspacePluginTrustedForProviderEnvVars(
   plugin: PluginManifestRecord,

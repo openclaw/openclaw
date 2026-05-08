@@ -19,6 +19,9 @@ type GoogleVertexAuthorizedUserToken = {
 
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_METADATA_TOKEN_URL =
+  "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+const GOOGLE_METADATA_TOKEN_TIMEOUT_MS = 1_000;
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 
@@ -166,18 +169,53 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   return token;
 }
 
+async function resolveGoogleVertexMetadataHeaders(
+  fetchImpl?: typeof fetch,
+): Promise<Record<string, string> | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), GOOGLE_METADATA_TOKEN_TIMEOUT_MS);
+  try {
+    const response = await (fetchImpl ?? globalThis.fetch)(GOOGLE_METADATA_TOKEN_URL, {
+      headers: { "Metadata-Flavor": "Google" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+    const payload = (await response.json().catch(() => undefined)) as
+      | { access_token?: unknown }
+      | undefined;
+    const token = normalizeOptionalString(payload?.access_token);
+    return token ? { Authorization: `Bearer ${token}` } : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function resolveGoogleVertexAuthorizedUserHeaders(
   fetchImpl?: typeof fetch,
 ): Promise<Record<string, string>> {
   const credentialsPath = resolveGoogleApplicationCredentialsPath();
   if (!credentialsPath) {
+    const metadataHeaders = await resolveGoogleVertexMetadataHeaders(fetchImpl);
+    if (metadataHeaders) {
+      return metadataHeaders;
+    }
     throw new Error(
-      "Google Vertex ADC credentials not found. Set GOOGLE_APPLICATION_CREDENTIALS or run gcloud auth application-default login.",
+      "Google Vertex ADC credentials not found. Set GOOGLE_APPLICATION_CREDENTIALS, run gcloud auth application-default login, or run on GCE with an attached service account.",
     );
   }
   const credentials = await readGoogleAuthorizedUserCredentials(credentialsPath);
   if (!credentials) {
-    throw new Error("Google Vertex ADC fallback requires an authorized_user credentials file.");
+    const metadataHeaders = await resolveGoogleVertexMetadataHeaders(fetchImpl);
+    if (metadataHeaders) {
+      return metadataHeaders;
+    }
+    throw new Error(
+      "Google Vertex ADC fallback requires an authorized_user credentials file or GCE metadata credentials.",
+    );
   }
   const token = await refreshGoogleVertexAuthorizedUserAccessToken({
     credentialsPath,

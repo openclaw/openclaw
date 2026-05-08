@@ -20,6 +20,31 @@ const googleProviderPlugin = {
 };
 
 describe("google provider plugin hooks", () => {
+  it("provides the Vertex transport without requiring file-based ADC discovery first", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+    const streamFn = provider.createStreamFn?.({
+      model: {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        api: "google-vertex",
+        provider: "google-vertex",
+        baseUrl: "https://{location}-aiplatform.googleapis.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8192,
+      } satisfies Model<"google-vertex">,
+    } as never);
+
+    expect(typeof streamFn).toBe("function");
+  });
+
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,

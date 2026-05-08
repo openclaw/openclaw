@@ -21,7 +21,11 @@ import {
   resolveProviderEnvApiKeyCandidates,
   resolveProviderEnvAuthEvidence,
 } from "../../agents/model-auth-env-vars.js";
-import { resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  resolveEnvApiKey,
+  resolveLiveEnvApiKey,
+  type EnvApiKeyResult,
+} from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
@@ -255,6 +259,7 @@ export async function modelsStatusCommand(
   }
 
   const providersFromEnv = new Set<string>();
+  const liveEnvAuthByProvider = new Map<string, EnvApiKeyResult>();
   // Use the shared provider-env registry so `models status` stays aligned with
   // env-backed providers beyond the text-model defaults (for example image-gen).
   const envLookupParams = {
@@ -264,15 +269,22 @@ export async function modelsStatusCommand(
   const envCandidateMap = resolveProviderEnvApiKeyCandidates(envLookupParams);
   const authEvidenceMap = resolveProviderEnvAuthEvidence(envLookupParams);
   for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
-    if (
-      resolveEnvApiKey(provider, process.env, {
-        config: cfg,
-        workspaceDir,
-        candidateMap: envCandidateMap,
-        authEvidenceMap,
-      })
-    ) {
+    const envAuth = opts.probe
+      ? await resolveLiveEnvApiKey(provider, process.env, {
+          config: cfg,
+          workspaceDir,
+          candidateMap: envCandidateMap,
+          authEvidenceMap,
+        })
+      : resolveEnvApiKey(provider, process.env, {
+          config: cfg,
+          workspaceDir,
+          candidateMap: envCandidateMap,
+          authEvidenceMap,
+        });
+    if (envAuth) {
       providersFromEnv.add(provider);
+      liveEnvAuthByProvider.set(provider, envAuth);
     }
   }
   const syntheticAuthByProvider = new Map<string, StatusSyntheticAuth>();
@@ -326,6 +338,7 @@ export async function modelsStatusCommand(
         modelsPath,
         agentDir,
         workspaceDir,
+        envAuth: liveEnvAuthByProvider.get(provider),
         syntheticAuth: syntheticAuthByProvider.get(provider),
       }),
     )

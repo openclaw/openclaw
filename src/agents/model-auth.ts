@@ -31,6 +31,7 @@ import {
 } from "./auth-profiles.js";
 import * as cliCredentials from "./cli-credentials.js";
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
+import { resolveLiveEnvApiKey } from "./model-auth-live-evidence.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
@@ -61,6 +62,14 @@ function resolveConfigAwareEnvApiKey(
   workspaceDir?: string,
 ): EnvApiKeyResult | null {
   return resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
+}
+
+async function resolveConfigAwareLiveEnvApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  workspaceDir?: string,
+): Promise<EnvApiKeyResult | null> {
+  return await resolveLiveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
 }
 
 function resolveProviderConfig(
@@ -594,7 +603,7 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   if (params.credentialPrecedence === "env-first") {
-    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+    const envResolved = await resolveConfigAwareLiveEnvApiKey(cfg, provider, params.workspaceDir);
     if (envResolved) {
       const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
         ? "oauth"
@@ -621,6 +630,18 @@ export async function resolveApiKeyForProvider(params: {
     return {
       apiKey: localMarkerEnv.apiKey,
       source: localMarkerEnv.source,
+      mode: "api-key",
+    };
+  }
+  const liveLocalMarkerEnv = await resolveConfigAwareLiveEnvApiKey(
+    cfg,
+    provider,
+    params.workspaceDir,
+  );
+  if (liveLocalMarkerEnv && isNonSecretApiKeyMarker(liveLocalMarkerEnv.apiKey)) {
+    return {
+      apiKey: liveLocalMarkerEnv.apiKey,
+      source: liveLocalMarkerEnv.source,
       mode: "api-key",
     };
   }
@@ -674,7 +695,7 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+  const envResolved = liveLocalMarkerEnv;
   if (envResolved) {
     const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
       ? "oauth"
@@ -741,6 +762,7 @@ export async function resolveApiKeyForProvider(params: {
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
 export { resolveEnvApiKey } from "./model-auth-env.js";
+export { resolveLiveEnvApiKey } from "./model-auth-live-evidence.js";
 export type { EnvApiKeyResult } from "./model-auth-env.js";
 
 export function resolveModelAuthMode(
@@ -832,10 +854,13 @@ export async function hasAvailableAuthForProvider(params: {
   if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+  if (await resolveConfigAwareLiveEnvApiKey(cfg, provider, params.workspaceDir)) {
     return true;
   }
   if (authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock") {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
     return true;
   }
 

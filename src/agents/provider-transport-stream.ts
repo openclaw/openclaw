@@ -17,6 +17,7 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "azure-openai-responses",
   "anthropic-messages",
   "google-generative-ai",
+  "google-vertex",
 ]);
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
@@ -26,6 +27,7 @@ const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
   "google-generative-ai": "openclaw-google-generative-ai-transport",
+  "google-vertex": "openclaw-google-vertex-transport",
 };
 
 type ProviderTransportStreamContext = {
@@ -87,6 +89,7 @@ function createSupportedTransportStreamFn(
     case "anthropic-messages":
       return createAnthropicMessagesTransportStreamFn();
     case "google-generative-ai":
+    case "google-vertex":
       return createProviderOwnedGoogleTransportStreamFn(model, ctx);
     default:
       return undefined;

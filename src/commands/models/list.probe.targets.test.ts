@@ -45,6 +45,34 @@ vi.mock("../../agents/model-auth.js", () => ({
     const source = keys.find((key) => process.env[key]?.trim());
     return source ? { source, value: process.env[source] } : null;
   },
+  resolveLiveEnvApiKey: async (
+    provider: string,
+    _env?: NodeJS.ProcessEnv,
+    options?: { workspaceDir?: string },
+  ) => {
+    if (provider === "google-vertex") {
+      return {
+        source: "GCE metadata service account",
+        apiKey: "gcp-vertex-credentials",
+      };
+    }
+    if (provider === "workspace-cloud") {
+      return options?.workspaceDir === "/tmp/workspace"
+        ? {
+            source: "workspace cloud credentials",
+            apiKey: "workspace-cloud-local-credentials",
+          }
+        : null;
+    }
+    const keys =
+      provider === "anthropic"
+        ? ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]
+        : provider === "zai"
+          ? ["ZAI_API_KEY", "Z_AI_API_KEY"]
+          : [];
+    const source = keys.find((key) => process.env[key]?.trim());
+    return source ? { source, value: process.env[source] } : null;
+  },
 }));
 vi.mock("../../agents/model-selection.js", () => {
   const normalizeProviderId = (value: string) =>
@@ -382,6 +410,39 @@ describe("buildProbeTargets reason codes", () => {
         source: "env",
         label: "env",
         model: { provider: "workspace-cloud", model: "workspace-model" },
+      }),
+    );
+  });
+
+  it("uses live GCE metadata auth evidence when building Google Vertex probe targets", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {},
+      order: {},
+    };
+    loadModelCatalogMock.mockResolvedValue([
+      { provider: "google-vertex", id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
+    ]);
+
+    const plan = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      providers: ["google-vertex"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).toEqual([]);
+    expect(plan.targets).toHaveLength(1);
+    expect(plan.targets[0]).toEqual(
+      expect.objectContaining({
+        provider: "google-vertex",
+        source: "env",
+        label: "env",
+        model: { provider: "google-vertex", model: "gemini-3.1-pro-preview" },
       }),
     );
   });

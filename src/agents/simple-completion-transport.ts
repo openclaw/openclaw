@@ -5,12 +5,18 @@ import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import {
   buildTransportAwareSimpleStreamFn,
+  createOpenClawTransportStreamFnForModel,
   prepareTransportAwareSimpleModel,
+  resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
 
 function resolveAnthropicVertexSimpleApi(baseUrl?: string): Api {
   const suffix = baseUrl?.trim() ? encodeURIComponent(baseUrl.trim()) : "default";
   return `openclaw-anthropic-vertex-simple:${suffix}`;
+}
+
+function shouldUseOpenClawSimpleTransport(model: Model<Api>): boolean {
+  return model.api === "google-vertex";
 }
 
 export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
@@ -21,6 +27,15 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   // Only provider-owned custom APIs need runtime stream registration here.
   if (!getApiProvider(model.api) && registerProviderStreamForModel({ model, cfg })) {
     return model;
+  }
+
+  if (shouldUseOpenClawSimpleTransport(model)) {
+    const api = resolveTransportAwareSimpleApi(model.api);
+    const streamFn = createOpenClawTransportStreamFnForModel(model, { cfg });
+    if (api && streamFn) {
+      ensureCustomApiRegistered(api, streamFn);
+      return { ...model, api };
+    }
   }
 
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });

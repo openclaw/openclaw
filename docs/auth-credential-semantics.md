@@ -74,8 +74,11 @@ the target agent signs in separately and creates its own local profile.
 
 ## Probe target resolution
 
-- Probe targets can come from auth profiles, environment credentials, or
-  `models.json`.
+- Probe targets can come from auth profiles, environment credentials,
+  provider-declared live auth evidence, or `models.json`.
+- Live auth evidence is only checked by live probe/runtime auth paths. For
+  example, Google Vertex can use a GCE metadata server access token from an
+  attached VM service account without a local ADC file.
 - If a provider has credentials but OpenClaw cannot resolve a probeable model
   candidate for it, `models status --probe` reports `status: no_model` with
   `reasonCode: no_model`.

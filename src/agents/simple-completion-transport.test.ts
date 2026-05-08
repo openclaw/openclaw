@@ -6,6 +6,7 @@ const createAnthropicVertexStreamFnForModel = vi.fn();
 const ensureCustomApiRegistered = vi.fn();
 const resolveProviderStreamFn = vi.fn();
 const buildTransportAwareSimpleStreamFn = vi.fn();
+const createOpenClawTransportStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
 
 vi.mock("./anthropic-vertex-stream.js", () => ({
@@ -18,7 +19,10 @@ vi.mock("./custom-api-registry.js", () => ({
 
 vi.mock("./provider-transport-stream.js", () => ({
   buildTransportAwareSimpleStreamFn,
+  createOpenClawTransportStreamFnForModel,
   prepareTransportAwareSimpleModel,
+  resolveTransportAwareSimpleApi: (api: string) =>
+    api === "google-vertex" ? "openclaw-google-vertex-transport" : undefined,
 }));
 
 vi.mock("../plugins/provider-runtime.js", async () => {
@@ -43,10 +47,12 @@ describe("prepareModelForSimpleCompletion", () => {
     ensureCustomApiRegistered.mockReset();
     resolveProviderStreamFn.mockReset();
     buildTransportAwareSimpleStreamFn.mockReset();
+    createOpenClawTransportStreamFnForModel.mockReset();
     prepareTransportAwareSimpleModel.mockReset();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue("ollama-stream");
     buildTransportAwareSimpleStreamFn.mockReturnValue(undefined);
+    createOpenClawTransportStreamFnForModel.mockReturnValue(undefined);
     prepareTransportAwareSimpleModel.mockImplementation((model) => model);
   });
 
@@ -156,6 +162,39 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(result).toEqual({
       ...model,
       api: "openclaw-openai-responses-transport",
+    });
+  });
+
+  it("uses the OpenClaw transport for Google Vertex simple completions", () => {
+    const model: Model<"google-vertex"> = {
+      id: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+      api: "google-vertex",
+      provider: "google-vertex",
+      baseUrl: "https://aiplatform.googleapis.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    };
+
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    createOpenClawTransportStreamFnForModel.mockReturnValueOnce("google-vertex-stream");
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(createOpenClawTransportStreamFnForModel).toHaveBeenCalledWith(model, {
+      cfg: undefined,
+    });
+    expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
+      "openclaw-google-vertex-transport",
+      "google-vertex-stream",
+    );
+    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      ...model,
+      api: "openclaw-google-vertex-transport",
     });
   });
 });

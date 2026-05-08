@@ -21,7 +21,7 @@ type MockManifestRegistry = {
         id: string;
         envVars?: string[];
         authEvidence?: Array<{
-          type: "local-file-with-env";
+          type: "local-file-with-env" | "gce-metadata-token";
           fileEnvVar?: string;
           fallbackPaths?: string[];
           requiresAnyEnv?: string[];
@@ -154,6 +154,13 @@ describe("provider env vars dynamic manifest metadata", () => {
                     credentialMarker: "external-cloud-local-credentials",
                     source: "external cloud credentials",
                   },
+                  {
+                    type: "gce-metadata-token",
+                    requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+                    requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
+                    credentialMarker: "gcp-vertex-credentials",
+                    source: "GCE metadata service account",
+                  },
                 ],
               },
             ],
@@ -170,6 +177,13 @@ describe("provider env vars dynamic manifest metadata", () => {
         requiresAllEnv: ["EXTERNAL_CLOUD_PROJECT"],
         credentialMarker: "external-cloud-local-credentials",
         source: "external cloud credentials",
+      },
+      {
+        type: "gce-metadata-token",
+        requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+        requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
+        credentialMarker: "gcp-vertex-credentials",
+        source: "GCE metadata service account",
       },
     ]);
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({

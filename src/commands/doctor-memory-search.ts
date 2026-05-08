@@ -9,6 +9,7 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import {
   resolveApiKeyForProvider,
   resolveEnvApiKey,
+  resolveLiveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -561,6 +562,9 @@ async function hasApiKeyForProvider(
     resolveEnvApiKey(authProviderId) ||
     resolveUsableCustomProviderApiKey({ cfg, provider: authProviderId })
   ) {
+    return true;
+  }
+  if (await resolveLiveEnvApiKey(authProviderId)) {
     return true;
   }
   if (authProviderId !== "amazon-bedrock" && !hasAnyAuthProfileStoreSource(agentDir)) {

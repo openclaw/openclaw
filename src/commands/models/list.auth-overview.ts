@@ -7,6 +7,7 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
+  type EnvApiKeyResult,
   getCustomProviderApiKey,
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
@@ -67,6 +68,7 @@ export function resolveProviderAuthOverview(params: {
   modelsPath: string;
   agentDir?: string;
   workspaceDir?: string;
+  envAuth?: EnvApiKeyResult;
   syntheticAuth?: { value: string; source: string };
 }): ProviderAuthOverview {
   const { provider, cfg, store } = params;
@@ -124,10 +126,12 @@ export function resolveProviderAuthOverview(params: {
   const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
   const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
 
-  const envKey = resolveEnvApiKey(provider, process.env, {
-    config: cfg,
-    workspaceDir: params.workspaceDir,
-  });
+  const envKey =
+    params.envAuth ??
+    resolveEnvApiKey(provider, process.env, {
+      config: cfg,
+      workspaceDir: params.workspaceDir,
+    });
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
 

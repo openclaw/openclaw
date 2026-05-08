@@ -13,7 +13,7 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
-import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import { hasUsableCustomProviderApiKey, resolveLiveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   findNormalizedProviderValue,
@@ -392,7 +392,7 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    const envKey = resolveEnvApiKey(providerKey, process.env, {
+    const envKey = await resolveLiveEnvApiKey(providerKey, process.env, {
       config: cfg,
       workspaceDir,
     });

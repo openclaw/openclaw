@@ -10,6 +10,7 @@ const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default/workspace"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
+const resolveLiveEnvApiKey = vi.hoisted(() => vi.fn(async () => null));
 const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
 const getActiveMemorySearchManager = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
@@ -41,6 +42,7 @@ vi.mock("../agents/memory-search.js", () => ({
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider,
   resolveEnvApiKey: vi.fn(() => null),
+  resolveLiveEnvApiKey,
   resolveUsableCustomProviderApiKey: vi.fn(() => null),
 }));
 
@@ -165,6 +167,8 @@ describe("noteMemorySearchHealth", () => {
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
+    resolveLiveEnvApiKey.mockReset();
+    resolveLiveEnvApiKey.mockResolvedValue(null);
     hasAnyAuthProfileStoreSource.mockReset();
     hasAnyAuthProfileStoreSource.mockReturnValue(true);
     getActiveMemorySearchManager.mockReset();
@@ -430,6 +434,25 @@ describe("noteMemorySearchHealth", () => {
       cfg,
       agentDir: "/tmp/agent-default",
     });
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("treats live provider auth evidence as configured for doctor checks", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "gemini",
+      local: {},
+      remote: {},
+    });
+    resolveLiveEnvApiKey.mockResolvedValue({
+      apiKey: "gcp-vertex-credentials",
+      source: "GCE metadata service account",
+    });
+    hasAnyAuthProfileStoreSource.mockReturnValue(false);
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(resolveLiveEnvApiKey).toHaveBeenCalledWith("google");
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
     expect(note).not.toHaveBeenCalled();
   });
 

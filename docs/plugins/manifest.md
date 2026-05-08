@@ -495,6 +495,13 @@ before runtime loads.
             "requiresAllEnv": ["OPENAI_PROJECT"],
             "credentialMarker": "openai-local-credentials",
             "source": "openai local credentials"
+          },
+          {
+            "type": "gce-metadata-token",
+            "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+            "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
+            "credentialMarker": "gcp-vertex-credentials",
+            "source": "GCE metadata service account"
           }
         ]
       }
@@ -547,29 +554,35 @@ registration. These diagnostics are additive and do not reject legacy plugins.
 
 ### setup.providers reference
 
-| Field          | Required | Type       | What it means                                                                                    |
-| -------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------ |
-| `id`           | Yes      | `string`   | Provider id exposed during setup or onboarding. Keep normalized ids globally unique.             |
-| `authMethods`  | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.                       |
-| `envVars`      | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.               |
-| `authEvidence` | No       | `object[]` | Cheap local auth evidence checks for providers that can authenticate through non-secret markers. |
+| Field          | Required | Type       | What it means                                                                              |
+| -------------- | -------- | ---------- | ------------------------------------------------------------------------------------------ |
+| `id`           | Yes      | `string`   | Provider id exposed during setup or onboarding. Keep normalized ids globally unique.       |
+| `authMethods`  | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.                 |
+| `envVars`      | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.         |
+| `authEvidence` | No       | `object[]` | Cheap auth evidence checks for providers that can authenticate through non-secret markers. |
 
-`authEvidence` is for provider-owned local credential markers that can be
-verified without loading runtime code. These checks must stay cheap and local:
-no network calls, no keychain or secret-manager reads, no shell commands, and no
-provider API probes.
+`authEvidence` is for provider-owned credential markers that can be verified
+without loading runtime code. Non-live checks must stay cheap and local: no
+network calls, no keychain or secret-manager reads, no shell commands, and no
+provider API probes. Live probe/runtime auth paths may verify explicit live
+evidence types such as GCE metadata tokens.
 
 Supported evidence entries:
 
 | Field              | Required | Type       | What it means                                                                                                  |
 | ------------------ | -------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
-| `type`             | Yes      | `string`   | Currently `local-file-with-env`.                                                                               |
+| `type`             | Yes      | `string`   | `local-file-with-env` or `gce-metadata-token`.                                                                 |
 | `fileEnvVar`       | No       | `string`   | Env var containing an explicit credential file path.                                                           |
 | `fallbackPaths`    | No       | `string[]` | Local credential file paths checked when `fileEnvVar` is absent or empty. Supports `${HOME}` and `${APPDATA}`. |
 | `requiresAnyEnv`   | No       | `string[]` | At least one listed env var must be non-empty before the evidence is valid.                                    |
 | `requiresAllEnv`   | No       | `string[]` | Every listed env var must be non-empty before the evidence is valid.                                           |
 | `credentialMarker` | Yes      | `string`   | Non-secret marker returned when the evidence is present.                                                       |
 | `source`           | No       | `string`   | User-facing source label for auth/status output.                                                               |
+
+For `gce-metadata-token`, OpenClaw checks the GCE metadata token endpoint with
+the required `Metadata-Flavor: Google` header during live probe/runtime auth
+resolution and treats a JSON `access_token` response as evidence. The token is
+not persisted.
 
 ### setup fields
 

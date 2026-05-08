@@ -89,6 +89,13 @@
             "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
             "credentialMarker": "gcp-vertex-credentials",
             "source": "gcloud adc"
+          },
+          {
+            "type": "gce-metadata-token",
+            "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+            "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
+            "credentialMarker": "gcp-vertex-credentials",
+            "source": "GCE metadata service account"
           }
         ]
       }

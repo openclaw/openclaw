@@ -2,6 +2,33 @@ import { describe, expect, it, type Mock, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
+  const resolveEnvApiKey = vi.fn((provider: string) => {
+    if (provider === "openai") {
+      return {
+        apiKey: "sk-openai-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
+        source: "shell env: OPENAI_API_KEY",
+      };
+    }
+    if (provider === "anthropic") {
+      return {
+        apiKey: "sk-ant-oat01-ACCESS-TOKEN-1234567890", // pragma: allowlist secret
+        source: "env: ANTHROPIC_OAUTH_TOKEN",
+      };
+    }
+    if (provider === "minimax") {
+      return {
+        apiKey: "sk-minimax-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
+        source: "env: MINIMAX_API_KEY",
+      };
+    }
+    if (provider === "fal") {
+      return {
+        apiKey: "fal_test_0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
+        source: "env: FAL_KEY",
+      };
+    }
+    return null;
+  });
   const store = {
     version: 1,
     profiles: {
@@ -55,33 +82,8 @@ const mocks = vi.hoisted(() => {
       (agentDir?: string) => `${agentDir ?? "/tmp/openclaw-agent"}/auth-profiles.json`,
     ),
     resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(undefined),
-    resolveEnvApiKey: vi.fn((provider: string) => {
-      if (provider === "openai") {
-        return {
-          apiKey: "sk-openai-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
-          source: "shell env: OPENAI_API_KEY",
-        };
-      }
-      if (provider === "anthropic") {
-        return {
-          apiKey: "sk-ant-oat01-ACCESS-TOKEN-1234567890", // pragma: allowlist secret
-          source: "env: ANTHROPIC_OAUTH_TOKEN",
-        };
-      }
-      if (provider === "minimax") {
-        return {
-          apiKey: "sk-minimax-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
-          source: "env: MINIMAX_API_KEY",
-        };
-      }
-      if (provider === "fal") {
-        return {
-          apiKey: "fal_test_0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
-          source: "env: FAL_KEY",
-        };
-      }
-      return null;
-    }),
+    resolveEnvApiKey,
+    resolveLiveEnvApiKey: vi.fn(async (provider: string) => resolveEnvApiKey(provider)),
     resolveProviderEnvApiKeyCandidates: vi.fn().mockReturnValue({
       anthropic: ["ANTHROPIC_API_KEY"],
       google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
@@ -201,6 +203,7 @@ vi.mock("../../agents/auth-health.js", () => ({
 }));
 vi.mock("../../agents/model-auth.js", () => ({
   resolveEnvApiKey: mocks.resolveEnvApiKey,
+  resolveLiveEnvApiKey: mocks.resolveLiveEnvApiKey,
   hasUsableCustomProviderApiKey: mocks.hasUsableCustomProviderApiKey,
   resolveUsableCustomProviderApiKey: mocks.resolveUsableCustomProviderApiKey,
   getCustomProviderApiKey: mocks.getCustomProviderApiKey,

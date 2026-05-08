@@ -19,6 +19,7 @@ let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
 let resetGoogleVertexAuthorizedUserTokenCacheForTest: typeof import("./vertex-adc.js").resetGoogleVertexAuthorizedUserTokenCacheForTest;
+let resolveGoogleVertexAuthorizedUserHeaders: typeof import("./vertex-adc.js").resolveGoogleVertexAuthorizedUserHeaders;
 
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
@@ -92,8 +93,11 @@ describe("google transport stream", () => {
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
     } = await import("./transport-stream.js"));
-    ({ hasGoogleVertexAuthorizedUserAdcSync, resetGoogleVertexAuthorizedUserTokenCacheForTest } =
-      await import("./vertex-adc.js"));
+    ({
+      hasGoogleVertexAuthorizedUserAdcSync,
+      resetGoogleVertexAuthorizedUserTokenCacheForTest,
+      resolveGoogleVertexAuthorizedUserHeaders,
+    } = await import("./vertex-adc.js"));
   });
 
   beforeEach(() => {
@@ -289,6 +293,73 @@ describe("google transport stream", () => {
         }),
       }),
     );
+  });
+
+  it("uses GCE metadata server credentials for Google Vertex when no ADC file exists", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-metadata-"));
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", path.join(tempDir, "appdata"));
+    const metadataFetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ access_token: " metadata-access-token " }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const headers = await resolveGoogleVertexAuthorizedUserHeaders(
+      metadataFetchMock as unknown as typeof fetch,
+    );
+
+    expect(headers).toEqual({ Authorization: "Bearer metadata-access-token" });
+    expect(metadataFetchMock).toHaveBeenCalledWith(
+      "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+      expect.objectContaining({
+        headers: { "Metadata-Flavor": "Google" },
+      }),
+    );
+  });
+
+  it("throws the missing credentials error when neither ADC nor metadata credentials exist", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-no-adc-"));
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", path.join(tempDir, "appdata"));
+    const metadataFetchMock = vi.fn().mockRejectedValue(new Error("metadata unavailable"));
+
+    await expect(
+      resolveGoogleVertexAuthorizedUserHeaders(metadataFetchMock as unknown as typeof fetch),
+    ).rejects.toThrow(
+      "Google Vertex ADC credentials not found. Set GOOGLE_APPLICATION_CREDENTIALS, run gcloud auth application-default login, or run on GCE with an attached service account.",
+    );
+  });
+
+  it("uses GCE metadata server credentials for Google Vertex when ADC is not authorized_user", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-sa-adc-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "service_account",
+        client_email: "vertex-vm@example.iam.gserviceaccount.com",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    const metadataFetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ access_token: "metadata-service-account-token" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const headers = await resolveGoogleVertexAuthorizedUserHeaders(
+      metadataFetchMock as unknown as typeof fetch,
+    );
+
+    expect(headers).toEqual({
+      Authorization: "Bearer metadata-service-account-token",
+    });
   });
 
   it("refreshes authorized_user ADC before Google Vertex requests", async () => {

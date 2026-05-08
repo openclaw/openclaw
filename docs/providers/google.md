@@ -1,5 +1,5 @@
 ---
-summary: "Google Gemini setup (API key + OAuth, image generation, media understanding, TTS, web search)"
+summary: "Google Gemini and Vertex setup (API key, OAuth, GCE metadata ADC, image generation, media understanding, TTS, web search)"
 title: "Google (Gemini)"
 read_when:
   - You want to use Google Gemini models with OpenClaw
@@ -13,6 +13,8 @@ Gemini Grounding.
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
+- Vertex provider: `google-vertex`
+- Vertex auth: local ADC or GCE metadata service-account ADC
 - Runtime option: `agents.defaults.agentRuntime.id: "google-gemini-cli"`
   reuses Gemini CLI OAuth while keeping model refs canonical as `google/*`.
 
@@ -127,6 +129,35 @@ Choose your preferred auth method and follow the setup steps.
 
   </Tab>
 </Tabs>
+
+## Vertex AI on GCE
+
+The `google-vertex` provider can use Application Default Credentials from a
+local `authorized_user` ADC file, or from the GCE metadata server when OpenClaw
+runs on a VM with an attached service account. Metadata auth does not require
+`gcloud auth application-default login` or a downloaded service-account key.
+
+Set the Vertex project and location on the gateway host:
+
+```bash
+export GOOGLE_CLOUD_PROJECT="my-gcp-project"
+export GOOGLE_CLOUD_LOCATION="global"
+```
+
+Then configure a Vertex model:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "google-vertex/gemini-3.1-pro-preview" },
+    },
+  },
+}
+```
+
+On GCE, `models status --probe` and `openclaw doctor` recognize a reachable
+metadata token as provider-owned auth evidence for `google-vertex`.
 
 ## Capabilities
 

@@ -79,6 +79,14 @@ describe("provider transport stream contracts", () => {
         alias: "openclaw-google-generative-ai-transport",
         providerOwnedRuntime: true,
       },
+      {
+        api: "google-vertex" as const,
+        provider: "google-vertex",
+        id: "gemini-3.1-pro-preview",
+        baseUrl: "https://aiplatform.googleapis.com",
+        alias: "openclaw-google-vertex-transport",
+        providerOwnedRuntime: true,
+      },
     ];
 
     for (const testCase of cases) {

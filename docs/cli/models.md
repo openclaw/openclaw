@@ -39,7 +39,9 @@ Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent’s model/auth state. When omitted,
 the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
 configured default agent.
-Probe rows can come from auth profiles, env credentials, or `models.json`.
+Probe rows can come from auth profiles, env credentials, live provider-owned
+auth evidence such as Google Vertex GCE metadata service-account credentials, or
+`models.json`.
 
 Notes:
 
@@ -52,6 +54,10 @@ Notes:
   markers, AWS Bedrock env/profile markers, and plugin synthetic-auth metadata;
   it does not load provider runtime, read keychain secrets, call provider
   APIs, or prove exact per-model execution readiness.
+- `models status --probe` may perform provider-declared live auth evidence
+  checks before building probe targets. For Google Vertex on GCE, a reachable
+  metadata server token can create a probe target even when no local ADC file or
+  service-account key is present.
 - `models list --all --provider <id>` can include provider-owned static catalog
   rows from plugin manifests or bundled provider catalog metadata even when you
   have not authenticated with that provider yet. Those rows still show as
