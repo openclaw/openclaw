@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Highlights
+
+- Channels/iMessage: bundled `imessage` plugin upgraded with full BlueBubbles parity over `imsg` JSON-RPC, offering a complete replacement for BlueBubbles-backed setups. See [docs/channels/imessage-from-bluebubbles.md](docs/channels/imessage-from-bluebubbles.md) for the migration guide. (#78317) Thanks @omarshahine.
+
 ### Changes
 
 - Agents/failover: harden state-aware lane suspension by persisting quota resume transitions, restoring configured lane concurrency, preserving non-quota failure reasons, and exporting model failover events through diagnostics OTLP. Thanks @BunsDev.
