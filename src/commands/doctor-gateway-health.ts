@@ -33,12 +33,11 @@ function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
   }
   note(
     [
-      `CLI version: ${VERSION}`,
-      `Gateway version: ${gatewayVersion}`,
-      "The CLI and running gateway are different versions. This can happen when PATH points at a stale global wrapper while the service runs a newer install.",
-      'Fix: run `openclaw gateway status --deep`; check `command -v openclaw`, `readlink -f "$(command -v openclaw)"`, and `openclaw --version`; reinstall the gateway service from the intended binary if needed.',
+      `This command is OpenClaw ${VERSION}; the running Gateway is OpenClaw ${gatewayVersion}.`,
+      "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+      "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
     ].join("\n"),
-    "Gateway version skew",
+    "OpenClaw version mismatch",
   );
 }
 
