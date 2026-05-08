@@ -968,7 +968,7 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
-    const memoryFlushCompactionCount =
+    const flushedCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
@@ -1001,7 +1001,6 @@ export async function runMemoryFlushIfNeeded(params: {
           });
         }
       }
-      // Persist the pre-increment count so the next compaction cycle remains eligible to flush.
     }
     if (params.storePath && params.sessionKey) {
       try {
@@ -1010,7 +1009,7 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionKey: params.sessionKey,
           update: async () => ({
             memoryFlushAt: memoryDeps.now(),
-            memoryFlushCompactionCount,
+            memoryFlushCompactionCount: flushedCompactionCount,
           }),
         });
         if (updatedEntry) {

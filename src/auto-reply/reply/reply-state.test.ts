@@ -300,23 +300,13 @@ describe("shouldRunMemoryFlush", () => {
       softThresholdTokens: 2_000,
     };
 
-    expect(
-      shouldRunMemoryFlush({ entry: { totalTokens: 95_000, compactionCount: 1 }, ...params }),
-    ).toBe(true);
-
-    expect(
-      shouldRunMemoryFlush({
-        entry: { totalTokens: 95_000, compactionCount: 2, memoryFlushCompactionCount: 1 },
-        ...params,
-      }),
-    ).toBe(true);
-
-    expect(
-      shouldRunMemoryFlush({
-        entry: { totalTokens: 95_000, compactionCount: 3, memoryFlushCompactionCount: 2 },
-        ...params,
-      }),
-    ).toBe(true);
+    for (const entry of [
+      { totalTokens: 95_000, compactionCount: 1 },
+      { totalTokens: 95_000, compactionCount: 2, memoryFlushCompactionCount: 1 },
+      { totalTokens: 95_000, compactionCount: 3, memoryFlushCompactionCount: 2 },
+    ]) {
+      expect(shouldRunMemoryFlush({ entry, ...params })).toBe(true);
+    }
   });
 
   it("ignores stale cached totals", () => {
