@@ -1,8 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, copyFile, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  MATRIX_IDB_SNAPSHOT_NAMESPACE,
+  resolveMatrixIdbSnapshotKey,
+} from "@openclaw/matrix/test-api.js";
+import {
+  createPluginBlobStore,
+  createPluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMatrixQaClient } from "../../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -48,6 +55,27 @@ const matrixStorageMetaStore = createPluginStateKeyedStore<MatrixQaStorageMetada
   namespace: "storage-meta",
   maxEntries: 10_000,
 });
+
+const matrixIdbSnapshotStore = createPluginBlobStore<Record<string, unknown>>("matrix", {
+  namespace: MATRIX_IDB_SNAPSHOT_NAMESPACE,
+  maxEntries: 1_000,
+});
+
+const MATRIX_QA_CLI_IDB_SNAPSHOT_FILENAME = ["crypto-idb-snapshot", "json"].join(".");
+
+async function withMatrixQaCliStateDir<T>(stateDir: string, action: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  try {
+    return await action();
+  } finally {
+    if (previous == null) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+  }
+}
 
 type MatrixQaCliBackupStatus = {
   backup?: {
@@ -564,10 +592,20 @@ async function corruptMatrixQaCliIdbSnapshot(params: {
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
-  const idbSnapshotPath = path.join(accountRoot, "crypto-idb-snapshot.json");
-  await stat(idbSnapshotPath);
-  await writeFile(idbSnapshotPath, "{ this is not valid indexeddb json\n", "utf8");
-  return idbSnapshotPath;
+  const idbSnapshotPath = path.join(accountRoot, MATRIX_QA_CLI_IDB_SNAPSHOT_FILENAME);
+  const key = resolveMatrixIdbSnapshotKey(idbSnapshotPath);
+  await withMatrixQaCliStateDir(params.runtime.stateDir, async () => {
+    await matrixIdbSnapshotStore.register(
+      key,
+      {
+        version: 1,
+        snapshotPath: idbSnapshotPath,
+        corruptedAt: new Date().toISOString(),
+      },
+      Buffer.from("{ this is not valid indexeddb json\n"),
+    );
+  });
+  return `sqlite:${MATRIX_IDB_SNAPSHOT_NAMESPACE}/${key}`;
 }
 
 async function deleteMatrixQaServerRoomKeyBackup(params: {
@@ -1115,7 +1153,7 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
         restoreTotal: repaired.payload.total,
       },
       details: [
-        "corrupted crypto-idb-snapshot.json was repaired by explicit backup restore",
+        "corrupted SQLite IndexedDB snapshot was repaired by explicit backup restore",
         `corrupted path: ${corruptedPath}`,
         `restore imported/total: ${repaired.payload.imported ?? 0}/${repaired.payload.total ?? 0}`,
       ].join("\n"),

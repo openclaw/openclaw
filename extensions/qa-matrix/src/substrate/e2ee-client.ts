@@ -161,7 +161,7 @@ function buildMatrixQaE2eeStoragePaths(params: {
   return {
     accountDir,
     cryptoDatabasePrefix: `qa-matrix-${runKey || "run"}-${actorKey || "actor"}`,
-    idbSnapshotPath: path.join(accountDir, "crypto-idb-snapshot.json"),
+    idbSnapshotPath: path.join(accountDir, "idb-snapshot-state-key"),
     recoveryKeyPath: path.join(accountDir, "recovery-key.json"),
     rootDir,
     storagePath: path.join(accountDir, "sync-store.json"),
@@ -177,11 +177,6 @@ async function prepareMatrixQaE2eeStorage(params: {
   await fs.mkdir(storage.rootDir, { recursive: true });
   await fs.mkdir(storage.accountDir, { recursive: true });
   await fs.mkdir(path.dirname(storage.storagePath), { recursive: true });
-  await fs.writeFile(storage.idbSnapshotPath, "[]\n", { flag: "wx" }).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-      throw error;
-    }
-  });
   return storage;
 }
 

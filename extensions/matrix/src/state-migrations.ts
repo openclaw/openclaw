@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
-import { upsertPluginStateMigrationEntry } from "openclaw/plugin-sdk/migration-runtime";
+import {
+  upsertPluginBlobMigrationEntry,
+  upsertPluginStateMigrationEntry,
+} from "openclaw/plugin-sdk/migration-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isMatrixLegacyCryptoMigrationState,
@@ -20,6 +23,11 @@ import {
   normalizeStoredRootMetadata,
   resolveMatrixStorageMetaKey,
 } from "./matrix/client/storage-meta-state.js";
+import {
+  MATRIX_IDB_SNAPSHOT_NAMESPACE,
+  parseMatrixIdbSnapshotPayload,
+  resolveMatrixIdbSnapshotKey,
+} from "./matrix/sdk/idb-persistence.js";
 import type { MatrixThreadBindingRecord } from "./matrix/thread-bindings-shared.js";
 
 const MATRIX_PLUGIN_ID = "matrix";
@@ -28,6 +36,7 @@ const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
 const INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
 const STARTUP_VERIFICATION_FILENAME = "startup-verification.json";
 const STORAGE_META_FILENAME = "storage-meta.json";
+const IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
 const INBOUND_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 type ImportResult = {
@@ -368,6 +377,41 @@ function importLegacyCryptoMigrationFiles(root: string, env: NodeJS.ProcessEnv):
   return { imported, warnings };
 }
 
+function importIdbSnapshotFiles(root: string, env: NodeJS.ProcessEnv): ImportResult {
+  let imported = 0;
+  const warnings: string[] = [];
+  for (const filePath of collectFiles(root, IDB_SNAPSHOT_FILENAME)) {
+    const data = fs.readFileSync(filePath, "utf8");
+    try {
+      const parsed = parseMatrixIdbSnapshotPayload(data);
+      if (!parsed) {
+        warnings.push(`Skipped empty Matrix IndexedDB snapshot file: ${filePath}`);
+        continue;
+      }
+    } catch {
+      warnings.push(`Skipped invalid Matrix IndexedDB snapshot file: ${filePath}`);
+      continue;
+    }
+    upsertPluginBlobMigrationEntry({
+      pluginId: MATRIX_PLUGIN_ID,
+      namespace: MATRIX_IDB_SNAPSHOT_NAMESPACE,
+      key: resolveMatrixIdbSnapshotKey(filePath),
+      metadata: {
+        version: 1,
+        snapshotPath: path.resolve(filePath),
+        importedAt: new Date().toISOString(),
+      },
+      blob: Buffer.from(data),
+      createdAt: fs.statSync(filePath).mtimeMs || Date.now(),
+      env,
+    });
+    imported++;
+    fs.rmSync(filePath, { force: true });
+    removeEmptyDir(path.dirname(filePath));
+  }
+  return { imported, warnings };
+}
+
 function pluginStatePlan(params: {
   label: string;
   sourcePath: string;
@@ -390,6 +434,29 @@ function pluginStatePlan(params: {
       return {
         changes: [
           `Imported ${result.imported} ${params.label} row(s) into SQLite plugin state (${MATRIX_PLUGIN_ID}/${params.namespace})`,
+        ],
+        warnings: result.warnings,
+      };
+    },
+  };
+}
+
+function pluginBlobPlan(params: {
+  label: string;
+  sourcePath: string;
+  namespace: typeof MATRIX_IDB_SNAPSHOT_NAMESPACE;
+  importSource: (sourcePath: string, env: NodeJS.ProcessEnv) => ImportResult;
+}): ChannelLegacyStateMigrationPlan {
+  return {
+    kind: "custom",
+    label: params.label,
+    sourcePath: params.sourcePath,
+    targetTable: `plugin_blob_entries:${MATRIX_PLUGIN_ID}/${params.namespace}`,
+    apply: ({ env }) => {
+      const result = params.importSource(params.sourcePath, env);
+      return {
+        changes: [
+          `Imported ${result.imported} ${params.label} row(s) into SQLite plugin blobs (${MATRIX_PLUGIN_ID}/${params.namespace})`,
         ],
         warnings: result.warnings,
       };
@@ -459,6 +526,16 @@ export function detectMatrixLegacyStateMigrations(params: {
         sourcePath: root,
         namespace: MATRIX_LEGACY_CRYPTO_MIGRATION_NAMESPACE,
         importSource: importLegacyCryptoMigrationFiles,
+      }),
+    );
+  }
+  if (collectFiles(root, IDB_SNAPSHOT_FILENAME).length > 0) {
+    plans.push(
+      pluginBlobPlan({
+        label: "Matrix IndexedDB snapshot",
+        sourcePath: root,
+        namespace: MATRIX_IDB_SNAPSHOT_NAMESPACE,
+        importSource: importIdbSnapshotFiles,
       }),
     );
   }
