@@ -88,18 +88,19 @@ async function runCommand(params: {
       }
       const exitCode = code ?? 0;
       if (exitCode !== 0 && !params.allowFailure) {
-        reject(
-          new Error(
-            [
-              `command failed: ${params.command} ${params.args.join(" ")}`,
-              `exit: ${exitCode}`,
-              stdout.trim() ? `stdout:\n${stdout}` : "",
-              stderr.trim() ? `stderr:\n${stderr}` : "",
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          ),
-        );
+        const message = [
+          `command failed: ${params.command} ${params.args.join(" ")}`,
+          `exit: ${exitCode}`,
+        ];
+        const trimmedStdout = stdout.trim();
+        if (trimmedStdout.length > 0) {
+          message.push(`stdout:\n${stdout}`);
+        }
+        const trimmedStderr = stderr.trim();
+        if (trimmedStderr.length > 0) {
+          message.push(`stderr:\n${stderr}`);
+        }
+        reject(new Error(message.join("\n")));
         return;
       }
       resolve({ code: exitCode, stdout, stderr });
