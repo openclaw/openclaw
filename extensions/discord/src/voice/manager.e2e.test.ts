@@ -389,6 +389,29 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1001");
   });
 
+  it("autoJoin uses the last configured channel for duplicate guild entries", async () => {
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        autoJoin: [
+          { guildId: "g1", channelId: "1001" },
+          { guildId: "g1", channelId: "1002" },
+        ],
+      },
+    });
+
+    await manager.autoJoin();
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(joinVoiceChannelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "g1",
+        channelId: "1002",
+      }),
+    );
+    expectConnectedStatus(manager, "1002");
+  });
+
   it("does not throw when stale tracked voice connections are already destroyed", async () => {
     const staleConnection = createConnectionMock();
     staleConnection.state.status = "destroyed";
