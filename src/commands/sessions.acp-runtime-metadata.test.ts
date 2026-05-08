@@ -87,7 +87,7 @@ function computeSessionAgentRuntime(params: {
 }): ReturnType<typeof resolveAgentRuntimeMetadata> {
   const agentId = parseAgentSessionKey(params.sessionKey)?.agentId ?? params.fallbackAgentId;
   // Explicit empty-env to avoid host-leak via OPENCLAW_AGENT_RUNTIME.
-  return resolveAgentRuntimeMetadata(params.cfg, agentId, {});
+  return resolveAgentRuntimeMetadata(params.cfg, agentId, {}, params.sessionKey);
 }
 
 describe("sessions --json agentRuntime classifier (catalog #18)", () => {
