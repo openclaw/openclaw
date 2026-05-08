@@ -84,7 +84,13 @@ async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
     {},
   );
   expect(nodes.ok).toBe(true);
-  return (nodes.payload?.nodes ?? []).filter((n) => n.connected).map((n) => n.nodeId);
+  const nodeIds: string[] = [];
+  for (const node of nodes.payload?.nodes ?? []) {
+    if (node.connected) {
+      nodeIds.push(node.nodeId);
+    }
+  }
+  return nodeIds;
 }
 
 async function requestAllowOnceApproval(
