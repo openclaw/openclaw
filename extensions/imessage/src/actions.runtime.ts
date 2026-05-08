@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { resolveIMessageMessageId as resolveIMessageMessageIdImpl } from "./monitor-reply-cache.js";
@@ -274,7 +274,7 @@ function resolveMessageId(result: Record<string, unknown>): string {
 }
 
 async function withTempFile<T>(input: TempFileInput, fn: (path: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "openclaw-imessage-"));
+  const dir = await mkdtemp(join(resolvePreferredOpenClawTmpDir(), "openclaw-imessage-"));
   const safeExt = extname(input.filename).slice(0, 16) || ".bin";
   const filePath = join(dir, `upload${safeExt}`);
   try {
