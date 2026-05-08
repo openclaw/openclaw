@@ -13,7 +13,6 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
-import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
   createGatewaySuiteHarness,

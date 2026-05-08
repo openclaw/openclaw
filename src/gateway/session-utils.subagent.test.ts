@@ -1146,8 +1146,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
 describe("loadCombinedSessionEntriesForGateway includes SQLite-registered agents (#32804)", () => {
   test("ACP agent sessions are visible even when agents.list is configured", async () => {
-    await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
-      const customRoot = path.join(stateDir, "custom-state");
+    await withStateDirEnv("openclaw-acp-vis-", async () => {
       upsertSessionEntry({
         agentId: "main",
         sessionKey: "agent:main:main",
@@ -1175,8 +1174,7 @@ describe("loadCombinedSessionEntriesForGateway includes SQLite-registered agents
   });
 
   test("agent-scoped loads read only matching agent stores", async () => {
-    await withStateDirEnv("openclaw-acp-scoped-", async ({ stateDir }) => {
-      const customRoot = path.join(stateDir, "custom-state");
+    await withStateDirEnv("openclaw-acp-scoped-", async () => {
       upsertSessionEntry({
         agentId: "main",
         sessionKey: "agent:main:main",
@@ -1205,8 +1203,7 @@ describe("loadCombinedSessionEntriesForGateway includes SQLite-registered agents
   });
 
   test("keeps canonical single-target entries intact", async () => {
-    await withStateDirEnv("openclaw-acp-canonical-", async ({ stateDir }) => {
-      const customRoot = path.join(stateDir, "custom-state");
+    await withStateDirEnv("openclaw-acp-canonical-", async () => {
       upsertSessionEntry({
         agentId: "codex",
         sessionKey: "agent:codex:acp-task",

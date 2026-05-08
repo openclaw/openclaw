@@ -1,5 +1,3 @@
-import os from "node:os";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSubagentRunForTests,
@@ -15,11 +13,6 @@ import {
   baseCommandTestConfig,
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
-
-const TEST_SESSION_STORE_PATH = path.join(
-  os.tmpdir(),
-  `openclaw-commands-subagents-info-${process.pid}.json`,
-);
 
 vi.mock("../../config/sessions/store.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/store.js")>(

@@ -6,7 +6,6 @@ import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info
 import {
   connectOk,
   rpcReq,
-  testState,
   trackConnectChallengeNonce,
   seedGatewaySessionEntries,
 } from "./test-helpers.js";

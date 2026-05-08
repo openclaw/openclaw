@@ -110,9 +110,7 @@ async function initStoredSessionState(params: {
 }): Promise<void> {
   await createStoredSession(params);
   const cfg = {
-    session: {
-      ...(params.reset ? { reset: params.reset } : {}),
-    },
+    session: params.reset ? { reset: params.reset } : {},
   } as OpenClawConfig;
 
   await initSessionState({

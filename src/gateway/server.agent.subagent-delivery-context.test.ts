@@ -12,7 +12,6 @@ import {
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
-  testState,
   seedGatewaySessionEntries,
 } from "./test-helpers.js";
 

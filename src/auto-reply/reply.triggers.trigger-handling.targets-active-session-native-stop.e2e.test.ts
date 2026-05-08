@@ -275,7 +275,7 @@ async function expectNextRunUsesTargetSession(
   }
 }
 
-async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
+async function writeStoredModelOverride(): Promise<void> {
   await replaceSessionStore("main", {
     [MAIN_SESSION_KEY]: {
       sessionId: "main",
@@ -533,7 +533,7 @@ describe("trigger handling", () => {
         runEmbeddedPiAgentMock.mockReset();
         mockEmbeddedOkPayload();
         const cfg = makeCfg(home);
-        await writeStoredModelOverride(cfg);
+        await writeStoredModelOverride();
         testCase.setup(cfg);
         await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
 

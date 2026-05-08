@@ -169,7 +169,6 @@ function sentMessagePlans(
       sourcePath,
       apply: () => {
         const parsed = readJson(sourcePath) as Record<string, Record<string, number>>;
-        const legacyStorePath = sourcePath.replace(/\.telegram-sent-messages\.json$/u, "");
         let imported = 0;
         for (const [chatId, messages] of Object.entries(parsed)) {
           for (const messageId of Object.keys(messages)) {
