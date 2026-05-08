@@ -45,7 +45,7 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
     prompt: "hello",
     sessionId: "session-1",
     runId: "run-1",
-    sessionFile: "/tmp/session.jsonl",
+    sessionFile: "sqlite-transcript://main/session-1.jsonl",
     workspaceDir: "/tmp/workspace",
     timeoutMs: 5_000,
     provider: "codex",
@@ -442,7 +442,7 @@ describe("selectAgentHarness", () => {
       maybeCompactAgentHarnessSession({
         sessionId: "session-1",
         sessionKey: "agent:main:main",
-        sessionFile: "/tmp/session.jsonl",
+        sessionFile: "sqlite-transcript://main/session-1.jsonl",
         workspaceDir: "/tmp/workspace",
         provider: "openai",
         model: "gpt-5.4",
