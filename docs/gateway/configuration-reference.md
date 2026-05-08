@@ -238,7 +238,7 @@ conversation bindings, or any non-Codex harness.
         config: {
           codexPlugins: {
             enabled: true,
-            allow_destructive_actions: true,
+            allow_destructive_actions: false,
             plugins: {
               "google-calendar": {
                 enabled: true,
@@ -259,7 +259,7 @@ conversation bindings, or any non-Codex harness.
   plugin/app support for the Codex harness. Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
   default destructive-action policy for migrated plugin app elicitations.
-  Default: `true`.
+  Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
   migrated plugin entry when global `codexPlugins.enabled` is also true.
   Default: `true` for explicit entries.
