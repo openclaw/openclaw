@@ -471,6 +471,58 @@ describe("memory index", () => {
     );
   });
 
+  it("reopens a cached sqlite handle that was closed underneath the manager", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-reopen.sqlite"),
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    await manager.sync({ reason: "test", force: true });
+    expect(manager.status().chunks).toBeGreaterThan(0);
+
+    (manager as unknown as { db: { close: () => void } }).db.close();
+
+    expect(manager.status().chunks).toBeGreaterThan(0);
+    const results = await manager.search("zebra");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+  });
+
+  it("does not reopen a closed sqlite handle while sync owns the index", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-reopen-during-sync.sqlite"),
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getPersistentManager(cfg);
+    const managerInternals = manager as unknown as {
+      db: { close: () => void };
+      syncing: Promise<void> | null;
+      ensureDatabaseOpenForUse: () => boolean;
+    };
+
+    await manager.sync({ reason: "test", force: true });
+    expect(manager.status().chunks).toBeGreaterThan(0);
+
+    const originalDb = managerInternals.db;
+    let finishSync!: () => void;
+    const pendingSync = new Promise<void>((resolve) => {
+      finishSync = resolve;
+    }).finally(() => {
+      managerInternals.syncing = null;
+    });
+    managerInternals.syncing = pendingSync;
+    originalDb.close();
+
+    expect(managerInternals.ensureDatabaseOpenForUse()).toBe(false);
+    expect(managerInternals.db).toBe(originalDb);
+
+    finishSync();
+    await pendingSync;
+    expect(managerInternals.ensureDatabaseOpenForUse()).toBe(true);
+    expect(manager.status().chunks).toBeGreaterThan(0);
+  });
+
   it("streams embedding cache rows during safe reindex", async () => {
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     type EmbeddingCacheRow = {
