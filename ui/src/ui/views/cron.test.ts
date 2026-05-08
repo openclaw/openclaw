@@ -218,7 +218,6 @@ describe("cron view", () => {
     expect(onLoadRuns).toHaveBeenNthCalledWith(2, "job-1");
 
     const link = container.querySelector("a.session-link");
-    expect(link).not.toBeNull();
     expect(link?.getAttribute("href")).toContain(
       "/ui/chat?session=agent%3Amain%3Acron%3Ajob-1%3Arun%3Aabc",
     );
@@ -290,7 +289,6 @@ describe("cron view", () => {
     render(renderCron(expandedProps), container);
 
     const collapseButton = container.querySelector('[data-test-id="cron-form-collapse-toggle"]');
-    expect(collapseButton).not.toBeNull();
     expect(collapseButton?.getAttribute("aria-expanded")).toBe("true");
     collapseButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onToggleFormCollapsed).toHaveBeenCalledWith(true);
@@ -306,8 +304,8 @@ describe("cron view", () => {
     render(renderCron(collapsedProps), container);
 
     const collapsedButton = container.querySelector('[data-test-id="cron-form-collapse-toggle"]');
-    expect(container.querySelector(".cron-workspace--form-collapsed")).not.toBeNull();
-    expect(container.querySelector(".cron-workspace-form--collapsed")).not.toBeNull();
+    expect(container.querySelectorAll(".cron-workspace--form-collapsed")).toHaveLength(1);
+    expect(container.querySelectorAll(".cron-workspace-form--collapsed")).toHaveLength(1);
     expect(collapsedButton?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".cron-form")?.hasAttribute("hidden")).toBe(true);
     expect(container.querySelector(".cron-form-actions")?.hasAttribute("hidden")).toBe(true);
@@ -515,7 +513,6 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Best effort delivery");
 
     const staggerGroup = container.querySelector(".cron-stagger-group");
-    expect(staggerGroup).not.toBeNull();
     expect(staggerGroup?.textContent).toContain("Stagger window");
     expect(staggerGroup?.textContent).toContain("Stagger unit");
     expect(container.textContent).toContain(
@@ -549,7 +546,6 @@ describe("cron view", () => {
     );
 
     const agentInput = container.querySelector('input[placeholder="main or ops"]');
-    expect(agentInput).not.toBeNull();
     expect(agentInput instanceof HTMLInputElement).toBe(true);
     expect(agentInput instanceof HTMLInputElement ? agentInput.disabled : false).toBe(true);
 
@@ -715,19 +711,28 @@ describe("cron view", () => {
       container,
     );
 
-    expect(container.querySelector("datalist#cron-agent-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-model-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-thinking-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-tz-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-delivery-to-suggestions")).not.toBeNull();
-    expect(container.querySelector("datalist#cron-delivery-account-suggestions")).not.toBeNull();
-    expect(container.querySelector('input[list="cron-agent-suggestions"]')).not.toBeNull();
-    expect(container.querySelector('input[list="cron-model-suggestions"]')).not.toBeNull();
-    expect(container.querySelector('input[list="cron-thinking-suggestions"]')).not.toBeNull();
-    expect(container.querySelector('input[list="cron-tz-suggestions"]')).not.toBeNull();
-    expect(container.querySelector('input[list="cron-delivery-to-suggestions"]')).not.toBeNull();
+    expect(Array.from(container.querySelectorAll("datalist")).map((node) => node.id)).toEqual([
+      "cron-agent-suggestions",
+      "cron-model-suggestions",
+      "cron-thinking-suggestions",
+      "cron-tz-suggestions",
+      "cron-delivery-to-suggestions",
+      "cron-delivery-account-suggestions",
+    ]);
     expect(
-      container.querySelector('input[list="cron-delivery-account-suggestions"]'),
-    ).not.toBeNull();
+      Array.from(container.querySelectorAll("input[list]")).map((node) =>
+        node.getAttribute("list"),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "cron-agent-suggestions",
+        "cron-model-suggestions",
+        "cron-thinking-suggestions",
+        "cron-tz-suggestions",
+        "cron-delivery-to-suggestions",
+        "cron-delivery-account-suggestions",
+      ]),
+    );
+    expect(container.querySelectorAll("input[list]")).toHaveLength(6);
   });
 });
