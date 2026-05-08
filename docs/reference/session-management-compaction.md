@@ -71,14 +71,21 @@ cached by file path plus `mtimeMs`/`size` and shared across concurrent readers.
 
 Per agent, on the Gateway host:
 
-- Store: `~/.openclaw/state/openclaw.sqlite` by default. `openclaw doctor --fix`
-  imports legacy `~/.openclaw/agents/<agentId>/sessions/sessions.json` indexes
-  into SQLite and removes the JSON index after import; Gateway startup leaves
-  legacy indexes alone.
-- Transcripts: `~/.openclaw/state/openclaw.sqlite` (`transcript_events` and
-  `transcript_files`). Legacy/export paths may still use
-  `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl` names as stable
-  handles.
+- Global store: `~/.openclaw/state/openclaw.sqlite` by default. It stores
+  shared registry, migration, plugin, task, backup, and transcript-locator
+  metadata.
+- Agent store: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. It
+  stores canonical session rows, transcript events, snapshots, VFS entries,
+  artifacts, and agent-local cache rows.
+- Legacy imports: `openclaw doctor --fix` imports
+  `~/.openclaw/agents/<agentId>/sessions/sessions.json` indexes and JSONL
+  transcripts into the agent SQLite database, then removes imported legacy
+  sources after durable verification. Gateway startup leaves legacy indexes
+  alone.
+- Transcripts: runtime transcript events live in the per-agent database
+  (`transcript_events` and `transcript_event_identities`). The global
+  `transcript_files` table maps legacy/export/debug path-shaped locators to
+  `{ agentId, sessionId }`; JSONL files are not runtime sidecars.
   - Telegram topic handles: `.../<sessionId>-topic-<threadId>.jsonl`
 
 OpenClaw resolves these via `src/config/sessions/*`.
@@ -199,7 +206,7 @@ The store is safe to edit, but the Gateway is the authority: it may rewrite or r
 
 Transcripts are managed by OpenClaw's SQLite-backed `SessionManager`.
 
-The event stream is stored in `transcript_events`:
+The event stream is stored in the per-agent `transcript_events` table:
 
 - First event: session header (`type: "session"`, includes `id`, `cwd`,
   `timestamp`, optional `parentSession`)

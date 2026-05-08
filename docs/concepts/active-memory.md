@@ -612,14 +612,14 @@ or compact user-fact context for the main model.
 
 ## Transcript persistence
 
-Active memory blocking memory sub-agent runs create a real `session.jsonl`
-transcript during the blocking memory sub-agent call.
+Active memory blocking memory sub-agent runs create SQLite transcript rows
+during the blocking memory sub-agent call.
 
 By default, that transcript is temporary:
 
-- it is written to a temp directory
+- it uses a temporary transcript scope
 - it is used only for the blocking memory sub-agent run
-- it is deleted immediately after the run finishes
+- its rows are removed after the run finishes
 
 If you want to keep those blocking memory sub-agent transcripts on disk for debugging or
 inspection, turn persistence on explicitly:
@@ -642,8 +642,8 @@ inspection, turn persistence on explicitly:
 ```
 
 When enabled, active memory records the blocking sub-agent transcript in the
-agent SQLite database and registers a plugin-owned transcript locator under the
-state directory, not in the main user conversation transcript path.
+agent SQLite database and registers plugin-owned transcript locator metadata,
+not a JSONL runtime sidecar and not the main user conversation transcript path.
 
 The default locator namespace is conceptually:
 
