@@ -13,7 +13,7 @@ import {
   resolveSessionKey,
   updateLastRoute,
 } from "./sessions.js";
-import { resolveSessionFilePath } from "./sessions/paths.js";
+import { resolveSessionTranscriptLocator } from "./sessions/paths.js";
 import {
   deleteSessionEntry,
   listSessionEntries,
@@ -602,7 +602,7 @@ describe("sessions", () => {
 
   it("uses agent id when resolving session file fallback paths", () => {
     withStateDir("/custom/state", () => {
-      const sessionFile = resolveSessionFilePath("sess-2", undefined, {
+      const sessionFile = resolveSessionTranscriptLocator("sess-2", undefined, {
         agentId: "codex",
       });
       expect(sessionFile).toBe(
@@ -615,7 +615,7 @@ describe("sessions", () => {
     withStateDir(path.resolve("/different/state"), () => {
       const originalBase = path.resolve("/original/state");
       const bot2Session = path.join(originalBase, "agents", "bot2", "sessions", "sess-1.jsonl");
-      const sessionFile = resolveSessionFilePath(
+      const sessionFile = resolveSessionTranscriptLocator(
         "sess-1",
         { sessionFile: bot2Session },
         { agentId: "bot1" },
@@ -646,7 +646,7 @@ describe("sessions", () => {
         agentId: "bot1",
         sessionId: "sess-1",
       });
-      const sessionFile = resolveSessionFilePath(
+      const sessionFile = resolveSessionTranscriptLocator(
         "sess-1",
         { sessionFile: locator },
         { agentId: "bot1" },
@@ -661,7 +661,7 @@ describe("sessions", () => {
         agentId: "bot2",
         sessionId: "sess-1",
       });
-      const sessionFile = resolveSessionFilePath(
+      const sessionFile = resolveSessionTranscriptLocator(
         "sess-1",
         { sessionFile: bot2Locator },
         { agentId: "bot1" },

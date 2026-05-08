@@ -12,7 +12,7 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionTranscriptLocator,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
 import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
@@ -884,7 +884,7 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
+      const transcriptPath = resolveSessionTranscriptLocator(sessionId, entry, sessionPathOpts);
       return !hasSessionTranscript({ agentId, sessionId, transcriptPath });
     });
     if (missing.length > 0) {
@@ -972,7 +972,7 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionFilePath(
+      const transcriptPath = resolveSessionTranscriptLocator(
         mainEntry.sessionId,
         mainEntry,
         sessionPathOpts,
@@ -1005,7 +1005,7 @@ export async function noteStateIntegrity(
       try {
         referencedTranscriptPaths.add(
           resolveComparableTranscriptPath(
-            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+            resolveSessionTranscriptLocator(entry.sessionId, entry, sessionPathOpts),
           ),
         );
       } catch {

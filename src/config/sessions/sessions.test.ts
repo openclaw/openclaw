@@ -8,7 +8,7 @@ import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
   createSqliteSessionTranscriptLocator,
-  resolveSessionFilePath,
+  resolveSessionTranscriptLocator,
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
@@ -38,7 +38,7 @@ describe("session path safety", () => {
   });
 
   it("ignores legacy sessionFile paths", () => {
-    const resolved = resolveSessionFilePath("sess-1", {
+    const resolved = resolveSessionTranscriptLocator("sess-1", {
       sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl",
     });
     expect(resolved).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));
@@ -46,7 +46,7 @@ describe("session path safety", () => {
 
   it("uses SQLite transcript locators instead of runtime JSONL paths by default", () => {
     expect(
-      resolveSessionFilePath("sess-1", {
+      resolveSessionTranscriptLocator("sess-1", {
         sessionFile: "/tmp/openclaw/agents/main/sessions/legacy.jsonl",
       }),
     ).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));

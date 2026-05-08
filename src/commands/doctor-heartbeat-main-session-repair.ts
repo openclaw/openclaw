@@ -1,7 +1,10 @@
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { formatFilesystemTimestamp } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveSessionFilePath, type SessionFilePathOptions } from "../config/sessions/paths.js";
+import {
+  resolveSessionTranscriptLocator,
+  type SessionTranscriptLocatorOptions,
+} from "../config/sessions/paths.js";
 import {
   deleteSessionEntry,
   getSessionEntry,
@@ -180,7 +183,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   stateDir: string;
-  sessionPathOpts: SessionFilePathOptions;
+  sessionPathOpts: SessionTranscriptLocatorOptions;
   prompter: DoctorPrompterLike;
   warnings: string[];
   changes: string[];
@@ -192,7 +195,11 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   }
   let transcriptPath: string | undefined;
   try {
-    transcriptPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, params.sessionPathOpts);
+    transcriptPath = resolveSessionTranscriptLocator(
+      mainEntry.sessionId,
+      mainEntry,
+      params.sessionPathOpts,
+    );
   } catch {
     transcriptPath = undefined;
   }
