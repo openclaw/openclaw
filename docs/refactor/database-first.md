@@ -102,6 +102,7 @@ The branch already has a real shared SQLite base:
   `task_runs`, and transcript identity rows cascade from transcript events.
 - Current shared tables include `kv`, `agents`, `agent_databases`,
   `plugin_state_entries`, `plugin_blob_entries`, `transcript_files`,
+  `capture_sessions`, `capture_events`, `capture_blobs`,
   `sandbox_registry_entries`, `cron_run_logs`, `cron_jobs`, `commitments`,
   `delivery_queue_entries`, `task_runs`, `task_delivery_state`, `flow_runs`,
   `migration_runs`, and `backup_runs`.
@@ -748,6 +749,10 @@ Keep shared coordination state in `state/openclaw.sqlite`:
   are temp materializations for compatibility with channel senders and sandbox
   staging. Doctor imports legacy media files into `media_blobs` and removes the
   source files after successful row writes.
+- Debug proxy capture sessions, events, and payload blobs. Done for the default
+  capture path: explicit `OPENCLAW_DEBUG_PROXY_DB_PATH` remains a one-off
+  diagnostics escape hatch, but normal captures live in the shared state DB and
+  use the same WAL/busy-timeout settings.
 
 This phase also deletes duplicate sidecar openers, permission helpers, WAL
 setup, filesystem pruning, and compatibility writers from those subsystems.

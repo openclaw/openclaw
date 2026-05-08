@@ -4,6 +4,7 @@ import {
   OPENCLAW_DEBUG_PROXY_SESSION_ID,
   resolveDebugProxySettings,
 } from "./env.js";
+import { resolveDebugProxyDbPath } from "./paths.js";
 
 describe("resolveDebugProxySettings", () => {
   it("keeps an implicit debug proxy session id stable within one process", () => {
@@ -24,5 +25,14 @@ describe("resolveDebugProxySettings", () => {
     });
 
     expect(settings.sessionId).toBe("session-explicit");
+  });
+
+  it("stores default captures in the shared state database", () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-proxy-state" };
+
+    expect(resolveDebugProxyDbPath(env)).toBe("/tmp/openclaw-proxy-state/state/openclaw.sqlite");
+    expect(resolveDebugProxySettings(env).dbPath).toBe(
+      "/tmp/openclaw-proxy-state/state/openclaw.sqlite",
+    );
   });
 });

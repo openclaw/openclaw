@@ -157,7 +157,7 @@ describe("openclaw state database", () => {
 
     expect(columns.some((column) => column.name === "sort_order")).toBe(true);
     expect(index?.sql).toContain("sort_order ASC");
-    expect(version.user_version).toBe(16);
+    expect(version.user_version).toBe(17);
   });
 
   it("upgrades task delivery state with task-run cascade integrity", () => {
