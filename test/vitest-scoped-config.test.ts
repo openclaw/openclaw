@@ -722,31 +722,34 @@ describe("scoped vitest configs", () => {
   });
 
   it("normalizes media include patterns relative to the scoped dir", () => {
-    expect(defaultMediaConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultMediaConfig.test?.include).toEqual(["media/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultMediaConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["media/**/*.test.ts"]);
   });
 
   it("normalizes logging include patterns relative to the scoped dir", () => {
-    expect(defaultLoggingConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultLoggingConfig.test?.include).toEqual(["logging/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultLoggingConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["logging/**/*.test.ts"]);
   });
 
   it("normalizes plugin-sdk include patterns relative to the scoped dir", () => {
-    expect(defaultPluginSdkConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultPluginSdkConfig.test?.include).toEqual(["plugin-sdk/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultPluginSdkConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["plugin-sdk/**/*.test.ts"]);
   });
 
   it("normalizes shared-core include patterns relative to the scoped dir", () => {
-    expect(defaultSharedCoreConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultSharedCoreConfig.test?.include).toEqual(["shared/**/*.test.ts"]);
-    expect(normalizeConfigPaths(defaultSharedCoreConfig.test?.setupFiles)).toEqual([
-      "test/setup.ts",
-    ]);
+    const testConfig = requireTestConfig(defaultSharedCoreConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["shared/**/*.test.ts"]);
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual(["test/setup.ts"]);
   });
 
   it("normalizes process include patterns relative to the scoped dir", () => {
-    expect(defaultProcessConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultProcessConfig.test?.include).toEqual(["process/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultProcessConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["process/**/*.test.ts"]);
   });
 
   it("normalizes tasks include patterns relative to the scoped dir", () => {
