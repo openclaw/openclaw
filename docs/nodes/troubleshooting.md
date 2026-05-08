@@ -93,8 +93,8 @@ run as an approval mismatch instead of trusting the edited payload.
 - `LOCATION_BACKGROUND_UNAVAILABLE` → app is backgrounded but only While Using permission exists.
 - `SYSTEM_RUN_DENIED: approval required` → exec request needs explicit approval.
 - `SYSTEM_RUN_DENIED: allowlist miss` → command blocked by allowlist mode.
-  On Windows node hosts, shell-wrapper forms like `cmd.exe /c ...` are treated as allowlist misses in
-  allowlist mode unless approved via ask flow.
+  On Windows node hosts, shell-wrapper forms like `cmd.exe /c ...` or `powershell`/`pwsh -Command ...`
+  are treated as allowlist misses in allowlist mode unless approved via ask flow.
 
 ## Fast recovery loop
 

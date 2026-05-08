@@ -35,7 +35,7 @@ export function formatSystemRunAllowlistMissMessage(params?: {
   if (params?.windowsShellWrapperBlocked) {
     return (
       "SYSTEM_RUN_DENIED: allowlist miss " +
-      "(Windows shell wrappers like cmd.exe /c or powershell -Command require approval; " +
+      "(Windows shell wrappers like cmd.exe /c or powershell/pwsh -Command require approval; " +
       "approve once/always or run with --ask on-miss|always)"
     );
   }
