@@ -132,9 +132,14 @@ describe("config view", () => {
     return button;
   }
 
-  function queryRequired(container: HTMLElement, selector: string): Element {
+  function queryRequired<T extends Element>(
+    container: HTMLElement,
+    selector: string,
+    constructor: new () => T,
+  ): T {
     const element = container.querySelector(selector);
-    if (!element) {
+    expect(element).toBeInstanceOf(constructor);
+    if (!(element instanceof constructor)) {
       throw new Error(`Expected element matching "${selector}"`);
     }
     return element;
@@ -302,12 +307,10 @@ describe("config view", () => {
     const rawButton = findButtonByText(container, "Raw");
     expect(formButton.classList.contains("active")).toBe(true);
     expect(rawButton.disabled).toBe(true);
-    const rawNotice = container.querySelector(".config-actions__notice");
-    const actionButtons = container.querySelector(".config-actions__buttons");
-    expect(rawNotice).not.toBeNull();
-    expect(actionButtons).not.toBeNull();
-    expect(actionButtons?.textContent).toContain("Reload");
-    expect(actionButtons?.textContent).toContain("Update");
+    queryRequired(container, ".config-actions__notice", HTMLElement);
+    const actionButtons = queryRequired(container, ".config-actions__buttons", HTMLElement);
+    expect(actionButtons.textContent).toContain("Reload");
+    expect(actionButtons.textContent).toContain("Update");
     expect(normalizedText(container)).toContain(
       "Raw mode disabled (snapshot cannot safely round-trip raw text).",
     );
@@ -379,7 +382,7 @@ describe("config view", () => {
       },
     });
 
-    const content = queryRequired(container, ".config-content") as HTMLElement;
+    const content = queryRequired(container, ".config-content", HTMLElement);
     content.scrollTop = 280;
     content.scrollLeft = 24;
     content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
@@ -410,9 +413,8 @@ describe("config view", () => {
       container,
     );
 
-    const icon = container.querySelector<SVGElement>(".config-search__icon");
-    expect(icon).not.toBeNull();
-    expect(icon?.closest(".config-search__input-row")).not.toBeNull();
+    const icon = queryRequired(container, ".config-search__icon", SVGElement);
+    expect(icon.closest(".config-search__input-row")).toBeInstanceOf(HTMLElement);
 
     const input = container.querySelector(".config-search__input");
     expect(input).toBeInstanceOf(HTMLInputElement);
@@ -522,18 +524,14 @@ describe("config view", () => {
     expect(text).not.toContain("supersecret");
     expect(container.querySelector("textarea")).toBeNull();
 
-    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
-    if (!revealButton) {
-      throw new Error("Expected raw config reveal button");
-    }
+    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
     revealButton.click();
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
-    expect(textarea?.value).toContain("supersecret");
-    textarea!.value = textarea!.value.replace("supersecret", "updatedsecret");
-    textarea!.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRawChange).toHaveBeenCalledWith(textarea!.value);
+    const textarea = queryRequired(container, "textarea", HTMLTextAreaElement);
+    expect(textarea.value).toContain("supersecret");
+    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
   });
 
   it("opens raw pending changes without sending a fake raw edit", () => {
@@ -573,10 +571,9 @@ describe("config view", () => {
     expect(normalizedText(container)).toContain("View pending changes");
     expect(normalizedText(container)).not.toContain("gateway.mode");
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
 
     const text = normalizedText(container);
     expect(updateCount).toBe(1);
@@ -648,10 +645,9 @@ describe("config view", () => {
       );
     rerender();
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
 
     const text = normalizedText(container);
     expect(text).toContain("channels.discord.token.id");
@@ -659,9 +655,8 @@ describe("config view", () => {
     expect(text).not.toContain("TOKEN_BEFORE");
     expect(text).not.toContain("TOKEN_AFTER");
 
-    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
-    expect(revealButton).not.toBeNull();
-    revealButton!.click();
+    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
+    revealButton.click();
 
     const revealedText = normalizedText(container);
     expect(revealedText).toContain("TOKEN_BEFORE");
@@ -696,13 +691,11 @@ describe("config view", () => {
       );
     rerender();
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
-    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
-    expect(revealButton).not.toBeNull();
-    revealButton!.click();
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
+    revealButton.click();
     expect(normalizedText(container)).toContain("TOKEN_A_AFTER");
 
     props.configPath = "/tmp/openclaw-b.json5";
@@ -759,10 +752,9 @@ describe("config view", () => {
       );
     rerender();
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
 
     const text = normalizedText(container);
     expect(text).toContain("integrations.foo.bar.credential");
@@ -799,10 +791,9 @@ describe("config view", () => {
       );
     rerender();
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
     expect(normalizedText(container)).toContain("gateway.mode");
 
     props.raw = props.originalRaw;
@@ -886,9 +877,8 @@ describe("config view", () => {
       container,
     );
 
-    const rawUnavailableInput = container.querySelector<HTMLInputElement>(".cfg-input");
-    expect(rawUnavailableInput).not.toBeNull();
-    expect(rawUnavailableInput?.placeholder).toBe(
+    const rawUnavailableInput = queryRequired(container, ".cfg-input", HTMLInputElement);
+    expect(rawUnavailableInput.placeholder).toBe(
       "Structured value (SecretRef) - edit the config file directly",
     );
   });
@@ -968,7 +958,7 @@ describe("config view", () => {
     const importButton = findButtonContainingText(container, "Import theme");
 
     expect(importButton.disabled).toBe(true);
-    expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
+    queryRequired(container, ".settings-theme-import__input", HTMLInputElement);
     expect(
       container.querySelector<HTMLAnchorElement>(".settings-theme-import__external")?.href,
     ).toBe("https://tweakcn.com/editor/theme");
