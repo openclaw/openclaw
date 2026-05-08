@@ -416,6 +416,9 @@ export async function createVoiceCallRuntime(params: {
 
           // --- Email-first path: user explicitly asked for email delivery ---
           if (parsedArgs.deliveryPreference === "email") {
+            log.info(
+              `[voice-call] Email-first path: caller requested email delivery for call=${callId}, agent=${agentId}, session=${sessionKey}`,
+            );
             const consultPromise = consultRealtimeVoiceAgent(consultParams);
             consultPromise
               .then((result: { text: string }) => {
@@ -435,12 +438,18 @@ export async function createVoiceCallRuntime(params: {
                   `[voice-call] Background consult for email delivery failed: ${formatErrorMessage(err)}`,
                 );
               });
+            log.info(
+              `[voice-call] Email-first path: returning ack to voice model for call=${callId}`,
+            );
             return buildRealtimeVoiceAgentConsultEmailAckResponse("caller");
           }
 
           // --- Timeout path: race consult against backgroundConsultTimeoutMs ---
           const bgTimeout = effectiveConfig.realtime.backgroundConsultTimeoutMs;
           if (bgTimeout) {
+            log.info(
+              `[voice-call] Timeout path: racing consult against ${bgTimeout}ms for call=${callId}, agent=${agentId}, session=${sessionKey}`,
+            );
             const consultPromise = consultRealtimeVoiceAgent(consultParams);
             const result = await Promise.race([
               consultPromise.then(
@@ -451,9 +460,15 @@ export async function createVoiceCallRuntime(params: {
               ),
             ]);
             if (result.kind === "result") {
+              log.info(
+                `[voice-call] Timeout path: consult finished before timeout for call=${callId}`,
+              );
               return result.value;
             }
             // Timeout exceeded — let the original promise continue and email the result
+            log.info(
+              `[voice-call] Timeout path: ${bgTimeout}ms exceeded for call=${callId}, deferring to email delivery`,
+            );
             consultPromise
               .then((r: { text: string }) => {
                 spawnEmailDeliveryAgent({
@@ -476,6 +491,9 @@ export async function createVoiceCallRuntime(params: {
           }
 
           // --- Normal path: await result and return it directly ---
+          log.info(
+            `[voice-call] Normal path: awaiting consult result for call=${callId}, agent=${agentId}`,
+          );
           return await consultRealtimeVoiceAgent(consultParams);
         },
       );

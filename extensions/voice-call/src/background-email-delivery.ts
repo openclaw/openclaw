@@ -62,6 +62,10 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
     timeoutMs,
   } = params;
 
+  logger.info(
+    `[voice-call] Spawning email delivery agent for session=${sessionKey}, agent=${agentId}, question="${question.slice(0, 80)}"`,
+  );
+
   const prompt = [
     `Original question from the caller: "${question}"`,
     "",
