@@ -116,7 +116,7 @@ export async function cleanupStaleLaunchdUpdateJobs(args?: {
     return emptyResult(false);
   }
 
-  const env = args?.env ?? (process.env as Record<string, string | undefined>);
+  const env = args?.env ?? process.env;
   const canonical = resolveCanonicalGatewayLabel(env);
   const domain = resolveGuiDomain();
 
@@ -188,7 +188,7 @@ export async function ensureGatewayLaunchAgentEnabled(args?: {
     return { attempted: false, enabled: false, warnings: [] };
   }
 
-  const env = args?.env ?? (process.env as Record<string, string | undefined>);
+  const env = args?.env ?? process.env;
   const canonical = resolveCanonicalGatewayLabel(env);
   if (canonical.label === null) {
     return { attempted: true, enabled: false, warnings: [...canonical.warnings] };
