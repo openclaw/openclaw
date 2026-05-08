@@ -1,6 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
+import type { ProviderWrapStreamFnContext } from "../../plugins/types.js";
 import { __testing as extraParamsTesting } from "./extra-params.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
@@ -37,6 +38,35 @@ afterEach(() => {
 });
 
 describe("extra-params: provider runtime handoff", () => {
+  it("passes agentDir through the provider runtime wrapper seam", () => {
+    let capturedContext: ProviderWrapStreamFnContext | undefined;
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: ({ context }) => context.extraParams,
+      resolveProviderExtraParamsForTransport: () => undefined,
+      wrapProviderStreamFn: ({ context }) => {
+        capturedContext = context;
+        return context.streamFn;
+      },
+    });
+
+    runExtraParamsCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      agentDir: "/tmp/openclaw-agent",
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        model: "gpt-5.4",
+        messages: [],
+      },
+    });
+
+    expect(capturedContext?.agentDir).toBe("/tmp/openclaw-agent");
+  });
+
   it("passes thinking-off intent through the provider runtime wrapper seam", () => {
     const payload = runExtraParamsCase({
       applyProvider: "local-provider",
