@@ -16,6 +16,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
@@ -68,6 +69,8 @@ function loadDispatchAcpTtsRuntime() {
 function loadDispatchAcpTranscriptRuntime() {
   return dispatchAcpTranscriptRuntimeLoader.load();
 }
+
+const log = createSubsystemLogger("dispatch-acp");
 
 type DispatchProcessedRecorder = (
   outcome: "completed" | "skipped" | "error",
@@ -514,6 +517,12 @@ export async function tryDispatchAcpReply(params: {
       return { queuedFinal, counts };
     }
     try {
+      const { readAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
+      const sessionStoreEntry =
+        readAcpSessionEntry({
+          sessionKey: canonicalSessionKey,
+          cfg: params.cfg,
+        }) ?? undefined;
       const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
       await persistAcpDispatchTranscript({
         cfg: params.cfg,
@@ -522,12 +531,14 @@ export async function tryDispatchAcpReply(params: {
         finalText: delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
         meta: acpResolution.meta,
         threadId: params.ctx.MessageThreadId,
+        sessionStoreEntry,
       });
     } catch (error) {
-      logVerbose(
-        `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
-          error,
-        )}`,
+      // Use log.warn (not logVerbose) so transcript write failures are
+      // visible in operator logs without requiring verbose mode. This was a
+      // silent swallow before catalog #22 was fixed. Still non-fatal.
+      log.warn(
+        `transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(error)}`,
       );
     }
     queuedFinal =
