@@ -16,6 +16,7 @@ import { withTimeout } from "./timeout.js";
 type SharedCodexAppServerClientEntry = {
   client?: CodexAppServerClient;
   promise?: Promise<CodexAppServerClient>;
+  poolKey?: string;
 };
 
 type SharedCodexAppServerClientState = {
@@ -70,6 +71,24 @@ function readLegacySharedCodexAppServerClientState(
   return value as LegacySharedCodexAppServerClientState;
 }
 
+function sharedCodexAppServerPoolKey(params: { agentDir: string }): string {
+  return JSON.stringify({ agentDir: params.agentDir });
+}
+
+function closeStaleSharedEntriesForPool(
+  state: SharedCodexAppServerClientState,
+  poolKey: string,
+  currentKey: string,
+): void {
+  for (const [key, entry] of state.clients) {
+    if (key === currentKey || entry.poolKey !== poolKey) {
+      continue;
+    }
+    state.clients.delete(key);
+    entry.client?.close();
+  }
+}
+
 export async function getSharedCodexAppServerClient(options?: {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
@@ -102,7 +121,10 @@ export async function getSharedCodexAppServerClient(options?: {
     agentDir: usesNativeAuth ? undefined : agentDir,
   });
   const state = getSharedCodexAppServerClientState();
+  const poolKey = sharedCodexAppServerPoolKey({ agentDir });
+  closeStaleSharedEntriesForPool(state, poolKey, key);
   const entry = getOrCreateSharedClientEntry(state, key);
+  entry.poolKey = poolKey;
   const sharedPromise =
     entry.promise ??
     (entry.promise = (async () => {
