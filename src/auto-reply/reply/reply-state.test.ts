@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
+import { createSqliteSessionTranscriptLocator, type SessionEntry } from "../../config/sessions.js";
 import { listSessionEntries, upsertSessionEntry } from "../../config/sessions/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
@@ -79,8 +79,7 @@ async function rotateCompactionSessionFile(params: {
     newSessionId: params.newSessionId,
   });
   const stored = readStoredMainAgentSessionRows();
-  const expectedDir = path.join(await fs.realpath(tmp), "transcript-fixtures", "main");
-  return { stored, sessionKey, expectedDir };
+  return { stored, sessionKey };
 }
 
 describe("history helpers", () => {
@@ -552,36 +551,40 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
-  it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
-    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
+  it("updates sessionId and uses sqlite locator when compaction rotated transcripts", async () => {
+    const { stored, sessionKey } = await rotateCompactionSessionFile({
       tempPrefix: "openclaw-compact-rotate-",
       sessionFile: (tmp) => path.join(tmp, "s1-topic-456.jsonl"),
       newSessionId: "s2",
     });
     expect(stored[sessionKey].sessionId).toBe("s2");
-    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "s2-topic-456.jsonl"));
+    expect(stored[sessionKey].sessionFile).toBe(
+      createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "s2" }),
+    );
   });
 
-  it("preserves fork transcript filenames when compaction rotates transcripts", async () => {
-    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
+  it("drops legacy fork transcript filenames when compaction rotates transcripts", async () => {
+    const { stored, sessionKey } = await rotateCompactionSessionFile({
       tempPrefix: "openclaw-compact-fork-",
       sessionFile: (tmp) => path.join(tmp, "2026-03-23T12-34-56-789Z_s1.jsonl"),
       newSessionId: "s2",
     });
     expect(stored[sessionKey].sessionId).toBe("s2");
     expect(stored[sessionKey].sessionFile).toBe(
-      path.join(expectedDir, "2026-03-23T12-34-56-789Z_s2.jsonl"),
+      createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "s2" }),
     );
   });
 
-  it("keeps rewritten absolute sessionFile paths that stay inside the sessions directory", async () => {
-    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
+  it("replaces absolute sessionFile paths with sqlite locators during compaction rotation", async () => {
+    const { stored, sessionKey } = await rotateCompactionSessionFile({
       tempPrefix: "openclaw-compact-unsafe-",
       sessionFile: (tmp) => path.join(tmp, "outside", "s1.jsonl"),
       newSessionId: "s2",
     });
     expect(stored[sessionKey].sessionId).toBe("s2");
-    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "outside", "s2.jsonl"));
+    expect(stored[sessionKey].sessionFile).toBe(
+      createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "s2" }),
+    );
   });
 
   it("increments compaction count by an explicit amount", async () => {
@@ -619,14 +622,9 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = readStoredMainAgentSessionRows();
-    const expectedSessionDir = path.join(
-      await fs.realpath(path.dirname(path.dirname(transcriptDir))),
-      "transcript-fixtures",
-      "main",
-    );
     expect(stored[sessionKey].sessionId).toBe("new-session-id");
     expect(stored[sessionKey].sessionFile).toBe(
-      path.join(expectedSessionDir, "new-session-id.jsonl"),
+      createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "new-session-id" }),
     );
     expect(stored[sessionKey].compactionCount).toBe(2);
   });

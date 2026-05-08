@@ -1,6 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
@@ -13,12 +11,9 @@ import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
 import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js";
 import {
   createSqliteSessionTranscriptLocator,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   getSessionEntry,
   isSqliteSessionTranscriptLocator,
   mergeSessionEntry,
-  parseSqliteSessionTranscriptLocator,
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
@@ -27,7 +22,7 @@ import { resolveStableSessionEndTranscript } from "../../gateway/session-transcr
 import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -336,91 +331,18 @@ function resolveCompactionSessionFile(params: {
     (params.cfg
       ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
       : undefined);
-  const pathOpts = resolveSessionFilePathOptions({
-    agentId,
+  return createSqliteSessionTranscriptLocator({
+    agentId: agentId ?? DEFAULT_AGENT_ID,
+    sessionId: params.newSessionId,
+    topicId: extractSqliteTranscriptTopicId(params.entry.sessionFile, params.entry.sessionId),
   });
-  const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-    sessionFile: params.entry.sessionFile,
-    previousSessionId: params.entry.sessionId,
-    nextSessionId: params.newSessionId,
-  });
-  const normalizedRewrittenSessionFile =
-    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
-      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
-      : rewrittenSessionFile;
-  if (normalizedRewrittenSessionFile && path.isAbsolute(normalizedRewrittenSessionFile)) {
-    return normalizedRewrittenSessionFile;
-  }
-  return resolveSessionFilePath(
-    params.newSessionId,
-    normalizedRewrittenSessionFile ? { sessionFile: normalizedRewrittenSessionFile } : undefined,
-    pathOpts,
-  );
-}
-
-function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
-  const resolved = path.resolve(filePath);
-  const missingSegments: string[] = [];
-  let cursor = resolved;
-  while (true) {
-    try {
-      return path.join(fs.realpathSync(cursor), ...missingSegments.toReversed());
-    } catch {
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        return resolved;
-      }
-      missingSegments.push(path.basename(cursor));
-      cursor = parent;
-    }
-  }
-}
-
-function rewriteSessionFileForNewSessionId(params: {
-  sessionFile?: string;
-  previousSessionId: string;
-  nextSessionId: string;
-}): string | undefined {
-  const trimmed = normalizeOptionalString(params.sessionFile);
-  if (!trimmed) {
-    return undefined;
-  }
-  const sqliteScope = parseSqliteSessionTranscriptLocator(trimmed);
-  if (sqliteScope) {
-    return createSqliteSessionTranscriptLocator({
-      agentId: sqliteScope.agentId,
-      sessionId: params.nextSessionId,
-      topicId: extractSqliteTranscriptTopicId(trimmed, params.previousSessionId),
-    });
-  }
-  const base = path.basename(trimmed);
-  if (!base.endsWith(".jsonl")) {
-    return undefined;
-  }
-  const withoutExt = base.slice(0, -".jsonl".length);
-  if (withoutExt === params.previousSessionId) {
-    return path.join(path.dirname(trimmed), `${params.nextSessionId}.jsonl`);
-  }
-  if (withoutExt.startsWith(`${params.previousSessionId}-topic-`)) {
-    return path.join(
-      path.dirname(trimmed),
-      `${params.nextSessionId}${base.slice(params.previousSessionId.length)}`,
-    );
-  }
-  const forkMatch = withoutExt.match(
-    /^(\d{4}-\d{2}-\d{2}T[\w-]+(?:Z|[+-]\d{2}(?:-\d{2})?)?)_(.+)$/,
-  );
-  if (forkMatch?.[2] === params.previousSessionId) {
-    return path.join(path.dirname(trimmed), `${forkMatch[1]}_${params.nextSessionId}.jsonl`);
-  }
-  return undefined;
 }
 
 function extractSqliteTranscriptTopicId(
-  locator: string,
+  locator: string | undefined,
   previousSessionId: string,
 ): string | undefined {
-  if (!isSqliteSessionTranscriptLocator(locator)) {
+  if (!locator || !isSqliteSessionTranscriptLocator(locator)) {
     return undefined;
   }
   try {
