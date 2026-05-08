@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -13,10 +12,11 @@ import {
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { describeExecTool, describeProcessTool } from "./bash-tools.descriptions.js";
+import { describeProcessTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import { createLazyExecTool, loadBashToolsModule } from "./bash-tools.lazy.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
-import { execSchema, processSchema } from "./bash-tools.schemas.js";
+import { processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
 import { resolveExecConfig } from "./exec-config-resolution.js";
@@ -58,10 +58,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
-import {
-  EXEC_TOOL_DISPLAY_SUMMARY,
-  PROCESS_TOOL_DISPLAY_SUMMARY,
-} from "./tool-description-presets.js";
+import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import {
@@ -84,42 +81,6 @@ function isOpenAIProvider(provider?: string) {
 }
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
-
-type BashToolsModule = typeof import("./bash-tools.js");
-
-const bashToolsModuleLoader = createLazyImportLoader<BashToolsModule>(
-  () => import("./bash-tools.js"),
-);
-
-function loadBashToolsModule(): Promise<BashToolsModule> {
-  return bashToolsModuleLoader.load();
-}
-
-function createLazyExecTool(defaults?: ExecToolDefaults): AnyAgentTool {
-  let loadedTool: AnyAgentTool | undefined;
-  const loadTool = async () => {
-    if (!loadedTool) {
-      const { createExecTool } = await loadBashToolsModule();
-      loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
-    }
-    return loadedTool;
-  };
-
-  return {
-    name: "exec",
-    label: "exec",
-    displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
-    get description() {
-      return describeExecTool({
-        agentId: defaults?.agentId,
-        hasCronTool: defaults?.hasCronTool === true,
-      });
-    },
-    parameters: execSchema,
-    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
-      (await loadTool()).execute(...args),
-  } as AnyAgentTool;
-}
 
 function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
   let loadedTool: AnyAgentTool | undefined;
@@ -531,43 +492,45 @@ export function createOpenClawCodingTools(options?: {
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const execTool = includeShellTools
     ? createLazyExecTool({
-        ...execDefaults,
-        host: options?.exec?.host ?? execConfig.host,
-        security: options?.exec?.security ?? execConfig.security,
-        ask: options?.exec?.ask ?? execConfig.ask,
-        trigger: options?.trigger,
-        node: options?.exec?.node ?? execConfig.node,
-        pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
-        safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
-        strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
-        safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
-        safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
-        agentId,
-        cwd: workspaceRoot,
-        allowBackground,
-        scopeKey,
-        sessionKey: options?.sessionKey,
-        messageProvider: options?.messageProvider,
-        currentChannelId: options?.currentChannelId,
-        currentThreadTs: options?.currentThreadTs,
-        accountId: options?.agentAccountId,
-        backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
-        timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
-        approvalRunningNoticeMs:
-          options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
-        notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
-        notifyOnExitEmptySuccess:
-          options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
-        sandbox: sandbox
-          ? {
-              containerName: sandbox.containerName,
-              workspaceDir: sandbox.workspaceDir,
-              containerWorkdir: sandbox.containerWorkdir,
-              env: sandbox.backend?.env ?? sandbox.docker.env,
-              buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
-              finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
-            }
-          : undefined,
+        defaults: {
+          ...execDefaults,
+          host: options?.exec?.host ?? execConfig.host,
+          security: options?.exec?.security ?? execConfig.security,
+          ask: options?.exec?.ask ?? execConfig.ask,
+          trigger: options?.trigger,
+          node: options?.exec?.node ?? execConfig.node,
+          pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
+          safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
+          strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
+          safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
+          safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
+          agentId,
+          cwd: workspaceRoot,
+          allowBackground,
+          scopeKey,
+          sessionKey: options?.sessionKey,
+          messageProvider: options?.messageProvider,
+          currentChannelId: options?.currentChannelId,
+          currentThreadTs: options?.currentThreadTs,
+          accountId: options?.agentAccountId,
+          backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
+          timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
+          approvalRunningNoticeMs:
+            options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
+          notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
+          notifyOnExitEmptySuccess:
+            options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
+          sandbox: sandbox
+            ? {
+                containerName: sandbox.containerName,
+                workspaceDir: sandbox.workspaceDir,
+                containerWorkdir: sandbox.containerWorkdir,
+                env: sandbox.backend?.env ?? sandbox.docker.env,
+                buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
+                finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
+              }
+            : undefined,
+        },
       })
     : null;
   const processTool = includeShellTools

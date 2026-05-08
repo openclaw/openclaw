@@ -1,7 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { describeExecTool } from "../agents/bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
-import { execSchema } from "../agents/bash-tools.schemas.js";
+import { createLazyExecTool } from "../agents/bash-tools.lazy.js";
 import { resolveExecConfig } from "../agents/exec-config-resolution.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
@@ -13,7 +12,6 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../agents/subagent-capabilities.js";
-import { EXEC_TOOL_DISPLAY_SUMMARY } from "../agents/tool-description-presets.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -32,14 +30,18 @@ import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
-function createLazyHttpExecTool(opts: {
+// Mirrors the `nodes` exec_capable owner-only contract: trusted-proxy callers
+// must have `operator.admin` to reach the HTTP-registered exec. Shared-secret
+// bearer auth always resolves to owner per the `/tools/invoke` security
+// boundary, so the gating is a no-op there.
+function buildHttpExecDefaults(opts: {
   cfg: OpenClawConfig;
   agentId?: string;
   sessionKey: string;
   workspaceDir?: string;
-}): AnyAgentTool {
+}): ExecToolDefaults {
   const execConfig = resolveExecConfig({ cfg: opts.cfg, agentId: opts.agentId });
-  const defaults: ExecToolDefaults = {
+  return {
     host: execConfig.host,
     security: execConfig.security,
     ask: execConfig.ask,
@@ -61,29 +63,6 @@ function createLazyHttpExecTool(opts: {
     // orphan the process with no transcript to follow up on.
     allowBackground: false,
   };
-
-  let loadedTool: AnyAgentTool | undefined;
-  const loadTool = async () => {
-    if (!loadedTool) {
-      const { createExecTool } = await import("../agents/bash-tools.js");
-      loadedTool = createExecTool(defaults) as unknown as AnyAgentTool;
-    }
-    return loadedTool;
-  };
-
-  return {
-    name: "exec",
-    label: "exec",
-    displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
-    description: describeExecTool({ agentId: opts.agentId, hasCronTool: false }),
-    parameters: execSchema,
-    // Mirrors the `nodes` exec_capable owner-only contract: trusted-proxy
-    // callers must have `operator.admin` to reach this. Shared-secret bearer
-    // auth always resolves to owner per the /tools/invoke security boundary.
-    ownerOnly: true,
-    execute: async (...args: Parameters<NonNullable<AnyAgentTool["execute"]>>) =>
-      (await loadTool()).execute(...args),
-  } as AnyAgentTool;
 }
 
 export function resolveGatewayScopedTools(params: {
@@ -190,11 +169,14 @@ export function resolveGatewayScopedTools(params: {
     surface === "http"
       ? [
           ...allTools,
-          createLazyHttpExecTool({
-            cfg: params.cfg,
-            agentId,
-            sessionKey: params.sessionKey,
-            workspaceDir,
+          createLazyExecTool({
+            defaults: buildHttpExecDefaults({
+              cfg: params.cfg,
+              agentId,
+              sessionKey: params.sessionKey,
+              workspaceDir,
+            }),
+            ownerOnly: true,
           }),
         ]
       : allTools;
