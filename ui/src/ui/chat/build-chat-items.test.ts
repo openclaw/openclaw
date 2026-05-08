@@ -137,7 +137,7 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].messages).toHaveLength(1);
-    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(true);
+    expect(canvasBlocksIn(groups[0])).toHaveLength(1);
   });
 
   it("suppresses active HEARTBEAT_OK streams before rendering", () => {
@@ -260,8 +260,8 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(true);
-    expect(firstMessageContent(groups[1]).some((block) => isCanvasBlock(block))).toBe(false);
+    expect(canvasBlocksIn(groups[0])).toHaveLength(1);
+    expect(canvasBlocksIn(groups[1])).toEqual([]);
   });
 
   it("does not lift generic view handles from non-canvas payloads", () => {
@@ -300,7 +300,7 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(false);
+    expect(canvasBlocksIn(groups[0])).toEqual([]);
   });
 
   it("lifts streamed canvas toolresult blocks into the assistant bubble", () => {
@@ -347,7 +347,7 @@ describe("buildChatItems", () => {
       ],
     });
 
-    const canvasBlocks = firstMessageContent(groups[0]).filter((block) => isCanvasBlock(block));
+    const canvasBlocks = canvasBlocksIn(groups[0]);
     expect(canvasBlocks).toHaveLength(1);
     expect(canvasBlocks[0]).toMatchObject({
       preview: {
@@ -386,6 +386,10 @@ describe("buildChatItems", () => {
     });
   });
 });
+
+function canvasBlocksIn(group: MessageGroup): unknown[] {
+  return firstMessageContent(group).filter((block) => isCanvasBlock(block));
+}
 
 function isCanvasBlock(block: unknown): boolean {
   return (
