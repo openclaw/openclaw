@@ -4,6 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { listSessionEntries, upsertSessionEntry } from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   __testing as abortTesting,
   getAbortMemory,
@@ -72,18 +75,20 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
 }));
 
 describe("abort detection", () => {
-  async function writeSessionStore(
-    storePath: string,
-    sessionIdsByKey: Record<string, string>,
-    nowMs = Date.now(),
-  ) {
-    const storeEntries = Object.fromEntries(
-      Object.entries(sessionIdsByKey).map(([key, sessionId]) => [
-        key,
-        { sessionId, updatedAt: nowMs },
-      ]),
+  async function writeSessionRows(sessionIdsByKey: Record<string, string>, nowMs = Date.now()) {
+    for (const [sessionKey, sessionId] of Object.entries(sessionIdsByKey)) {
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey,
+        entry: { sessionId, updatedAt: nowMs },
+      });
+    }
+  }
+
+  function readSessionRows(): Record<string, SessionEntry> {
+    return Object.fromEntries(
+      listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
     );
-    await fs.writeFile(storePath, JSON.stringify(storeEntries, null, 2));
   }
 
   async function createAbortConfig(params?: {
@@ -92,17 +97,17 @@ describe("abort detection", () => {
     nowMs?: number;
   }) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
-    const storePath = path.join(root, "sessions.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const cfg = {
-      session: { store: storePath },
+      session: {},
       ...(typeof params?.commandsTextEnabled === "boolean"
         ? { commands: { text: params.commandsTextEnabled } }
         : {}),
     } as OpenClawConfig;
     if (params?.sessionIdsByKey) {
-      await writeSessionStore(storePath, params.sessionIdsByKey, params.nowMs);
+      await writeSessionRows(params.sessionIdsByKey, params.nowMs);
     }
-    return { root, storePath, cfg };
+    return { root, cfg };
   }
 
   async function runStopCommand(params: {
@@ -190,6 +195,8 @@ describe("abort detection", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllEnvs();
     resetAbortMemoryForTest();
     abortTesting.resetDepsForTests();
     queueCleanupTesting.resetDepsForTests();
@@ -472,7 +479,7 @@ describe("abort detection", () => {
   it("persists abort cutoff metadata on /stop when command and target session match", async () => {
     const sessionKey = "telegram:123";
     const sessionId = "session-123";
-    const { storePath, cfg } = await createAbortConfig({
+    const { cfg } = await createAbortConfig({
       sessionIdsByKey: { [sessionKey]: sessionId },
     });
 
@@ -486,7 +493,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+    const store = readSessionRows() as Record<string, unknown>;
     const entry = store[sessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;
@@ -501,7 +508,7 @@ describe("abort detection", () => {
     const slashSessionKey = "telegram:slash:123";
     const targetSessionKey = "agent:main:telegram:group:123";
     const targetSessionId = "session-target";
-    const { storePath, cfg } = await createAbortConfig({
+    const { cfg } = await createAbortConfig({
       sessionIdsByKey: { [targetSessionKey]: targetSessionId },
     });
 
@@ -516,7 +523,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+    const store = readSessionRows() as Record<string, unknown>;
     const entry = store[targetSessionKey] as {
       abortedLastRun?: boolean;
       abortCutoffMessageSid?: string;
