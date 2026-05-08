@@ -18,6 +18,7 @@ import {
   readDreamingWorkspaceMap,
   readDreamingWorkspaceValue,
 } from "../memory-host-sdk/dreaming-state-store.js";
+import { loadNodeHostConfig } from "../node-host/config.js";
 import { listChannelPairingRequests, readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -81,6 +82,17 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
               createdAtMs: 1,
               approvedAtMs: 2,
             },
+          })}\n`,
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(stateDir, "node.json"),
+          `${JSON.stringify({
+            version: 1,
+            nodeId: "legacy-node",
+            token: "legacy-node-token",
+            displayName: "Legacy Node",
+            gateway: { host: "gateway.local", port: 18443, tls: true },
           })}\n`,
           "utf8",
         );
@@ -348,6 +360,15 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(listDevicePairing(stateDir)).resolves.toMatchObject({
           pending: [expect.objectContaining({ requestId: "request-1" })],
           paired: [expect.objectContaining({ deviceId: "device-2" })],
+        });
+        await expect(loadNodeHostConfig(env)).resolves.toMatchObject({
+          nodeId: "legacy-node",
+          token: "legacy-node-token",
+          displayName: "Legacy Node",
+          gateway: { host: "gateway.local", port: 18443, tls: true },
+        });
+        await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
+          code: "ENOENT",
         });
         expect(loadDeviceAuthStore({ env })?.tokens.operator?.token).toBe("local-token");
         await expect(listChannelPairingRequests("telegram", env, "default")).resolves.toEqual([

@@ -59,6 +59,10 @@ import {
   legacyMemoryCoreDreamingStateFilesExist,
 } from "../memory-host-sdk/dreaming-state-migration.js";
 import {
+  importLegacyNodeHostConfigFileToSqlite,
+  legacyNodeHostConfigFileExists,
+} from "../node-host/config.js";
+import {
   importLegacyChannelPairingFilesToSqlite,
   legacyChannelPairingFilesExist,
 } from "../pairing/pairing-store.js";
@@ -91,6 +95,7 @@ type LegacyStateProbe = {
   deviceBootstrap: boolean;
   devicePairing: boolean;
   nodePairing: boolean;
+  nodeHostConfig: boolean;
   channelPairing: boolean;
   commitments: boolean;
   webPush: boolean;
@@ -124,6 +129,7 @@ async function probeLegacyRuntimeStateFiles(params: {
     deviceBootstrap: await legacyDeviceBootstrapFileExists(baseDir),
     devicePairing: await legacyPairingStateFilesExist({ baseDir, subdir: "devices" }),
     nodePairing: await legacyPairingStateFilesExist({ baseDir, subdir: "nodes" }),
+    nodeHostConfig: await legacyNodeHostConfigFileExists(env),
     channelPairing: await legacyChannelPairingFilesExist(env),
     commitments: await legacyCommitmentStoreFileExists(env),
     webPush: await legacyWebPushFilesExist(baseDir),
@@ -165,7 +171,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, channel pairing, node pairing, push, media, plugin, plugin binding approvals, installed plugin index, subagent, task, Task Flow, TUI, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
+      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, channel pairing, node pairing, node host config, push, media, plugin, plugin binding approvals, installed plugin index, subagent, task, Task Flow, TUI, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
       "SQLite state",
     );
     return;
@@ -222,6 +228,14 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
         changes.push(
           `- Imported ${result.pending} pending node pairing request(s) and ${result.paired} paired node record(s) into SQLite.`,
         );
+      }
+    });
+  }
+  if (probe.nodeHostConfig) {
+    await runImport("Node host config", async () => {
+      const result = await importLegacyNodeHostConfigFileToSqlite(env);
+      if (result.imported) {
+        changes.push("- Imported node host config into SQLite.");
       }
     });
   }
