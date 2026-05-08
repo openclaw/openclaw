@@ -271,15 +271,11 @@ function renderSourceBrowserHelpText(
   const browserCliUrl = pathToFileURL(
     path.join(rootDir, "extensions/browser/src/cli/browser-cli.ts"),
   ).href;
-  const helpUrl = pathToFileURL(path.join(rootDir, "src/cli/program/help.ts")).href;
-  const contextUrl = pathToFileURL(path.join(rootDir, "src/cli/program/context.ts")).href;
   const inlineModule = [
     `const { Command } = await import("commander");`,
     `const { registerBrowserCli } = await import(${JSON.stringify(browserCliUrl)});`,
-    `const { configureProgramHelp } = await import(${JSON.stringify(helpUrl)});`,
-    `const { createProgramContext } = await import(${JSON.stringify(contextUrl)});`,
     `const program = new Command();`,
-    `configureProgramHelp(program, createProgramContext());`,
+    `program.name("openclaw");`,
     `registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);`,
     `const browser = program.commands.find((cmd) => cmd.name() === "browser");`,
     `if (!browser) throw new Error("Browser command was not registered.");`,
