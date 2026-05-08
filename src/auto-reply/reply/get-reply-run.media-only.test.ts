@@ -25,8 +25,10 @@ vi.mock("../../config/sessions/group.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/session.jsonl"),
-  resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
+  createSqliteSessionTranscriptLocator: vi.fn(
+    ({ agentId, sessionId }: { agentId?: string; sessionId: string }) =>
+      `sqlite-transcript://${agentId ?? "main"}/${sessionId}.jsonl`,
+  ),
 }));
 
 const storeRuntimeLoads = vi.hoisted(() => vi.fn());

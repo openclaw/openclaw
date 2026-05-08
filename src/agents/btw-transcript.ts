@@ -1,6 +1,5 @@
 import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
+  createSqliteSessionTranscriptLocator,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
 import {
@@ -22,10 +21,7 @@ export function resolveBtwSessionTranscriptPath(params: {
 }): string | undefined {
   try {
     const agentId = params.sessionKey?.split(":")[1];
-    const pathOpts = resolveSessionFilePathOptions({
-      agentId,
-    });
-    return resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
+    return createSqliteSessionTranscriptLocator({ agentId, sessionId: params.sessionId });
   } catch (error) {
     diag.debug(
       `resolveSessionTranscriptPath failed: sessionId=${params.sessionId} err=${String(error)}`,

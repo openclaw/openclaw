@@ -1,7 +1,7 @@
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { resolveSessionFilePath } from "../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   listSqliteSessionTranscriptFiles,
   listSqliteSessionTranscripts,
@@ -279,7 +279,7 @@ function resolveSyntheticSessionFile(params: {
     params.sessionFile ??
     params.sessionEntry?.sessionFile ??
     params.rememberedPath ??
-    resolveSessionFilePath(params.sessionId, params.sessionEntry, { agentId: params.agentId })
+    createSqliteSessionTranscriptLocator({ agentId: params.agentId, sessionId: params.sessionId })
   );
 }
 

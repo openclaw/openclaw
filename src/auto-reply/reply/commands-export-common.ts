@@ -1,7 +1,4 @@
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { getSessionEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -53,11 +50,10 @@ export function resolveExportCommandSessionTarget(
   }
 
   try {
-    const sessionFile = resolveSessionFilePath(
-      entry.sessionId,
-      entry,
-      resolveSessionFilePathOptions({ agentId: targetAgentId }),
-    );
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: targetAgentId,
+      sessionId: entry.sessionId,
+    });
     return { agentId: targetAgentId, entry, sessionFile };
   } catch (err) {
     return {

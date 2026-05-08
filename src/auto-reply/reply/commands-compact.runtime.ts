@@ -5,6 +5,7 @@ export {
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
 export {
+  createSqliteSessionTranscriptLocator,
   resolveFreshSessionTotalTokens,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
