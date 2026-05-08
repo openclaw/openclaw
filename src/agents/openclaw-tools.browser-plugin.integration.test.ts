@@ -138,6 +138,60 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(hoisted.resolvePluginTools.mock.calls[0]?.[0]?.allowGatewaySubagentBinding).toBe(true);
   });
 
+  it("forwards auth profile helpers to plugin resolution and context", async () => {
+    let capturedParams:
+      | {
+          hasAuthForProvider?: (providerId: string) => boolean;
+          context?: {
+            hasAuthForProvider?: (providerId: string) => boolean;
+            resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
+          };
+        }
+      | undefined;
+    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+      capturedParams = params as typeof capturedParams;
+      return [];
+    });
+    const config = {
+      auth: {
+        order: {
+          xai: ["xai-profile"],
+        },
+      },
+      plugins: {
+        allow: ["xai"],
+      },
+    } as OpenClawConfig;
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config,
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "xai-excluded": {
+              type: "api_key",
+              provider: "xai",
+              key: "xai-excluded-key", // pragma: allowlist secret
+            },
+            "xai-profile": {
+              type: "api_key",
+              provider: "xai",
+              key: "xai-profile-key", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+      resolvedConfig: config,
+    });
+
+    expect(capturedParams?.hasAuthForProvider?.("xai")).toBe(true);
+    expect(capturedParams?.context?.hasAuthForProvider?.("xai")).toBe(true);
+    await expect(capturedParams?.context?.resolveApiKeyForProvider?.("xai")).resolves.toBe(
+      "xai-profile-key",
+    );
+  });
+
   it("forwards plugin tool deny policy to plugin resolution", () => {
     hoisted.resolvePluginTools.mockReturnValue([]);
     const config = {
