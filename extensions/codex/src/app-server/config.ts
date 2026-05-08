@@ -188,8 +188,8 @@ const codexDynamicToolsProfileSchema = z.enum(["native-first", "openclaw-compat"
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
-    (value) => (value === null ? null : resolveServiceTier(value)),
-    z.enum(["fast", "flex"]).nullable().optional(),
+    (value) => (value === null ? null : normalizeCodexServiceTier(value)),
+    z.string().trim().min(1).nullable().optional(),
   )
   .optional();
 
@@ -327,7 +327,7 @@ export function resolveCodexAppServerRuntimeOptions(
     resolvePolicyMode(config.mode) ??
     resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
     "yolo";
-  const serviceTier = resolveServiceTier(config.serviceTier);
+  const serviceTier = normalizeCodexServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
@@ -523,8 +523,26 @@ function resolveApprovalsReviewer(value: unknown): CodexAppServerApprovalsReview
     : undefined;
 }
 
-function resolveServiceTier(value: unknown): CodexServiceTier | undefined {
-  return value === "fast" || value === "flex" ? value : undefined;
+export function normalizeCodexServiceTier(value: unknown): CodexServiceTier | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "fast" || normalized === "priority") {
+    return "priority";
+  }
+  if (normalized === "flex") {
+    return "flex";
+  }
+  return trimmed;
+}
+
+export function isCodexFastServiceTier(value: unknown): boolean {
+  return normalizeCodexServiceTier(value) === "priority";
 }
 
 function normalizePositiveNumber(value: unknown, fallback: number): number {

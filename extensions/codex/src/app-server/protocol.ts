@@ -140,6 +140,7 @@ export type CodexTurn = {
 
 export type CodexThread = {
   id: string;
+  sessionId?: string;
   name?: string | null;
   cwd?: string | null;
 };

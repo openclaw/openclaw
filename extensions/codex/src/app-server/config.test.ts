@@ -82,14 +82,14 @@ describe("Codex app-server config", () => {
     );
   });
 
-  it("drops invalid legacy service tiers without discarding the rest of the config", () => {
+  it("normalizes legacy service tiers without discarding the rest of the config", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
         appServer: {
           mode: "guardian",
           approvalPolicy: "on-request",
           sandbox: "read-only",
-          serviceTier: "priority",
+          serviceTier: "fast",
         },
       },
       env: {},
@@ -100,9 +100,22 @@ describe("Codex app-server config", () => {
         approvalPolicy: "on-request",
         sandbox: "read-only",
         approvalsReviewer: "auto_review",
+        serviceTier: "priority",
       }),
     );
-    expect(runtime).not.toHaveProperty("serviceTier");
+  });
+
+  it("passes through non-empty Codex app-server service tiers for forward compatibility", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          serviceTier: "batch-preview",
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime.serviceTier).toBe("batch-preview");
   });
 
   it("rejects malformed plugin config instead of treating freeform strings as control values", () => {

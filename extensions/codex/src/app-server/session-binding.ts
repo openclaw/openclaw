@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
+  normalizeCodexServiceTier,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
 } from "./config.js";
@@ -311,5 +312,5 @@ function readSandboxMode(value: unknown): CodexAppServerSandboxMode | undefined 
 }
 
 function readServiceTier(value: unknown): CodexServiceTier | undefined {
-  return value === "fast" || value === "flex" ? value : undefined;
+  return normalizeCodexServiceTier(value);
 }

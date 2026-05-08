@@ -67,7 +67,7 @@ function createBackendEntry(params: {
             params.id === "claude-cli"
               ? "@anthropic-ai/claude-code"
               : params.id === "codex-cli"
-                ? "@openai/codex@0.129.0-alpha.15"
+                ? "@openai/codex@0.129.0"
                 : params.id === "google-gemini-cli"
                   ? "@google/gemini-cli"
                   : undefined,
@@ -290,7 +290,7 @@ beforeEach(() => {
           "--sandbox",
           "workspace-write",
           "-c",
-          'service_tier="fast"',
+          'service_tier="priority"',
           "--skip-git-repo-check",
         ],
         resumeArgs: [
@@ -300,7 +300,7 @@ beforeEach(() => {
           "-c",
           'sandbox_mode="workspace-write"',
           "-c",
-          'service_tier="fast"',
+          'service_tier="priority"',
           "--skip-git-repo-check",
         ],
         systemPromptFileConfigArg: "-c",
@@ -388,7 +388,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "--sandbox",
       "workspace-write",
       "-c",
-      'service_tier="fast"',
+      'service_tier="priority"',
       "--skip-git-repo-check",
     ]);
     expect(resolved?.config.resumeArgs).toEqual([
@@ -398,7 +398,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
       "-c",
       'sandbox_mode="workspace-write"',
       "-c",
-      'service_tier="fast"',
+      'service_tier="priority"',
       "--skip-git-repo-check",
     ]);
   });
@@ -493,7 +493,7 @@ describe("resolveCliBackendLiveTest", () => {
       defaultModelRef: "codex-cli/gpt-5.5",
       defaultImageProbe: true,
       defaultMcpProbe: true,
-      dockerNpmPackage: "@openai/codex@0.129.0-alpha.15",
+      dockerNpmPackage: "@openai/codex@0.129.0",
       dockerBinaryName: "codex",
     });
   });
