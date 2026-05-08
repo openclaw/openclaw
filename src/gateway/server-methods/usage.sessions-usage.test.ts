@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
@@ -225,21 +226,33 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
-        fs.mkdirSync(agentSessionsDir, { recursive: true });
-        fs.writeFileSync(path.join(agentSessionsDir, "current.jsonl"), "", "utf-8");
-        fs.writeFileSync(
-          path.join(agentSessionsDir, "old.jsonl.reset.2026-02-01T00-00-00.000Z"),
-          "",
-          "utf-8",
-        );
+        const currentSessionFile = createSqliteSessionTranscriptLocator({
+          agentId: "opus",
+          sessionId: "current",
+        });
+        const oldSessionFile = createSqliteSessionTranscriptLocator({
+          agentId: "opus",
+          sessionId: "old",
+        });
+        replaceSqliteSessionTranscriptEvents({
+          agentId: "opus",
+          sessionId: "current",
+          transcriptPath: currentSessionFile,
+          events: [{ type: "session", id: "current" }],
+        });
+        replaceSqliteSessionTranscriptEvents({
+          agentId: "opus",
+          sessionId: "old",
+          transcriptPath: oldSessionFile,
+          events: [{ type: "session", id: "old" }],
+        });
 
-        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
-          storePath: "(multiple)",
-          store: {
+        vi.mocked(loadCombinedSessionEntriesForGateway).mockReturnValue({
+          databasePath: "(multiple)",
+          entries: {
             [storeKey]: {
               sessionId: "current",
-              sessionFile: "current.jsonl",
+              sessionFile: currentSessionFile,
               updatedAt: 1_000,
               usageFamilyKey: storeKey,
               usageFamilySessionIds: ["old", "current"],
