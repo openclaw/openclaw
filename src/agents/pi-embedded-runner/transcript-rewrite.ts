@@ -351,6 +351,7 @@ export function rewriteTranscriptEntriesInState(params: {
  */
 export async function rewriteTranscriptEntriesInSqliteTranscript(params: {
   transcriptPath: string;
+  agentId?: string;
   sessionId?: string;
   sessionKey?: string;
   request: TranscriptRewriteRequest;
@@ -369,6 +370,8 @@ export async function rewriteTranscriptEntriesInSqliteTranscript(params: {
         appendedEntries: result.appendedEntries,
       });
       emitSessionTranscriptUpdate({
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         sessionFile: params.transcriptPath,
         sessionKey: params.sessionKey,
       });
