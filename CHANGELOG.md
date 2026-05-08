@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Tools/exec: load workspace `.env` at request time for gateway-host exec when a workspace cwd is configured, preserve non-override dotenv semantics (including Windows key matching), apply host override blocklist filtering to workspace-derived keys, and add focused host/sandbox coverage around workspace `.env` behavior.
 - Breaking/Plugins: bare `openclaw plugins install <package>` now prefers ClawHub before npm for npm-safe names, and only falls back to npm when ClawHub does not have that package or version.
 - Breaking/Tools/image generation: deprecate the bundled `openai-image-gen` skill, standardize on the native `image` and `image_generate` tools, clarify provider-specific image auth requirements in runtime output and docs, and harden provider-auth hint lookups against prototype-like provider ids. (#52552) Thanks @vincentkoc.
 - ClawHub/install: add native `openclaw skills search|install|update` flows plus `openclaw plugins install clawhub:<package>` with tracked update metadata, gateway skill-install/update support for ClawHub-backed requests, and regression coverage/docs for the new source path.

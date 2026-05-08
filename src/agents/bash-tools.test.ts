@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -595,16 +596,9 @@ describe("exec PATH handling", () => {
   useCapturedEnv([...PATH_SHELL_ENV_KEYS], applyDefaultShellEnv);
 
   it("injects workspace .env vars per-request for host exec", async () => {
-    const cwd = process.cwd();
     const marker = `gh-config-${Date.now()}`;
+    const cwd = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-env-test-"));
     const envPath = path.join(cwd, ".env");
-
-    let previousEnvFile: string | null;
-    try {
-      previousEnvFile = await fs.promises.readFile(envPath, "utf-8");
-    } catch {
-      previousEnvFile = null;
-    }
 
     const previousVar = process.env.GH_CONFIG_DIR;
     delete process.env.GH_CONFIG_DIR;
@@ -615,15 +609,7 @@ describe("exec PATH handling", () => {
       const result = await executeExecCommand(tool, COMMAND_PRINT_GH_CONFIG_DIR);
       expect(readNormalizedTextContent(result.content)).toContain(marker);
     } finally {
-      if (previousEnvFile === null) {
-        try {
-          await fs.promises.unlink(envPath);
-        } catch {
-          // no-op
-        }
-      } else {
-        await fs.promises.writeFile(envPath, previousEnvFile, "utf-8");
-      }
+      await fs.promises.rm(cwd, { recursive: true, force: true });
 
       if (previousVar === undefined) {
         delete process.env.GH_CONFIG_DIR;
