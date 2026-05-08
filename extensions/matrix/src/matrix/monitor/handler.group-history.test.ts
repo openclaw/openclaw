@@ -90,10 +90,13 @@ beforeEach(() => {
 });
 
 function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   const promise = new Promise<T>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
