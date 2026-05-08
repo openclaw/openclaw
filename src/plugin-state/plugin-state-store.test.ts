@@ -1,5 +1,9 @@
 import { mkdirSync, statSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  importLegacyPluginStateSidecarToSqlite,
+  legacyPluginStateSidecarExists,
+} from "../commands/doctor-sqlite-sidecars.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -10,8 +14,6 @@ import {
   closePluginStateSqliteStore,
   createCorePluginStateKeyedStore,
   createPluginStateKeyedStore,
-  importLegacyPluginStateSidecarToSqlite,
-  legacyPluginStateSidecarExists,
   PluginStateStoreError,
   probePluginStateStore,
   resetPluginStateStoreForTests,
