@@ -1,4 +1,3 @@
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { selectAgentHarness } from "../agents/harness/selection.js";
@@ -178,22 +177,6 @@ function resolveSessionRuntimeLabel(params: {
   agentId?: string;
   sessionKey: string;
 }): string {
-  const agentRuntime = resolveAgentRuntimeMetadata(params.cfg, params.agentId ?? "");
-  const explicitRuntime =
-    normalizeOptionalLowercaseString(params.entry?.agentRuntimeOverride) ??
-    normalizeOptionalLowercaseString(params.entry?.agentHarnessId) ??
-    (agentRuntime.source === "implicit"
-      ? undefined
-      : normalizeOptionalLowercaseString(agentRuntime.id));
-  if (explicitRuntime && explicitRuntime !== "auto" && explicitRuntime !== "default") {
-    return resolveAgentRuntimeLabel({
-      config: params.cfg,
-      sessionEntry: params.entry,
-      resolvedHarness: explicitRuntime,
-      fallbackProvider: params.provider,
-    });
-  }
-
   let resolvedHarness: string | undefined;
   try {
     const selected = selectAgentHarness({
@@ -202,7 +185,6 @@ function resolveSessionRuntimeLabel(params: {
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      agentHarnessId: params.entry?.agentHarnessId,
     });
     const id = normalizeOptionalLowercaseString(selected.id);
     resolvedHarness = id && id !== "pi" ? id : undefined;
