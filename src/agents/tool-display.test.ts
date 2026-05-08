@@ -88,6 +88,33 @@ describe("tool display details", () => {
     expect(detail).toBe('for "OpenClaw docs" (top 3)');
   });
 
+  it("formats web_search provider query shapes", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "web_search",
+          args: { q: "Codex OAuth API key", max_results: 5 },
+        }),
+      ),
+    ).toBe('for "Codex OAuth API key" (top 5)');
+
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "web_search",
+          args: {
+            search_query: [
+              { q: "latest Kimi model" },
+              { q: "latest Gemini model" },
+              { q: "latest Claude model" },
+              { q: "latest OpenAI model" },
+            ],
+          },
+        }),
+      ),
+    ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
+  });
+
   it("summarizes exec commands with context", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
