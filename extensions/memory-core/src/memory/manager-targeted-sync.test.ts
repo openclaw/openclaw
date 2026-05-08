@@ -7,14 +7,14 @@ import {
 describe("memory targeted session sync", () => {
   it("preserves unrelated dirty sessions after targeted cleanup", () => {
     const secondSessionPath = "/tmp/targeted-dirty-second.jsonl";
-    const sessionsDirtyFiles = new Set(["/tmp/targeted-dirty-first.jsonl", secondSessionPath]);
+    const dirtySessionTranscripts = new Set(["/tmp/targeted-dirty-first.jsonl", secondSessionPath]);
 
     const sessionsDirty = clearMemorySyncedSessionTranscripts({
-      sessionsDirtyFiles,
+      dirtySessionTranscripts,
       targetSessionTranscripts: ["/tmp/targeted-dirty-first.jsonl"],
     });
 
-    expect(sessionsDirtyFiles.has(secondSessionPath)).toBe(true);
+    expect(dirtySessionTranscripts.has(secondSessionPath)).toBe(true);
     expect(sessionsDirty).toBe(true);
   });
 
@@ -29,7 +29,7 @@ describe("memory targeted session sync", () => {
       reason: "post-compaction",
       progress: undefined,
       useUnsafeReindex: false,
-      sessionsDirtyFiles: new Set(),
+      dirtySessionTranscripts: new Set(),
       syncSessionTranscripts: async () => {
         throw new Error("embedding backend failed");
       },
@@ -58,7 +58,7 @@ describe("memory targeted session sync", () => {
       reason: "post-compaction",
       progress: undefined,
       useUnsafeReindex: true,
-      sessionsDirtyFiles: new Set(),
+      dirtySessionTranscripts: new Set(),
       syncSessionTranscripts: async () => {
         throw new Error("embedding backend failed");
       },

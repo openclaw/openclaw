@@ -4,7 +4,7 @@ export function resolveMemorySessionSyncPlan(params: {
   needsFullReindex: boolean;
   files: string[];
   targetSessionTranscripts: Set<string> | null;
-  sessionsDirtyFiles: Set<string>;
+  dirtySessionTranscripts: Set<string>;
   existingRows?: MemorySourceFileStateRow[] | null;
   sessionPathForTranscript: (file: string) => string;
 }): {
@@ -24,6 +24,6 @@ export function resolveMemorySessionSyncPlan(params: {
     indexAll:
       params.needsFullReindex ||
       Boolean(params.targetSessionTranscripts) ||
-      params.sessionsDirtyFiles.size === 0,
+      params.dirtySessionTranscripts.size === 0,
   };
 }
