@@ -1,7 +1,11 @@
+import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  resetPluginBlobStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSessionBindingService, __testing } from "openclaw/plugin-sdk/session-binding-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,6 +15,11 @@ import {
 import { FileBackedMatrixSyncStore } from "./matrix/client/file-sync-store.js";
 import { readMatrixStorageMetadata } from "./matrix/client/storage-meta-state.js";
 import { createMatrixInboundEventDeduper } from "./matrix/monitor/inbound-dedupe.js";
+import { restoreIdbFromState } from "./matrix/sdk/idb-persistence.js";
+import {
+  clearAllIndexedDbState,
+  readDatabaseRecords,
+} from "./matrix/sdk/idb-persistence.test-helpers.js";
 import { resetMatrixThreadBindingsForTests } from "./matrix/thread-bindings-shared.js";
 import { createMatrixThreadBindingManager } from "./matrix/thread-bindings.js";
 import { detectMatrixLegacyStateMigrations } from "./state-migrations.js";
@@ -27,12 +36,14 @@ const auth = {
   encryption: true,
 } as const;
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   resetMatrixThreadBindingsForTests();
   __testing.resetSessionBindingAdaptersForTests();
   resetPluginStateStoreForTests();
+  resetPluginBlobStoreForTests();
+  await clearAllIndexedDbState({ databasePrefix: "openclaw-matrix-migration-test" });
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -159,6 +170,42 @@ describe("Matrix legacy state migrations", () => {
       roomKeyCounts: { total: 3, backedUp: 2 },
     });
     expect(fs.existsSync(migrationFile)).toBe(false);
+  });
+
+  it("imports IndexedDB crypto snapshots into SQLite plugin blobs", async () => {
+    const stateDir = makeStateDir();
+    const legacyRoot = makeLegacyAccountRoot(stateDir);
+    const snapshotFile = path.join(legacyRoot, "crypto-idb-snapshot.json");
+    const databaseName = "openclaw-matrix-migration-test::matrix-sdk-crypto";
+    fs.writeFileSync(
+      snapshotFile,
+      `${JSON.stringify([
+        {
+          name: databaseName,
+          version: 1,
+          stores: [
+            {
+              name: "sessions",
+              keyPath: null,
+              autoIncrement: false,
+              indexes: [],
+              records: [{ key: "room-1", value: { session: "abc123" } }],
+            },
+          ],
+        },
+      ])}\n`,
+    );
+
+    await applyPlan(stateDir, "Matrix IndexedDB snapshot");
+
+    expect(fs.existsSync(snapshotFile)).toBe(false);
+    expect(await restoreIdbFromState(snapshotFile)).toBe(true);
+    await expect(
+      readDatabaseRecords({
+        name: databaseName,
+        storeName: "sessions",
+      }),
+    ).resolves.toEqual([{ key: "room-1", value: { session: "abc123" } }]);
   });
 
   it("imports thread bindings into SQLite plugin state", async () => {

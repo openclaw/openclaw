@@ -30,7 +30,7 @@ import type { MatrixCryptoFacade } from "./sdk/crypto-facade.js";
 import type { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 import { matrixEventToRaw, parseMxc } from "./sdk/event-helpers.js";
 import { MatrixAuthedHttpClient } from "./sdk/http-client.js";
-import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./sdk/idb-persistence-lock.js";
+import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./sdk/idb-persistence-constants.js";
 import { ConsoleLogger, LogService, noop } from "./sdk/logger.js";
 import {
   MatrixRecoveryKeyStore,
@@ -669,9 +669,9 @@ export class MatrixClient {
     // Final persist on shutdown
     this.syncStore?.markCleanShutdown();
     if (loadedMatrixCryptoRuntime) {
-      const { persistIdbToDisk } = loadedMatrixCryptoRuntime;
+      const { persistIdbToState } = loadedMatrixCryptoRuntime;
       this.stopPersistPromise = Promise.all([
-        persistIdbToDisk({
+        persistIdbToState({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
         }).catch(noop),
@@ -680,9 +680,9 @@ export class MatrixClient {
       return;
     }
     this.stopPersistPromise = loadMatrixCryptoRuntime()
-      .then(async ({ persistIdbToDisk }) => {
+      .then(async ({ persistIdbToState }) => {
         await Promise.all([
-          persistIdbToDisk({
+          persistIdbToState({
             snapshotPath: this.idbSnapshotPath,
             databasePrefix: this.cryptoDatabasePrefix,
           }).catch(noop),
@@ -766,10 +766,10 @@ export class MatrixClient {
       return;
     }
     throwIfMatrixStartupAborted(abortSignal);
-    const { persistIdbToDisk, restoreIdbFromDisk } = await loadMatrixCryptoRuntime();
+    const { persistIdbToState, restoreIdbFromState } = await loadMatrixCryptoRuntime();
 
     // Restore persisted IndexedDB crypto store before initializing WASM crypto.
-    await restoreIdbFromDisk(this.idbSnapshotPath);
+    await restoreIdbFromState(this.idbSnapshotPath);
     throwIfMatrixStartupAborted(abortSignal);
 
     try {
@@ -780,7 +780,7 @@ export class MatrixClient {
       throwIfMatrixStartupAborted(abortSignal);
 
       // Persist the crypto store after successful init (captures fresh keys on first run).
-      await persistIdbToDisk({
+      await persistIdbToState({
         snapshotPath: this.idbSnapshotPath,
         databasePrefix: this.cryptoDatabasePrefix,
       });
@@ -788,7 +788,7 @@ export class MatrixClient {
 
       // Periodically persist to capture new Olm sessions and room keys.
       this.idbPersistTimer = setInterval(() => {
-        persistIdbToDisk({
+        persistIdbToState({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
         }).catch(noop);
