@@ -46,6 +46,8 @@ Example config:
     defaults: {
       heartbeat: {
         every: "30m",
+        // mode: "ambient", // optional: low-priority natural initiative wake
+        // maxMessages: 3, // optional ambient visible-message budget
         target: "last", // explicit delivery to last contact (default is "none")
         directPolicy: "allow", // default: allow direct/DM targets; set "block" to suppress
         lightContext: true, // optional: only inject HEARTBEAT.md from bootstrap files
@@ -67,6 +69,7 @@ Example config:
 - When heartbeats are disabled with `0m`, normal runs also omit `HEARTBEAT.md` from bootstrap context so the model does not see heartbeat-only instructions.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
 - Heartbeats automatically defer while cron work is active or queued. Set `heartbeat.skipWhenBusy: true` to defer on extra busy lanes (subagent or nested command work) as well; this is useful for local Ollama and other constrained single-runtime hosts.
+- Ambient mode (`heartbeat.mode: "ambient"`) reuses the heartbeat scheduler and delivery path, but changes the prompt contract: each wake is a low-priority ambient initiative. The agent may decide to do nothing, or send up to `heartbeat.maxMessages` concise natural messages before recording the outcome with `heartbeat_respond`.
 
 ## What the heartbeat prompt is for
 
@@ -102,6 +105,8 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
         skipWhenBusy: false, // default: false; true also waits for subagent/nested lanes
+        mode: "heartbeat", // default; set "ambient" for low-priority initiative wakes
+        maxMessages: 3, // ambient mode visible-message budget
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "imessage")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id

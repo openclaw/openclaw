@@ -17,6 +17,8 @@ export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs at
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
 export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+export const AMBIENT_INITIATIVE_RESPONSE_TOOL_INSTRUCTIONS =
+  "You are running an ambient initiative wake. First decide whether any action is natural and useful from persona, memory, HEARTBEAT.md, and recent context. You may send no visible message, or send a short natural message sequence within the configured message budget. Do not send messages just to use the budget. After any work, use heartbeat_respond to record the outcome; set notify=false if you already used the message tool or if nothing should be sent.";
 export const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
@@ -92,6 +94,21 @@ export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
   return trimmed
     ? appendHeartbeatResponseToolInstructions(trimmed)
     : HEARTBEAT_RESPONSE_TOOL_PROMPT;
+}
+
+export function resolveAmbientInitiativePromptForResponseTool(
+  raw?: string,
+  maxMessages = 3,
+): string {
+  const budget = Math.max(0, Math.floor(maxMessages));
+  const base = (normalizeOptionalString(raw) ?? "") || HEARTBEAT_CONTEXT_PROMPT;
+  const zeroBudgetNote =
+    "A budget of 0 means observe/write internal state only and do not send a visible message.";
+  return `${base}
+
+${AMBIENT_INITIATIVE_RESPONSE_TOOL_INSTRUCTIONS}
+
+Visible message budget for this wake: ${budget}. ${zeroBudgetNote}`;
 }
 
 type StripHeartbeatMode = "heartbeat" | "message";
