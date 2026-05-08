@@ -153,12 +153,23 @@ async function flushTelegramTestMicrotasks() {
   await Promise.resolve();
 }
 
+function requireValue<T>(value: T | null | undefined, label: string): T {
+  if (value == null) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
   });
   afterAll(() => {
-    process.env.TZ = ORIGINAL_TZ;
+    if (ORIGINAL_TZ === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = ORIGINAL_TZ;
+    }
   });
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
@@ -191,7 +202,7 @@ describe("createTelegramBot", () => {
     const errorHandler = catchMock.mock.calls[0]?.[0];
 
     expect(errorHandler).toBeTypeOf("function");
-    expect(() => errorHandler?.(new Error("handler boom"))).not.toThrow();
+    errorHandler?.(new Error("handler boom"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("telegram bot error:"));
   });
 
@@ -345,19 +356,16 @@ describe("createTelegramBot", () => {
     });
 
     const events: string[] = [];
-    let releaseTopicTurn!: () => void;
+    let releaseTopicTurn: (() => void) | undefined;
     const topicGate = new Promise<void>((resolve) => {
       releaseTopicTurn = resolve;
     });
 
     createTelegramBot({ token: "tok" });
-    const sequentializer = sequentializeSpy.mock.results[0]?.value as
-      | TelegramMiddleware
-      | undefined;
-    expect(sequentializer).toBeDefined();
-    if (!sequentializer) {
-      return;
-    }
+    const sequentializer = requireValue(
+      sequentializeSpy.mock.results[0]?.value as TelegramMiddleware | undefined,
+      "telegram sequentializer",
+    );
 
     const busyMessage = makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }).message;
     const statusMessage = makeForumGroupMessageCtx({ threadId: 99, text: "/status" }).message;
@@ -387,6 +395,9 @@ describe("createTelegramBot", () => {
 
     expect(events).toEqual(["busy:start", "status"]);
 
+    if (!releaseTopicTurn) {
+      throw new Error("Expected Telegram topic turn release callback to be initialized");
+    }
     releaseTopicTurn();
     await busyPromise;
     expect(events).toEqual(["busy:start", "status", "busy:end"]);
@@ -405,7 +416,7 @@ describe("createTelegramBot", () => {
     });
 
     const startedBodies: string[] = [];
-    let releaseFirstTurn!: () => void;
+    let releaseFirstTurn: (() => void) | undefined;
     const firstTurnGate = new Promise<void>((resolve) => {
       releaseFirstTurn = resolve;
     });
@@ -462,6 +473,9 @@ describe("createTelegramBot", () => {
     expect(startedBodies[0]).toContain("first message");
     expect(sendMessageSpy).not.toHaveBeenCalled();
 
+    if (!releaseFirstTurn) {
+      throw new Error("Expected first Telegram turn release callback to be initialized");
+    }
     releaseFirstTurn();
     await Promise.all([firstPromise, secondPromise]);
 
@@ -515,7 +529,7 @@ describe("createTelegramBot", () => {
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const startedBodies: string[] = [];
-    let releaseFirstRun!: () => void;
+    let releaseFirstRun: (() => void) | undefined;
     const firstRunGate = new Promise<void>((resolve) => {
       releaseFirstRun = resolve;
     });
@@ -609,6 +623,9 @@ describe("createTelegramBot", () => {
       expect(startedBodies).toHaveLength(1);
       expect(sendMessageSpy).not.toHaveBeenCalled();
 
+      if (!releaseFirstRun) {
+        throw new Error("Expected first Telegram run release callback to be initialized");
+      }
       releaseFirstRun();
       await Promise.all([firstFlush, secondFlush]);
 
@@ -630,10 +647,12 @@ describe("createTelegramBot", () => {
 
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
 
     await callbackHandler({
       callbackQuery: {
@@ -1581,6 +1600,85 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     },
     {
+      name: "allows group messages from sender access groups in groupAllowFrom",
+      config: {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { telegram: ["123456789"] },
+          },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["accessGroup:operators"],
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
+    },
+    {
+      name: "blocks explicitly configured group when groupAllowFrom access group does not match sender",
+      config: {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { telegram: ["111111111"] },
+          },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["accessGroup:operators"],
+            groups: { "-100123456789": { requireMention: false } },
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 0,
+    },
+    {
+      name: "allows group messages from sender access groups in per-group allowFrom",
+      config: {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { telegram: ["123456789"] },
+          },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: {
+              "-100123456789": {
+                allowFrom: ["accessGroup:operators"],
+                requireMention: false,
+              },
+            },
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
+    },
+    {
       name: "blocks group messages when allowFrom is configured with @username entries (numeric IDs required)",
       config: {
         channels: {
@@ -2335,8 +2433,10 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    expect(payload.Body).toContain("[Replying to Ada id:9001]");
+    expect(payload.Body).toContain("[Reply chain - nearest first]");
+    expect(payload.Body).toContain("[1. Ada id:9001]");
     expect(payload.Body).toContain("Can you summarize this?");
+    expect(payload.Body).toContain("[/Reply chain]");
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("Can you summarize this?");
     expect(payload.ReplyToSender).toBe("Ada");
@@ -2484,11 +2584,7 @@ describe("createTelegramBot", () => {
       const handler = getMessageHandler();
       await handler(makeForumGroupMessageCtx({ threadId: testCase.threadId }));
 
-      const payload = dispatchCall?.ctx;
-      expect(payload).toBeDefined();
-      if (!payload) {
-        continue;
-      }
+      const payload = requireValue(dispatchCall?.ctx, "forum dispatch context");
       if (testCase.assertTopicMetadata) {
         expect(payload.SessionKey).toContain("telegram:group:-1001234567890:topic:99");
         expect(payload.From).toBe("telegram:group:-1001234567890:topic:99");
@@ -2621,6 +2717,30 @@ describe("createTelegramBot", () => {
         channels: {
           telegram: {
             allowFrom: ["  TG:123456789  "],
+          },
+        },
+      },
+      message: {
+        chat: { id: 123456789, type: "private" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
+    },
+    {
+      name: "allows direct messages from sender access groups in allowFrom",
+      config: {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { telegram: ["123456789"] },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["accessGroup:operators"],
           },
         },
       },
@@ -2932,11 +3052,7 @@ describe("createTelegramBot", () => {
 
     await handler(makeForumGroupMessageCtx({ threadId: 99 }));
 
-    const payload = dispatchCall?.ctx;
-    expect(payload).toBeDefined();
-    if (!payload) {
-      return;
-    }
+    const payload = requireValue(dispatchCall?.ctx, "topic dispatch context");
     expect(payload.GroupSystemPrompt).toBe("Group prompt\n\nTopic prompt");
     expect(dispatchCall?.replyOptions?.skillFilter).toEqual([]);
   });

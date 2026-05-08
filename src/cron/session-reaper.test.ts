@@ -103,10 +103,14 @@ describe("sweepCronRunSessions", () => {
     expect(result.pruned).toBe(1);
 
     const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
-    expect(updated["agent:main:cron:job1"]).toBeDefined();
+    expect(updated["agent:main:cron:job1"]).toMatchObject({ sessionId: "base-session" });
     expect(updated["agent:main:cron:job1:run:old-run"]).toBeUndefined();
-    expect(updated["agent:main:cron:job1:run:recent-run"]).toBeDefined();
-    expect(updated["agent:main:telegram:dm:123"]).toBeDefined();
+    expect(updated["agent:main:cron:job1:run:recent-run"]).toMatchObject({
+      sessionId: "recent-run",
+    });
+    expect(updated["agent:main:telegram:dm:123"]).toMatchObject({
+      sessionId: "regular-session",
+    });
   });
 
   it("archives transcript files for pruned run sessions that are no longer referenced", async () => {
@@ -132,7 +136,10 @@ describe("sweepCronRunSessions", () => {
     expect(result.pruned).toBe(1);
     expect(fs.existsSync(runTranscript)).toBe(false);
     const files = fs.readdirSync(tmpDir);
-    expect(files.some((name) => name.startsWith(`${runSessionId}.jsonl.deleted.`))).toBe(true);
+    const archivedRunTranscripts = files.filter((name) =>
+      name.startsWith(`${runSessionId}.jsonl.deleted.`),
+    );
+    expect(archivedRunTranscripts.length).toBeGreaterThan(0);
   });
 
   it("does not archive external transcript paths for pruned runs", async () => {

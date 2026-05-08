@@ -6,7 +6,7 @@ import {
   getDebugProxyCaptureStore,
   initializeDebugProxyCapture,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import {
@@ -32,8 +32,26 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
+const officialEndpointValidationCases = [
+  {
+    label: "voice validator",
+    isAccepted: () => isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/"),
+  },
+  {
+    label: "model validator",
+    isAccepted: () => isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/"),
+  },
+];
+
 describe("openai tts", () => {
   const proxyReset = installDebugProxyTestResetHooks();
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
 
   describe("isValidOpenAIVoice", () => {
     it("accepts all valid OpenAI voices including newer additions", () => {
@@ -51,10 +69,6 @@ describe("openai tts", () => {
       expect(isValidOpenAIVoice("ALLOY")).toBe(false);
       expect(isValidOpenAIVoice("alloy ")).toBe(false);
       expect(isValidOpenAIVoice(" alloy")).toBe(false);
-    });
-
-    it("treats the default endpoint with trailing slash as the default endpoint", () => {
-      expect(isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/")).toBe(false);
     });
   });
 
@@ -78,10 +92,15 @@ describe("openai tts", () => {
         expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(testCase.expected);
       }
     });
+  });
 
-    it("treats the default endpoint with trailing slash as the default endpoint", () => {
-      expect(isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/")).toBe(false);
-    });
+  describe("official OpenAI TTS endpoint validation", () => {
+    it.each(officialEndpointValidationCases)(
+      "$label treats the default endpoint with trailing slash as the default endpoint",
+      ({ isAccepted }) => {
+        expect(isAccepted()).toBe(false);
+      },
+    );
   });
 
   describe("resolveOpenAITtsInstructions", () => {

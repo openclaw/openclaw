@@ -27,6 +27,17 @@ type HandlerMap = {
 
 type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
 
+function createDeferred<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
+  return { promise, resolve };
+}
+
 class MockWebSocket {
   static OPEN = 1;
 
@@ -164,7 +175,7 @@ function emitRetryableTokenMismatch(ws: MockWebSocket, connectId: string | undef
   });
 }
 
-async function startRetriedDeviceTokenConnect(params: {
+async function expectRetriedDeviceTokenConnect(params: {
   url: string;
   token: string;
   retryNonce?: string;
@@ -196,6 +207,8 @@ async function startRetriedDeviceTokenConnect(params: {
 
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
     const storage = createStorageMock();
     wsInstances.length = 0;
     loadOrCreateDeviceIdentityMock.mockReset();
@@ -251,7 +264,7 @@ describe("GatewayBrowserClient", () => {
       ok: true,
       payload: {
         type: "hello-ok",
-        protocol: 3,
+        protocol: 4,
         auth: { role: "operator", scopes: [] },
       },
     });
@@ -294,7 +307,7 @@ describe("GatewayBrowserClient", () => {
       ok: true,
       payload: {
         type: "hello-ok",
-        protocol: 3,
+        protocol: 4,
         auth: { role: "operator", scopes: [] },
       },
     });
@@ -423,7 +436,7 @@ describe("GatewayBrowserClient", () => {
 
   it("retries once with device token after token mismatch when shared token is explicit", async () => {
     vi.useFakeTimers();
-    const { secondWs, secondConnect } = await startRetriedDeviceTokenConnect({
+    const { secondWs, secondConnect } = await expectRetriedDeviceTokenConnect({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
     });
@@ -492,7 +505,7 @@ describe("GatewayBrowserClient", () => {
 
   it("treats IPv6 loopback as trusted for bounded device-token retry", async () => {
     vi.useFakeTimers();
-    const { client } = await startRetriedDeviceTokenConnect({
+    const { client } = await expectRetriedDeviceTokenConnect({
       url: "ws://[::1]:18789",
       token: "shared-auth-token",
     });
@@ -554,13 +567,8 @@ describe("GatewayBrowserClient", () => {
 
   it("does not send stale connect frames on a replacement socket", async () => {
     vi.useFakeTimers();
-    let resolveIdentity!: (identity: DeviceIdentity) => void;
-    loadOrCreateDeviceIdentityMock.mockImplementationOnce(
-      () =>
-        new Promise<DeviceIdentity>((resolve) => {
-          resolveIdentity = resolve;
-        }),
-    );
+    const identity = createDeferred<DeviceIdentity>();
+    loadOrCreateDeviceIdentityMock.mockImplementationOnce(() => identity.promise);
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -583,7 +591,7 @@ describe("GatewayBrowserClient", () => {
     const secondWs = getLatestWebSocket();
     expect(secondWs).not.toBe(firstWs);
 
-    resolveIdentity({
+    identity.resolve({
       deviceId: "device-1",
       privateKey: "private-key", // pragma: allowlist secret
       publicKey: "public-key", // pragma: allowlist secret

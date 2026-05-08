@@ -373,7 +373,7 @@ describe("createStatusReactionController", () => {
     // Should only have set calls, no remove
     const removeCalls = calls.filter((c) => c.method === "remove");
     expect(removeCalls).toHaveLength(0);
-    expect(calls.filter((c) => c.method === "set").length).toBeGreaterThan(0);
+    expect(calls.some((c) => c.method === "set")).toBe(true);
   });
 
   it("should clear all known emojis when adapter supports removeReaction", async () => {

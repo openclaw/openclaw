@@ -63,8 +63,9 @@ function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string 
     "npm",
     "install",
     "--omit=dev",
-    "--loglevel=error",
+    "--omit=peer",
     "--legacy-peer-deps",
+    "--loglevel=error",
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
@@ -434,9 +435,8 @@ describe("installPluginFromNpmSpec", () => {
     const stagedArchivePath = dependencySpec
       ? resolveManagedFileDependency(npmRoot, dependencySpec)
       : null;
-    expect(stagedArchivePath).toBeTruthy();
-    if (!stagedArchivePath) {
-      return;
+    if (stagedArchivePath === null) {
+      throw new Error("expected staged archive path");
     }
     await expect(fs.promises.readFile(stagedArchivePath, "utf8")).resolves.toBe(
       "fixture pack contents",
@@ -1072,7 +1072,9 @@ describe("installPluginFromNpmSpec", () => {
         return;
       }
       expect(result.pluginId).toBe(pluginId);
-      expect(warnings.some((warning) => warning.includes("installation blocked"))).toBe(false);
+      expect(warnings).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("installation blocked")]),
+      );
       expectNpmInstallIntoRoot({
         calls: runCommandWithTimeoutMock.mock.calls,
         npmRoot,

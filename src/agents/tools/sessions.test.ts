@@ -14,7 +14,7 @@ type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string };
   tools: {
     agentToAgent: { enabled: boolean };
-    sessions?: { visibility: "all" | "own" };
+    sessions?: { visibility: "self" | "tree" | "agent" | "all" };
   };
 };
 
@@ -329,8 +329,7 @@ describe("resolveAnnounceTarget", () => {
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
-    expect(first).toBeDefined();
-    expect(first?.method).toBe("sessions.list");
+    expect(first).toMatchObject({ method: "sessions.list" });
   });
 
   it("falls back to origin provider and accountId from sessions.list when legacy route fields are absent", async () => {
@@ -417,13 +416,20 @@ describe("resolveAnnounceTarget", () => {
 describe("sessions_list gating", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    callGatewayMock.mockResolvedValue({
-      path: "/tmp/sessions.json",
-      sessions: [
-        { key: "agent:main:main", kind: "direct" },
-        { key: "agent:other:main", kind: "direct" },
-      ],
-    });
+    callGatewayMock.mockImplementation(
+      (request: { method?: string; params?: { spawnedBy?: string } }) => {
+        if (request.method === "sessions.list" && request.params?.spawnedBy) {
+          return Promise.resolve({ path: "/tmp/sessions.json", sessions: [] });
+        }
+        return Promise.resolve({
+          path: "/tmp/sessions.json",
+          sessions: [
+            { key: "agent:main:main", kind: "direct" },
+            { key: "agent:other:main", kind: "direct" },
+          ],
+        });
+      },
+    );
   });
 
   it("filters out other agents when tools.agentToAgent.enabled is false", async () => {
@@ -435,6 +441,62 @@ describe("sessions_list gating", () => {
     });
   });
 
+  it("keeps requester-owned cross-agent rows with tree visibility without a spawned lookup", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "tree" },
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:codex:acp:child-1",
+          kind: "direct",
+          spawnedBy: MAIN_AGENT_SESSION_KEY,
+        },
+      ],
+    });
+
+    const result = await createMainSessionsListTool().execute("call1", {});
+
+    expect(result.details).toMatchObject({
+      count: 1,
+      sessions: [{ key: "agent:codex:acp:child-1", spawnedBy: MAIN_AGENT_SESSION_KEY }],
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps requester-owned cross-agent rows with all visibility when a2a is disabled", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockResolvedValueOnce({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:codex:acp:child-1",
+          kind: "direct",
+          parentSessionKey: MAIN_AGENT_SESSION_KEY,
+        },
+      ],
+    });
+
+    const result = await createMainSessionsListTool().execute("call1", {});
+
+    expect(result.details).toMatchObject({
+      count: 1,
+      sessions: [{ key: "agent:codex:acp:child-1", parentSessionKey: MAIN_AGENT_SESSION_KEY }],
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps literal current keys for message previews", async () => {
     callGatewayMock.mockReset();
     callGatewayMock
@@ -442,7 +504,6 @@ describe("sessions_list gating", () => {
         path: "/tmp/sessions.json",
         sessions: [{ key: "current", kind: "direct" }],
       })
-      .mockResolvedValueOnce({ sessions: [{ key: "current" }] })
       .mockResolvedValueOnce({ messages: [{ role: "assistant", content: [] }] });
 
     await createMainSessionsListTool().execute("call1", { messageLimit: 1 });
@@ -478,7 +539,6 @@ describe("sessions_list transcriptPath resolution", () => {
           },
         ],
       });
-
       const result = await executeMainSessionsList();
       expectWorkerTranscriptPath(result, {
         containsPath: path.join("agents", "worker", "sessions"),
@@ -498,7 +558,6 @@ describe("sessions_list transcriptPath resolution", () => {
           },
         ],
       });
-
       const result = await executeMainSessionsList();
       expectWorkerTranscriptPath(result, {
         containsPath: path.join("agents", "worker", "sessions"),
@@ -519,7 +578,6 @@ describe("sessions_list transcriptPath resolution", () => {
           },
         ],
       });
-
       const result = await executeMainSessionsList();
       expectWorkerTranscriptPath(result, {
         containsPath: path.join("agents", "worker", "sessions"),
@@ -540,7 +598,6 @@ describe("sessions_list transcriptPath resolution", () => {
           },
         ],
       });
-
       const result = await executeMainSessionsList();
       expectWorkerTranscriptPath(result, {
         containsPath: path.join(stateDir, "agents", "worker", "sessions"),
@@ -562,7 +619,6 @@ describe("sessions_list transcriptPath resolution", () => {
         },
       ],
     });
-
     const result = await executeMainSessionsList();
     const expectedSessionsDir = path.dirname(templateStorePath.replace("{agentId}", "worker"));
     expectWorkerTranscriptPath(result, {
@@ -595,7 +651,6 @@ describe("sessions_list channel derivation", () => {
         },
       ],
     });
-
     const result = await executeMainSessionsList();
 
     expect(result.details).toMatchObject({

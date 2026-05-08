@@ -93,19 +93,19 @@ describe("validateBindMounts", () => {
 
   it("allows legitimate project directory mounts", () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-safe-"));
-    expect(() =>
+    expect(
       validateBindMounts([
         `${join(projectRoot, "source")}:/source:rw`,
         `${join(projectRoot, "projects")}:/projects:ro`,
         `${join(projectRoot, "data")}:/data`,
         `${join(projectRoot, "config")}:/config:ro`,
       ]),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("allows undefined or empty binds", () => {
-    expect(() => validateBindMounts(undefined)).not.toThrow();
-    expect(() => validateBindMounts([])).not.toThrow();
+    expect(validateBindMounts(undefined)).toBeUndefined();
+    expect(validateBindMounts([])).toBeUndefined();
   });
 
   it("blocks dangerous bind source paths", () => {
@@ -162,7 +162,7 @@ describe("validateBindMounts", () => {
   });
 
   it("allows parent mounts that are not blocked", () => {
-    expect(() => validateBindMounts(["/var:/var"])).not.toThrow();
+    expect(validateBindMounts(["/var:/var"])).toBeUndefined();
   });
 
   it("blocks sensitive home credential binds", () => {
@@ -175,16 +175,16 @@ describe("validateBindMounts", () => {
   });
 
   it("allows drive-absolute Windows bind sources", () => {
-    expect(() => validateBindMounts(["D:/data/openclaw/src:/src:ro"])).not.toThrow();
-    expect(() => validateBindMounts(["D:\\data\\openclaw\\output:/output:rw"])).not.toThrow();
+    expect(validateBindMounts(["D:/data/openclaw/src:/src:ro"])).toBeUndefined();
+    expect(validateBindMounts(["D:\\data\\openclaw\\output:/output:rw"])).toBeUndefined();
   });
 
   it("compares Windows allowed roots case-insensitively", () => {
-    expect(() =>
+    expect(
       validateBindMounts(["d:/DATA/OpenClaw/src:/src:ro"], {
         allowedSourceRoots: ["D:/data/openclaw"],
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(() =>
       validateBindMounts(["D:/other/project:/src:ro"], {
@@ -280,22 +280,22 @@ describe("validateBindMounts", () => {
 
   it("allows bind sources in allowed roots when allowlist is configured", () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-allowed-"));
-    expect(() =>
+    expect(
       validateBindMounts([`${join(projectRoot, "cache")}:/data:ro`], {
         allowedSourceRoots: [projectRoot],
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("allows bind sources outside allowed roots with explicit dangerous override", () => {
     const allowedRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-allowed-root-"));
     const externalRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-external-"));
-    expect(() =>
+    expect(
       validateBindMounts([`${externalRoot}:/data:ro`], {
         allowedSourceRoots: [allowedRoot],
         allowSourcesOutsideAllowedRoots: true,
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("blocks reserved container target paths by default", () => {
@@ -307,11 +307,11 @@ describe("validateBindMounts", () => {
 
   it("allows reserved container target paths with explicit dangerous override", () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-reserved-"));
-    expect(() =>
+    expect(
       validateBindMounts([`${projectRoot}:/workspace:rw`], {
         allowReservedContainerTargets: true,
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 });
 
@@ -321,10 +321,10 @@ function normalizePathForSnapshot(input: string): string {
 
 describe("validateNetworkMode", () => {
   it("allows bridge/none/custom/undefined", () => {
-    expect(() => validateNetworkMode("bridge")).not.toThrow();
-    expect(() => validateNetworkMode("none")).not.toThrow();
-    expect(() => validateNetworkMode("my-custom-network")).not.toThrow();
-    expect(() => validateNetworkMode(undefined)).not.toThrow();
+    expect(validateNetworkMode("bridge")).toBeUndefined();
+    expect(validateNetworkMode("none")).toBeUndefined();
+    expect(validateNetworkMode("my-custom-network")).toBeUndefined();
+    expect(validateNetworkMode(undefined)).toBeUndefined();
   });
 
   it("blocks host mode (case-insensitive)", () => {
@@ -354,25 +354,25 @@ describe("validateNetworkMode", () => {
   });
 
   it("allows container namespace joins with explicit dangerous override", () => {
-    expect(() =>
+    expect(
       validateNetworkMode("container:abc123", {
         allowContainerNamespaceJoin: true,
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 });
 
 describe("validateSeccompProfile", () => {
   it("allows custom profile paths/undefined", () => {
-    expect(() => validateSeccompProfile("/tmp/seccomp.json")).not.toThrow();
-    expect(() => validateSeccompProfile(undefined)).not.toThrow();
+    expect(validateSeccompProfile("/tmp/seccomp.json")).toBeUndefined();
+    expect(validateSeccompProfile(undefined)).toBeUndefined();
   });
 });
 
 describe("validateApparmorProfile", () => {
   it("allows named profile/undefined", () => {
-    expect(() => validateApparmorProfile("openclaw-sandbox")).not.toThrow();
-    expect(() => validateApparmorProfile(undefined)).not.toThrow();
+    expect(validateApparmorProfile("openclaw-sandbox")).toBeUndefined();
+    expect(validateApparmorProfile(undefined)).toBeUndefined();
   });
 });
 
@@ -397,13 +397,13 @@ describe("profile hardening", () => {
 describe("validateSandboxSecurity", () => {
   it("passes with safe config", () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "openclaw-sbx-safe-config-"));
-    expect(() =>
+    expect(
       validateSandboxSecurity({
         binds: [`${projectRoot}:/src:rw`],
         network: "none",
         seccompProfile: "/tmp/seccomp.json",
         apparmorProfile: "openclaw-sandbox",
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 });

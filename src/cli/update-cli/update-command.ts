@@ -10,6 +10,7 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   ConfigMutationConflictError,
+  assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayPort,
@@ -51,6 +52,7 @@ import {
   globalInstallArgs,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
+  resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
@@ -645,7 +647,7 @@ async function resolvePackageRuntimePreflightError(params: {
   return [
     `Node ${process.versions.node ?? "unknown"} is too old for openclaw@${targetLabel}.`,
     `The requested package requires ${status.nodeEngine}.`,
-    "Upgrade Node to 22.14+ or Node 24, then rerun `openclaw update`.",
+    "Upgrade Node to 22.16+ or Node 24, then rerun `openclaw update`.",
     "Bare `npm i -g openclaw` can silently install an older compatible release.",
     "After upgrading Node, use `npm i -g openclaw@latest`.",
   ].join("\n");
@@ -1069,9 +1071,13 @@ async function runGitUpdate(params: {
       timeoutMs: effectiveTimeout,
       pkgRoot: params.root,
     });
+    const installLocation =
+      installTarget.manager === "pnpm"
+        ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
+        : null;
     const installStep = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(installTarget, updateRoot),
+      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation),
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,
@@ -1795,6 +1801,22 @@ function stopPostCoreUpdateChild(child: ChildProcess): void {
   child.kill();
 }
 
+/**
+ * Returns the stdio mode for the post-core-update child process.
+ *
+ * Windows shells (PowerShell/CMD) wait for all processes that hold inherited console handles to
+ * exit before returning the prompt, even after the immediate child has exited.  Using "pipe" on
+ * Windows prevents the child (and any grandchildren it spawns) from ever receiving a reference to
+ * the parent's console handles, eliminating the terminal hang seen in #78445.
+ *
+ * @internal exported for testing
+ */
+export function resolvePostCoreUpdateChildStdio(
+  platform: NodeJS.Platform = process.platform,
+): "inherit" | "pipe" {
+  return platform === "win32" ? "pipe" : "inherit";
+}
+
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
@@ -1826,8 +1848,9 @@ async function continuePostCoreUpdateInFreshProcess(params: {
 
   try {
     await writePostCorePluginInstallRecordsFile(installRecordsPath, params.pluginInstallRecords);
+    const childStdio = resolvePostCoreUpdateChildStdio();
     const child = spawn(resolveNodeRunner(), argv, {
-      stdio: "inherit",
+      stdio: childStdio,
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         [POST_CORE_UPDATE_ENV]: "1",
@@ -1839,6 +1862,11 @@ async function continuePostCoreUpdateInFreshProcess(params: {
         [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
       },
     });
+    // When piped, relay child output to the parent process so terminal output is preserved.
+    if (childStdio === "pipe") {
+      child.stdout?.pipe(process.stdout);
+      child.stderr?.pipe(process.stderr);
+    }
 
     const childResult = await new Promise<
       | { kind: "exit"; exitCode: number }
@@ -1944,6 +1972,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const shouldRestart = opts.restart !== false;
   if (timeoutMs === null) {
     return;
+  }
+  if (opts.dryRun !== true) {
+    assertConfigWriteAllowedInCurrentMode();
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 

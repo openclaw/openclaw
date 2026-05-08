@@ -47,7 +47,7 @@ vi.mock("../../plugins/provider-auth-helpers.js", () => ({
     params: {
       profileId: string;
       provider: string;
-      mode: "api_key" | "oauth" | "token";
+      mode: "api_key" | "aws-sdk" | "oauth" | "token";
       email?: string;
       displayName?: string;
     },
@@ -547,7 +547,8 @@ describe("modelsAuthLoginCommand", () => {
       expect(ctx.env).toBe(process.env);
       expect(ctx.allowSecretRefPrompt).toBe(false);
       expect(ctx.isRemote).toBe(false);
-      expect(ctx.openUrl).toEqual(expect.any(Function));
+      await ctx.openUrl("https://example.com/auth");
+      expect(mocks.openUrl).toHaveBeenCalledWith("https://example.com/auth");
       expect(ctx.oauth).toMatchObject({
         createVpsAwareHandlers: expect.any(Function),
       });

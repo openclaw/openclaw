@@ -136,7 +136,7 @@ describe("subagent registry steer restarts", () => {
   };
 
   const createDeferredAnnounceResolver = (): ((value: boolean) => void) => {
-    let resolveAnnounce!: (value: boolean) => void;
+    let resolveAnnounce: ((value: boolean) => void) | undefined;
     announceSpy.mockImplementationOnce(
       () =>
         new Promise<boolean>((resolve) => {
@@ -144,6 +144,9 @@ describe("subagent registry steer restarts", () => {
         }),
     );
     return (value: boolean) => {
+      if (!resolveAnnounce) {
+        throw new Error("Expected subagent announcement resolver to be initialized");
+      }
       resolveAnnounce(value);
     };
   };
@@ -356,7 +359,7 @@ describe("subagent registry steer restarts", () => {
     }
   });
 
-  it("clears announce retry state when replacing after steer restart", async () => {
+  it("clears announce retry state when replacing after steer restart", () => {
     {
       registerRun({
         runId: "run-retry-reset-old",
@@ -482,11 +485,13 @@ describe("subagent registry steer restarts", () => {
     expect(replaced).toBe(true);
 
     const next = listMainRuns().find((entry) => entry.runId === "run-runtime-new");
-    expect(next).toBeDefined();
+    if (next === undefined) {
+      throw new Error("expected restarted run");
+    }
     expect(mod.getSubagentSessionStartedAt(next)).toBe(1_000);
-    expect(next?.accumulatedRuntimeMs).toBe(120_000);
+    expect(next.accumulatedRuntimeMs).toBe(120_000);
 
-    if (!next?.startedAt) {
+    if (!next.startedAt) {
       throw new Error("missing next startedAt");
     }
     next.endedAt = next.startedAt + 30_000;
@@ -564,9 +569,10 @@ describe("subagent registry steer restarts", () => {
 
     const run = listMainRuns()[0];
     expect(run?.outcome).toMatchObject({ status: "error", error: "manual kill" });
-    expect(run?.outcome?.startedAt).toEqual(expect.any(Number));
-    expect(run?.outcome?.endedAt).toEqual(expect.any(Number));
-    expect(run?.outcome?.elapsedMs).toEqual(expect.any(Number));
+    expect(run?.outcome?.startedAt).toBeTypeOf("number");
+    expect(run?.outcome?.endedAt).toBeTypeOf("number");
+    expect(run?.outcome?.elapsedMs).toBeTypeOf("number");
+    expect(run?.outcome?.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(run?.outcome?.endedAt).toBeGreaterThanOrEqual(run?.outcome?.startedAt ?? 0);
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
@@ -591,7 +597,7 @@ describe("subagent registry steer restarts", () => {
     );
   });
 
-  it("treats a child session as inactive when only a stale older row is still unended", async () => {
+  it("treats a child session as inactive when only a stale older row is still unended", () => {
     const childSessionKey = "agent:main:subagent:stale-active-older-row";
 
     mod.addSubagentRunForTests({

@@ -20,6 +20,13 @@ import {
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 
+type RunGroupParams = {
+  args: string[];
+  config: string;
+  env: Record<string, string | undefined>;
+  targets: string[];
+};
+
 function runScript(args: string[], cwd = process.cwd()) {
   return execFileSync(process.execPath, [scriptPath, ...args], {
     cwd,
@@ -27,13 +34,23 @@ function runScript(args: string[], cwd = process.cwd()) {
   });
 }
 
+function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
+  const [arg] = mock.mock.calls[0] ?? [];
+  if (arg === undefined) {
+    throw new Error("expected first mock call argument");
+  }
+  return arg;
+}
+
 function findExtensionWithoutTests() {
   const extensionId = listAvailableExtensionIds().find(
     (candidate) => !resolveExtensionTestPlan({ targetArg: candidate, cwd: process.cwd() }).hasTests,
   );
 
-  expect(extensionId).toBeDefined();
-  return extensionId ?? "missing-no-test-extension";
+  if (!extensionId) {
+    throw new Error("Expected at least one extension without tests");
+  }
+  return extensionId;
 }
 
 describe("scripts/test-extension.mjs", () => {
@@ -44,15 +61,6 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
     expect(plan.config).toBe("test/vitest/vitest.extension-slack.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("slack"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves bluebubbles onto the bluebubbles vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "bluebubbles", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("bluebubbles");
-    expect(plan.config).toBe("test/vitest/vitest.extension-bluebubbles.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("bluebubbles"));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -272,7 +280,6 @@ describe("scripts/test-extension.mjs", () => {
         "msteams",
         "feishu",
         "irc",
-        "bluebubbles",
         "acpx",
         "diffs",
         "browser",
@@ -283,7 +290,6 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(batch.extensionIds).toEqual([
       "acpx",
-      "bluebubbles",
       "browser",
       "diffs",
       "feishu",
@@ -310,13 +316,6 @@ describe("scripts/test-extension.mjs", () => {
         estimatedCost: expect.any(Number),
         extensionIds: ["acpx"],
         roots: [bundledPluginRoot("acpx")],
-        testFileCount: expect.any(Number),
-      },
-      {
-        config: "test/vitest/vitest.extension-bluebubbles.config.ts",
-        estimatedCost: expect.any(Number),
-        extensionIds: ["bluebubbles"],
-        roots: [bundledPluginRoot("bluebubbles")],
         testFileCount: expect.any(Number),
       },
       {
@@ -482,19 +481,12 @@ describe("scripts/test-extension.mjs", () => {
   it("runs extension batch config groups concurrently when requested", async () => {
     const started: string[] = [];
     const resolvers: Array<() => void> = [];
-    const runGroup = vi.fn(
-      (params: {
-        args: string[];
-        config: string;
-        env: Record<string, string | undefined>;
-        targets: string[];
-      }) => {
-        started.push(params.config);
-        return new Promise<number>((resolve) => {
-          resolvers.push(() => resolve(0));
-        });
-      },
-    );
+    const runGroup = vi.fn((params: RunGroupParams) => {
+      started.push(params.config);
+      return new Promise<number>((resolve) => {
+        resolvers.push(() => resolve(0));
+      });
+    });
     const runPromise = runExtensionBatchPlan(
       {
         extensionCount: 3,
@@ -543,12 +535,13 @@ describe("scripts/test-extension.mjs", () => {
     }
     await expect(runPromise).resolves.toBe(0);
     expect(runGroup).toHaveBeenCalledTimes(3);
-    expect(runGroup.mock.calls[0]?.[0]).toMatchObject({
+    const firstRunGroupParams = requireFirstMockArg<RunGroupParams>(runGroup);
+    expect(firstRunGroupParams).toMatchObject({
       args: ["--reporter=dot"],
       config: "heavy",
       targets: ["extensions/two"],
     });
-    expect(runGroup.mock.calls[0]?.[0].env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toContain(
+    expect(firstRunGroupParams.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toContain(
       path.join("node_modules", ".experimental-vitest-cache", "extension-batch", "0-heavy"),
     );
   });

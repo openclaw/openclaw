@@ -106,7 +106,7 @@ title: "Thinking levels"
 - `stream` (Telegram only): streams reasoning into the Telegram draft bubble while the reply is generating, then sends the final answer without reasoning.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
-- Resolution order: inline directive, then session override, then per-agent default (`agents.list[].reasoningDefault`), then fallback (`off`).
+- Resolution order: inline directive, then session override, then per-agent default (`agents.list[].reasoningDefault`), then global default (`agents.defaults.reasoningDefault`), then fallback (`off`).
 
 Malformed local-model reasoning tags are handled conservatively. Closed `<think>...</think>` blocks stay hidden on normal replies, and unclosed reasoning after already visible text is also hidden. If a reply is fully wrapped in a single unclosed opening tag and would otherwise deliver as empty text, OpenClaw removes the malformed opening tag and delivers the remaining text.
 
@@ -123,7 +123,8 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
 - Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
-- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model's provider thinking profile plus the same fallback logic that `/status` and `session_status` use.
+- The first option is always the clear-override choice. It shows `Inherited: <resolved level>` when the session is inheriting a non-off effective default, or `Off` when inherited thinking is disabled.
+- Explicit picker choices are labeled as overrides, while preserving provider labels when present (for example `Override: maximum` for a provider-labeled `max` option).
 - The picker uses `thinkingLevels` returned by the gateway session row/defaults, with `thinkingOptions` kept as a legacy label list. The browser UI does not keep its own provider regex list; plugins own model-specific level sets.
 - `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.
 

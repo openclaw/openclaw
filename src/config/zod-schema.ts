@@ -53,6 +53,16 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
+const LegacyCanvasHostSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    root: z.string().optional(),
+    port: z.number().int().positive().optional(),
+    liveReload: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const AccessGroupsSchema = z
   .record(
     z.string().min(1),
@@ -199,6 +209,14 @@ const PluginEntrySchema = z
       .object({
         allowModelOverride: z.boolean().optional(),
         allowedModels: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    llm: z
+      .object({
+        allowModelOverride: z.boolean().optional(),
+        allowedModels: z.array(z.string()).optional(),
+        allowAgentIdOverride: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -560,7 +578,12 @@ export const OpenClawSchema = z
             z
               .object({
                 provider: z.string(),
-                mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
+                mode: z.union([
+                  z.literal("api_key"),
+                  z.literal("aws-sdk"),
+                  z.literal("oauth"),
+                  z.literal("token"),
+                ]),
                 email: z.string().optional(),
                 displayName: z.string().optional(),
               })
@@ -792,15 +815,6 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
-    canvasHost: z
-      .object({
-        enabled: z.boolean().optional(),
-        root: z.string().optional(),
-        port: z.number().int().positive().optional(),
-        liveReload: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
     talk: TalkSchema.optional(),
     gateway: z
       .object({
@@ -897,6 +911,7 @@ export const OpenClawSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            preserveFunnel: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -1112,6 +1127,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    canvasHost: LegacyCanvasHostSchema,
     surfaces: z
       .record(
         z.string(),

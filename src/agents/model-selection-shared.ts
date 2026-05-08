@@ -123,7 +123,11 @@ export function inferUniqueProviderFromConfiguredModels(params: {
         if (!modelId) {
           continue;
         }
-        if (modelId === model || normalizeLowercaseStringOrEmpty(modelId) === normalized) {
+        const normalizedModelId = normalizeStaticProviderModelId(providerId, modelId);
+        if (
+          normalizedModelId === model ||
+          normalizeLowercaseStringOrEmpty(normalizedModelId) === normalized
+        ) {
           addProvider(providerId);
         }
       }
@@ -631,7 +635,10 @@ export function buildAllowedModelSetWithFallbacks(params: {
         })
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
-  const catalogKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
+  const catalogKeys = new Set<string>();
+  for (const entry of catalog) {
+    catalogKeys.add(modelKey(entry.provider, entry.id));
+  }
 
   if (allowAny) {
     if (defaultKey) {
@@ -831,7 +838,8 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
       continue;
     }
     for (const model of provider.models) {
-      const id = normalizeOptionalString(model?.id) ?? "";
+      const rawId = normalizeOptionalString(model?.id) ?? "";
+      const id = rawId ? normalizeStaticProviderModelId(providerId, rawId) : "";
       if (!id) {
         continue;
       }

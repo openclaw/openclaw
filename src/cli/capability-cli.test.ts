@@ -130,6 +130,7 @@ const mocks = vi.hoisted(() => ({
   ]),
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
+  convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
   modelsStatusCommand: vi.fn(
@@ -153,6 +154,9 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: () => "/tmp/agent",
+  resolveAgentConfig: () => ({}),
+  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentModelFallbacksOverride: () => [],
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
@@ -220,6 +224,15 @@ vi.mock("../media-understanding/provider-registry.js", () => ({
   buildMediaUnderstandingRegistry:
     mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
 }));
+
+vi.mock("../media/image-ops.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/image-ops.js")>();
+  return {
+    ...actual,
+    convertHeicToJpeg:
+      mocks.convertHeicToJpeg as typeof import("../media/image-ops.js").convertHeicToJpeg,
+  };
+});
 
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
   listMemoryEmbeddingProviders:
@@ -333,6 +346,7 @@ describe("capability cli", () => {
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
+    mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
@@ -363,6 +377,42 @@ describe("capability cli", () => {
     }) as never);
   });
 
+  async function runModelRunWithModel(model: string, transport: "local" | "gateway") {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        model,
+        "--prompt",
+        "hello",
+        ...(transport === "gateway" ? ["--gateway"] : []),
+        "--json",
+      ],
+    });
+  }
+
+  function expectModelRunDispatch(transport: "local" | "gateway", modelRef: string) {
+    if (transport === "gateway") {
+      const slash = modelRef.indexOf("/");
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agent",
+          params: expect.objectContaining({
+            provider: modelRef.slice(0, slash),
+            model: modelRef.slice(slash + 1),
+          }),
+        }),
+      );
+      return;
+    }
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef }),
+    );
+  }
+
   it("lists canonical capabilities", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -370,8 +420,9 @@ describe("capability cli", () => {
     });
 
     const payload = mocks.runtime.writeJson.mock.calls[0]?.[0] as Array<{ id: string }>;
-    expect(payload.some((entry) => entry.id === "model.run")).toBe(true);
-    expect(payload.some((entry) => entry.id === "image.describe")).toBe(true);
+    expect(payload.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["model.run", "image.describe"]),
+    );
   });
 
   it("defaults model run to local transport", async () => {
@@ -557,6 +608,56 @@ describe("capability cli", () => {
           modelRun: true,
           promptMode: "none",
         }),
+      }),
+    );
+  });
+
+  it("normalizes HEIC files to JPEG before local model probes", async () => {
+    const tempInput = path.join(os.tmpdir(), `openclaw-model-run-image-${Date.now()}.heic`);
+    await fs.writeFile(tempInput, Buffer.from("heic-like"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "describe this",
+        "--file",
+        tempInput,
+        "--json",
+      ],
+    });
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-like"));
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: [
+                { type: "text", text: "describe this" },
+                {
+                  type: "image",
+                  data: Buffer.from("jpeg-normalized").toString("base64"),
+                  mimeType: "image/jpeg",
+                },
+              ],
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputs: [
+          expect.objectContaining({
+            path: tempInput,
+            mimeType: "image/jpeg",
+          }),
+        ],
       }),
     );
   });
@@ -777,6 +878,50 @@ describe("capability cli", () => {
         }),
       }),
     );
+  });
+
+  it.each(["local", "gateway"] as const)(
+    "canonicalizes case-only catalog model refs before %s dispatch",
+    async (transport) => {
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+      ] as never);
+
+      await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7", transport);
+
+      expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: true }),
+      );
+      expectModelRunDispatch(transport, "anthropic/claude-opus-4-7");
+    },
+  );
+
+  it("canonicalizes case-only catalog refs and preserves auth profiles before local dispatch", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+    await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7@work", "local");
+
+    expectModelRunDispatch("local", "anthropic/claude-opus-4-7@work");
+  });
+
+  it("leaves auth profile refs unchanged before gateway dispatch", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+    await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7@work", "gateway");
+
+    expectModelRunDispatch("gateway", "Anthropic/CLAUDE-OPUS-4-7@work");
+  });
+
+  it("preserves custom mixed-case profile refs before local dispatch when the catalog has no match", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([] as never);
+
+    await runModelRunWithModel("custom/MyModel@work", "local");
+
+    expectModelRunDispatch("local", "custom/MyModel@work");
   });
 
   it("rejects empty model run prompts before gateway dispatch", async () => {

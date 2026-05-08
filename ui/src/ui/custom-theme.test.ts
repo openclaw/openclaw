@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCustomThemeStyles,
   importCustomThemeFromUrl,
@@ -8,6 +8,10 @@ import {
   syncCustomThemeStyleTag,
 } from "./custom-theme.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function createTweakcnPayload() {
   return {
@@ -295,7 +299,11 @@ describe("custom theme import helpers", () => {
   it("parses stored imported themes and rejects malformed records", () => {
     const imported = createImportedTheme();
 
-    expect(parseImportedCustomTheme(imported)?.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+    const parsed = parseImportedCustomTheme(imported);
+    if (!parsed) {
+      throw new Error("Expected imported custom theme to parse");
+    }
+    expect(parsed.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
     expect(parseImportedCustomTheme({ ...imported, light: {} })).toBeNull();
   });
 

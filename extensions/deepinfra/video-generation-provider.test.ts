@@ -83,4 +83,36 @@ describe("deepinfra video generation provider", () => {
     });
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it("names base64 WebM data URL outputs from the MIME type", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          video_url: `data:video/webm;base64,${Buffer.from("webm-data").toString("base64")}`,
+          request_id: "req_webm",
+          inference_status: { status: "succeeded" },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/Pixverse/Pixverse-T2V",
+      prompt: "A WebM data URL",
+      cfg: {},
+    });
+
+    expect(result.videos).toHaveLength(1);
+    const [video] = result.videos;
+    if (!video) {
+      throw new Error("Expected generated DeepInfra video");
+    }
+    expect(video).toMatchObject({
+      mimeType: "video/webm",
+      fileName: "video-1.webm",
+    });
+    expect(video.buffer).toEqual(Buffer.from("webm-data"));
+  });
 });

@@ -179,7 +179,36 @@ export const discordChannelConfigUiHints = {
   },
   "voice.model": {
     label: "Discord Voice Model",
-    help: "Optional LLM model override for Discord voice channel responses (for example openai/gpt-5.4-mini). Leave unset to inherit the routed agent model.",
+    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai-codex/gpt-5.5). Leave unset to inherit the routed agent model.",
+  },
+  "voice.mode": {
+    label: "Discord Voice Mode",
+    help: "Conversation mode: stt-tts uses batch speech-to-text plus TTS, talk-buffer uses a realtime voice shell with the OpenClaw agent as the brain, and bidi lets the realtime provider converse directly with the OpenClaw consult tool.",
+  },
+  "voice.realtime.provider": {
+    label: "Discord Realtime Provider",
+    help: "Realtime voice provider for talk-buffer or bidi Discord voice modes, such as openai.",
+  },
+  "voice.realtime.model": {
+    label: "Discord Realtime Model",
+    help: "Provider realtime session model, such as gpt-realtime-2. This is separate from voice.model, which remains the OpenClaw agent brain model.",
+  },
+  "voice.realtime.voice": {
+    label: "Discord Realtime Voice",
+    help: "Provider realtime output voice, such as cedar.",
+  },
+  "voice.realtime.toolPolicy": {
+    label: "Discord Realtime Tool Policy",
+    help: "Tool policy for the OpenClaw agent consult tool in bidi mode: safe-read-only, owner, or none.",
+  },
+  "voice.realtime.consultPolicy": {
+    label: "Discord Realtime Consult Policy",
+    help: "Use always to strongly prefer the OpenClaw agent brain for substantive bidi turns.",
+  },
+  "voice.realtime.providers": {
+    label: "Discord Realtime Provider Settings",
+    help: "Provider-specific realtime voice settings keyed by provider id.",
+    advanced: true,
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
@@ -200,6 +229,10 @@ export const discordChannelConfigUiHints = {
   "voice.reconnectGraceMs": {
     label: "Discord Voice Reconnect Grace (ms)",
     help: "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000.",
+  },
+  "voice.captureSilenceGraceMs": {
+    label: "Discord Voice Capture Silence Grace (ms)",
+    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2500.",
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",

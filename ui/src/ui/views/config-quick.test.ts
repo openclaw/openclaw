@@ -4,6 +4,23 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderQuickSettings, type QuickSettingsProps } from "./config-quick.ts";
 
+function expectButtonByText(container: Element, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (candidate) => candidate.textContent?.trim() === text,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button labelled ${text}`);
+  }
+  return button;
+}
+
+function expectFileInput(input: Element | null | undefined): HTMLInputElement {
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error("Expected file input");
+  }
+  return input;
+}
+
 function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettingsProps {
   return {
     currentModel: "gpt-5.5",
@@ -67,14 +84,23 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps()), container);
 
-    expect(container.querySelector(".qs-card--model")).not.toBeNull();
-    expect(container.querySelector(".qs-card--channels")).not.toBeNull();
-    expect(container.querySelector(".qs-card--security")).not.toBeNull();
-    expect(container.querySelector(".qs-card--appearance")).not.toBeNull();
-    expect(container.querySelector(".qs-card--automations")).not.toBeNull();
-    expect(container.querySelector(".qs-side-stack .qs-card--appearance")).not.toBeNull();
-    expect(container.querySelector(".qs-side-stack .qs-card--automations")).not.toBeNull();
-    expect(container.querySelector(".qs-card--personal")).not.toBeNull();
+    expect(
+      Array.from(container.querySelectorAll(".qs-card"))
+        .map((card) =>
+          Array.from(card.classList).find(
+            (className) => className.startsWith("qs-card--") && className !== "qs-card--span-all",
+          ),
+        )
+        .filter(Boolean),
+    ).toEqual([
+      "qs-card--model",
+      "qs-card--channels",
+      "qs-card--security",
+      "qs-card--personal",
+      "qs-card--appearance",
+      "qs-card--automations",
+    ]);
+    expect(container.querySelectorAll(".qs-side-stack .qs-card")).toHaveLength(2);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });
 
@@ -203,9 +229,9 @@ describe("renderQuickSettings", () => {
       const input = inputs.find((node) =>
         node.closest(".qs-identity-card--assistant"),
       ) as HTMLInputElement | null;
-      expect(input).not.toBeNull();
+      expect(input?.type).toBe("file");
       if (!input) {
-        return;
+        throw new Error("expected assistant avatar file input");
       }
 
       Object.defineProperty(input, "files", {
@@ -244,11 +270,7 @@ describe("renderQuickSettings", () => {
     expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
       "UI override",
     );
-    const clear = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Clear override",
-    );
-    expect(clear).not.toBeUndefined();
-    clear?.dispatchEvent(new Event("click"));
+    expectButtonByText(container, "Clear override").dispatchEvent(new Event("click"));
 
     expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
   });
@@ -298,13 +320,11 @@ describe("renderQuickSettings", () => {
       const container = document.createElement("div");
       render(renderQuickSettings(createProps({ onUserAvatarChange })), container);
 
-      const input = Array.from(container.querySelectorAll('input[type="file"]')).find(
-        (node) => !node.closest(".qs-identity-card--assistant"),
-      ) as HTMLInputElement | null;
-      expect(input).not.toBeNull();
-      if (!input) {
-        return;
-      }
+      const input = expectFileInput(
+        Array.from(container.querySelectorAll('input[type="file"]')).find(
+          (node) => !node.closest(".qs-identity-card--assistant"),
+        ),
+      );
 
       const file = new File([new Uint8Array(1_500_001)], "avatar.png", { type: "image/png" });
       Object.defineProperty(input, "files", {
@@ -349,10 +369,7 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const customButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Import",
-    );
-    customButton?.click();
+    expectButtonByText(container, "Import").click();
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     expect(setTheme).not.toHaveBeenCalled();
@@ -376,10 +393,7 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const customButton = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Light Green",
-    );
-    customButton?.click();
+    expectButtonByText(container, "Light Green").click();
 
     expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();

@@ -50,6 +50,16 @@ async function waitForPluginEventHandlers(): Promise<void> {
   });
 }
 
+function requireFirstCommandRegistration(
+  registry: ReturnType<typeof createPluginRegistryFixture>["registry"]["registry"],
+) {
+  const registration = registry.commands[0];
+  if (!registration) {
+    throw new Error("expected first plugin command registration");
+  }
+  return registration;
+}
+
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -1328,8 +1338,7 @@ describe("host-hook fixture plugin contract", () => {
         });
       },
     });
-    const registration = registry.registry.commands[0];
-    expect(registration).toBeTruthy();
+    const registration = requireFirstCommandRegistration(registry.registry);
     const command = {
       ...registration.command,
       pluginId: registration.pluginId,
@@ -1706,8 +1715,8 @@ describe("host-hook fixture plugin contract", () => {
 
     expect(parityMap).toHaveLength(8);
     for (const [entryPoint, seam] of parityMap) {
-      expect(entryPoint).toBeTruthy();
-      expect(seam).toBeTruthy();
+      expect(entryPoint).not.toBe("");
+      expect(seam).not.toBe("");
       expect(seam).not.toContain("Plan Mode");
     }
   });
@@ -1967,7 +1976,7 @@ describe("host-hook fixture plugin contract", () => {
 
   it("does not let stale scheduler cleanup delete a newer job generation", async () => {
     let releaseCleanup: (() => void) | undefined;
-    let markCleanupStarted!: () => void;
+    let markCleanupStarted: (() => void) | undefined;
     const cleanupStartedPromise = new Promise<void>((resolve) => {
       markCleanupStarted = resolve;
     });
@@ -1985,6 +1994,9 @@ describe("host-hook fixture plugin contract", () => {
           sessionKey: "agent:main:main",
           kind: "monitor",
           cleanup: async () => {
+            if (!markCleanupStarted) {
+              throw new Error("Expected scheduler cleanup start callback to be initialized");
+            }
             markCleanupStarted();
             await new Promise<void>((resolve) => {
               releaseCleanup = resolve;
@@ -2018,7 +2030,10 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    releaseCleanup?.();
+    if (!releaseCleanup) {
+      throw new Error("Expected scheduler cleanup release callback to be initialized");
+    }
+    releaseCleanup();
     await expect(cleanupPromise).resolves.toMatchObject({ failures: [] });
     expect(listPluginSessionSchedulerJobs("scheduler-race")).toEqual([
       {

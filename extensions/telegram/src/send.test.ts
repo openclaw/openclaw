@@ -102,6 +102,13 @@ function mockLoadedMedia({
   });
 }
 
+function requireMockCall<T extends unknown[]>(call: T | undefined, label: string): T {
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 describe("sent-message-cache", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -1925,10 +1932,8 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = sendMessage.mock.calls[0];
-    const secondCall = sendMessage.mock.calls[1];
-    expect(firstCall).toBeDefined();
-    expect(secondCall).toBeDefined();
+    const firstCall = requireMockCall(sendMessage.mock.calls[0], "first sendMessage call");
+    const secondCall = requireMockCall(sendMessage.mock.calls[1], "second sendMessage call");
     expect((firstCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect((secondCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect(firstCall[2]?.reply_markup).toBeUndefined();
@@ -1956,10 +1961,8 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = sendMessage.mock.calls[0];
-    const secondCall = sendMessage.mock.calls[1];
-    expect(firstCall).toBeDefined();
-    expect(secondCall).toBeDefined();
+    const firstCall = requireMockCall(sendMessage.mock.calls[0], "first sendMessage call");
+    const secondCall = requireMockCall(sendMessage.mock.calls[1], "second sendMessage call");
     expect(String(firstCall[1] ?? "").length).toBeLessThanOrEqual(4000);
     expect(String(secondCall[1] ?? "").length).toBeLessThanOrEqual(4000);
     expect(firstCall[2]?.parse_mode).toBe("HTML");
@@ -1999,7 +2002,7 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledTimes(4);
     const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.every((call) => !String(call?.[1] ?? "").includes("<"))).toBe(true);
+    expect(plainFallbackCalls.some((call) => String(call?.[1] ?? "").includes("<"))).toBe(false);
     expect(res.messageId).toBe("91");
   });
 
@@ -2054,7 +2057,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === undefined)).toBe(true);
+    expect(sendMessage.mock.calls.some((call) => call[2]?.parse_mode !== undefined)).toBe(false);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
     expect(res.messageId).toBe("96");
   });

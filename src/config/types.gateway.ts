@@ -38,16 +38,6 @@ export type DiscoveryConfig = {
   mdns?: MdnsDiscoveryConfig;
 };
 
-export type CanvasHostConfig = {
-  enabled?: boolean;
-  /** Directory to serve (default: ~/.openclaw/workspace/canvas). */
-  root?: string;
-  /** HTTP port to listen on (default: 18793). */
-  port?: number;
-  /** Enable live-reload file watching + WS reloads (default: true). */
-  liveReload?: boolean;
-};
-
 export type TalkProviderConfig = {
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: SecretInput;
@@ -206,6 +196,13 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /**
+   * When `mode="serve"` and an externally configured Tailscale Funnel route
+   * already covers the gateway port, skip re-applying `tailscale serve` on
+   * startup. Lets operators manage Funnel exposure outside OpenClaw without
+   * losing it across gateway restarts.
+   */
+  preserveFunnel?: boolean;
 };
 
 export type GatewayRemoteConfig = {

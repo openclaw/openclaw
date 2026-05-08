@@ -13,6 +13,8 @@ import {
   type ChatState,
 } from "./chat.ts";
 
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
@@ -37,12 +39,15 @@ afterEach(() => {
 });
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -717,7 +722,7 @@ describe("handleChatEvent", () => {
   });
 });
 
-describe("loadChatHistory", () => {
+describe("loadChatHistory filtering", () => {
   it("filters legacy silent assistant messages from history", async () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "Hello" }] },
@@ -864,7 +869,7 @@ describe("sendChatMessage", () => {
     await loadChatHistory(state);
     const result = await sendChatMessage(state, "continue");
 
-    expect(result).toEqual(expect.any(String));
+    expect(result).toMatch(UUID_V4_RE);
     expect(state.currentSessionId).toBe("session-before-reconnect");
     expect(request).toHaveBeenLastCalledWith(
       "chat.send",
@@ -892,7 +897,7 @@ describe("sendChatMessage", () => {
       },
     ]);
 
-    expect(result).toEqual(expect.any(String));
+    expect(result).toMatch(UUID_V4_RE);
     expect(request).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
@@ -944,7 +949,7 @@ describe("sendChatMessage", () => {
 
     const result = await sendChatMessage(state, "summarize", [attachment]);
 
-    expect(result).toEqual(expect.any(String));
+    expect(result).toMatch(UUID_V4_RE);
     expect(request).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({
@@ -1017,7 +1022,7 @@ describe("abortChatRun", () => {
   });
 });
 
-describe("loadChatHistory", () => {
+describe("loadChatHistory retry handling", () => {
   it("retries retryable startup unavailability before showing history", async () => {
     vi.useFakeTimers();
     try {

@@ -10,8 +10,10 @@ import {
   loadAuthProfileStoreForRuntime,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -37,7 +39,7 @@ import {
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
-import { getImageMetadata } from "../media/image-ops.js";
+import { convertHeicToJpeg, getImageMetadata } from "../media/image-ops.js";
 import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
@@ -91,6 +93,7 @@ type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
+const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
 type CapabilityMetadata = {
   id: string;
@@ -558,6 +561,20 @@ function resolveModelRefOverride(raw: string | undefined): { provider?: string; 
   };
 }
 
+async function canonicalizeModelRunRef(params: {
+  raw: string | undefined;
+  cfg: OpenClawConfig;
+  preserveAuthProfile: boolean;
+}): Promise<string | undefined> {
+  return await canonicalizeCaseOnlyCatalogModelRef({
+    cfg: params.cfg,
+    raw: params.raw,
+    defaultProvider: DEFAULT_PROVIDER,
+    loadCatalog: () => loadModelCatalog({ config: params.cfg, readOnly: true }),
+    preserveAuthProfile: params.preserveAuthProfile,
+  });
+}
+
 function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
@@ -614,6 +631,15 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
           `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
         );
       }
+      if (HEIC_MODEL_RUN_MIMES.has(mimeType)) {
+        const converted = await convertHeicToJpeg(buffer);
+        return {
+          path: resolvedPath,
+          fileName: path.basename(resolvedPath),
+          mimeType: "image/jpeg",
+          data: converted.toString("base64"),
+        };
+      }
       return {
         path: resolvedPath,
         fileName: path.basename(resolvedPath),
@@ -632,6 +658,11 @@ async function runModelRun(params: {
 }) {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
+  const modelRef = await canonicalizeModelRunRef({
+    raw: params.model,
+    cfg,
+    preserveAuthProfile: params.transport === "local",
+  });
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -648,7 +679,7 @@ async function runModelRun(params: {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
-      modelRef: params.model,
+      modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
       skipPiDiscovery: true,
     });
@@ -721,7 +752,7 @@ async function runModelRun(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const { provider, model } = resolveModelRefOverride(params.model);
+  const { provider, model } = resolveModelRefOverride(modelRef);
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);

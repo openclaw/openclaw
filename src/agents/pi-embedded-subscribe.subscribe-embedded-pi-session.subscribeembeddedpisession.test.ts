@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import * as agentEvents from "../infra/agent-events.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
@@ -216,7 +217,7 @@ describe("subscribeEmbeddedPiSession", () => {
       const streamTexts = onReasoningStream.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
-      expect(streamTexts.at(-1)).toBe("Reasoning:\n_Because it helps_");
+      expect(streamTexts.at(-1)).toBe("Because it helps");
 
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "Because it helps" },
@@ -469,7 +470,10 @@ describe("subscribeEmbeddedPiSession", () => {
         text: "Generated 1 image.",
       }),
     );
-    expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+    const earlyMediaPayloads = onBlockReply.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.mediaUrls?.length);
+    expect(earlyMediaPayloads).toEqual([]);
 
     emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
     emit({
@@ -611,7 +615,10 @@ describe("subscribeEmbeddedPiSession", () => {
           text: firstChunk.trim(),
         }),
       );
-      expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+      const earlyMediaPayloads = onBlockReply.mock.calls
+        .map(([payload]) => payload)
+        .filter((payload) => payload.mediaUrls?.length);
+      expect(earlyMediaPayloads).toEqual([]);
 
       emitAssistantTextDelta(emit, `MEDIA:${mediaUrl}`);
       emit({
@@ -751,8 +758,50 @@ describe("subscribeEmbeddedPiSession", () => {
     const streamTexts = onReasoningStream.mock.calls
       .map((call) => call[0]?.text)
       .filter((value): value is string => typeof value === "string");
-    expect(streamTexts.at(-1)).toBe("Reasoning:\n_Checking files done_");
+    expect(streamTexts.at(-1)).toBe("Checking files done");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("extracts correct reasoning delta for incremental stream updates", () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      reasoningMode: "stream",
+      onReasoningStream: vi.fn(),
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Step 1" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Step 1",
+      },
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Step 1 and Step 2" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: " and Step 2",
+      },
+    });
+
+    const thinkingEvents = emitAgentEventSpy.mock.calls
+      .map((call) => call[0])
+      .filter((evt) => evt?.stream === "thinking");
+
+    expect(thinkingEvents.length).toBe(2);
+    expect(thinkingEvents[0]?.data?.delta).toBe("Step 1");
+    expect(thinkingEvents[1]?.data?.delta).toBe(" and Step 2");
+    emitAgentEventSpy.mockRestore();
   });
 
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {
@@ -968,7 +1017,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getLastToolError()?.toolName).toBe("session_status");
   });
 
-  it("emits lifecycle:error event on agent_end when last assistant message was an error", async () => {
+  it("emits lifecycle:error event on agent_end when last assistant message was an error", () => {
     const { emit, onAgentEvent } = createAgentEventHarness({
       runId: "run-error",
       sessionKey: "test-session",
@@ -982,8 +1031,9 @@ describe("subscribeEmbeddedPiSession", () => {
     // Look for lifecycle:error event
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
-    expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.data?.error).toContain("API rate limit reached");
+    expect(lifecycleError).toMatchObject({
+      data: { error: expect.stringContaining("API rate limit reached") },
+    });
   });
 
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {

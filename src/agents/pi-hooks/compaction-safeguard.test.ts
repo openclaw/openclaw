@@ -113,8 +113,10 @@ const createCompactionHandler = () => {
     }),
   } as unknown as ExtensionAPI;
   compactionSafeguardExtension(mockApi);
-  expect(compactionHandler).toBeDefined();
-  return compactionHandler as CompactionHandler;
+  if (!compactionHandler) {
+    throw new Error("expected compaction safeguard handler");
+  }
+  return compactionHandler;
 };
 
 const createCompactionEvent = (params: { messageText: string; tokensBefore: number }) => ({
@@ -193,7 +195,6 @@ function expectCompactionResult(result: {
   };
 }) {
   expect(result.cancel).not.toBe(true);
-  expect(result.compaction).toBeDefined();
   if (!result.compaction) {
     throw new Error("Expected compaction result");
   }
@@ -510,7 +511,7 @@ describe("compaction-safeguard runtime registry", () => {
   it("clears entry when value is null", () => {
     const sm = {};
     setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.7 });
-    expect(getCompactionSafeguardRuntime(sm)).not.toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.7 });
     setCompactionSafeguardRuntime(sm, null);
     expect(getCompactionSafeguardRuntime(sm)).toBeNull();
   });
@@ -1299,6 +1300,45 @@ describe("compaction-safeguard recent-turn preservation", () => {
     );
     expect(droppedCall?.customInstructions).toContain("## Decisions");
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+  });
+
+  it("caps summarization reserve tokens to the model output limit", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "large history", timestamp: 1 } as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 250_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 240_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    await compactionHandler(event, mockContext);
+
+    const call = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(call?.reserveTokens).toBe(128_000);
   });
 
   it("adds Copilot IDE headers to built-in compaction summarization", async () => {
@@ -2187,7 +2227,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
   });
 
-  it("treats tool results as real conversation only when linked to a meaningful user ask", async () => {
+  it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
     expect(
       __testing.isRealConversationMessage(
         {

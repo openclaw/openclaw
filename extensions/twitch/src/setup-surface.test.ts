@@ -200,8 +200,10 @@ describe("setup surface helpers", () => {
       );
 
       // Should return config with username and clientId
-      expect(result).not.toBeNull();
-      const defaultAccount = result?.cfg.channels?.twitch?.accounts?.default as
+      if (!result) {
+        throw new Error("expected Twitch env-token setup result");
+      }
+      const defaultAccount = result.cfg.channels?.twitch?.accounts?.default as
         | { username?: string; clientId?: string }
         | undefined;
       expect(defaultAccount?.username).toBe("testbot");
@@ -237,7 +239,7 @@ describe("setup surface helpers", () => {
   });
 
   describe("defaultAccount setup resolution", () => {
-    it("reports status for the configured default account", async () => {
+    it("reports status for the configured default account", () => {
       const lines = twitchSetupWizard.status?.resolveStatusLines?.({
         cfg: {
           channels: {
@@ -259,7 +261,7 @@ describe("setup surface helpers", () => {
       expect(lines).toEqual(["Twitch (secondary): configured"]);
     });
 
-    it("reports status for the requested account override", async () => {
+    it("reports status for the requested account override", () => {
       const lines = twitchSetupWizard.status?.resolveStatusLines?.({
         cfg: {
           channels: {

@@ -53,7 +53,11 @@ describe("docker build cache layout", () => {
 
     expect(installIndex).toBeGreaterThan(-1);
     expect(copyAllIndex).toBeGreaterThan(installIndex);
-    expect(scriptsCopyIndex === -1 || scriptsCopyIndex > installIndex).toBe(true);
+    if (scriptsCopyIndex === -1) {
+      expect(scriptsCopyIndex).toBe(-1);
+    } else {
+      expect(scriptsCopyIndex).toBeGreaterThan(installIndex);
+    }
   });
 
   it("uses pnpm cache mounts in Dockerfiles that install repo dependencies", async () => {
@@ -113,9 +117,10 @@ describe("docker build cache layout", () => {
     expect(dockerfile).toContain(
       "npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit",
     );
-    expect(dockerfile).toContain(
+    expect(dockerfile).not.toContain(
       "cp -a /tmp/openclaw-prefix/lib/node_modules/. /app/node_modules/",
     );
+    expect(dockerfile).toContain("cp -a /tmp/openclaw-prefix/lib/node_modules/openclaw/. /app/");
     expect(dockerfile).toContain("rm -rf /app/node_modules/openclaw");
     expect(dockerfile).toContain("ln -sf /app /app/node_modules/openclaw");
   });

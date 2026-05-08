@@ -488,7 +488,7 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     ).toThrow("gateway.auth.token");
   });
 
-  it("does not throw for unresolved remote token ref when password is available", () => {
+  it("uses remote password when remote token ref is unresolved", () => {
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: {
         gateway: {

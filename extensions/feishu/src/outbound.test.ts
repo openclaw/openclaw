@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
@@ -75,7 +75,48 @@ vi.mock("./comment-reaction.js", () => ({
 import { feishuPlugin } from "./channel.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
-const sendText = feishuOutbound.sendText!;
+
+type FeishuSendText = NonNullable<typeof feishuOutbound.sendText>;
+type FeishuMessageAdapter = NonNullable<typeof feishuPlugin.message>;
+type FeishuMessageSender = NonNullable<FeishuMessageAdapter["send"]>;
+
+function requireFeishuSendText(): FeishuSendText {
+  const sendText = feishuOutbound.sendText;
+  if (!sendText) {
+    throw new Error("Expected Feishu outbound sendText");
+  }
+  return sendText;
+}
+
+function requireFeishuMessageAdapter(): FeishuMessageAdapter {
+  const adapter = feishuPlugin.message;
+  if (!adapter) {
+    throw new Error("Expected Feishu message adapter");
+  }
+  return adapter;
+}
+
+function requireFeishuTextSender(
+  adapter: FeishuMessageAdapter,
+): NonNullable<FeishuMessageSender["text"]> {
+  const text = adapter.send?.text;
+  if (!text) {
+    throw new Error("Expected Feishu message adapter text sender");
+  }
+  return text;
+}
+
+function requireFeishuMediaSender(
+  adapter: FeishuMessageAdapter,
+): NonNullable<FeishuMessageSender["media"]> {
+  const media = adapter.send?.media;
+  if (!media) {
+    throw new Error("Expected Feishu message adapter media sender");
+  }
+  return media;
+}
+
+const sendText = requireFeishuSendText();
 const emptyConfig: ClawdbotConfig = {};
 const cardRenderConfig: ClawdbotConfig = {
   channels: {
@@ -84,6 +125,16 @@ const cardRenderConfig: ClawdbotConfig = {
     },
   },
 };
+
+afterAll(() => {
+  vi.doUnmock("./media.js");
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./drive.js");
+  vi.doUnmock("./comment-reaction.js");
+  vi.resetModules();
+});
 
 function resetOutboundMocks() {
   vi.clearAllMocks();
@@ -123,14 +174,17 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         kind: "media",
       }),
     });
+    const adapter = requireFeishuMessageAdapter();
+    const adapterSendText = requireFeishuTextSender(adapter);
+    const adapterSendMedia = requireFeishuMediaSender(adapter);
 
     await expect(
       verifyChannelMessageAdapterCapabilityProofs({
         adapterName: "feishu",
-        adapter: feishuPlugin.message!,
+        adapter,
         proofs: {
           text: async () => {
-            const result = await feishuPlugin.message?.send?.text?.({
+            const result = await adapterSendText({
               cfg: emptyConfig,
               to: "chat:chat-1",
               text: "hello",
@@ -143,10 +197,10 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
                 accountId: "default",
               }),
             );
-            expect(result?.receipt.platformMessageIds).toEqual(["feishu-text-1"]);
+            expect(result.receipt.platformMessageIds).toEqual(["feishu-text-1"]);
           },
           media: async () => {
-            const result = await feishuPlugin.message?.send?.media?.({
+            const result = await adapterSendMedia({
               cfg: emptyConfig,
               to: "chat:chat-1",
               text: "",
@@ -160,7 +214,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
                 accountId: "default",
               }),
             );
-            expect(result?.receipt.platformMessageIds).toEqual(["feishu-media-1"]);
+            expect(result.receipt.platformMessageIds).toEqual(["feishu-media-1"]);
           },
         },
       }),
@@ -178,7 +232,6 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       throw new Error("feishuOutbound.chunker missing");
     }
 
-    expect(() => chunker("hello world", 5)).not.toThrow();
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 

@@ -1,3 +1,4 @@
+import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   ensureConfiguredBindingRouteReady,
@@ -806,6 +807,11 @@ export async function handleFeishuMessage(params: {
           runtime,
           senderOpenId: ctx.senderOpenId,
           dynamicCfg,
+          configWritesAllowed: resolveChannelConfigWrites({
+            cfg,
+            channelId: "feishu",
+            accountId: account.accountId,
+          }),
           log: (msg) => log(msg),
         });
         if (result.created) {
@@ -1351,6 +1357,8 @@ export async function handleFeishuMessage(params: {
           },
         };
         const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+          cfg,
+          agentId,
           storePath: agentStorePath,
           sessionKey: agentSessionKey,
         });
@@ -1526,6 +1534,8 @@ export async function handleFeishuMessage(params: {
         agentId: route.agentId,
       });
       const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+        cfg,
+        agentId: route.agentId,
         storePath,
         sessionKey: route.sessionKey,
       });
