@@ -71,7 +71,9 @@ function expectHandled(result: TtsCommandResult): NonNullable<TtsCommandResult> 
   return result;
 }
 
-function expectReply(result: TtsCommandResult): NonNullable<TtsCommandResult>["reply"] {
+function expectReply(
+  result: TtsCommandResult,
+): NonNullable<NonNullable<TtsCommandResult>["reply"]> {
   const handled = expectHandled(result);
   if (!handled.reply) {
     throw new Error("Expected TTS command to return a reply");
