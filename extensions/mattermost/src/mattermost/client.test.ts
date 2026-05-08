@@ -276,8 +276,17 @@ describe("updateMattermostPost", () => {
   it("sends PUT to /posts/{id}", async () => {
     const { calls } = await updatePostAndCapture({ message: "Updated" });
 
-    expect(calls[0].url).toContain("/posts/post1");
-    expect(calls[0].init?.method).toBe("PUT");
+    const firstCall = calls[0];
+    expect(firstCall).toBeDefined();
+    if (!firstCall) {
+      throw new Error("expected Mattermost update post request");
+    }
+    expect(firstCall.url).toContain("/posts/post1");
+    expect(firstCall.init).toBeDefined();
+    if (!firstCall.init) {
+      throw new Error("expected Mattermost update post request init");
+    }
+    expect(firstCall.init.method).toBe("PUT");
   });
 
   it("includes post id in the body", async () => {
