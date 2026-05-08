@@ -148,7 +148,7 @@ Exec provider safety note:
 
 - Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`.
 - Set `allowSymlinkCommand: true` only when needed for trusted package-manager paths, and pair it with `trustedDirs` (for example `["/opt/homebrew"]`).
-- On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+- On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed. On POSIX systems, provider paths normally must be owned by the gateway user's uid; root-owned system-package binaries such as `/usr/bin/op` or `/usr/bin/sops` can fail this check. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass these ownership/permission checks.
 
 ## Apply a saved plan
 
