@@ -129,7 +129,7 @@ export async function readMatrixMessages(
     if (opts.threadId) {
       res = (await client.doRequest(
         "GET",
-        `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(opts.threadId)}/${MATRIX_THREAD_RELATION_TYPE}/m.room.message`,
+        `/_matrix/client/v1/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(opts.threadId)}/${MATRIX_THREAD_RELATION_TYPE}/m.room.message`,
         {
           dir: opts.after ? "f" : "b",
           limit,

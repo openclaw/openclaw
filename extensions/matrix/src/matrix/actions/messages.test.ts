@@ -353,7 +353,9 @@ describe("matrix message actions", () => {
 
     expect(doRequest).toHaveBeenCalledWith(
       "GET",
-      expect.stringContaining("/relations/%24thread-root/m.thread/m.room.message"),
+      expect.stringContaining(
+        "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24thread-root/m.thread/m.room.message",
+      ),
       expect.objectContaining({ limit: 5 }),
     );
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-root");
