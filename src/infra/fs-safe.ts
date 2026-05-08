@@ -7,10 +7,13 @@ export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
+  ensureAbsoluteDirectory,
   findExistingAncestor,
   resolveAbsolutePathForRead,
   resolveAbsolutePathForWrite,
   type AbsolutePathSymlinkPolicy,
+  type EnsureAbsoluteDirectoryOptions,
+  type EnsureAbsoluteDirectoryResult,
   type ResolvedAbsolutePath,
   type ResolvedWritableAbsolutePath,
 } from "@openclaw/fs-safe/advanced";

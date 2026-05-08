@@ -620,6 +620,7 @@ Docs: https://docs.openclaw.ai
 - Channels/iMessage: surface the silent group-allowlist drop at default log level by emitting a one-time `warn` per account at monitor startup when `channels.imessage.groupPolicy: "allowlist"` is set without a `channels.imessage.groups` block, plus a one-time `warn` per `chat_id` when the runtime gate drops a specific group, naming the exact `channels.imessage.groups[...]` key to add to allow it. Fixes #78749. (#79190) Thanks @omarshahine.
 - WhatsApp: stop Gateway-originated outbound echoes from advancing inbound activity in `openclaw channels status`, so outbound self-sends no longer look like handled inbound messages. Fixes #79056. (#79057) Thanks @ai-hpc and @bittoby.
 - Gateway/nodes: preserve the live node registry session and invoke ownership when an older same-node WebSocket closes after reconnecting. (#78351) Thanks @samzong.
+- Browser/downloads: route explicit and managed browser download output directories through `fs-safe` validation before staging final files, so symlinked output roots are rejected before writes. (#78780) Thanks @jesse-merhi.
 
 ## 2026.5.3-1
 
