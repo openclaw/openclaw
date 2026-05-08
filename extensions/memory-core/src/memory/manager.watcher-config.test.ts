@@ -173,7 +173,7 @@ describe("memory watcher config", () => {
         extraDir,
       ]),
     );
-    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
+    expect(watchedPaths).not.toContainEqual(expect.stringContaining("*"));
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
@@ -225,7 +225,7 @@ describe("memory watcher config", () => {
     expect(watchedPaths).toEqual(
       expect.arrayContaining([path.join(workspaceDir, "MEMORY.md"), path.join(extraDir)]),
     );
-    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
+    expect(watchedPaths).not.toContainEqual(expect.stringContaining("*"));
 
     const ignored = options.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");
