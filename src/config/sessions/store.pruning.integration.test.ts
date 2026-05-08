@@ -395,7 +395,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
     await expect(fs.stat(directTranscript)).rejects.toThrow();
     const files = await fs.readdir(testDir);
-    expect(files.some((name) => name.startsWith("direct-session.jsonl.deleted."))).toBe(true);
+    const archivedDirectTranscripts = files.filter((name) =>
+      name.startsWith("direct-session.jsonl.deleted."),
+    );
+    expect(archivedDirectTranscripts.length).toBeGreaterThan(0);
   });
 
   it("sessions cleanup dry-run does not double-count artifacts already covered by disk budget", async () => {
@@ -867,7 +870,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expect(fs.stat(oldestTranscript)).rejects.toThrow();
     await expectPathExists(newestTranscript);
     const files = await fs.readdir(testDir);
-    expect(files.some((name) => name.startsWith(`${oldestSessionId}.jsonl.deleted.`))).toBe(true);
+    const archivedOldestTranscripts = files.filter((name) =>
+      name.startsWith(`${oldestSessionId}.jsonl.deleted.`),
+    );
+    expect(archivedOldestTranscripts.length).toBeGreaterThan(0);
   });
 
   it("does not archive external transcript paths when capping entries", async () => {
