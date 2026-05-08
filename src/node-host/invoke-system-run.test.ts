@@ -133,7 +133,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   function requireFirstRunCommandArgs(runCommand: MockedRunCommand): string[] {
     const args = vi.mocked(runCommand).mock.calls[0]?.[0] as string[] | undefined;
-    expect(args).toBeDefined();
     if (!args) {
       throw new Error("expected runCommand args");
     }

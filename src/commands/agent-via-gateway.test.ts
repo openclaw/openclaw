@@ -87,13 +87,12 @@ function mockLocalAgentReply(text = "local") {
   });
 }
 
-function requireFirstCallArg<T>(mock: { mock: { calls: unknown[][] } }, label: string): T {
+function requireFirstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   const [arg] = mock.mock.calls[0] ?? [];
-  expect(arg).toBeDefined();
   if (arg === undefined) {
     throw new Error(`expected ${label} call`);
   }
-  return arg as T;
+  return arg;
 }
 
 function createGatewayTimeoutError() {
@@ -151,7 +150,7 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555", timeout: "0" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireFirstCallArg<{ timeoutMs?: number }>(callGateway, "gateway");
+      const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
       expect(request.timeoutMs).toBe(2_147_000_000);
     });
   });
@@ -163,10 +162,9 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireFirstCallArg<{ params?: Record<string, unknown> }>(
-        callGateway,
-        "gateway",
-      );
+      const request = requireFirstCallArg(callGateway, "gateway") as {
+        params?: Record<string, unknown>;
+      };
       expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");

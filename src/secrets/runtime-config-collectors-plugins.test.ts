@@ -44,7 +44,6 @@ type RuntimeConfigAssignment = ResolverContext["assignments"][number];
 
 function requireAssignment(context: ResolverContext, index: number): RuntimeConfigAssignment {
   const assignment = context.assignments[index];
-  expect(assignment).toBeDefined();
   if (!assignment) {
     throw new Error(`expected runtime config assignment ${index}`);
   }
@@ -195,7 +194,6 @@ describe("collectPluginConfigAssignments", () => {
       Record<string, unknown>
     >;
     const env = mcpServers?.mcp1?.env as Record<string, unknown>;
-    expect(env).toBeDefined();
     if (!env) {
       throw new Error("expected acpx mcp env config");
     }

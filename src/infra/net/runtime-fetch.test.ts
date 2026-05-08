@@ -42,7 +42,6 @@ class MockProxyAgent {
 
 function requireFetchInit(mock: ReturnType<typeof vi.fn>): RequestInit {
   const init = mock.mock.calls[0]?.[1] as RequestInit | undefined;
-  expect(init).toBeDefined();
   if (!init) {
     throw new Error("expected runtime fetch init");
   }

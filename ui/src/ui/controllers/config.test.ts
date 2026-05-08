@@ -57,7 +57,6 @@ function createRequestWithConfigGet() {
 
 function requireRequestCall(request: ReturnType<typeof vi.fn>, index = 0): unknown[] {
   const call = request.mock.calls[index];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error("expected client request call");
   }

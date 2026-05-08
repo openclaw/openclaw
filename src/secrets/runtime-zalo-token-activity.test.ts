@@ -10,7 +10,6 @@ const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks()
 
 function requireZaloConfig(snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>) {
   const config = snapshot.config.channels?.zalo;
-  expect(config).toBeDefined();
   if (!config) {
     throw new Error("expected Zalo runtime config");
   }
