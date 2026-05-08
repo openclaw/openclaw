@@ -4326,8 +4326,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
       registry,
       message: "api.registerHttpHandler(...) was removed",
     });
-    expect(errors.some((entry) => entry.includes("api.registerHttpHandler(...) was removed"))).toBe(
-      true,
+    expect(errors).toEqual(
+      expect.arrayContaining([expect.stringContaining("api.registerHttpHandler(...) was removed")]),
     );
   });
 
@@ -6609,7 +6609,9 @@ module.exports = {
         status: "disabled",
         error: "not in allowlist",
       });
-      expect(warnings.some((message) => message.includes("plugins.allow is empty"))).toBe(false);
+      expect(warnings).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("plugins.allow is empty")]),
+      );
       expect(
         warnings.some(
           (message) =>
