@@ -551,6 +551,41 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
+
+  it("applies history limits after dropping transcript-only OpenClaw assistant artifacts", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        { role: "user", content: "older visible", timestamp: 1 },
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: "mirrored delivery",
+          timestamp: 2,
+        },
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: "injected transcript tail",
+          timestamp: 3,
+        },
+        {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude",
+          content: "real",
+          timestamp: 4,
+        },
+      ],
+      { maxMessages: 2 },
+    );
+
+    expect(result).toEqual([
+      { role: "user", content: "older visible", timestamp: 1 },
+      { role: "assistant", provider: "anthropic", model: "claude", content: "real", timestamp: 4 },
+    ]);
+  });
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {

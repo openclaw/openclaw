@@ -26,6 +26,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { filterTranscriptOnlyOpenClawAssistantMessages } from "../../config/sessions/transcript-artifacts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -137,6 +138,10 @@ let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
 let loggedSlowSessionsListCatalog = false;
 
 const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
+
+function resolveRawSessionGetWindow(limit: number): number {
+  return limit * 20 + 20;
+}
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
@@ -1847,11 +1852,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       storePath,
       entry.sessionFile,
       {
-        maxMessages: limit,
-        maxLines: limit * 20 + 20,
+        maxMessages: resolveRawSessionGetWindow(limit),
+        maxLines: resolveRawSessionGetWindow(limit),
       },
     );
-    respond(true, { messages }, undefined);
+    respond(
+      true,
+      { messages: filterTranscriptOnlyOpenClawAssistantMessages(messages).slice(-limit) },
+      undefined,
+    );
   },
   "sessions.compact": async ({ req, params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
