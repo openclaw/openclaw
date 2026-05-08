@@ -4,6 +4,7 @@
  */
 
 import crypto from "node:crypto";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { SessionEntry } from "../api.js";
@@ -282,6 +283,9 @@ export async function generateVoiceResponse(
   const timeoutMs = voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
   const runId = `voice:${callId}:${Date.now()}`;
 
+  const agentToolsAllow = resolveAgentConfig(cfg, agentId)?.tools?.allow;
+  const toolsAllow = Array.isArray(agentToolsAllow) ? agentToolsAllow : undefined;
+
   try {
     const result = await agentRuntime.runEmbeddedPiAgent({
       sessionId,
@@ -302,6 +306,7 @@ export async function generateVoiceResponse(
       lane: "voice",
       extraSystemPrompt,
       agentDir,
+      ...(toolsAllow !== undefined ? { toolsAllow } : {}),
     });
 
     const text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);

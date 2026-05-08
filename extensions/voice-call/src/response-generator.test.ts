@@ -82,6 +82,7 @@ function requireEmbeddedAgentArgs(runEmbeddedPiAgent: ReturnType<typeof vi.fn>) 
         extraSystemPrompt?: string;
         provider?: string;
         model?: string;
+        toolsAllow?: string[];
       }
     | undefined;
   if (!args?.extraSystemPrompt) {
@@ -319,5 +320,53 @@ describe("generateVoiceResponse", () => {
         sessionFile: "/tmp/openclaw/voice/sessions/session.jsonl",
       }),
     );
+  });
+
+  it("forwards agent tools.allow to the embedded runner when configured", async () => {
+    const { runtime, runEmbeddedPiAgent } = createAgentRuntime([
+      { text: '{"spoken":"Tools allowed."}' },
+    ]);
+    const coreConfig = {
+      agents: {
+        list: [{ id: "main", tools: { allow: ["read", "write", "web_search"] } }],
+      },
+    } as CoreConfig;
+
+    const result = await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+    });
+
+    expect(result.text).toBe("Tools allowed.");
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolsAllow: ["read", "write", "web_search"],
+      }),
+    );
+  });
+
+  it("omits toolsAllow from the embedded runner when agent has no tools.allow config", async () => {
+    const { runtime, runEmbeddedPiAgent } = createAgentRuntime([
+      { text: '{"spoken":"No tools restriction."}' },
+    ]);
+
+    const result = await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+    });
+
+    expect(result.text).toBe("No tools restriction.");
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.toolsAllow).toBeUndefined();
   });
 });
