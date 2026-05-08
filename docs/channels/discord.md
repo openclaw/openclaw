@@ -1184,7 +1184,10 @@ Auto-join example:
         reconnectGraceMs: 15000,
         tts: {
           provider: "openai",
-          openai: { voice: "onyx" },
+          openai: {
+            model: "gpt-4o-mini-tts",
+            voice: "cedar",
+          },
         },
       },
     },
@@ -1195,8 +1198,9 @@ Auto-join example:
 Notes:
 
 - `voice.tts` overrides `messages.tts` for voice playback only.
-- `voice.model` overrides the LLM used for Discord voice channel responses only. Leave it unset to inherit the routed agent model.
+- `voice.model` overrides the LLM used for Discord voice channel responses only. Leave it unset to inherit the routed agent model. Do not set this to `gpt-realtime-2`; Discord voice channels use STT plus TTS playback, not the OpenAI Realtime session transport.
 - STT uses `tools.media.audio`; `voice.model` does not affect transcription.
+- For an OpenAI voice on Discord playback, set `voice.tts.provider: "openai"` and choose a Text-to-speech voice under `voice.tts.openai.voice` or `voice.tts.providers.openai.voice`. `cedar` is a good masculine-sounding choice on the current OpenAI TTS model.
 - Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
 - Discord voice is opt-in for text-only configs; set `channels.discord.voice.enabled=true` (or keep an existing `channels.discord.voice` block) to enable `/vc` commands, the voice runtime, and the `GuildVoiceStates` gateway intent.

@@ -648,8 +648,21 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     | Silence duration | `...openai.silenceDurationMs` | `500` |
     | API key | `...openai.apiKey` | Falls back to `OPENAI_API_KEY` |
 
+    Available built-in Realtime voices for `gpt-realtime-2`: `alloy`, `ash`,
+    `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
+    OpenAI recommends `marin` and `cedar` for the best Realtime quality. This
+    is a separate set from the Text-to-speech voices above; do not assume a TTS
+    voice such as `fable`, `nova`, or `onyx` is valid for Realtime sessions.
+
     <Note>
     Backend OpenAI realtime bridges use the GA Realtime WebSocket session shape, which does not accept `session.temperature`. Azure OpenAI deployments remain available via `azureEndpoint` and `azureDeployment` and keep the deployment-compatible session shape. Supports bidirectional tool calling and G.711 u-law audio.
+    </Note>
+
+    <Note>
+    Realtime voice is selected when the session is created. OpenAI allows most
+    session fields to change later, but the voice cannot be changed after the
+    model has emitted audio in that session. OpenClaw currently exposes the
+    built-in Realtime voice ids as strings.
     </Note>
 
     <Note>
