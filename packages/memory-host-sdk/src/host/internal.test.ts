@@ -133,6 +133,10 @@ describe("memory host SDK package internals", () => {
 
     const entry = expectFileEntry(await buildFileEntry(imagePath, tmpDir, multimodal));
     const built = expectMultimodalIndexingChunk(await buildMultimodalChunkForIndexing(entry));
+    expect(built.chunk.embeddingInput).toBeDefined();
+    if (!built.chunk.embeddingInput) {
+      throw new Error("Expected multimodal chunk embedding input");
+    }
     expect(built.chunk.embeddingInput.parts).toEqual([
       { type: "text", text: "Image file: diagram.png" },
       expect.objectContaining({ type: "inline-data", mimeType: "image/png" }),

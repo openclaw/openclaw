@@ -673,23 +673,28 @@ describe("runCliAgent spawn path", () => {
 
   it("cancels the managed CLI run when the abort signal fires", async () => {
     const abortController = new AbortController();
-    let resolveWait!: (value: {
-      reason:
-        | "manual-cancel"
-        | "overall-timeout"
-        | "no-output-timeout"
-        | "spawn-error"
-        | "signal"
-        | "exit";
-      exitCode: number | null;
-      exitSignal: NodeJS.Signals | number | null;
-      durationMs: number;
-      stdout: string;
-      stderr: string;
-      timedOut: boolean;
-      noOutputTimedOut: boolean;
-    }) => void;
+    let resolveWait:
+      | ((value: {
+          reason:
+            | "manual-cancel"
+            | "overall-timeout"
+            | "no-output-timeout"
+            | "spawn-error"
+            | "signal"
+            | "exit";
+          exitCode: number | null;
+          exitSignal: NodeJS.Signals | number | null;
+          durationMs: number;
+          stdout: string;
+          stderr: string;
+          timedOut: boolean;
+          noOutputTimedOut: boolean;
+        }) => void)
+      | undefined;
     const cancel = vi.fn((reason?: string) => {
+      if (!resolveWait) {
+        throw new Error("Expected managed CLI wait resolver to be initialized");
+      }
       resolveWait({
         reason: reason === "manual-cancel" ? "manual-cancel" : "signal",
         exitCode: null,
@@ -1971,16 +1976,18 @@ describe("runCliAgent spawn path", () => {
   it("does not surface stale stderr after a later Claude live exit", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let stderrListener: ((chunk: string) => void) | undefined;
-    let resolveExit!: (value: {
-      reason: "exit";
-      exitCode: number;
-      exitSignal: null;
-      durationMs: number;
-      stdout: string;
-      stderr: string;
-      timedOut: false;
-      noOutputTimedOut: false;
-    }) => void;
+    let resolveExit:
+      | ((value: {
+          reason: "exit";
+          exitCode: number;
+          exitSignal: null;
+          durationMs: number;
+          stdout: string;
+          stderr: string;
+          timedOut: false;
+          noOutputTimedOut: false;
+        }) => void)
+      | undefined;
     const wait = new Promise<{
       reason: "exit";
       exitCode: number;
@@ -2013,6 +2020,9 @@ describe("runCliAgent spawn path", () => {
           return;
         }
         cb?.();
+        if (!resolveExit) {
+          throw new Error("Expected Claude live exit resolver to be initialized");
+        }
         resolveExit({
           reason: "exit",
           exitCode: 1,
