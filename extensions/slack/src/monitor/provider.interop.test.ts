@@ -163,7 +163,8 @@ describe("createSlackBoltApp", () => {
     expect(receiverArgs).toEqual({
       appToken: "xapp-test",
       autoReconnectEnabled: true,
-      clientPingTimeout: 15_000,
+      clientPingTimeout: 30_000,
+      serverPingTimeout: 60_000,
       logger: receiverLogger,
       installerOptions: {
         clientOptions,

@@ -17,7 +17,13 @@ type SlackSocketModeLogger = SlackSdkLogger & {
 };
 type SlackSocketDisconnect = Awaited<ReturnType<typeof waitForSlackSocketDisconnect>>;
 
-const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
+// Defaults raised above the bolt-socket-mode upstream defaults (5s/30s) so the
+// SocketModeReceiver does not tear down the websocket when the Node event loop
+// is blocked >5s under cron CPU load. With autoReconnectEnabled disabled, the
+// new connection is treated by Slack as fresh and queued events are not
+// replayed — silently losing DMs and channel mentions for personal-app agents.
+const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 30_000;
+const OPENCLAW_SLACK_SERVER_PING_TIMEOUT_MS = 60_000;
 const OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT = "unable_to_socket_mode_start";
 const OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY = "__openclawNativeReconnectFailureObserver";
 const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from the server";
@@ -319,9 +325,8 @@ export function createSlackBoltApp(params: {
       clientOptions: params.clientOptions,
     },
   };
-  if (params.socketMode?.serverPingTimeout !== undefined) {
-    socketModeReceiverOptions.serverPingTimeout = params.socketMode.serverPingTimeout;
-  }
+  socketModeReceiverOptions.serverPingTimeout =
+    params.socketMode?.serverPingTimeout ?? OPENCLAW_SLACK_SERVER_PING_TIMEOUT_MS;
   if (params.socketMode?.pingPongLoggingEnabled !== undefined) {
     socketModeReceiverOptions.pingPongLoggingEnabled = params.socketMode.pingPongLoggingEnabled;
   }
