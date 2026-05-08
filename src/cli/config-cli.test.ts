@@ -529,7 +529,7 @@ describe("config cli", () => {
 
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
 
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config invalid at"));
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("config is invalid"));
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining("agents.defaults.suppressToolErrorWarnings"),
       );
