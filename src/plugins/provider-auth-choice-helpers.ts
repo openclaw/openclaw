@@ -89,12 +89,86 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
   return next as T;
 }
 
+function normalizeAgentModelConfigForWrite(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeAgentModelRefForConfig(value);
+  }
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  const next: Record<string, unknown> = { ...value };
+  if (typeof next.primary === "string") {
+    next.primary = normalizeAgentModelRefForConfig(next.primary);
+  }
+  if (Array.isArray(next.fallbacks)) {
+    next.fallbacks = next.fallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+  }
+  return next;
+}
+
+function mergeModelEntryConfig(existing: unknown, incoming: unknown): unknown {
+  if (!isPlainRecord(existing) || !isPlainRecord(incoming)) {
+    return incoming;
+  }
+
+  const existingParams = isPlainRecord(existing.params) ? existing.params : undefined;
+  const incomingParams = isPlainRecord(incoming.params) ? incoming.params : undefined;
+  return {
+    ...existing,
+    ...incoming,
+    ...(existingParams || incomingParams
+      ? { params: { ...existingParams, ...incomingParams } }
+      : undefined),
+  };
+}
+
+function normalizeAgentModelMapForWrite(value: unknown): unknown {
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const normalizedKey = normalizeAgentModelRefForConfig(key);
+    next[normalizedKey] = mergeModelEntryConfig(next[normalizedKey], entry);
+  }
+  return next;
+}
+
+function normalizeConfigModelRefsForWrite(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults;
+  if (!defaults) {
+    return cfg;
+  }
+
+  const nextDefaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {
+    ...defaults,
+  };
+  if (defaults.model !== undefined) {
+    nextDefaults.model = normalizeAgentModelConfigForWrite(defaults.model) as typeof defaults.model;
+  }
+  if (defaults.models !== undefined) {
+    nextDefaults.models = normalizeAgentModelMapForWrite(defaults.models) as typeof defaults.models;
+  }
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: nextDefaults,
+    },
+  };
+}
+
 export function applyProviderAuthConfigPatch(
   cfg: OpenClawConfig,
   patch: unknown,
   options?: { replaceDefaultModels?: boolean },
 ): OpenClawConfig {
-  const merged = mergeConfigPatch(cfg, patch);
+  const merged = normalizeConfigModelRefsForWrite(mergeConfigPatch(cfg, patch));
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {
     return merged;
   }
@@ -105,7 +179,7 @@ export function applyProviderAuthConfigPatch(
     return merged;
   }
 
-  return {
+  return normalizeConfigModelRefsForWrite({
     ...merged,
     agents: {
       ...merged.agents,
@@ -117,7 +191,7 @@ export function applyProviderAuthConfigPatch(
         >["models"],
       },
     },
-  };
+  });
 }
 
 export function applyDefaultModel(
