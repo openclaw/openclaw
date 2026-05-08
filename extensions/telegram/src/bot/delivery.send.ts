@@ -68,7 +68,8 @@ export async function sendTelegramWithThreadFallback<T>(params: {
   send: (effectiveParams: Record<string, unknown>) => Promise<T>;
   shouldLog?: (err: unknown) => boolean;
 }): Promise<T> {
-  const allowThreadlessRetry = params.thread?.scope === "dm";
+  const allowThreadlessRetry =
+    params.thread?.scope === "dm" || params.thread?.scope === "forum";
   const hasThreadId = hasMessageThreadIdParam(params.requestParams);
   const hasNativeQuote = getTelegramNativeQuoteReplyMessageId(params.requestParams) != null;
   const shouldSuppressFirstErrorLog = (err: unknown) =>
