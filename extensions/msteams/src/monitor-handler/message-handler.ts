@@ -204,11 +204,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       maxInlineBytes: mediaMaxBytes,
       maxInlineTotalBytes: mediaMaxBytes,
     });
-    // If text and attachments are both empty but activity.value is present,
-    // this is a messageBack card action (Action.Submit). Serialize the value
-    // payload so it reaches the agent instead of being dropped. (#60952)
-    // Accept any truthy value — object, string, or primitive — since
-    // messageBack payloads are not guaranteed to be objects.
+    // Forward messageBack card action payloads instead of dropping empty text.
     let rawBody = text || attachmentPlaceholder;
     if (!rawBody && activity.value != null) {
       try {
@@ -221,7 +217,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           });
         }
       } catch {
-        log.warn("failed to serialize messageBack value payload");
+        log.warn?.("failed to serialize messageBack value payload");
       }
     }
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
