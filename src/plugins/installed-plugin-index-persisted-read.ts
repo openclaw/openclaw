@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { tryReadJsonSync } from "../infra/json-files.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";

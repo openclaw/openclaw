@@ -203,6 +203,10 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "webhook.error":
       record.channel = event.channel;
       break;
+    case "sqlite.wal.checkpoint.error":
+      record.source = event.databaseLabel;
+      assignReasonCode(record, event.error);
+      break;
     case "message.queued":
       record.channel = event.channel;
       record.source = event.source;

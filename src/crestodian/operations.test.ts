@@ -14,14 +14,6 @@ import {
 
 type TestConfig = Record<string, unknown>;
 
-function parseLastJsonLine(raw: string): unknown {
-  const lastLine = raw.trim().split("\n").at(-1);
-  if (!lastLine) {
-    throw new Error("Expected audit log to contain at least one JSON line");
-  }
-  return JSON.parse(lastLine) as unknown;
-}
-
 const mockConfig = vi.hoisted(() => {
   const initial = {};
   const state = {

@@ -980,7 +980,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     history.mockClear();
-    seedExistingSession(prepared!.ctxPayload.SessionKey!);
+    seedExistingSession(prepared.ctxPayload.SessionKey!);
     const existing = await prepareMessageWith(
       slackCtx,
       account,

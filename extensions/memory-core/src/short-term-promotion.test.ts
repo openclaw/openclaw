@@ -801,7 +801,7 @@ describe("short-term promotion", () => {
       expect(ranked[0].score).toBeGreaterThan(ranked[1].score);
 
       const phaseStore = await readPhaseSignalStore(workspaceDir);
-      expect(phaseStore.entries[boostedKey!]).toMatchObject({
+      expect(phaseStore.entries[boostedKey]).toMatchObject({
         lightHits: 1,
         remHits: 1,
       });

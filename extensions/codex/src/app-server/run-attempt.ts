@@ -41,7 +41,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   buildCodexAppInventoryCacheKey,
   defaultCodexAppInventoryCache,

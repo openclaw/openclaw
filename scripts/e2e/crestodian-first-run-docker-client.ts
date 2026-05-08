@@ -162,9 +162,9 @@ async function main() {
   );
 
   const auditEntries = (await listCrestodianAuditEntriesForTests()).map((entry) => entry.value);
-  const auditOperations = auditEntries.map((entry) => entry.operation);
+  const auditOperations = new Set(auditEntries.map((entry) => entry.operation));
   for (const operation of spec.auditOperations) {
-    assert(auditOperations.includes(operation), `${operation} audit entry missing`);
+    assert(auditOperations.has(operation), `${operation} audit entry missing`);
   }
 
   console.log("Crestodian first-run Docker E2E passed");

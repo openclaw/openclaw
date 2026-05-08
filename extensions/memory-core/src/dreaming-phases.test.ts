@@ -2389,8 +2389,8 @@ describe("memory-core dreaming phases", () => {
     });
 
     const phaseSignalStore = await readPhaseSignalStoreForTest(workspaceDir, nowMs);
-    expect(phaseSignalStore.entries[liveKey!]).toMatchObject({ remHits: 1 });
-    expect(phaseSignalStore.entries[staleKey!]).toBeUndefined();
+    expect(phaseSignalStore.entries[liveKey]).toMatchObject({ remHits: 1 });
+    expect(phaseSignalStore.entries[staleKey]).toBeUndefined();
 
     const remOutput = await fs.readFile(
       path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
