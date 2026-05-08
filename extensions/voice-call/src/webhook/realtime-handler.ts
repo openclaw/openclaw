@@ -75,6 +75,22 @@ function buildGreetingInstructions(
     : `${intro} "${trimmedGreeting}"`;
 }
 
+function readStringField(
+  source: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function readSpeakableToolResultText(result: unknown): string | undefined {
   if (typeof result === "string") {
     return result.trim() || undefined;
@@ -221,6 +237,9 @@ type PendingStreamToken = {
   from?: string;
   to?: string;
   direction?: "inbound" | "outbound";
+  provider?: "telnyx" | "twilio";
+  providerCallId?: string;
+  callId?: string;
 };
 
 type CallRegistration = {
@@ -329,10 +348,24 @@ export class RealtimeCallHandler {
     return `${this.publicPathPrefix}${normalizePath(this.config.streamPath ?? "/voice/stream/realtime")}`;
   }
 
+  buildProviderStreamUrl(input: {
+    provider: "telnyx" | "twilio";
+    providerCallId?: string;
+    callId?: string;
+    from?: string;
+    to?: string;
+    direction?: "inbound" | "outbound";
+  }): string {
+    const token = this.issueStreamToken(input);
+    const host = this.publicOrigin || DEFAULT_HOST;
+    return `wss://${host}${this.getStreamPathPattern()}/${token}`;
+  }
+
   buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
     const host = this.publicOrigin || req.headers.host || DEFAULT_HOST;
     const rawDirection = params?.get("Direction");
     const token = this.issueStreamToken({
+      provider: "twilio",
       from: params?.get("From") ?? undefined,
       to: params?.get("To") ?? undefined,
       direction: rawDirection?.startsWith("outbound") ? "outbound" : "inbound",
@@ -384,8 +417,12 @@ export class RealtimeCallHandler {
                 ? (msg.start as Record<string, unknown>)
                 : undefined;
             const streamSid =
-              typeof startData?.streamSid === "string" ? startData.streamSid : "unknown";
-            const callSid = typeof startData?.callSid === "string" ? startData.callSid : "unknown";
+              readStringField(startData, ["streamSid", "stream_id", "streamId"]) ?? "unknown";
+            const callSid =
+              readStringField(startData, ["callSid", "call_control_id", "callControlId"]) ??
+              readStringField(msg, ["call_control_id", "callControlId"]) ??
+              callerMeta.providerCallId ??
+              "unknown";
             activeCallSid = callSid;
             const nextBridge = this.handleCall(streamSid, callSid, ws, callerMeta);
             if (!nextBridge) {
@@ -587,6 +624,7 @@ export class RealtimeCallHandler {
       return true;
     };
     const audioPacer = new RealtimeTwilioAudioPacer({
+      provider: callerMeta.provider,
       streamSid,
       sendJson,
       onBackpressure: () => {

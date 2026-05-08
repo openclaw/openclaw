@@ -20,6 +20,7 @@ import {
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import type { TelnyxProvider } from "./providers/telnyx.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
@@ -458,6 +459,17 @@ export async function createVoiceCallRuntime(params: {
     }
     if (publicUrl && realtimeProvider) {
       webhookServer.getRealtimeHandler()?.setPublicUrl(publicUrl);
+    }
+    if (provider.name === "telnyx" && realtimeProvider) {
+      const realtimeHandler = webhookServer.getRealtimeHandler();
+      if (realtimeHandler) {
+        (provider as TelnyxProvider).setRealtimeStreamUrlFactory((input) =>
+          realtimeHandler.buildProviderStreamUrl({
+            provider: "telnyx",
+            providerCallId: input.providerCallId,
+          }),
+        );
+      }
     }
 
     if (provider.name === "twilio" && config.streaming?.enabled) {

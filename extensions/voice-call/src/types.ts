@@ -260,6 +260,11 @@ export type StopListeningInput = {
   providerCallId: ProviderCallId;
 };
 
+export type StartRealtimeStreamInput = {
+  callId: CallId;
+  providerCallId: ProviderCallId;
+};
+
 // -----------------------------------------------------------------------------
 // Call Status Verification (used on restart to verify persisted calls)
 // -----------------------------------------------------------------------------

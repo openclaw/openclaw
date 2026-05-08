@@ -146,6 +146,75 @@ describe("RealtimeCallHandler path routing", () => {
     );
   });
 
+  it("issues Telnyx provider stream URLs without TwiML", async () => {
+    const createBridge = vi.fn(() => makeBridge());
+    const processEvent = vi.fn();
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCallByProviderCallId: vi.fn(
+          (): CallRecord => ({
+            callId: "call-1",
+            providerCallId: "telnyx-call-control-1",
+            provider: "telnyx",
+            direction: "inbound",
+            state: "answered",
+            from: "+15550009999",
+            to: "+15550001234",
+            startedAt: Date.now(),
+            transcript: [],
+            processedEventIds: [],
+            metadata: {},
+          }),
+        ),
+      },
+      provider: { name: "telnyx" },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.setPublicUrl("https://public.example/voice/webhook");
+    const wsUrl = handler.buildProviderStreamUrl({
+      provider: "telnyx",
+      providerCallId: "telnyx-call-control-1",
+    });
+    const path = new URL(wsUrl).pathname;
+    const server = await startUpgradeWsServer({
+      urlPath: path,
+      onUpgrade: (request, socket, head) => {
+        handler.handleWebSocketUpgrade(request, socket, head);
+      },
+    });
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: {
+              stream_id: "stream-1",
+              call_control_id: "telnyx-call-control-1",
+            },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.initiated",
+            providerCallId: "telnyx-call-control-1",
+          }),
+        );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("normalizes Twilio outbound realtime directions", async () => {
     let callbacks:
       | {

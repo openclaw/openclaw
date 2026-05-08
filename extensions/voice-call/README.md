@@ -37,7 +37,7 @@ Put under `plugins.entries.voice-call.config`:
 
 ```json5
 {
-  provider: "twilio", // or "telnyx" | "plivo" | "mock"
+  provider: "telnyx", // or "twilio" | "plivo" | "mock"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
   sessionScope: "per-phone", // or "per-call"
@@ -99,6 +99,7 @@ Put under `plugins.entries.voice-call.config`:
 
 Notes:
 
+- Telnyx is the recommended production provider for Voice Call. Twilio and Plivo remain supported for existing installs.
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
@@ -161,5 +162,6 @@ Actions:
 - While a Twilio stream is active, playback does not fall back to TwiML `<Say>`; stream-TTS failures fail the playback request.
 - Outbound conversation calls suppress barge-in only while the initial greeting is actively speaking, then re-enable normal interruption.
 - Twilio stream disconnect auto-end uses a short grace window so quick reconnects do not end the call.
+- Realtime voice supports Twilio `<Connect><Stream>` and Telnyx Call Control `streaming_start` media streams. Telnyx realtime uses bidirectional PCMU/RTP streaming into the same realtime voice bridge.
 - Realtime provider selection is generic. Configure `streaming.provider` / `realtime.provider` and put provider-owned options under `providers.<id>`.
 - Runtime fallback still accepts the old voice-call keys for now, but migration is a doctor step and the compat shim is scheduled to go away in a future release.

@@ -11,6 +11,7 @@ import type {
   WebhookParseOptions,
   ProviderWebhookParseResult,
   StartListeningInput,
+  StartRealtimeStreamInput,
   StopListeningInput,
   WebhookContext,
   WebhookVerificationResult,
@@ -71,6 +72,13 @@ export interface VoiceCallProvider {
    * The provider should handle streaming if supported.
    */
   playTts(input: PlayTtsInput): Promise<void>;
+
+  /**
+   * Start a provider media stream for realtime voice bridges.
+   * Providers that connect streams via webhook response (for example Twilio
+   * <Connect><Stream>) do not need to implement this hook.
+   */
+  startRealtimeStream?: (input: StartRealtimeStreamInput) => Promise<void>;
 
   /**
    * Send DTMF digits to an active call.

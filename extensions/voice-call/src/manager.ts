@@ -377,6 +377,7 @@ export class CallManager {
     const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
     if (mode === "conversation") {
       if (this.config.realtime.enabled) {
+        this.maybeStartProviderRealtimeStream(call);
         return;
       }
       const shouldWaitForStreamConnect =
@@ -397,6 +398,37 @@ export class CallManager {
         `[voice-call] Failed to speak initial message for call ${call.callId}: ${formatErrorMessage(err)}`,
       );
     });
+  }
+
+  private maybeStartProviderRealtimeStream(call: CallRecord): void {
+    if (!this.provider || this.provider.name === "twilio" || !call.providerCallId) {
+      return;
+    }
+    if (typeof this.provider.startRealtimeStream !== "function") {
+      return;
+    }
+    const metadata = call.metadata ?? {};
+    if (metadata.realtimeStreamStartedAt || metadata.realtimeStreamStartPending) {
+      return;
+    }
+    metadata.realtimeStreamStartPending = true;
+    call.metadata = metadata;
+    void this.provider
+      .startRealtimeStream({ callId: call.callId, providerCallId: call.providerCallId })
+      .then(() => {
+        const nextMetadata = call.metadata ?? {};
+        delete nextMetadata.realtimeStreamStartPending;
+        nextMetadata.realtimeStreamStartedAt = Date.now();
+        call.metadata = nextMetadata;
+      })
+      .catch((err) => {
+        const nextMetadata = call.metadata ?? {};
+        delete nextMetadata.realtimeStreamStartPending;
+        call.metadata = nextMetadata;
+        console.warn(
+          `[voice-call] Failed to start realtime stream for call ${call.callId}: ${formatErrorMessage(err)}`,
+        );
+      });
   }
 
   /**

@@ -35,6 +35,7 @@ export class RealtimeTwilioAudioPacer {
     private readonly params: {
       maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
+      provider?: "telnyx" | "twilio";
       sendJson: RealtimeTwilioAudioPacerSendJson;
       streamSid: string;
     },
@@ -77,7 +78,9 @@ export class RealtimeTwilioAudioPacer {
     this.clearTimer();
     this.queue = [];
     this.queuedAudioBytes = 0;
-    this.params.sendJson({ event: "clear", streamSid: this.params.streamSid });
+    if (this.params.provider !== "telnyx") {
+      this.params.sendJson({ event: "clear", streamSid: this.params.streamSid });
+    }
     return clearedAudioBytes;
   }
 
@@ -121,18 +124,28 @@ export class RealtimeTwilioAudioPacer {
     let sent = true;
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-      sent = this.params.sendJson({
-        event: "media",
-        streamSid: this.params.streamSid,
-        media: { payload: item.chunk.toString("base64") },
-      });
+      sent = this.params.sendJson(
+        this.params.provider === "telnyx"
+          ? {
+              event: "media",
+              media: { payload: item.chunk.toString("base64") },
+            }
+          : {
+              event: "media",
+              streamSid: this.params.streamSid,
+              media: { payload: item.chunk.toString("base64") },
+            },
+      );
       delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
     } else {
-      sent = this.params.sendJson({
-        event: "mark",
-        streamSid: this.params.streamSid,
-        mark: { name: item.name },
-      });
+      sent =
+        this.params.provider === "telnyx"
+          ? true
+          : this.params.sendJson({
+              event: "mark",
+              streamSid: this.params.streamSid,
+              mark: { name: item.name },
+            });
     }
 
     if (!sent) {

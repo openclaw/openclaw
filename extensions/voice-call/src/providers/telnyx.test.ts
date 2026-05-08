@@ -302,6 +302,51 @@ describe("TelnyxProvider answer control", () => {
   });
 });
 
+describe("TelnyxProvider realtime streaming", () => {
+  it("starts bidirectional PCMU media streaming with the configured realtime URL", async () => {
+    const release = vi.fn(async () => {});
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      release,
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+    provider.setRealtimeStreamUrlFactory(
+      (input) => `wss://voice.example.com/voice/stream/realtime/${input.providerCallId}`,
+    );
+
+    await provider.startRealtimeStream({
+      callId: "call-1",
+      providerCallId: "call-control-1",
+    });
+
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.telnyx.com/v2/calls/call-control-1/actions/streaming_start",
+        auditContext: "voice-call.telnyx.api",
+        policy: { allowedHostnames: ["api.telnyx.com"] },
+        init: expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            command_id: "openclaw-realtime-stream-call-1",
+            stream_url: "wss://voice.example.com/voice/stream/realtime/call-control-1",
+            stream_track: "both_tracks",
+            stream_codec: "PCMU",
+            stream_bidirectional_mode: "rtp",
+            stream_bidirectional_codec: "PCMU",
+            stream_bidirectional_sampling_rate: 8000,
+            stream_bidirectional_target_legs: "both",
+          }),
+        }),
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("TelnyxProvider speak control", () => {
   it("passes custom Telnyx voice ids to the speak action", async () => {
     const release = vi.fn(async () => {});

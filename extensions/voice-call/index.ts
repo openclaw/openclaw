@@ -25,6 +25,13 @@ import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-op
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
 const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
 
+function resolveDefaultVoiceCallProvider(enabled: boolean): "telnyx" | "mock" | undefined {
+  if (!enabled) {
+    return undefined;
+  }
+  return process.env.TELNYX_API_KEY && process.env.TELNYX_CONNECTION_ID ? "telnyx" : "mock";
+}
+
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
     const normalized = normalizeVoiceCallLegacyConfigInput(value);
@@ -32,13 +39,13 @@ const voiceCallConfigSchema = {
     return parseVoiceCallPluginConfig({
       ...normalized,
       enabled,
-      provider: normalized.provider ?? (enabled ? "mock" : undefined),
+      provider: normalized.provider ?? resolveDefaultVoiceCallProvider(enabled),
     });
   },
   uiHints: {
     provider: {
       label: "Provider",
-      help: "Use twilio, telnyx, or mock for dev/no-network.",
+      help: "Use telnyx for production voice AI; twilio/plivo remain supported; mock is for dev/no-network.",
     },
     fromNumber: { label: "From Number", placeholder: "+15550001234" },
     toNumber: { label: "Default To Number", placeholder: "+15550001234" },

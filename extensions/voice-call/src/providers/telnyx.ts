@@ -12,6 +12,7 @@ import type {
   PlayTtsInput,
   ProviderWebhookParseResult,
   StartListeningInput,
+  StartRealtimeStreamInput,
   StopListeningInput,
   WebhookContext,
   WebhookParseOptions,
@@ -56,6 +57,7 @@ export class TelnyxProvider implements VoiceCallProvider {
   private readonly options: TelnyxProviderOptions;
   private readonly baseUrl = "https://api.telnyx.com/v2";
   private readonly apiHost = "api.telnyx.com";
+  private realtimeStreamUrlFactory: ((input: StartRealtimeStreamInput) => string) | undefined;
 
   constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
     if (!config.apiKey) {
@@ -299,6 +301,30 @@ export class TelnyxProvider implements VoiceCallProvider {
       payload: input.text,
       voice: input.voice || "female",
       language: input.locale || "en-US",
+    });
+  }
+
+  setRealtimeStreamUrlFactory(factory: (input: StartRealtimeStreamInput) => string): void {
+    this.realtimeStreamUrlFactory = factory;
+  }
+
+  /**
+   * Start a bidirectional Telnyx media stream for realtime voice.
+   */
+  async startRealtimeStream(input: StartRealtimeStreamInput): Promise<void> {
+    if (!this.realtimeStreamUrlFactory) {
+      throw new Error("Telnyx realtime stream URL factory is not configured");
+    }
+    const streamUrl = this.realtimeStreamUrlFactory(input);
+    await this.apiRequest(`/calls/${input.providerCallId}/actions/streaming_start`, {
+      command_id: `openclaw-realtime-stream-${input.callId}`,
+      stream_url: streamUrl,
+      stream_track: "both_tracks",
+      stream_codec: "PCMU",
+      stream_bidirectional_mode: "rtp",
+      stream_bidirectional_codec: "PCMU",
+      stream_bidirectional_sampling_rate: 8000,
+      stream_bidirectional_target_legs: "both",
     });
   }
 
