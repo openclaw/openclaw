@@ -110,7 +110,11 @@ describe("realtime voice agent consult runtime", () => {
     });
 
     expect(result).toEqual({ text: "Speak this." });
-    expect(sessionStore["voice:15550001234"]?.sessionId).toEqual(expect.stringMatching(/\S/));
+    const voiceSession = sessionStore["voice:15550001234"];
+    if (!voiceSession) {
+      throw new Error("Expected voice consult session entry");
+    }
+    expect(voiceSession.sessionId).toEqual(expect.stringMatching(/\S/));
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "voice:15550001234",
