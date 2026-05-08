@@ -14,6 +14,7 @@ import { setMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsSsoTokenStore } from "./sso-token-store.js";
 import { detectMSTeamsLegacyStateMigrations } from "./state-migrations.js";
 import { msteamsRuntimeStub } from "./test-runtime.js";
+import { loadDelegatedTokens } from "./token.js";
 
 const tempDirs: string[] = [];
 
@@ -156,6 +157,30 @@ describe("Microsoft Teams legacy state migrations", () => {
     ).resolves.toMatchObject({
       token: "token-1",
       updatedAt: "2026-04-10T00:00:00.000Z",
+    });
+    expect(fs.existsSync(tokenFile)).toBe(false);
+  });
+
+  it("imports delegated token files into SQLite plugin state", async () => {
+    const stateDir = makeStateDir();
+    const tokenFile = path.join(stateDir, "msteams-delegated.json");
+    fs.writeFileSync(
+      tokenFile,
+      `${JSON.stringify({
+        accessToken: "access-token",
+        refreshToken: "refresh-token",
+        expiresAt: 1_900_000_000_000,
+        scopes: ["ChatMessage.Send", "offline_access"],
+        userPrincipalName: "user@example.com",
+      })}\n`,
+    );
+
+    await applyPlan(stateDir, "Microsoft Teams delegated token");
+
+    expect(loadDelegatedTokens()).toMatchObject({
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      userPrincipalName: "user@example.com",
     });
     expect(fs.existsSync(tokenFile)).toBe(false);
   });

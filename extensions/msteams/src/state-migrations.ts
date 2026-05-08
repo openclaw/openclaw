@@ -12,6 +12,11 @@ import {
   MSTEAMS_SSO_TOKEN_STORE_FILENAME,
   parseMSTeamsSsoTokenStoreData,
 } from "./sso-token-store.js";
+import {
+  MSTEAMS_DELEGATED_TOKEN_FILENAME,
+  MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+  parseMSTeamsDelegatedTokens,
+} from "./token.js";
 
 const MSTEAMS_PLUGIN_ID = "msteams";
 const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
@@ -150,6 +155,26 @@ function importSsoTokens(filePath: string, env: NodeJS.ProcessEnv): ImportResult
   }
   fs.rmSync(filePath, { force: true });
   return { imported, warnings: [] };
+}
+
+function importDelegatedTokens(filePath: string, env: NodeJS.ProcessEnv): ImportResult {
+  const tokens = parseMSTeamsDelegatedTokens(readJsonFile(filePath));
+  if (!tokens) {
+    return {
+      imported: 0,
+      warnings: [`Skipped invalid Microsoft Teams delegated token file: ${filePath}`],
+    };
+  }
+  upsertPluginStateMigrationEntry({
+    pluginId: MSTEAMS_PLUGIN_ID,
+    namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+    key: "current",
+    value: tokens,
+    createdAt: Date.now(),
+    env,
+  });
+  fs.rmSync(filePath, { force: true });
+  return { imported: 1, warnings: [] };
 }
 
 function importPendingUploads(filePath: string, env: NodeJS.ProcessEnv): ImportResult {
@@ -342,6 +367,17 @@ export function detectMSTeamsLegacyStateMigrations(params: {
         sourcePath: ssoTokens,
         namespace: MSTEAMS_SSO_TOKEN_NAMESPACE,
         importSource: importSsoTokens,
+      }),
+    );
+  }
+  const delegatedTokens = path.join(params.stateDir, MSTEAMS_DELEGATED_TOKEN_FILENAME);
+  if (fs.existsSync(delegatedTokens)) {
+    plans.push(
+      pluginStatePlan({
+        label: "Microsoft Teams delegated token",
+        sourcePath: delegatedTokens,
+        namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+        importSource: importDelegatedTokens,
       }),
     );
   }

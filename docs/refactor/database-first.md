@@ -274,9 +274,10 @@ The remaining cleanup is mostly consolidation and deletion:
 - The generic plugin SDK persistent-dedupe helper no longer exposes file-shaped
   options. Callers provide SQLite scope keys and durable dedupe rows live in
   shared plugin state.
-- Microsoft Teams SSO tokens moved from a locked JSON file to SQLite plugin
-  state. Doctor imports `msteams-sso-tokens.json`, rebuilds canonical token
-  keys from payloads, and removes the source file.
+- Microsoft Teams SSO and delegated OAuth tokens moved from locked JSON files
+  to SQLite plugin state. Doctor imports `msteams-sso-tokens.json` and
+  `msteams-delegated.json`, rebuilds canonical SSO token keys from payloads,
+  and removes the source files.
 - Matrix sync cache state moved from `bot-storage.json` to SQLite plugin
   state. Doctor imports legacy raw or wrapped sync payloads and removes the
   source file.
@@ -603,10 +604,11 @@ Move these into the global database:
   `*.telegram-sent-messages.json`, `*.telegram-topic-names.json`, and
   `thread-bindings-*.json`; the Telegram doctor/setup migration imports and
   removes the legacy files.
-- Microsoft Teams conversations, polls, pending uploads, and feedback
-  learnings now use SQLite plugin state/blob namespaces
-  (`conversations`, `polls`, `pending-uploads`, `feedback-learnings`) instead
-  of `msteams-conversations.json`, `msteams-polls.json`,
+- Microsoft Teams conversations, polls, delegated tokens, pending uploads, and
+  feedback learnings now use SQLite plugin state/blob namespaces
+  (`conversations`, `polls`, `delegated-tokens`, `pending-uploads`,
+  `feedback-learnings`) instead of `msteams-conversations.json`,
+  `msteams-polls.json`, `msteams-delegated.json`,
   `msteams-pending-uploads.json`, and `*.learnings.json`; the Microsoft Teams
   doctor/setup migration imports and removes the legacy files.
 - Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
@@ -1012,6 +1014,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - Telegram `thread-bindings-*.json`
 - Microsoft Teams `msteams-conversations.json`
 - Microsoft Teams `msteams-polls.json`
+- Microsoft Teams `msteams-delegated.json`
 - Microsoft Teams `msteams-pending-uploads.json`
 - Microsoft Teams `*.learnings.json`
 - Matrix `thread-bindings.json`

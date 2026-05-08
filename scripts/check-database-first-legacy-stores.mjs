@@ -98,6 +98,7 @@ const legacyStoreMarkers = [
     pattern: /\bmsteams-pending-uploads\.json\b/u,
   },
   { label: "Microsoft Teams SSO token JSON", pattern: /\bmsteams-sso-tokens\.json\b/u },
+  { label: "Microsoft Teams delegated token JSON", pattern: /\bmsteams-delegated\.json\b/u },
   { label: "Microsoft Teams feedback learnings JSON", pattern: /\.learnings\.json\b/u },
   { label: "Matrix sync store JSON", pattern: /\bbot-storage\.json\b/u },
   { label: "Matrix storage metadata JSON", pattern: /\bstorage-meta\.json\b/u },
