@@ -359,7 +359,7 @@ describe("before_tool_call hook integration for client tools", () => {
   });
 
   it("preserves client tool source order when hooks resolve out of order", async () => {
-    let releaseFirstHook!: () => void;
+    let releaseFirstHook: (() => void) | undefined;
     const firstHookGate = new Promise<void>((resolve) => {
       releaseFirstHook = resolve;
     });
@@ -445,6 +445,9 @@ describe("before_tool_call hook integration for client tools", () => {
       { name: "second_tool", completed: true },
     ]);
 
+    if (!releaseFirstHook) {
+      throw new Error("Expected first before-tool-call hook release callback to be initialized");
+    }
     releaseFirstHook();
     await firstRun;
 
