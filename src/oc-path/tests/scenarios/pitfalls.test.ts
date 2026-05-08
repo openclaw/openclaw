@@ -26,6 +26,7 @@ import {
   setOcPath,
 } from '../../index.js';
 import { parseJsonc } from '../../jsonc/parse.js';
+import { parseJsonl } from '../../jsonl/parse.js';
 import { parseYaml } from '../../yaml/parse.js';
 
 // ---------- Encoding pitfalls --------------------------------------------
@@ -374,6 +375,33 @@ describe('wave-23 pitfalls — performance & limits', () => {
   it('P-032 path at the cap parses cleanly', () => {
     const justUnder = 'oc://X/' + 'a'.repeat(MAX_PATH_LENGTH - 'oc://X/'.length);
     expect(() => parseOcPath(justUnder)).not.toThrow();
+  });
+
+  it('P-032 formatOcPath enforces the same cap on output', () => {
+    // Symmetric upper bound — without this guard, a struct whose
+    // formatted form crosses the cap would emit a string parseOcPath
+    // would immediately reject (round-trip break).
+    expect(() =>
+      formatOcPath({ file: 'X', section: 'a'.repeat(MAX_PATH_LENGTH) }),
+    ).toThrow(/Formatted oc:\/\/ exceeds/);
+  });
+
+  it('walker depth cap fires on jsonl `**` against a long log', () => {
+    // JSONL is the kind most likely to grow unbounded in production
+    // (forensics, replay, audit). Pin the outer-walker guard so a
+    // pattern that exceeds MAX_TRAVERSAL_DEPTH doesn't slip past the
+    // jsonl driver into per-line walkJsonc dispatch.
+    const lines: string[] = [];
+    // Build a deeply nested JSONL line: {"a":{"a":{"a":{...}}}}
+    let nested = '"x"';
+    for (let i = 0; i < MAX_TRAVERSAL_DEPTH + 50; i++) {
+      nested = `{"a":${nested}}`;
+    }
+    lines.push(nested);
+    const { ast } = parseJsonl(lines.join('\n'));
+    expect(() => findOcPaths(ast, parseOcPath('oc://log.jsonl/L1/**'))).toThrow(
+      /MAX_TRAVERSAL_DEPTH/,
+    );
   });
 });
 

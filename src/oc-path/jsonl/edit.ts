@@ -154,12 +154,36 @@ function replaceAt(
 }
 
 function pickLineIndex(ast: JsonlAst, addr: string): number {
+  // Mirrors the line-address grammar handled by resolveJsonlOcPath's
+  // pickLine and find.ts's pickLine — the four shapes a JSONL line can
+  // be addressed by. Without `$first` and `-N` here, a path that
+  // resolves cleanly under those tokens would silently unresolve on
+  // the edit path (resolve↔write asymmetry).
   if (addr === '$last') {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];
       if (l !== undefined && l.kind === 'value') {return i;}
     }
     return -1;
+  }
+  if (addr === '$first') {
+    for (let i = 0; i < ast.lines.length; i++) {
+      const l = ast.lines[i];
+      if (l !== undefined && l.kind === 'value') {return i;}
+    }
+    return -1;
+  }
+  if (/^-\d+$/.test(addr)) {
+    // -N selects the Nth-from-last value line. Walk only value lines
+    // so blank/malformed lines don't shift the count (consistent with
+    // resolve.ts's pickLine).
+    const valueIndices: number[] = [];
+    for (let i = 0; i < ast.lines.length; i++) {
+      const l = ast.lines[i];
+      if (l !== undefined && l.kind === 'value') {valueIndices.push(i);}
+    }
+    const n = valueIndices.length + Number(addr);
+    return n >= 0 && n < valueIndices.length ? (valueIndices[n] ?? -1) : -1;
   }
   const m = /^L(\d+)$/.exec(addr);
   if (m === null || m[1] === undefined) {return -1;}

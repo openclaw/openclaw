@@ -438,6 +438,19 @@ function walkJsonl(
   walked: readonly SlotSub[],
   onMatch: (subs: readonly SlotSub[]) => void,
 ): void {
+  // Bound recursion at the line-enumeration layer — without this guard,
+  // a `**` pattern over a 100k-line forensic log dispatches per-line
+  // walkJsonc (which has its own guard) but the JSONL outer driver has
+  // no per-walker depth bound. JSONL session logs are exactly the kind
+  // of file that grows unbounded in production (replay, audit), so
+  // defense-in-depth at the outer layer mirrors the yaml/jsonc walkers.
+  if (walked.length > MAX_TRAVERSAL_DEPTH) {
+    throw new OcPathError(
+      `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological JSONL pattern`,
+      '',
+      'OC_PATH_DEPTH_EXCEEDED',
+    );
+  }
   if (i >= subs.length) {
     onMatch(walked);
     return;
@@ -483,6 +496,18 @@ function walkJsonlInsideLine(
   walked: readonly SlotSub[],
   onMatch: (subs: readonly SlotSub[]) => void,
 ): void {
+  // Mirror the outer guard so a hostile pattern that bypasses the
+  // top-of-walkJsonl path (e.g., reached via direct call from a future
+  // helper) still lands on the depth bound. walkJsonc inside has its
+  // own bound, but the slot-sub list extends across both layers — the
+  // depth check must consider the full `walked` history.
+  if (walked.length > MAX_TRAVERSAL_DEPTH) {
+    throw new OcPathError(
+      `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological JSONL pattern`,
+      '',
+      'OC_PATH_DEPTH_EXCEEDED',
+    );
+  }
   if (i >= subs.length) {
     onMatch(walked);
     return;

@@ -373,6 +373,19 @@ export function formatOcPath(path: OcPath): string {
   if (path.item !== undefined) {out += '/' + formatSlot(path.item, 'item');}
   if (path.field !== undefined) {out += '/' + formatSlot(path.field, 'field');}
   if (path.session !== undefined) {out += '?session=' + path.session;}
+  // Symmetric upper bound with parseOcPath's MAX_PATH_LENGTH cap. Without
+  // this, a struct whose formatted form exceeds the cap would emit a
+  // string `parseOcPath` immediately rejects — silently breaking the
+  // round-trip contract and surprising every consumer that buffers /
+  // logs / column-aligns by the cap (audit events, error messages,
+  // editor breadcrumbs).
+  if (out.length > MAX_PATH_LENGTH) {
+    throw new OcPathError(
+      `Formatted oc:// exceeds ${MAX_PATH_LENGTH} bytes (length: ${out.length})`,
+      out.slice(0, 80) + '…',
+      'OC_PATH_TOO_LONG',
+    );
+  }
   return out;
 }
 
