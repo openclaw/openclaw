@@ -28,7 +28,7 @@ function makeParams(): RunEmbeddedPiAgentParams {
     model: "gpt-5.5",
     prompt: "hello",
     runId: "run-1",
-    sessionFile: "/tmp/openclaw-session.jsonl",
+    sessionFile: "sqlite-transcript://agent-1/session-1.jsonl",
     sessionId: "session-1",
     sessionKey: "session-key-1",
     timeoutMs: 1_000,
