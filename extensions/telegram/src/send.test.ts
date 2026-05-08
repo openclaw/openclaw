@@ -884,10 +884,8 @@ describe("sendMessageTelegram", () => {
       caption: undefined,
     });
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(sendMessage.mock.calls.filter((call) => call[2]?.parse_mode !== "HTML")).toEqual([]);
-    expect(sendMessage.mock.calls.filter((call) => String(call[1] ?? "").length > 4000)).toEqual(
-      [],
-    );
+    expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
+    expect(sendMessage.mock.calls.every((call) => String(call[1] ?? "").length <= 4000)).toBe(true);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toContain("<b>");
     expect(res.messageId).toBe("74");
   });
@@ -2004,7 +2002,7 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledTimes(4);
     const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.filter((call) => String(call?.[1] ?? "").includes("<"))).toEqual([]);
+    expect(plainFallbackCalls.some((call) => String(call?.[1] ?? "").includes("<"))).toBe(false);
     expect(res.messageId).toBe("91");
   });
 
@@ -2035,7 +2033,7 @@ describe("sendMessageTelegram", () => {
     expect(String(sendMessage.mock.calls[0]?.[1] ?? "")).toMatch(/^&/);
     const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.filter((call) => String(call?.[1] ?? "").length === 0)).toEqual([]);
+    expect(plainFallbackCalls.every((call) => String(call?.[1] ?? "").length > 0)).toBe(true);
     expect(res.messageId).toBe("93");
   });
 
@@ -2059,7 +2057,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sendMessage.mock.calls.filter((call) => call[2]?.parse_mode !== undefined)).toEqual([]);
+    expect(sendMessage.mock.calls.some((call) => call[2]?.parse_mode !== undefined)).toBe(false);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
     expect(res.messageId).toBe("96");
   });
