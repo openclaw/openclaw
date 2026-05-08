@@ -841,6 +841,8 @@ async function agentCommandInternal(
           config: cfg,
           agentId: sessionAgentId,
           sessionKey,
+          authProfileId,
+          authProfileProvider: profile?.provider,
         });
         const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
           provider: providerForAuthProfileValidation,

@@ -154,6 +154,7 @@ const installRunEmbeddedMocks = () => {
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 let SessionManager: typeof import("@mariozechner/pi-coding-agent").SessionManager;
+let replaceRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").replaceRuntimeAuthProfileStoreSnapshots;
 let e2eWorkspace: EmbeddedPiRunnerTestWorkspace | undefined;
 let agentDir: string;
 let workspaceDir: string;
@@ -166,6 +167,7 @@ beforeAll(async () => {
   installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
   ({ SessionManager } = await import("@mariozechner/pi-coding-agent"));
+  ({ replaceRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles.js"));
   e2eWorkspace = await createEmbeddedPiRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
 }, 180_000);
@@ -188,6 +190,12 @@ beforeEach(() => {
   ensureOpenClawModelsJsonMock.mockReset();
   ensureOpenClawModelsJsonMock.mockResolvedValue({ wrote: false });
   loggerWarnMock.mockReset();
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      agentDir,
+      store: { version: 1, profiles: {} },
+    },
+  ]);
   refreshRuntimeAuthOnFirstPromptError = false;
   runEmbeddedAttemptMock.mockImplementation(async () => {
     throw new Error("unexpected extra runEmbeddedAttempt call");
@@ -293,6 +301,63 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
 };
 
 describe("runEmbeddedPiAgent", () => {
+  it("passes an auto-selected direct OpenAI API-key profile into harness policy", async () => {
+    const { selectAgentHarness } = await import("./harness/selection.js");
+    vi.mocked(selectAgentHarness).mockClear();
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-test",
+            },
+          },
+        },
+      },
+    ]);
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const openAIProvider = cfg.models?.providers?.openai;
+    if (openAIProvider) {
+      openAIProvider.baseUrl = "https://api.openai.com/v1";
+      delete openAIProvider.apiKey;
+    }
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "auto-openai-api-key",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("auto-openai-api-key"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(selectAgentHarness).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        authProfileId: "openai:default",
+        authProfileProvider: "openai",
+      }),
+    );
+  });
+
   it("skips models.json generation when dynamic model resolution succeeds", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig([]);

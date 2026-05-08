@@ -30,6 +30,28 @@ function openAIProviderUsesCustomBaseUrl(config: OpenClawConfig | undefined): bo
   return !isOfficialOpenAIBaseUrl(config?.models?.providers?.openai?.baseUrl);
 }
 
+function isDirectOpenAIAuthProfileMode(value: unknown): boolean {
+  const mode = normalizeOptionalLowercaseString(value);
+  return mode === "api_key" || mode === "api-key" || mode === "token";
+}
+
+function isDirectOpenAIAuthProfileId(params: {
+  config: OpenClawConfig | undefined;
+  authProfileId: string | undefined;
+  authProfileProvider?: string;
+}): boolean {
+  const provider =
+    normalizeOptionalLowercaseString(params.authProfileProvider) ??
+    normalizeOptionalLowercaseString(params.authProfileId?.split(":", 1)[0]);
+  if (!isOpenAIProvider(provider)) {
+    return false;
+  }
+  const profileConfig = params.authProfileId
+    ? params.config?.auth?.profiles?.[params.authProfileId]
+    : undefined;
+  return profileConfig ? isDirectOpenAIAuthProfileMode(profileConfig.mode) : true;
+}
+
 export function isOpenAIProvider(provider: string | undefined): boolean {
   return normalizeProviderId(provider ?? "") === OPENAI_PROVIDER_ID;
 }
@@ -38,11 +60,46 @@ export function isOpenAICodexProvider(provider: string | undefined): boolean {
   return normalizeProviderId(provider ?? "") === OPENAI_CODEX_PROVIDER_ID;
 }
 
+export function openAIProviderUsesPiRuntimeForDirectAuthProfile(params: {
+  provider?: string;
+  config?: OpenClawConfig;
+  authProfileId?: string;
+  authProfileProvider?: string;
+}): boolean {
+  if (!isOpenAIProvider(params.provider) || openAIProviderUsesCustomBaseUrl(params.config)) {
+    return false;
+  }
+  const selectedAuthProvider =
+    normalizeOptionalLowercaseString(params.authProfileProvider) ??
+    normalizeOptionalLowercaseString(params.authProfileId?.split(":", 1)[0]);
+  if (isOpenAICodexProvider(selectedAuthProvider)) {
+    return false;
+  }
+  if (
+    isDirectOpenAIAuthProfileId({
+      config: params.config,
+      authProfileId: params.authProfileId,
+      authProfileProvider: params.authProfileProvider,
+    })
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function openAIProviderUsesCodexRuntimeByDefault(params: {
   provider?: string;
   config?: OpenClawConfig;
+  authProfileId?: string;
+  authProfileProvider?: string;
 }): boolean {
-  return isOpenAIProvider(params.provider) && !openAIProviderUsesCustomBaseUrl(params.config);
+  if (!isOpenAIProvider(params.provider) || openAIProviderUsesCustomBaseUrl(params.config)) {
+    return false;
+  }
+  if (openAIProviderUsesPiRuntimeForDirectAuthProfile(params)) {
+    return false;
+  }
+  return true;
 }
 
 export function parseModelRefProvider(value: unknown): string | undefined {
@@ -68,7 +125,7 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
   if (provider === OPENAI_CODEX_PROVIDER_ID) {
     return true;
   }
-  return provider === OPENAI_PROVIDER_ID && !openAIProviderUsesCustomBaseUrl(params.config);
+  return openAIProviderUsesCodexRuntimeByDefault({ provider, config: params.config });
 }
 
 export function hasOpenAICodexAuthProfileOverride(value: unknown): boolean {

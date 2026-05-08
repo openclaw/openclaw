@@ -4,6 +4,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
@@ -1607,17 +1608,24 @@ export async function runAgentTurnWithFallback(params: {
               model,
             },
           );
+          const runAuthProfileProvider = runBaseParams.authProfileId
+            ? ensureAuthProfileStore(effectiveRun.agentDir, {
+                allowKeychainPrompt: false,
+              }).profiles[runBaseParams.authProfileId]?.provider
+            : undefined;
           const agentHarnessPolicy = resolveAgentHarnessPolicy({
             provider,
             modelId: model,
             config: runtimeConfig,
             agentId: params.followupRun.run.agentId,
             sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+            authProfileId: runBaseParams.authProfileId,
+            authProfileProvider: runAuthProfileProvider,
           });
           const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
             provider,
             harnessRuntime: agentHarnessPolicy.runtime,
-            authProfileProvider: runBaseParams.authProfileId?.split(":", 1)[0],
+            authProfileProvider: runAuthProfileProvider,
             authProfileId: runBaseParams.authProfileId,
             config: runtimeConfig,
             workspaceDir: params.followupRun.run.workspaceDir,

@@ -3,6 +3,7 @@ import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
 import {
   isOpenAICodexProvider,
   openAIProviderUsesCodexRuntimeByDefault,
+  openAIProviderUsesPiRuntimeForDirectAuthProfile,
 } from "../openai-codex-routing.js";
 import {
   normalizeEmbeddedAgentRuntime,
@@ -20,6 +21,8 @@ export function resolveAgentHarnessPolicy(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  authProfileId?: string;
+  authProfileProvider?: string;
   env?: NodeJS.ProcessEnv;
 }): AgentHarnessPolicy {
   const configured = resolveModelRuntimePolicy({
@@ -36,7 +39,25 @@ export function resolveAgentHarnessPolicy(params: {
       ? normalizeEmbeddedAgentRuntime(configuredRuntime)
       : "auto";
   if (
-    openAIProviderUsesCodexRuntimeByDefault({ provider: params.provider, config: params.config })
+    openAIProviderUsesPiRuntimeForDirectAuthProfile({
+      provider: params.provider,
+      config: params.config,
+      authProfileId: params.authProfileId,
+      authProfileProvider: params.authProfileProvider,
+    })
+  ) {
+    if (runtime === "auto") {
+      return { runtime: "pi", runtimeSource };
+    }
+    return { runtime, runtimeSource };
+  }
+  if (
+    openAIProviderUsesCodexRuntimeByDefault({
+      provider: params.provider,
+      config: params.config,
+      authProfileId: params.authProfileId,
+      authProfileProvider: params.authProfileProvider,
+    })
   ) {
     if (runtime === "auto") {
       return { runtime: "codex", runtimeSource };

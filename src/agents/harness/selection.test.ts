@@ -209,6 +209,117 @@ describe("runAgentHarnessAttempt", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
+  it("keeps Codex eligible for unselected OpenAI API-key profile metadata", async () => {
+    registerSuccessfulCodexHarness();
+    const config: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(config),
+        provider: "openai",
+        modelId: "gpt-5.4",
+      }),
+    ).resolves.toMatchObject({
+      sessionIdUsed: "codex",
+    });
+    expect(piRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps selected OpenAI API-key profile runs on the PI transport", async () => {
+    registerSuccessfulCodexHarness();
+    const config: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(config),
+        provider: "openai",
+        modelId: "gpt-5.4",
+        authProfileId: "openai:default",
+      }),
+    ).resolves.toMatchObject({
+      sessionIdUsed: "pi",
+    });
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps mixed OpenAI Codex-profile runs on the Codex harness", async () => {
+    registerSuccessfulCodexHarness();
+    const config: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+          },
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(config),
+        provider: "openai",
+        modelId: "gpt-5.4",
+        authProfileId: "openai-codex:default",
+      }),
+    ).resolves.toMatchObject({
+      sessionIdUsed: "codex",
+    });
+    expect(piRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps selected direct OpenAI profiles on PI in mixed auth configs", async () => {
+    registerSuccessfulCodexHarness();
+    const config: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+          },
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+    };
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(config),
+        provider: "openai",
+        modelId: "gpt-5.4",
+        authProfileId: "openai:default",
+      }),
+    ).resolves.toMatchObject({
+      sessionIdUsed: "pi",
+    });
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("honors explicit PI runtime for OpenAI agent model runs", async () => {
     await expect(
       runAgentHarnessAttempt({

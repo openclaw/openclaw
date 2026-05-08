@@ -8,6 +8,8 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  authProfileId?: string;
+  authProfileProvider?: string;
   workspaceDir: string;
 }): Promise<void> {
   const policy = resolveAgentHarnessPolicy({
@@ -16,6 +18,8 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    authProfileId: params.authProfileId,
+    authProfileProvider: params.authProfileProvider,
   });
   if (policy.runtime !== "codex") {
     return;

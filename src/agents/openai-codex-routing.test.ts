@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
   modelSelectionShouldEnsureCodexPlugin,
+  openAIProviderUsesPiRuntimeForDirectAuthProfile,
   openAIProviderUsesCodexRuntimeByDefault,
   resolveOpenAIRuntimeProviderForPi,
 } from "./openai-codex-routing.js";
@@ -32,6 +33,66 @@ describe("OpenAI Codex routing policy", () => {
 
     expect(openAIProviderUsesCodexRuntimeByDefault({ provider: "openai", config })).toBe(false);
     expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(false);
+  });
+
+  it("keeps Codex as fallback for unselected OpenAI API-key profile metadata", () => {
+    const config = {
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(openAIProviderUsesPiRuntimeForDirectAuthProfile({ provider: "openai", config })).toBe(
+      false,
+    );
+    expect(openAIProviderUsesCodexRuntimeByDefault({ provider: "openai", config })).toBe(true);
+    expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(true);
+    expect(
+      openAIProviderUsesCodexRuntimeByDefault({
+        provider: "openai",
+        config,
+        authProfileId: "openai:default",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps Codex eligible when direct and Codex OpenAI profiles are both configured", () => {
+    const config = {
+      auth: {
+        profiles: {
+          "openai:default": {
+            provider: "openai",
+            mode: "api_key",
+          },
+          "openai-codex:default": {
+            provider: "openai-codex",
+            mode: "oauth",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(openAIProviderUsesCodexRuntimeByDefault({ provider: "openai", config })).toBe(true);
+    expect(
+      openAIProviderUsesCodexRuntimeByDefault({
+        provider: "openai",
+        config,
+        authProfileId: "openai:default",
+      }),
+    ).toBe(false);
+    expect(
+      openAIProviderUsesCodexRuntimeByDefault({
+        provider: "openai",
+        config,
+        authProfileId: "openai-codex:default",
+      }),
+    ).toBe(true);
+    expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(true);
   });
 
   it("maps explicit PI plus Codex auth profile to the legacy PI Codex-auth transport", () => {

@@ -61,6 +61,7 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { isOpenAIProvider, isOpenAICodexProvider } from "../openai-codex-routing.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -186,6 +187,47 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function isDirectOpenAIStoredProfile(
+  credential: AuthProfileStore["profiles"][string] | undefined,
+): credential is AuthProfileStore["profiles"][string] {
+  return (
+    isOpenAIProvider(credential?.provider) &&
+    (credential?.type === "api_key" || credential?.type === "token")
+  );
+}
+
+function resolvePreHarnessDirectOpenAIAuthProfile(params: {
+  cfg?: RunEmbeddedPiAgentParams["config"];
+  store: AuthProfileStore;
+  provider: string;
+}): { authProfileId?: string; authProfileProvider?: string } {
+  if (!isOpenAIProvider(params.provider)) {
+    return {};
+  }
+  const codexProfileId = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store: params.store,
+    provider: "openai-codex",
+  })[0]?.trim();
+  const codexProfile = codexProfileId ? params.store.profiles[codexProfileId] : undefined;
+  if (isOpenAICodexProvider(codexProfile?.provider)) {
+    return {};
+  }
+  const authProfileId = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store: params.store,
+    provider: "openai",
+  })[0]?.trim();
+  const credential = authProfileId ? params.store.profiles[authProfileId] : undefined;
+  if (!isDirectOpenAIStoredProfile(credential)) {
+    return {};
+  }
+  return {
+    authProfileId,
+    authProfileProvider: credential.provider,
+  };
+}
 
 function resolveHarnessContextConfigProvider(params: {
   provider: string;
@@ -501,12 +543,36 @@ export async function runEmbeddedPiAgent(
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
       startupStages.mark("hooks");
+      const requestedProfileId = params.authProfileId?.trim();
+      const preHarnessAuthStore =
+        requestedProfileId || isOpenAIProvider(provider)
+          ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+              allowKeychainPrompt: false,
+            })
+          : undefined;
+      const requestedAuthProfileProvider = requestedProfileId
+        ? preHarnessAuthStore?.profiles[requestedProfileId]?.provider
+        : undefined;
+      const harnessPolicyAuthProfile = requestedProfileId
+        ? {
+            authProfileId: requestedProfileId,
+            authProfileProvider: requestedAuthProfileProvider,
+          }
+        : preHarnessAuthStore
+          ? resolvePreHarnessDirectOpenAIAuthProfile({
+              cfg: params.config,
+              store: preHarnessAuthStore,
+              provider,
+            })
+          : {};
       await ensureSelectedAgentHarnessPlugin({
         provider,
         modelId,
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        authProfileId: harnessPolicyAuthProfile.authProfileId,
+        authProfileProvider: harnessPolicyAuthProfile.authProfileProvider,
         workspaceDir: resolvedWorkspace,
       });
       const agentHarness = selectAgentHarness({
@@ -516,6 +582,8 @@ export async function runEmbeddedPiAgent(
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         agentHarnessId: params.agentHarnessId,
+        authProfileId: harnessPolicyAuthProfile.authProfileId,
+        authProfileProvider: harnessPolicyAuthProfile.authProfileProvider,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
       const dynamicModelResolution = await resolveModelAsync(
@@ -573,7 +641,6 @@ export async function runEmbeddedPiAgent(
         : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
             allowKeychainPrompt: false,
           });
-      const requestedProfileId = params.authProfileId?.trim();
       const resolvePluginHarnessPreferredProfileId = (): string | undefined => {
         if (requestedProfileId) {
           return requestedProfileId;
@@ -1206,6 +1273,9 @@ export async function runEmbeddedPiAgent(
             ),
             resolvedApiKey: resolvedStreamApiKey,
             authProfileId: lastProfileId,
+            authProfileProvider: lastProfileId
+              ? authStore.profiles[lastProfileId]?.provider
+              : undefined,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayState: accumulatedReplayState,
             authStorage,

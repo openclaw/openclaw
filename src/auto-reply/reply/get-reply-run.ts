@@ -274,6 +274,51 @@ function loadSessionStoreRuntime() {
   return sessionStoreRuntimeLoader.load();
 }
 
+async function resolveAuthProfileProviderFromStore(params: {
+  agentDir: string;
+  profileId: string | undefined;
+}): Promise<string | undefined> {
+  const profileId = params.profileId?.trim();
+  if (!profileId) {
+    return undefined;
+  }
+  const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
+  return ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  }).profiles[profileId]?.provider;
+}
+
+async function resolveDirectOpenAIStoreProfileForPolicy(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  provider: string;
+}): Promise<{ authProfileId?: string; authProfileProvider?: string }> {
+  if (params.provider.trim().toLowerCase() !== "openai") {
+    return {};
+  }
+  const { ensureAuthProfileStore, resolveAuthProfileOrder } =
+    await import("../../agents/auth-profiles.js");
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  if (resolveAuthProfileOrder({ cfg: params.cfg, store, provider: "openai-codex" }).length > 0) {
+    return {};
+  }
+  const authProfileId = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store,
+    provider: "openai",
+  })[0];
+  const credential = authProfileId ? store.profiles[authProfileId] : undefined;
+  if (credential?.type !== "api_key" && credential?.type !== "token") {
+    return {};
+  }
+  return {
+    authProfileId,
+    authProfileProvider: credential.provider,
+  };
+}
+
 function stripPromptThinkingDirectives(body: string): string {
   return body
     .split("\n")
@@ -859,6 +904,29 @@ export async function runPreparedReply(
     );
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
+  const sessionAuthProfileOverride = preparedSessionState.sessionEntry?.authProfileOverride;
+  const sessionAuthProfileOverrideProvider =
+    useFastReplyRuntime || !sessionAuthProfileOverride
+      ? undefined
+      : await traceRunPhase("reply.resolve_auth_profile_provider", () =>
+          resolveAuthProfileProviderFromStore({
+            agentDir,
+            profileId: sessionAuthProfileOverride,
+          }),
+        );
+  const policyAuthProfile =
+    useFastReplyRuntime || sessionAuthProfileOverride
+      ? {
+          authProfileId: sessionAuthProfileOverride,
+          authProfileProvider: sessionAuthProfileOverrideProvider,
+        }
+      : await traceRunPhase("reply.resolve_policy_auth_profile", () =>
+          resolveDirectOpenAIStoreProfileForPolicy({
+            cfg,
+            agentDir,
+            provider,
+          }),
+        );
   const agentHarnessPolicy = useFastReplyRuntime
     ? undefined
     : resolveAgentHarnessPolicy({
@@ -867,6 +935,8 @@ export async function runPreparedReply(
         config: cfg,
         agentId,
         sessionKey: runtimePolicySessionKey,
+        authProfileId: policyAuthProfile.authProfileId,
+        authProfileProvider: policyAuthProfile.authProfileProvider,
       });
   const resolveAcceptedAuthProfileProviders = () =>
     agentHarnessPolicy

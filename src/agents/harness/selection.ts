@@ -62,6 +62,8 @@ export function selectAgentHarness(params: {
   agentId?: string;
   sessionKey?: string;
   agentHarnessId?: string;
+  authProfileId?: string;
+  authProfileProvider?: string;
 }): AgentHarness {
   return selectAgentHarnessDecision(params).harness;
 }
@@ -73,6 +75,8 @@ function selectAgentHarnessDecision(params: {
   agentId?: string;
   sessionKey?: string;
   agentHarnessId?: string;
+  authProfileId?: string;
+  authProfileProvider?: string;
 }): AgentHarnessSelectionDecision {
   const policy = resolveAgentHarnessPolicy(params);
   // PI is intentionally not part of the plugin candidate list. Explicit plugin
@@ -147,6 +151,8 @@ export async function runAgentHarnessAttempt(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     agentHarnessId: params.agentHarnessId,
+    authProfileId: params.authProfileId,
+    authProfileProvider: params.authProfileProvider,
   });
   const harness = selection.harness;
   logAgentHarnessSelection(selection, {

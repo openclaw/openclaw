@@ -425,6 +425,11 @@ export function runAgentAttempt(params: {
         config: params.cfg,
         agentId: params.sessionAgentId,
         sessionKey: params.sessionKey ?? params.sessionId,
+        authProfileId: params.sessionEntry?.authProfileOverride,
+        authProfileProvider: resolveProfileProviderFromStore({
+          agentDir: params.agentDir,
+          profileId: params.sessionEntry?.authProfileOverride,
+        }),
       });
   const harnessAuthSelection = resolveHarnessAuthProfileSelection({
     config: params.cfg,

@@ -240,6 +240,8 @@ export async function createModelSelectionState(params: {
       config: cfg,
       agentId: params.agentId,
       sessionKey,
+      authProfileId: sessionEntry.authProfileOverride,
+      authProfileProvider: profileProvider,
     });
     const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
       provider,

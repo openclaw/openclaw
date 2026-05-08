@@ -128,6 +128,20 @@ function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
   );
 }
 
+async function resolveStoredAuthProfileProvider(params: {
+  agentDir: string;
+  profileId: string | undefined;
+}): Promise<string | undefined> {
+  const profileId = params.profileId?.trim();
+  if (!profileId) {
+    return undefined;
+  }
+  const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
+  return ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  }).profiles[profileId]?.provider;
+}
+
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -724,9 +738,13 @@ async function prepareCronRunContext(params: {
     job: input.job,
     cronSession,
   });
-  const hasSessionAuthProfileOverride = Boolean(
-    cronSession.sessionEntry.authProfileOverride?.trim(),
-  );
+  const sessionAuthProfileOverride =
+    cronSession.sessionEntry.authProfileOverride?.trim() || undefined;
+  const sessionAuthProfileOverrideProvider = await resolveStoredAuthProfileProvider({
+    agentDir,
+    profileId: sessionAuthProfileOverride,
+  });
+  const hasSessionAuthProfileOverride = Boolean(sessionAuthProfileOverride);
   const authProfileId =
     !hasSessionAuthProfileOverride &&
     !hasConfiguredAuthProfiles(cfgWithAgentDefaults) &&
@@ -745,6 +763,8 @@ async function prepareCronRunContext(params: {
               config: cfgWithAgentDefaults,
               agentId,
               sessionKey: agentSessionKey,
+              authProfileId: sessionAuthProfileOverride,
+              authProfileProvider: sessionAuthProfileOverrideProvider,
             }).runtime,
           }),
           agentDir,

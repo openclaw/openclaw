@@ -33,6 +33,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   resolvedApiKey?: string;
   /** Auth profile resolved for this attempt's provider/model call. */
   authProfileId?: string;
+  /** Provider recorded on the resolved auth profile, for profile ids without provider prefixes. */
+  authProfileProvider?: string;
   /** Source for the resolved auth profile (user-locked or automatic). */
   authProfileIdSource?: "auto" | "user";
   provider: string;

@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { resolveAgentHarnessPolicy } from "./harness/selection.js";
@@ -243,6 +244,12 @@ async function resolveRuntimeModel(params: {
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
   }
+  const sessionAuthProfileId = params.sessionEntry?.authProfileOverride;
+  const sessionAuthProfileProvider = sessionAuthProfileId
+    ? ensureAuthProfileStore(params.agentDir, {
+        allowKeychainPrompt: false,
+      }).profiles[sessionAuthProfileId]?.provider
+    : undefined;
 
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: params.cfg,
@@ -255,6 +262,8 @@ async function resolveRuntimeModel(params: {
         config: params.cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        authProfileId: sessionAuthProfileId,
+        authProfileProvider: sessionAuthProfileProvider,
       }).runtime,
     }),
     agentDir: params.agentDir,
