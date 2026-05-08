@@ -116,6 +116,39 @@ export type IMessageAccountConfig = {
       systemPrompt?: string;
     }
   >;
+  /**
+   * Catchup: replay inbound messages that arrived in `chat.db` while the
+   * gateway was offline (crash, restart, mac sleep). Disabled by default.
+   * See https://github.com/openclaw/openclaw/issues/78649.
+   */
+  catchup?: {
+    /** Master switch. Default `false`. */
+    enabled?: boolean;
+    /**
+     * Maximum age of replayable messages in minutes. Messages older than
+     * `now - maxAgeMinutes` are skipped even when the cursor is older.
+     * Defense against runaway replay (the inverse of #62761). Default
+     * `120` (2 h). Clamp `[1, 720]`.
+     */
+    maxAgeMinutes?: number;
+    /**
+     * Maximum messages to replay per catchup pass. Default `50`. Clamp
+     * `[1, 500]`.
+     */
+    perRunLimit?: number;
+    /**
+     * On first run when no cursor exists, look back this many minutes.
+     * Default `30`.
+     */
+    firstRunLookbackMinutes?: number;
+    /**
+     * Per-message retry ceiling. After this many consecutive failed
+     * dispatch attempts against the same message guid, catchup logs a
+     * `warn` and force-advances the cursor past the wedged message.
+     * Default `10`. Clamp `[1, 1000]`.
+     */
+    maxFailureRetries?: number;
+  };
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
