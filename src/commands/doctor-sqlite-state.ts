@@ -33,6 +33,10 @@ import {
   legacyDeviceIdentityFileExists,
 } from "../infra/device-identity.js";
 import {
+  importLegacyExecApprovalsFileToSqlite,
+  legacyExecApprovalsFileExists,
+} from "../infra/exec-approvals-migration.js";
+import {
   importLegacyPairingStateFilesToSqlite,
   legacyPairingStateFilesExist,
 } from "../infra/pairing-files.js";
@@ -94,6 +98,7 @@ type LegacyStateProbe = {
   deviceAuth: boolean;
   deviceBootstrap: boolean;
   devicePairing: boolean;
+  execApprovals: boolean;
   nodePairing: boolean;
   nodeHostConfig: boolean;
   channelPairing: boolean;
@@ -128,6 +133,7 @@ async function probeLegacyRuntimeStateFiles(params: {
     deviceAuth: legacyDeviceAuthFileExists(env),
     deviceBootstrap: await legacyDeviceBootstrapFileExists(baseDir),
     devicePairing: await legacyPairingStateFilesExist({ baseDir, subdir: "devices" }),
+    execApprovals: legacyExecApprovalsFileExists(env),
     nodePairing: await legacyPairingStateFilesExist({ baseDir, subdir: "nodes" }),
     nodeHostConfig: await legacyNodeHostConfigFileExists(env),
     channelPairing: await legacyChannelPairingFilesExist(env),
@@ -171,7 +177,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, channel pairing, node pairing, node host config, push, media, plugin, plugin binding approvals, installed plugin index, subagent, task, Task Flow, TUI, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
+      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, exec approvals, channel pairing, node pairing, node host config, push, media, plugin, plugin binding approvals, installed plugin index, subagent, task, Task Flow, TUI, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
       "SQLite state",
     );
     return;
@@ -218,6 +224,14 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
         changes.push(
           `- Imported ${result.pending} pending device pairing request(s) and ${result.paired} paired device record(s) into SQLite.`,
         );
+      }
+    });
+  }
+  if (probe.execApprovals) {
+    await runImport("Exec approvals", () => {
+      const result = importLegacyExecApprovalsFileToSqlite(env);
+      if (result.imported) {
+        changes.push("- Imported exec approvals into SQLite.");
       }
     });
   }

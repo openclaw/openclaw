@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
@@ -26,7 +28,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
-  let prevServiceKind: string | undefined;
+  let prevOpenClawHome: string | undefined;
+  let prevStateDir: string | undefined;
 
   beforeEach(() => {
     note.mockClear();
@@ -36,7 +39,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     prevHome = process.env.HOME;
-    prevServiceKind = process.env.OPENCLAW_SERVICE_KIND;
+    prevOpenClawHome = process.env.OPENCLAW_HOME;
+    prevStateDir = process.env.OPENCLAW_STATE_DIR;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_SERVICE_KIND;
@@ -58,31 +62,40 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } else {
       process.env.HOME = prevHome;
     }
-    if (prevServiceKind === undefined) {
-      delete process.env.OPENCLAW_SERVICE_KIND;
+    if (prevOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
     } else {
-      process.env.OPENCLAW_SERVICE_KIND = prevServiceKind;
+      process.env.OPENCLAW_HOME = prevOpenClawHome;
     }
+    if (prevStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = prevStateDir;
+    }
+    closeOpenClawStateDatabaseForTest();
   });
 
   const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
 
-  async function withExecApprovalsFile(
-    file: Record<string, unknown>,
+  async function withExecApprovalsState(
+    file: ExecApprovalsFile,
     run: () => Promise<void>,
   ): Promise<void> {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-security-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-security-state-"));
     process.env.HOME = home;
-    await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-    await fs.writeFile(
-      path.join(home, ".openclaw", "exec-approvals.json"),
-      JSON.stringify(file, null, 2),
-    );
-    await run();
+    process.env.OPENCLAW_HOME = home;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    saveExecApprovals(file);
+    try {
+      await run();
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
   }
 
   async function expectAgentExecHostPolicyWarning(agentKey: "*" | "runner") {
-    await withExecApprovalsFile(
+    await withExecApprovalsState(
       {
         version: 1,
         defaults:
@@ -291,7 +304,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("disables approval forwarding only");
-    expect(message).toContain("exec-approvals.json");
+    expect(message).toContain("SQLite exec approvals state");
     expect(message).toContain("openclaw approvals get --gateway");
   });
 
@@ -333,7 +346,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   it("warns when tools.exec is broader than host exec defaults", async () => {
-    await withExecApprovalsFile(
+    await withExecApprovalsState(
       {
         version: 1,
         defaults: {
@@ -365,7 +378,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   it("does not invent a deny host policy when exec-approvals defaults.security is unset", async () => {
-    await withExecApprovalsFile(
+    await withExecApprovalsState(
       {
         version: 1,
         agents: {},
@@ -388,7 +401,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   it("does not invent an on-miss host ask policy when exec-approvals defaults.ask is unset", async () => {
-    await withExecApprovalsFile(
+    await withExecApprovalsState(
       {
         version: 1,
         agents: {},
@@ -414,7 +427,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   it("warns when an agent inherits broader global tools.exec policy than the matching host agent policy", async () => {
-    await withExecApprovalsFile(
+    await withExecApprovalsState(
       {
         version: 1,
         agents: {
@@ -448,7 +461,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   it("ignores malformed host policy fields when attributing doctor conflicts", async () => {
-    await withExecApprovalsFile(
+    await withExecApprovalsState(
       {
         version: 1,
         defaults: {
@@ -481,7 +494,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   it('does not warn about durable allow-always trust when ask="always" is enforced', async () => {
-    await withExecApprovalsFile(
+    await withExecApprovalsState(
       {
         version: 1,
         defaults: {

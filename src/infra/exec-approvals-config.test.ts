@@ -1,6 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   isSafeBinUsage,
@@ -9,6 +8,7 @@ import {
   normalizeSafeBins,
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
+  saveExecApprovals,
   type ExecApprovalsAgent,
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
@@ -17,26 +17,20 @@ import {
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
     const dir = makeTempDir();
+    const stateDir = makeTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
 
     try {
       process.env.OPENCLAW_HOME = dir;
-      const approvalsPath = path.join(dir, ".openclaw", "exec-approvals.json");
-      fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
-      fs.writeFileSync(
-        approvalsPath,
-        JSON.stringify(
-          {
-            version: 1,
-            agents: {
-              "*": { allowlist: [{ pattern: "/bin/hostname" }] },
-              main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      saveExecApprovals({
+        version: 1,
+        agents: {
+          "*": { allowlist: [{ pattern: "/bin/hostname" }] },
+          main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+        },
+      });
 
       const resolved = resolveExecApprovals("main");
       expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
@@ -49,6 +43,12 @@ describe("exec approvals wildcard agent", () => {
       } else {
         process.env.OPENCLAW_HOME = prevOpenClawHome;
       }
+      if (prevStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
+      closeOpenClawStateDatabaseForTest();
     }
   });
 });
