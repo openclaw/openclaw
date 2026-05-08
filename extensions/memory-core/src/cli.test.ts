@@ -142,13 +142,35 @@ describe("memory cli", () => {
     );
   }
 
-  const ansiPattern = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+  function stripAnsi(value: string) {
+    let output = "";
+    for (let index = 0; index < value.length; index += 1) {
+      if (value.charCodeAt(index) !== 0x1b) {
+        output += value[index] ?? "";
+        continue;
+      }
+      if (value[index + 1] !== "[") {
+        continue;
+      }
+      index += 2;
+      while (index < value.length) {
+        const code = value.charCodeAt(index);
+        if (code >= 0x40 && code <= 0x7e) {
+          break;
+        }
+        index += 1;
+      }
+    }
+    return output;
+  }
 
   function loggedOutput(spy: ReturnType<typeof vi.spyOn>) {
     return spy.mock.calls
       .map((call: unknown[]) => (typeof call[0] === "string" ? call[0] : ""))
       .join("\n")
-      .replace(ansiPattern, "");
+      .split("\n")
+      .map(stripAnsi)
+      .join("\n");
   }
 
   function expectLogged(spy: ReturnType<typeof vi.spyOn>, expected: string) {
