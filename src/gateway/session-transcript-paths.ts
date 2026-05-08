@@ -1,51 +1,11 @@
-import path from "node:path";
 import {
   createSqliteSessionTranscriptLocator,
   isSqliteSessionTranscriptLocator,
-  resolveSessionFilePath,
 } from "../config/sessions/paths.js";
 
-function normalizeTranscriptLocator(value: string): string {
-  return isSqliteSessionTranscriptLocator(value) ? value.trim() : path.resolve(value);
-}
-
-function classifySessionTranscriptCandidate(
-  sessionId: string,
-  sessionFile?: string,
-): "current" | "stale" | "custom" {
-  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
-  if (!transcriptSessionId) {
-    return "custom";
-  }
-  return transcriptSessionId === sessionId ? "current" : "stale";
-}
-
-function extractGeneratedTranscriptSessionId(sessionFile?: string): string | undefined {
-  const trimmed = sessionFile?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const base = path.basename(trimmed);
-  if (!base.endsWith(".jsonl")) {
-    return undefined;
-  }
-  const withoutExt = base.slice(0, -".jsonl".length);
-  const topicIndex = withoutExt.indexOf("-topic-");
-  if (topicIndex > 0) {
-    const topicSessionId = withoutExt.slice(0, topicIndex);
-    return looksLikeGeneratedSessionId(topicSessionId) ? topicSessionId : undefined;
-  }
-  const forkMatch = withoutExt.match(
-    /^(\d{4}-\d{2}-\d{2}T[\w-]+(?:Z|[+-]\d{2}(?:-\d{2})?)?)_(.+)$/,
-  );
-  if (forkMatch?.[2]) {
-    return looksLikeGeneratedSessionId(forkMatch[2]) ? forkMatch[2] : undefined;
-  }
-  return looksLikeGeneratedSessionId(withoutExt) ? withoutExt : undefined;
-}
-
-function looksLikeGeneratedSessionId(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+function normalizeTranscriptLocator(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && isSqliteSessionTranscriptLocator(trimmed) ? trimmed : undefined;
 }
 
 export function resolveSessionTranscriptCandidates(
@@ -54,7 +14,6 @@ export function resolveSessionTranscriptCandidates(
   agentId?: string,
 ): string[] {
   const candidates: string[] = [];
-  const sessionFileState = classifySessionTranscriptCandidate(sessionId, sessionFile);
   const pushCandidate = (resolve: () => string): void => {
     try {
       candidates.push(resolve());
@@ -63,29 +22,13 @@ export function resolveSessionTranscriptCandidates(
     }
   };
 
-  if (sessionFile) {
-    if (agentId) {
-      if (sessionFileState === "custom") {
-        const trimmed = sessionFile.trim();
-        if (trimmed) {
-          candidates.push(normalizeTranscriptLocator(trimmed));
-        }
-      } else if (sessionFileState !== "stale") {
-        pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
-      }
-    } else {
-      const trimmed = sessionFile.trim();
-      if (trimmed) {
-        candidates.push(normalizeTranscriptLocator(trimmed));
-      }
-    }
+  const normalizedSessionFile = normalizeTranscriptLocator(sessionFile);
+  if (normalizedSessionFile) {
+    candidates.push(normalizedSessionFile);
   }
 
   if (agentId) {
     pushCandidate(() => createSqliteSessionTranscriptLocator({ sessionId, agentId }));
-    if (sessionFile && sessionFileState === "stale") {
-      pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
-    }
   }
 
   return Array.from(new Set(candidates));
@@ -96,9 +39,9 @@ export function resolveStableSessionEndTranscript(params: {
   sessionFile?: string;
   agentId?: string;
 }): { sessionFile?: string } {
-  const stablePath = params.sessionFile?.trim();
+  const stablePath = normalizeTranscriptLocator(params.sessionFile);
   if (stablePath) {
-    return { sessionFile: normalizeTranscriptLocator(stablePath) };
+    return { sessionFile: stablePath };
   }
 
   const [candidate] = resolveSessionTranscriptCandidates(
@@ -106,5 +49,5 @@ export function resolveStableSessionEndTranscript(params: {
     params.sessionFile,
     params.agentId,
   );
-  return candidate ? { sessionFile: normalizeTranscriptLocator(candidate) } : {};
+  return candidate ? { sessionFile: candidate } : {};
 }

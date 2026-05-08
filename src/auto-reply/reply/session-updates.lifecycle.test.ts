@@ -89,7 +89,7 @@ describe("session-updates lifecycle hooks", () => {
   });
 
   it("emits compaction lifecycle hooks when newSessionId replaces the session", async () => {
-    const { sessionKey, sessionStore, entry, transcriptPath } = await createFixture();
+    const { sessionKey, sessionStore, entry } = await createFixture();
     const cfg = { session: {} } as OpenClawConfig;
 
     await incrementCompactionCount({
@@ -111,7 +111,9 @@ describe("session-updates lifecycle hooks", () => {
       sessionKey,
       reason: "compaction",
     });
-    expect(endEvent?.sessionFile).toBe(path.resolve(transcriptPath));
+    expect(endEvent?.sessionFile).toBe(
+      createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: "s1" }),
+    );
     expect(endContext).toMatchObject({
       sessionId: "s1",
       sessionKey,
