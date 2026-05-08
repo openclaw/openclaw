@@ -5,7 +5,6 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
-import { DEFAULT_AGENT_ID, isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -20,7 +19,6 @@ import {
   summarizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
-import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -1111,42 +1109,6 @@ export async function onTimer(state: CronServiceState) {
       });
     }
   } finally {
-    // Piggyback session reaper on timer tick (self-throttled to every 5 min).
-    // Placed in `finally` so the reaper runs even when a long-running job keeps
-    // `state.running` true across multiple timer ticks — the early return at the
-    // top of onTimer would otherwise skip the reaper indefinitely.
-    const storePaths = new Set<string>();
-    if (state.deps.resolveSessionStorePath) {
-      const defaultAgentId = state.deps.defaultAgentId ?? DEFAULT_AGENT_ID;
-      if (state.store?.jobs?.length) {
-        for (const job of state.store.jobs) {
-          const agentId =
-            typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : defaultAgentId;
-          storePaths.add(state.deps.resolveSessionStorePath(agentId));
-        }
-      } else {
-        storePaths.add(state.deps.resolveSessionStorePath(defaultAgentId));
-      }
-    } else if (state.deps.sessionStorePath) {
-      storePaths.add(state.deps.sessionStorePath);
-    }
-
-    if (storePaths.size > 0) {
-      const nowMs = state.deps.nowMs();
-      for (const storePath of storePaths) {
-        try {
-          await sweepCronRunSessions({
-            cronConfig: state.deps.cronConfig,
-            sessionStorePath: storePath,
-            nowMs,
-            log: state.deps.log,
-          });
-        } catch (err) {
-          state.deps.log.warn({ err: String(err), storePath }, "cron: session reaper sweep failed");
-        }
-      }
-    }
-
     state.running = false;
     armTimer(state);
   }

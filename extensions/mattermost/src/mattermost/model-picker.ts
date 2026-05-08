@@ -238,16 +238,13 @@ export function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
-  skipCache?: boolean;
 }): string {
   const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionStore = params.skipCache
-      ? loadSessionStore(storePath)
-      : loadSessionStore(storePath);
+    const sessionStore = loadSessionStore(storePath);
     const sessionEntry = sessionStore[params.route.sessionKey];
     const override = resolveStoredModelOverride({
       sessionEntry,

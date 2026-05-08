@@ -87,7 +87,7 @@ OpenClaw resolves these via `src/config/sessions/*`.
 
 ## Store maintenance and disk controls
 
-Session persistence has automatic maintenance controls (`session.maintenance`) for session entries, transcript artifacts, and trajectory sidecars:
+Session persistence has explicit maintenance controls (`session.maintenance`) for session entries, transcript artifacts, and trajectory sidecars:
 
 - `mode`: `warn` (default) or `enforce`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
@@ -129,9 +129,9 @@ openclaw sessions cleanup --enforce
 
 ## Cron sessions and run logs
 
-Isolated cron runs also create session entries/transcripts, and they have dedicated retention controls:
+Isolated cron runs also create session entries/transcripts. Session rows use the same explicit session cleanup path as other rows:
 
-- `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
+- `openclaw sessions cleanup --enforce` maintains old isolated cron run sessions through `session.maintenance`.
 - `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
 
 When cron force-creates a new isolated run session, it sanitizes the previous
