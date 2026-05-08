@@ -2,6 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 import { CompiledQuery, Kysely, sql, type Generated } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NodeSqliteKyselyDialect } from "./kysely-node-sqlite.js";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  executeCompiledSqliteQuerySync,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 type TestDatabase = {
   person: {
@@ -47,6 +53,10 @@ describe("NodeSqliteKyselyDialect", () => {
     );
     expect(update.insertId).toBeUndefined();
     expect(update.numAffectedRows).toBe(1n);
+
+    const rawInsert = await sql`insert into person (name) values (${"Raw"})`.execute(db);
+    expect(rawInsert.insertId).toBeUndefined();
+    expect(rawInsert.numAffectedRows).toBe(1n);
   });
 
   it("creates the database lazily and runs the connection hook once", async () => {
@@ -99,6 +109,31 @@ describe("NodeSqliteKyselyDialect", () => {
     `.execute(db);
     expect(ignoredInsert.insertId).toBeUndefined();
     expect(ignoredInsert.numAffectedRows).toBe(0n);
+  });
+
+  it("keeps sync query insert metadata tied to Kysely insert nodes", () => {
+    const sqlite = new DatabaseSync(":memory:");
+    try {
+      sqlite.exec("create table person (id integer primary key autoincrement, name text)");
+      const syncDb = getNodeSqliteKysely<TestDatabase>(sqlite);
+
+      const insertResult = executeSqliteQuerySync(
+        sqlite,
+        syncDb.insertInto("person").values({ name: "Ada" }),
+      );
+      expect(insertResult.insertId).toBe(1n);
+      expect(insertResult.numAffectedRows).toBe(1n);
+
+      const rawInsertResult = executeCompiledSqliteQuerySync(
+        sqlite,
+        sql`insert into person (name) values (${"Raw"})`.compile(syncDb),
+      );
+      expect(rawInsertResult.insertId).toBeUndefined();
+      expect(rawInsertResult.numAffectedRows).toBe(1n);
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(sqlite);
+      sqlite.close();
+    }
   });
 
   it("rolls back transactions and controlled savepoints", async () => {
