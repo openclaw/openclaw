@@ -209,10 +209,10 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ensureContextEnginesInitialized: () => {},
     ensureRuntimePluginsLoaded: () => {},
-    persistSubagentRunsToDisk: () => {
+    persistSubagentRunsToState: () => {
       hoisted.notifyEventWaiters();
     },
-    restoreSubagentRunsFromDisk: () => 0,
+    restoreSubagentRunsFromState: () => 0,
     resolveContextEngine: async () => ({
       info: { id: "test", name: "Test" },
       assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),

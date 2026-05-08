@@ -61,8 +61,8 @@ import {
 } from "./subagent-registry-run-manager.js";
 import {
   getSubagentRunsSnapshotForRead,
-  persistSubagentRunsToDisk,
-  restoreSubagentRunsFromDisk,
+  persistSubagentRunsToState,
+  restoreSubagentRunsFromState,
 } from "./subagent-registry-state.js";
 import { configureSubagentRegistrySteerRuntime } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -92,9 +92,9 @@ type SubagentRegistryDeps = {
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   getRuntimeConfig: typeof getRuntimeConfig;
   onAgentEvent: typeof onAgentEvent;
-  persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
+  persistSubagentRunsToState: typeof persistSubagentRunsToState;
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
-  restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
+  restoreSubagentRunsFromState: typeof restoreSubagentRunsFromState;
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof ensureRuntimePluginsLoadedFn;
@@ -130,9 +130,9 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   getSubagentRunsSnapshotForRead,
   getRuntimeConfig,
   onAgentEvent,
-  persistSubagentRunsToDisk,
+  persistSubagentRunsToState,
   resolveAgentTimeoutMs,
-  restoreSubagentRunsFromDisk,
+  restoreSubagentRunsFromState,
   runSubagentAnnounceFlow: async (params) =>
     (await loadSubagentAnnounceModule()).runSubagentAnnounceFlow(params),
 };
@@ -338,7 +338,7 @@ async function resolveSubagentRegistryContextEngine(
 }
 
 function persistSubagentRuns() {
-  subagentRegistryDeps.persistSubagentRunsToDisk(subagentRuns);
+  subagentRegistryDeps.persistSubagentRunsToState(subagentRuns);
 }
 
 export function scheduleSubagentOrphanRecovery(params?: { delayMs?: number; maxRetries?: number }) {
@@ -691,7 +691,7 @@ function restoreSubagentRunsOnce() {
   }
   restoreAttempted = true;
   try {
-    const restoredCount = subagentRegistryDeps.restoreSubagentRunsFromDisk({
+    const restoredCount = subagentRegistryDeps.restoreSubagentRunsFromState({
       runs: subagentRuns,
       mergeOnly: true,
     });

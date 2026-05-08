@@ -466,6 +466,10 @@ The remaining cleanup is mostly consolidation and deletion:
   `acpx/process-leases` instead of a whole-file `process-leases.json` registry.
   Each lease is stored as its own row, preserving startup stale-process reaping
   without a runtime JSON rewrite path.
+- Subagent run registry persistence uses shared SQLite KV rows under
+  `subagent_runs`. The old `subagents/runs.json` path is now only a doctor
+  migration input, and runtime helper names no longer describe the state layer
+  as disk-backed.
 - Backup stages the state directory before archiving, copies non-database files,
   snapshots `*.sqlite` databases with `VACUUM INTO`, omits live WAL/SHM
   sidecars, records snapshot metadata in the archive manifest, and records

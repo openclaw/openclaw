@@ -168,8 +168,8 @@ beforeEach(() => {
     ensureContextEnginesInitialized: () => {},
     ensureRuntimePluginsLoaded: () => {},
     getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
-    persistSubagentRunsToDisk: () => {},
-    restoreSubagentRunsFromDisk: () => 0,
+    persistSubagentRunsToState: () => {},
+    restoreSubagentRunsFromState: () => 0,
     resolveContextEngine: async () => ({
       info: { id: "test", name: "Test" },
       assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),

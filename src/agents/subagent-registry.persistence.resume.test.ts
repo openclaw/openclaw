@@ -10,7 +10,7 @@ import {
   createSubagentRegistryTestDeps,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import { saveSubagentRegistryToDisk } from "./subagent-registry.store.js";
+import { saveSubagentRegistryToState } from "./subagent-registry.store.js";
 
 const hoisted = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
@@ -96,7 +96,7 @@ describe("subagent registry persistence resume", () => {
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
 
-    saveSubagentRegistryToDisk(
+    saveSubagentRegistryToState(
       new Map([
         [
           "run-1",

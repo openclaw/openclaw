@@ -47,11 +47,11 @@ function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
   return resolveStateDir(env);
 }
 
-export function resolveSubagentRegistryPath(): string {
+export function resolveLegacySubagentRegistryPath(): string {
   return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
 }
 
-function resolveSubagentRegistryPathForEnv(env: NodeJS.ProcessEnv = process.env): string {
+function resolveLegacySubagentRegistryPathForEnv(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveSubagentStateDir(env), "subagents", "runs.json");
 }
 
@@ -125,7 +125,7 @@ function normalizePersistedRunRecords(params: {
   return out;
 }
 
-function loadSubagentRegistryFromSqlite(
+export function loadSubagentRegistryFromSqlite(
   env: NodeJS.ProcessEnv = process.env,
 ): Map<string, SubagentRunRecord> | null {
   const entries = listOpenClawStateKvJson<PersistedSubagentRunRecord>(
@@ -142,7 +142,7 @@ function loadSubagentRegistryFromSqlite(
   return normalizePersistedRunRecords({ runsRaw, isLegacy: false });
 }
 
-export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
+export function loadSubagentRegistryFromState(): Map<string, SubagentRunRecord> {
   return loadSubagentRegistryFromSqlite() ?? new Map();
 }
 
@@ -177,7 +177,7 @@ function loadLegacySubagentRegistryFile(pathname: string): Map<string, SubagentR
 
 export function legacySubagentRegistryFileExists(env: NodeJS.ProcessEnv = process.env): boolean {
   try {
-    return fs.statSync(resolveSubagentRegistryPathForEnv(env)).isFile();
+    return fs.statSync(resolveLegacySubagentRegistryPathForEnv(env)).isFile();
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
       return false;
@@ -190,7 +190,7 @@ export function importLegacySubagentRegistryFileToSqlite(env: NodeJS.ProcessEnv 
   imported: boolean;
   runs: number;
 } {
-  const pathname = resolveSubagentRegistryPathForEnv(env);
+  const pathname = resolveLegacySubagentRegistryPathForEnv(env);
   if (!legacySubagentRegistryFileExists(env)) {
     return { imported: false, runs: 0 };
   }
@@ -204,7 +204,7 @@ export function importLegacySubagentRegistryFileToSqlite(env: NodeJS.ProcessEnv 
   return { imported: true, runs: runs.size };
 }
 
-export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>) {
+export function saveSubagentRegistryToState(runs: Map<string, SubagentRunRecord>) {
   const dbOptions = subagentRegistryDbOptions();
   const existing = listOpenClawStateKvJson<PersistedSubagentRunRecord>(
     SUBAGENT_REGISTRY_KV_SCOPE,

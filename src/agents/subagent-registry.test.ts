@@ -23,8 +23,8 @@ const mocks = vi.hoisted(() => ({
     return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
   }),
   emitSessionLifecycleEvent: vi.fn(),
-  persistSubagentRunsToDisk: vi.fn(),
-  restoreSubagentRunsFromDisk: vi.fn(() => 0),
+  persistSubagentRunsToState: vi.fn(),
+  restoreSubagentRunsFromState: vi.fn(() => 0),
   getSubagentRunsSnapshotForRead: vi.fn(
     (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
   ),
@@ -69,8 +69,8 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
 
 vi.mock("./subagent-registry-state.js", () => ({
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
-  persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
-  restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
+  persistSubagentRunsToState: mocks.persistSubagentRunsToState,
+  restoreSubagentRunsFromState: mocks.restoreSubagentRunsFromState,
 }));
 
 vi.mock("./subagent-announce-queue.js", () => ({
@@ -163,9 +163,9 @@ describe("subagent registry seam flow", () => {
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: async () => {},
       onAgentEvent: mocks.onAgentEvent,
-      persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
+      persistSubagentRunsToState: mocks.persistSubagentRunsToState,
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
-      restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
+      restoreSubagentRunsFromState: mocks.restoreSubagentRunsFromState,
       runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
       ensureContextEnginesInitialized: mocks.ensureContextEnginesInitialized,
       ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
@@ -404,7 +404,7 @@ describe("subagent registry seam flow", () => {
       }),
     });
 
-    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+    expect(mocks.persistSubagentRunsToState).toHaveBeenCalled();
   });
 
   it("suppresses stale timeout announces when the same child run later finishes successfully", async () => {
@@ -517,7 +517,7 @@ describe("subagent registry seam flow", () => {
       runSubagentEnded: mocks.runSubagentEnded,
     };
     mocks.getGlobalHookRunner.mockReturnValue(endedHookRunner as never);
-    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+    mocks.restoreSubagentRunsFromState.mockImplementation(((params: {
       runs: Map<string, unknown>;
       mergeOnly?: boolean;
     }) => {
