@@ -327,7 +327,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     }
     while (this.pendingSpeakerTurns.length > DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT) {
       const completedIndex = this.pendingSpeakerTurns.findIndex((turn) => turn.closed);
-      this.pendingSpeakerTurns.splice(completedIndex >= 0 ? completedIndex : 0, 1);
+      this.pendingSpeakerTurns.splice(Math.max(completedIndex, 0), 1);
     }
   }
 }
