@@ -4,6 +4,12 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Cron/failover: classify structured OpenAI-compatible `server_error` payloads as `server_error`, expose that reason in cron state, and let one-shot cron retry policy honor `retryOn: ["server_error"]` without requiring raw `5xx` text. (#45594) Thanks @clovericbot.
+
+## 2026.5.8
+
 ### Changes
 
 ### Fixes
