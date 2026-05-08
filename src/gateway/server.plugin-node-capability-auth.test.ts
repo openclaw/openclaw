@@ -553,7 +553,7 @@ describe("gateway plugin node capability auth", () => {
             },
           );
           expect(second.status).toBe(429);
-          expect(second.headers.get("retry-after")).toBeTruthy();
+          expect(second.headers.get("retry-after")).toMatch(/^\d+$/);
 
           await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, headers, 429);
         },

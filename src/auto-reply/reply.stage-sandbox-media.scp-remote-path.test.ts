@@ -110,7 +110,8 @@ describe("stageSandboxMedia scp remote paths", () => {
       const remoteCacheRoot = join(CONFIG_DIR, "media", "remote-cache");
       const expectedSafeDir = join(remoteCacheRoot, slugifySessionKey(sessionKey));
       try {
-        await expect(fs.stat(expectedSafeDir)).resolves.toBeTruthy();
+        const safeDirStats = await fs.stat(expectedSafeDir);
+        expect(safeDirStats.isDirectory()).toBe(true);
         await expect(fs.stat(join(CONFIG_DIR, "escape"))).rejects.toThrow();
       } finally {
         await fs.rm(expectedSafeDir, { recursive: true, force: true });

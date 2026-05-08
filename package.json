@@ -33,7 +33,6 @@
     "!dist/extensions/acpx/**",
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
-    "!dist/extensions/bluebubbles/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/codex/**",
     "!dist/extensions/diagnostics-otel/**",
@@ -233,6 +232,10 @@
     "./plugin-sdk/config-schema": {
       "types": "./dist/plugin-sdk/config-schema.d.ts",
       "default": "./dist/plugin-sdk/config-schema.js"
+    },
+    "./plugin-sdk/json-schema-runtime": {
+      "types": "./dist/plugin-sdk/json-schema-runtime.d.ts",
+      "default": "./dist/plugin-sdk/json-schema-runtime.js"
     },
     "./plugin-sdk/reply-runtime": {
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",

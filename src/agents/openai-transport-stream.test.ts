@@ -2223,7 +2223,14 @@ describe("openai transport stream", () => {
       } as never,
     ) as { reasoning_effort?: unknown; tools?: unknown };
 
-    expect(params.tools).toBeDefined();
+    expect(params.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        function: expect.objectContaining({
+          name: "lookup_weather",
+        }),
+      }),
+    ]);
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
@@ -2760,13 +2767,14 @@ describe("openai transport stream", () => {
         api: "openai-completions",
         provider: "fireworks",
         baseUrl: "https://api.fireworks.ai/inference/v1",
+        reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 256000,
         maxTokens: 256000,
         compat: {
           unsupportedToolSchemaKeywords: ["not"],
-        },
+        } as never,
       } satisfies Model<"openai-completions">,
       {
         systemPrompt: "system",
@@ -3184,8 +3192,10 @@ describe("openai transport stream", () => {
     };
 
     const functionCall = params.input?.find((item) => item.type === "function_call");
-    expect(functionCall).toBeDefined();
-    expect(functionCall?.arguments).toBe("not valid json");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      arguments: "not valid json",
+    });
   });
 
   it("defaults tool_choice to auto for proxy-like openai-completions endpoints", () => {
@@ -3477,6 +3487,85 @@ describe("openai transport stream", () => {
     expect(thinkingBlock.thinking).toBe("I need to think about this. Let me analyze.");
     expect(textBlock.type).toBe("text");
     expect(textBlock.text).toBe(" Hello! How can I help you?");
+  });
+
+  it("normalizes structured completions content blocks without stringifying objects (#78846)", async () => {
+    const model = {
+      id: "mistral-small-latest",
+      name: "Mistral Small",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+    const mockChunks = [
+      {
+        id: "chatcmpl-structured-content",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: [
+                { type: "thinking", thinking: [{ type: "text", text: "Need to think." }] },
+                { type: "text", content: "Visible answer." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-structured-content",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toEqual([
+      { type: "thinking", thinking: "Need to think.", thinkingSignature: "content" },
+      { type: "text", text: "Visible answer." },
+    ]);
   });
 
   it("keeps tool calls when reasoning_details and tool_calls share a chunk", async () => {
