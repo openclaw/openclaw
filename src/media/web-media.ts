@@ -596,6 +596,19 @@ async function loadWebMediaInternal(
           { cause: err },
         );
       }
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        ((err as NodeJS.ErrnoException).code === "EACCES" ||
+          (err as NodeJS.ErrnoException).code === "EPERM")
+      ) {
+        throw new LocalMediaAccessError(
+          "permissions-denied",
+          `Local media file is not readable (mode too restrictive): ${mediaUrl}. ` +
+            `Ensure the file has at least 0o644 permissions (e.g. chmod 644).`,
+          { cause: err },
+        );
+      }
       throw err;
     }
   }

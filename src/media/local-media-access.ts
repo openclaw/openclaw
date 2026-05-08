@@ -13,7 +13,8 @@ export type LocalMediaAccessErrorCode =
   | "unsafe-bypass"
   | "not-found"
   | "invalid-path"
-  | "not-file";
+  | "not-file"
+  | "permissions-denied";
 
 export class LocalMediaAccessError extends Error {
   code: LocalMediaAccessErrorCode;
