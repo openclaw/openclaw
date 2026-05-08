@@ -20,7 +20,7 @@ import {
   resolveFreshSessionTotalTokens,
   type SessionEntry as StoreSessionEntry,
 } from "../../config/sessions/types.js";
-import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-utils.fs.js";
+import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 
 type ForkSourceTranscript = {
   agentId: string;

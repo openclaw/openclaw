@@ -36,7 +36,7 @@ import {
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
-import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
+import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import {
   listAgentsForGateway,
   listSessionsFromStoreAsync,

@@ -24,7 +24,7 @@ import {
   readSessionPreviewItemsFromTranscript,
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
-} from "./session-utils.fs.js";
+} from "./session-transcript-readers.js";
 
 type TranscriptEvent = Record<string, unknown>;
 

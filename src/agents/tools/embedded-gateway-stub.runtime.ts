@@ -12,7 +12,7 @@ export {
   enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
 } from "../../gateway/server-methods/chat.js";
-export { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
+export { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 export {
   listSessionsFromStoreAsync,
   loadCombinedSessionEntriesForGateway,
