@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { upsertSessionEntry } from "../config/sessions/store.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
@@ -457,8 +458,8 @@ describe("before_tool_call hook integration for client tools", () => {
   it("lets trusted policies read session extensions for client tools when config is provided", async () => {
     resetGlobalHookRunner();
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-client-tool-policy-"));
-    const storePath = path.join(stateDir, "sessions.json");
-    const config = { session: { store: storePath } };
+    const config = { session: {} };
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const seen: unknown[] = [];
     const registry = createEmptyPluginRegistry();
     registry.sessionExtensions = [
@@ -489,11 +490,14 @@ describe("before_tool_call hook integration for client tools", () => {
     ];
     setActivePluginRegistry(registry);
     try {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:client"] = {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:client",
+        entry: {
           sessionId: "session-client",
           updatedAt: Date.now(),
-        } as SessionEntry;
+        } satisfies SessionEntry,
       });
       await expect(
         patchPluginSessionExtension({
@@ -533,6 +537,11 @@ describe("before_tool_call hook integration for client tools", () => {
 
       expect(seen).toEqual([{ gate: "client" }]);
     } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       setActivePluginRegistry(createEmptyPluginRegistry());
       await fs.rm(stateDir, { recursive: true, force: true });
     }

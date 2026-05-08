@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { upsertSessionEntry } from "../../config/sessions/store.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -639,8 +640,8 @@ describe("native hook relay registry", () => {
 
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {
     const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-native-relay-policy-"));
-    const storePath = path.join(stateDir, "sessions.json");
-    const config = { session: { store: storePath } };
+    const config = { session: {} };
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const seen: unknown[] = [];
     const registry = createEmptyPluginRegistry();
     registry.sessionExtensions = [
@@ -675,11 +676,14 @@ describe("native hook relay registry", () => {
     ];
     setActivePluginRegistry(registry);
     try {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:session-1"] = {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        entry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
-        } as SessionEntry;
+        } satisfies SessionEntry,
       });
       await expect(
         patchPluginSessionExtension({
@@ -722,6 +726,11 @@ describe("native hook relay registry", () => {
       });
       expect(seen).toEqual([{ block: true }]);
     } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

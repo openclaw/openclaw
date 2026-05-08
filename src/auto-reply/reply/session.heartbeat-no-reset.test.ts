@@ -15,11 +15,9 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
 
 describe("initSessionState - heartbeat should not trigger session reset", () => {
   let tempDir: string;
-  let storePath: string;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp("/tmp/openclaw-test-");
-    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
   afterEach(async () => {
@@ -74,7 +72,6 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     updatedAt: number,
     overrides: Partial<SessionEntry> = {},
   ): Promise<void> => {
-    void storePath;
     upsertSessionEntry({
       agentId: "main",
       sessionKey: "main:user123",
