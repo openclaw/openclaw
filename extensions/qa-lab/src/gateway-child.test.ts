@@ -972,7 +972,7 @@ describe("qa bundled plugin dir", () => {
     expect(stagedRoot).toBe(
       path.join(repoRoot, ".artifacts", "qa-runtime", path.basename(tempRoot)),
     );
-    await expect(readFile(path.join(stagedRoot!, "package.json"), "utf8")).resolves.toContain(
+    await expect(readFile(path.join(stagedRoot, "package.json"), "utf8")).resolves.toContain(
       '"name": "openclaw"',
     );
     await expect(
