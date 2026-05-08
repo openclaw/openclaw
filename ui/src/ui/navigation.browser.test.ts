@@ -13,16 +13,33 @@ function nextFrame() {
   });
 }
 
-function findConfirmButton(app: ReturnType<typeof mountApp>) {
-  return Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
-    (button) => button.textContent?.trim() === "Confirm",
+function expectElement<T extends Element>(
+  app: ReturnType<typeof mountApp>,
+  selector: string,
+  constructor: new () => T,
+): T {
+  const element = app.querySelector<T>(selector);
+  expect(element).toBeInstanceOf(constructor);
+  if (!(element instanceof constructor)) {
+    throw new Error(`Expected ${selector} to match ${constructor.name}`);
+  }
+  return element;
+}
+
+function expectButtonWithText(app: ReturnType<typeof mountApp>, text: string): HTMLButtonElement {
+  const button = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
+    (candidate) => candidate.textContent?.trim() === text,
   );
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button with text "${text}"`);
+  }
+  return button;
 }
 
 async function confirmPendingGatewayChange(app: ReturnType<typeof mountApp>) {
-  const confirmButton = findConfirmButton(app);
-  expect(confirmButton).not.toBeUndefined();
-  confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  const confirmButton = expectButtonWithText(app, "Confirm");
+  confirmButton.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   await app.updateComplete;
 }
 
@@ -48,13 +65,14 @@ describe("control UI routing", () => {
     const app = mountApp("/channels");
     await app.updateComplete;
 
-    const breadcrumb = app.querySelector<HTMLAnchorElement>(
+    const breadcrumb = expectElement(
+      app,
       "dashboard-header .dashboard-header__breadcrumb-link",
+      HTMLAnchorElement,
     );
-    expect(breadcrumb).toBeInstanceOf(HTMLAnchorElement);
-    expect(breadcrumb?.getAttribute("href")).toBe("/overview");
+    expect(breadcrumb.getAttribute("href")).toBe("/overview");
 
-    breadcrumb?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    breadcrumb.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 
     expect(app.tab).toBe("overview");
@@ -65,11 +83,12 @@ describe("control UI routing", () => {
     const app = mountApp("/ui/channels");
     await app.updateComplete;
 
-    const breadcrumb = app.querySelector<HTMLAnchorElement>(
+    const breadcrumb = expectElement(
+      app,
       "dashboard-header .dashboard-header__breadcrumb-link",
+      HTMLAnchorElement,
     );
-    expect(breadcrumb).toBeInstanceOf(HTMLAnchorElement);
-    expect(breadcrumb?.getAttribute("href")).toBe("/ui/overview");
+    expect(breadcrumb.getAttribute("href")).toBe("/ui/overview");
   });
 
   it("renders the dreaming view on the /dreaming route", async () => {
@@ -295,17 +314,13 @@ describe("control UI routing", () => {
     app.requestUpdate();
     await app.updateComplete;
 
-    const toggle = app.querySelector<HTMLButtonElement>(".dreams__phase-toggle--on");
-    expect(toggle).not.toBeNull();
-    toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const toggle = expectElement(app, ".dreams__phase-toggle--on", HTMLButtonElement);
+    toggle.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 
     expect(request).not.toHaveBeenCalledWith("config.patch", expect.anything());
-    const confirmRestart = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Confirm Restart",
-    );
-    expect(confirmRestart).not.toBeUndefined();
-    confirmRestart?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const confirmRestart = expectButtonWithText(app, "Confirm Restart");
+    confirmRestart.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
     await nextFrame();
     await app.updateComplete;
@@ -410,9 +425,8 @@ describe("control UI routing", () => {
     expect(nav.classList.contains("shell-nav")).toBe(true);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
-    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
-    expect(link).not.toBeNull();
-    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    const link = expectElement(app, 'a.nav-item[href="/channels"]', HTMLAnchorElement);
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
@@ -489,7 +503,7 @@ describe("control UI routing", () => {
     expect(app.chatMobileControlsOpen).toBe(false);
     expect(closedDropdown?.classList.contains("open")).toBe(false);
 
-    app.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle")?.click();
+    expectElement(app, ".chat-controls-mobile-toggle", HTMLButtonElement).click();
     await app.updateComplete;
     expect(app.chatMobileControlsOpen).toBe(true);
 
@@ -502,9 +516,8 @@ describe("control UI routing", () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
 
-    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/chat"]');
-    expect(link).not.toBeNull();
-    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    const link = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
     expect(app.tab).toBe("chat");
@@ -516,16 +529,14 @@ describe("control UI routing", () => {
     expect(shell).not.toBeNull();
     expect(shell?.classList.contains("shell--chat-focus")).toBe(false);
 
-    const toggle = app.querySelector<HTMLButtonElement>('button[title^="Toggle focus mode"]');
-    expect(toggle).not.toBeNull();
-    toggle?.click();
+    const toggle = expectElement(app, 'button[title^="Toggle focus mode"]', HTMLButtonElement);
+    toggle.click();
 
     await app.updateComplete;
     expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
 
-    const channelsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
-    expect(channelsLink).not.toBeNull();
-    channelsLink?.dispatchEvent(
+    const channelsLink = expectElement(app, 'a.nav-item[href="/channels"]', HTMLAnchorElement);
+    channelsLink.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
     );
 
@@ -533,10 +544,8 @@ describe("control UI routing", () => {
     expect(app.tab).toBe("channels");
     expect(shell?.classList.contains("shell--chat-focus")).toBe(false);
 
-    const chatLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/chat"]');
-    chatLink?.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
-    );
+    const chatLink = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
+    chatLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
     expect(app.tab).toBe("chat");
