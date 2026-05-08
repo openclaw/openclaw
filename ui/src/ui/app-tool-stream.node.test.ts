@@ -65,6 +65,14 @@ function expectCompactionCompleteAndAutoClears(host: MutableHost) {
   expect(host.compactionClearTimer).toBeNull();
 }
 
+function requireFallbackStatus(host: MutableHost): FallbackStatus {
+  expect(host.fallbackStatus).toBeTruthy();
+  if (!host.fallbackStatus) {
+    throw new Error("expected fallback status");
+  }
+  return host.fallbackStatus;
+}
+
 function useToolStreamFakeTimers(): void {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
 }
@@ -107,11 +115,10 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       },
     });
 
-    expect(host.fallbackStatus?.selected).toBe(
-      "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-    );
-    expect(host.fallbackStatus?.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
-    expect(host.fallbackStatus?.reason).toBe("rate limit");
+    const fallbackStatus = requireFallbackStatus(host);
+    expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
+    expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    expect(fallbackStatus.reason).toBe("rate limit");
     vi.useRealTimers();
   });
 
@@ -194,8 +201,9 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       },
     });
 
-    expect(host.fallbackStatus?.phase).toBe("cleared");
-    expect(host.fallbackStatus?.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    const fallbackStatus = requireFallbackStatus(host);
+    expect(fallbackStatus.phase).toBe("cleared");
+    expect(fallbackStatus.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.useRealTimers();
   });
 
