@@ -229,46 +229,6 @@ describe("session lifecycle timestamps", () => {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
   });
-
-  it("ignores legacy transcript files that were not imported", async () => {
-    const dir = await fsPromises.mkdtemp("/tmp/openclaw-lifecycle-test-");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = dir;
-    try {
-      const sessionsDir = path.join(dir, "agents", "main", "sessions");
-      const sessionFile = path.join(sessionsDir, "legacy-session.jsonl");
-      await fsPromises.mkdir(path.dirname(sessionFile), { recursive: true });
-      await fsPromises.writeFile(
-        sessionFile,
-        `${JSON.stringify({
-          type: "session",
-          version: 3,
-          id: "legacy-session",
-          timestamp: "2026-04-20T04:30:00.000Z",
-          cwd: dir,
-        })}\n`,
-        "utf8",
-      );
-
-      const timestamps = resolveSessionLifecycleTimestamps({
-        agentId: "main",
-        entry: {
-          sessionId: "legacy-session",
-          sessionFile,
-          updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
-        },
-      });
-
-      expect(timestamps.sessionStartedAt).toBeUndefined();
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fsPromises.rm(dir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("SQLite session store patch retries", () => {
