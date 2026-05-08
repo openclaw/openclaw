@@ -705,6 +705,16 @@ export const ko: TranslationMap = {
       today: "오늘",
       last7d: "7일",
       last30d: "30일",
+      last90d: "90일",
+      last1y: "1년",
+      all: "전체",
+    },
+    scope: {
+      instance: "현재 인스턴스",
+      instanceHint: "각 논리 세션의 활성 세션 id만 표시합니다.",
+      family: "기록 계보",
+      familyHint: "알려진 순환된 transcript 기반 세션 id를 집계합니다.",
+      familyIncluded: "기록 계보에 {count}개의 세션 인스턴스가 포함됩니다.",
     },
     filters: {
       title: "필터",

@@ -75,6 +75,15 @@ async function createNoisyPngBuffer(width: number, height: number): Promise<Buff
     .toBuffer();
 }
 
+function requireAttachmentIdFromUrl(url: unknown): string {
+  expect(url).toEqual(expect.any(String));
+  const attachmentId = String(url).split("/").at(-2);
+  if (!attachmentId) {
+    throw new Error(`expected attachment id in URL ${String(url)}`);
+  }
+  return attachmentId;
+}
+
 async function createFixture(
   stateDir: string,
   options?: { sessionKey?: string; attachmentId?: string; filename?: string },
@@ -437,8 +446,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(blocks[0]?.url).toBe(blocks[0]?.openUrl);
       expect(JSON.stringify(blocks[0])).not.toContain(sourcePath);
 
-      const attachmentId = String(blocks[0]?.url).split("/").at(-2);
-      expect(attachmentId).toBeTruthy();
+      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
       const record = JSON.parse(
         await fs.readFile(
           path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
@@ -497,8 +505,7 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(JSON.stringify(blocks[0])).not.toContain("127.0.0.1");
       expect(JSON.stringify(blocks[0])).not.toContain("sig=secret");
 
-      const attachmentId = String(blocks[0]?.url).split("/").at(-2);
-      expect(attachmentId).toBeTruthy();
+      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
       const record = JSON.parse(
         await fs.readFile(
           path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`),
@@ -540,8 +547,7 @@ describe("createManagedOutgoingImageBlocks", () => {
         localRoots: [path.join(stateDir, "workspace")],
       });
 
-      const attachmentId = String(blocks[0]?.url).split("/").at(-2);
-      expect(attachmentId).toBeTruthy();
+      const attachmentId = requireAttachmentIdFromUrl(blocks[0]?.url);
 
       const record = JSON.parse(
         await fs.readFile(

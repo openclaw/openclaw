@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
+import { readQaJsonBody } from "./bus-server.js";
+import {
+  startQaLabServer,
+  writeQaLabServerError,
+  type QaLabServerStartParams,
+} from "./lab-server.js";
 
 vi.mock("@openclaw/qa-channel/api.js", async () => await import("../../qa-channel/api.js"));
 
@@ -312,6 +317,38 @@ describe("qa-lab server", () => {
     expect(snapshot.messages.some((message) => message.text === "hello from test")).toBe(true);
 
     await expect(readFile(outputPath, "utf8")).rejects.toThrow();
+  });
+
+  it("returns controlled errors for oversized JSON body reads", async () => {
+    const req = {
+      headers: { "content-length": String(1024 * 1024 + 1) },
+      destroyed: false,
+      destroy() {
+        this.destroyed = true;
+      },
+    };
+    const res = {
+      statusCode: 0,
+      body: "",
+      writeHead(statusCode: number) {
+        this.statusCode = statusCode;
+      },
+      end(payload: string) {
+        this.body = payload;
+      },
+    };
+
+    let error: unknown;
+    try {
+      await readQaJsonBody(req as never);
+    } catch (caught) {
+      error = caught;
+    }
+
+    writeQaLabServerError(res as never, error);
+
+    expect(res.statusCode).toBe(413);
+    expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {

@@ -17,6 +17,14 @@ import {
 } from "./client.js";
 
 describe("browser client", () => {
+  function requireSnapshotCall(calls: string[]): string {
+    const call = calls.find((url) => url.includes("/snapshot?"));
+    if (!call) {
+      throw new Error("expected browser snapshot request");
+    }
+    return call;
+  }
+
   function stubSnapshotFetch(calls: string[]) {
     vi.stubGlobal(
       "fetch",
@@ -85,9 +93,7 @@ describe("browser client", () => {
       }),
     ).resolves.toMatchObject({ ok: true, format: "ai" });
 
-    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
-    expect(snapshotCall).toBeTruthy();
-    const parsed = new URL(snapshotCall as string);
+    const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("labels")).toBe("1");
     expect(parsed.searchParams.get("mode")).toBe("efficient");
   });
@@ -101,9 +107,7 @@ describe("browser client", () => {
       refs: "aria",
     });
 
-    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
-    expect(snapshotCall).toBeTruthy();
-    const parsed = new URL(snapshotCall as string);
+    const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("refs")).toBe("aria");
   });
 
@@ -115,9 +119,7 @@ describe("browser client", () => {
       profile: "chrome",
     });
 
-    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
-    expect(snapshotCall).toBeTruthy();
-    const parsed = new URL(snapshotCall as string);
+    const parsed = new URL(requireSnapshotCall(calls));
     expect(parsed.searchParams.get("format")).toBeNull();
     expect(parsed.searchParams.get("profile")).toBe("chrome");
   });

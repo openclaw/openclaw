@@ -706,6 +706,16 @@ export const pt_BR: TranslationMap = {
       today: "Hoje",
       last7d: "7d",
       last30d: "30d",
+      last90d: "90d",
+      last1y: "1a",
+      all: "Todas",
+    },
+    scope: {
+      instance: "Instância atual",
+      instanceHint: "Mostra somente o id da sessão ativa para cada sessão lógica.",
+      family: "Linhagem histórica",
+      familyHint: "Agrega ids de sessão conhecidos com respaldo em transcrições alternadas.",
+      familyIncluded: "A linhagem histórica inclui {count} instâncias de sessão.",
     },
     filters: {
       title: "Filtros",
