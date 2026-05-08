@@ -364,6 +364,10 @@ The remaining cleanup is mostly consolidation and deletion:
   the canonical byte store. Local paths returned to channel and sandbox
   compatibility surfaces are temp materializations of the database row, not the
   durable media store.
+- Cache-trace diagnostics, Anthropic payload diagnostics, and raw model stream
+  diagnostics now default to SQLite diagnostic rows instead of
+  `logs/*.jsonl` files. Explicit path flags/env vars remain only as
+  export/debug overrides.
 - Gateway singleton locks now use shared SQLite KV instead of temp-dir lock
   files. Done.
 - Gateway restart sentinel state now uses shared SQLite KV instead of
