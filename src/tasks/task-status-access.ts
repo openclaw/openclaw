@@ -1,5 +1,10 @@
-import { getTaskById, listTasksForAgentId, listTasksForSessionKey } from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import {
+  getTaskById,
+  getTaskRegistrySnapshot,
+  listTasksForAgentId,
+  listTasksForSessionKey,
+} from "./task-registry.js";
+import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 export function getTaskSessionLookupByIdForStatus(
   taskId: string,
@@ -19,4 +24,11 @@ export function listTasksForSessionKeyForStatus(sessionKey: string): TaskRecord[
 
 export function listTasksForAgentIdForStatus(agentId: string): TaskRecord[] {
   return listTasksForAgentId(agentId);
+}
+
+export function getTaskRequesterOriginForStatus(
+  taskId: string,
+): TaskDeliveryState["requesterOrigin"] | undefined {
+  return getTaskRegistrySnapshot().deliveryStates.find((state) => state.taskId === taskId)
+    ?.requesterOrigin;
 }

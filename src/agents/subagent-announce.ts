@@ -9,7 +9,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { getTaskRegistrySnapshot } from "../tasks/task-registry.js";
+import { getTaskRequesterOriginForStatus } from "../tasks/task-status-access.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -234,9 +234,7 @@ function resolveTaskAwareCompletionContext(params: {
   if (!taskId) {
     return { error: "task_id_missing" };
   }
-  const snapshot = getTaskRegistrySnapshot();
-  const state = snapshot.deliveryStates.find((candidate) => candidate.taskId === taskId);
-  const requesterOrigin = normalizeDeliveryContext(state?.requesterOrigin);
+  const requesterOrigin = normalizeDeliveryContext(getTaskRequesterOriginForStatus(taskId));
   const to = normalizeOptionalString(requesterOrigin?.to);
   if (!requesterOrigin?.channel || !to) {
     return { taskId, error: "context_missing" };
