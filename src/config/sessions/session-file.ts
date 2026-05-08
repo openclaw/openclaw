@@ -33,13 +33,16 @@ export async function resolveAndPersistSessionFile(params: {
     : !baseEntry.sessionFile && fallbackSessionFile
       ? { ...baseEntry, sessionFile: fallbackSessionFile }
       : baseEntry;
+  const entrySessionFile = entryForResolve.sessionFile?.trim();
   const sessionFile =
-    fallbackSessionFile && !params.sessionsDir
-      ? path.resolve(fallbackSessionFile)
-      : resolveSessionFilePath(sessionId, entryForResolve, {
-          agentId: params.agentId,
-          sessionsDir: params.sessionsDir,
-        });
+    !params.sessionsDir && entrySessionFile && path.isAbsolute(entrySessionFile)
+      ? path.resolve(entrySessionFile)
+      : fallbackSessionFile && !params.sessionsDir
+        ? path.resolve(fallbackSessionFile)
+        : resolveSessionFilePath(sessionId, entryForResolve, {
+            agentId: params.agentId,
+            sessionsDir: params.sessionsDir,
+          });
   const persistedEntry: SessionEntry = {
     ...baseEntry,
     sessionId,

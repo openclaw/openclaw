@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
@@ -54,11 +55,7 @@ async function estimateParentTranscriptTokensFromSqlite(params: {
   agentId: string;
 }): Promise<number | undefined> {
   try {
-    const filePath = resolveSessionFilePath(
-      params.parentEntry.sessionId,
-      params.parentEntry,
-      resolveSessionFilePathOptions({ agentId: params.agentId }),
-    );
+    const filePath = resolveForkParentSessionFile(params.parentEntry, params.agentId);
     const scope = resolveSqliteSessionTranscriptScope({
       agentId: params.agentId,
       sessionId: params.parentEntry.sessionId,
@@ -75,6 +72,18 @@ async function estimateParentTranscriptTokensFromSqlite(params: {
   } catch {
     return undefined;
   }
+}
+
+function resolveForkParentSessionFile(parentEntry: StoreSessionEntry, agentId: string): string {
+  const sessionFile = parentEntry.sessionFile?.trim();
+  if (sessionFile && path.isAbsolute(sessionFile)) {
+    return path.resolve(sessionFile);
+  }
+  return resolveSessionFilePath(
+    parentEntry.sessionId,
+    parentEntry,
+    resolveSessionFilePathOptions({ agentId }),
+  );
 }
 
 export async function resolveParentForkTokenCountRuntime(params: {
@@ -298,11 +307,7 @@ export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
 }): Promise<{ sessionId: string; sessionFile: string } | null> {
-  const parentSessionFile = resolveSessionFilePath(
-    params.parentEntry.sessionId,
-    params.parentEntry,
-    { agentId: params.agentId },
-  );
+  const parentSessionFile = resolveForkParentSessionFile(params.parentEntry, params.agentId);
   if (!parentSessionFile) {
     return null;
   }

@@ -319,16 +319,14 @@ describe("forkSessionFromParentRuntime", () => {
     if (fork === null) {
       throw new Error("Expected forked session");
     }
-    const agentSessionsDir = path.join(root, "agents", "main", "sessions");
     expect(fork.sessionFile).toBe(fork.sessionId);
     expect(fork.sessionId).not.toBe(parentSessionId);
     const forkedEntries = readTranscript("main", fork.sessionId) as Array<Record<string, unknown>>;
-    const resolvedParentSessionFile = path.join(agentSessionsDir, `${parentSessionId}.jsonl`);
     expect(forkedEntries[0]).toMatchObject({
       type: "session",
       id: fork.sessionId,
       cwd,
-      parentSession: resolvedParentSessionFile,
+      parentSession: path.resolve(parentSessionFile),
     });
     expect(forkedEntries.map((entry) => entry.type)).toEqual([
       "session",
@@ -377,17 +375,10 @@ describe("forkSessionFromParentRuntime", () => {
     }
     const entries = readTranscript("main", fork.sessionId) as Array<Record<string, unknown>>;
     expect(entries).toHaveLength(1);
-    const resolvedParentSessionFile = path.join(
-      root,
-      "agents",
-      "main",
-      "sessions",
-      `${parentSessionId}.jsonl`,
-    );
     expect(entries[0]).toMatchObject({
       type: "session",
       id: fork.sessionId,
-      parentSession: resolvedParentSessionFile,
+      parentSession: path.resolve(parentSessionFile),
     });
   });
 });
