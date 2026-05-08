@@ -149,7 +149,7 @@ import { runEmbeddedPiAgent } from "./agents/pi-embedded-runner.js";
 const result = await runEmbeddedPiAgent({
   sessionId: "user-123",
   sessionKey: "main:whatsapp:+1234567890",
-  sessionFile: "/path/to/session.jsonl",
+  sessionFile: "sqlite-transcript://main/user-123.jsonl",
   workspaceDir: "/path/to/workspace",
   config: openclawConfig,
   prompt: "Hello, how are you?",
