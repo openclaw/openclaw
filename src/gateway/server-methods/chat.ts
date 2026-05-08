@@ -1377,6 +1377,9 @@ async function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
   content?: Array<Record<string, unknown>>;
+  command?: boolean;
+  interactive?: unknown;
+  channelData?: unknown;
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
@@ -1425,6 +1428,9 @@ async function appendAssistantTranscriptMessage(params: {
     message: params.message,
     label: params.label,
     content: params.content,
+    command: params.command,
+    interactive: params.interactive,
+    channelData: params.channelData,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
     config: params.cfg,
@@ -2853,6 +2859,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       message: string;
       label?: string;
+      idempotencyKey?: string;
+      command?: boolean;
+      interactive?: unknown;
+      channelData?: unknown;
     };
 
     // Load session to find transcript file
@@ -2867,6 +2877,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     const appended = await appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
+      command: p.command,
+      interactive: p.interactive,
+      channelData: p.channelData,
+      idempotencyKey: p.idempotencyKey,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
@@ -2874,6 +2888,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       createIfMissing: true,
       cfg,
     });
+    if (appended.ok && !appended.messageId && !appended.message) {
+      respond(true, { ok: true, duplicate: true });
+      return;
+    }
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(
         false,

@@ -50,6 +50,58 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
   });
 
+  it("renders plugin command actions as text without dead callback buttons", async () => {
+    const actions: Array<{
+      kind: "command" | "decision";
+      label: string;
+      command: string;
+      style: "primary" | "danger";
+      decision?: "deny";
+    }> = [
+      {
+        kind: "command",
+        label: "Verify with World",
+        command: "/agentkit approve plugin:approval-1 allow-once",
+        style: "primary",
+      },
+      {
+        kind: "decision",
+        decision: "deny",
+        label: "Deny",
+        command: "/approve plugin:approval-1 deny",
+        style: "danger",
+      },
+    ];
+
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "plugin:approval-1",
+        request: {
+          title: "World proof required",
+          description: "Verify before running the tool.",
+          actions,
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        approvalId: "plugin:approval-1",
+        actions,
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain("/agentkit approve plugin:approval-1 allow-once");
+    expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Deny"]);
+  });
+
   it("passes topic thread ids to typing and message delivery", async () => {
     const sendTyping = vi.fn().mockResolvedValue({ ok: true });
     const sendMessage = vi.fn().mockResolvedValue({

@@ -49,6 +49,9 @@
     },
     "visibleReplies": "message_tool"
   },
+  "plugins": {
+    "enabled": true
+  },
   "tools": {
     "profiles": {
       "coding": {

@@ -40,7 +40,45 @@ describe("plugin-sdk/approval-renderers", () => {
           },
         ],
       },
-      channelDataExpected: undefined,
+      channelDataExpected: {
+        execApproval: {
+          agentId: undefined,
+          approvalId: "plugin:approval-123",
+          approvalKind: "exec",
+          approvalSlug: "plugin:a",
+          actions: [
+            {
+              kind: "decision",
+              decision: "allow-once",
+              label: "Allow Once",
+              style: "success",
+              command: "/approve plugin:approval-123 allow-once",
+            },
+            {
+              kind: "decision",
+              decision: "allow-always",
+              label: "Allow Always",
+              style: "primary",
+              command: "/approve plugin:approval-123 allow-always",
+            },
+            {
+              kind: "decision",
+              decision: "deny",
+              label: "Deny",
+              style: "danger",
+              command: "/approve plugin:approval-123 deny",
+            },
+          ],
+          allowedDecisions: ["allow-once", "allow-always", "deny"],
+          description: undefined,
+          pluginId: undefined,
+          sessionKey: undefined,
+          severity: undefined,
+          state: "pending",
+          title: undefined,
+          toolName: undefined,
+        },
+      },
     },
     {
       name: "builds plugin pending payloads with approval metadata and extra channel data",
@@ -93,9 +131,37 @@ describe("plugin-sdk/approval-renderers", () => {
           approvalId: "plugin-approval-123",
           approvalKind: "plugin",
           approvalSlug: "custom-slug",
+          actions: [
+            {
+              kind: "decision",
+              decision: "allow-once",
+              label: "Allow Once",
+              style: "success",
+              command: "/approve plugin-approval-123 allow-once",
+            },
+            {
+              kind: "decision",
+              decision: "allow-always",
+              label: "Allow Always",
+              style: "primary",
+              command: "/approve plugin-approval-123 allow-always",
+            },
+            {
+              kind: "decision",
+              decision: "deny",
+              label: "Deny",
+              style: "danger",
+              command: "/approve plugin-approval-123 deny",
+            },
+          ],
           allowedDecisions: ["allow-once", "allow-always", "deny"],
+          description: "Needs approval",
+          pluginId: undefined,
           sessionKey: undefined,
+          severity: undefined,
           state: "pending",
+          title: "Sensitive action",
+          toolName: undefined,
         },
         telegram: {
           quoteText: "quoted",
@@ -144,9 +210,30 @@ describe("plugin-sdk/approval-renderers", () => {
           approvalId: "plugin-approval-123",
           approvalKind: "plugin",
           approvalSlug: "plugin-a",
+          actions: [
+            {
+              kind: "decision",
+              decision: "allow-once",
+              label: "Allow Once",
+              style: "success",
+              command: "/approve plugin-approval-123 allow-once",
+            },
+            {
+              kind: "decision",
+              decision: "deny",
+              label: "Deny",
+              style: "danger",
+              command: "/approve plugin-approval-123 deny",
+            },
+          ],
           allowedDecisions: ["allow-once", "deny"],
+          description: "Needs approval",
+          pluginId: undefined,
           sessionKey: undefined,
+          severity: undefined,
           state: "pending",
+          title: "Sensitive action",
+          toolName: undefined,
         },
       },
     },
@@ -206,5 +293,50 @@ describe("plugin-sdk/approval-renderers", () => {
     if (channelDataExpected) {
       expect(payload.channelData).toEqual(channelDataExpected);
     }
+  });
+
+  it("uses plugin request allowed decisions when rendering plugin pending payloads", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-approval-deny-only",
+        request: {
+          title: "World proof required",
+          description: "Verify with AgentKit",
+          allowedDecisions: ["deny"],
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+      },
+      nowMs: 1_000,
+    });
+
+    expect(payload.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Deny",
+              value: "/approve plugin-approval-deny-only deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+    expect(payload.channelData?.execApproval).toEqual(
+      expect.objectContaining({
+        allowedDecisions: ["deny"],
+        actions: [
+          {
+            kind: "decision",
+            decision: "deny",
+            label: "Deny",
+            style: "danger",
+            command: "/approve plugin-approval-deny-only deny",
+          },
+        ],
+      }),
+    );
   });
 });

@@ -27,16 +27,24 @@ export type ExecApprovalReplyMetadata = {
   approvalId: string;
   approvalSlug: string;
   approvalKind: "exec" | "plugin";
+  state?: "pending" | "resolved";
   agentId?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   sessionKey?: string;
+  title?: string;
+  description?: string;
+  severity?: "info" | "warning" | "critical";
+  toolName?: string;
+  pluginId?: string;
+  actions?: readonly ExecApprovalActionDescriptor[];
 };
 
 export type ExecApprovalActionDescriptor = {
-  decision: ExecApprovalReplyDecision;
+  kind: "decision" | "command";
   label: string;
   style: NonNullable<InteractiveReplyButton["style"]>;
   command: string;
+  decision?: ExecApprovalReplyDecision;
 };
 
 export type ExecApprovalPendingReplyParams = {
@@ -98,6 +106,44 @@ function buildApprovalCommandFence(
   return buildFence(descriptors.map((descriptor) => descriptor.command).join("\n"), "txt");
 }
 
+function parseExecApprovalActions(value: unknown): ExecApprovalActionDescriptor[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const descriptors: ExecApprovalActionDescriptor[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const kind =
+      record.kind === "decision" ? "decision" : record.kind === "command" ? "command" : "";
+    const label = normalizeOptionalString(record.label) ?? "";
+    const style =
+      record.style === "primary" || record.style === "success" || record.style === "danger"
+        ? record.style
+        : "";
+    const command = normalizeOptionalString(record.command) ?? "";
+    if (!kind || !label || !style || !command) {
+      continue;
+    }
+    const decision =
+      record.decision === "allow-once" ||
+      record.decision === "allow-always" ||
+      record.decision === "deny"
+        ? record.decision
+        : undefined;
+    descriptors.push({
+      kind,
+      label,
+      style,
+      ...(decision ? { decision } : {}),
+      command,
+    });
+  }
+  return descriptors.length > 0 ? descriptors : undefined;
+}
+
 export function buildExecApprovalCommandText(params: {
   approvalCommandId: string;
   decision: ExecApprovalReplyDecision;
@@ -118,6 +164,7 @@ export function buildExecApprovalActionDescriptors(params: {
   const descriptors: ExecApprovalActionDescriptor[] = [];
   if (allowedDecisions.includes("allow-once")) {
     descriptors.push({
+      kind: "decision",
       decision: "allow-once",
       label: "Allow Once",
       style: "success",
@@ -129,6 +176,7 @@ export function buildExecApprovalActionDescriptors(params: {
   }
   if (allowedDecisions.includes("allow-always")) {
     descriptors.push({
+      kind: "decision",
       decision: "allow-always",
       label: "Allow Always",
       style: "primary",
@@ -140,6 +188,7 @@ export function buildExecApprovalActionDescriptors(params: {
   }
   if (allowedDecisions.includes("deny")) {
     descriptors.push({
+      kind: "decision",
       decision: "deny",
       label: "Deny",
       style: "danger",
@@ -272,15 +321,33 @@ export function getExecApprovalReplyMetadata(
           value === "allow-once" || value === "allow-always" || value === "deny",
       )
     : undefined;
+  const state =
+    record.state === "pending" || record.state === "resolved" ? record.state : undefined;
   const agentId = normalizeOptionalString(record.agentId);
   const sessionKey = normalizeOptionalString(record.sessionKey);
+  const title = normalizeOptionalString(record.title);
+  const description = normalizeOptionalString(record.description);
+  const severity =
+    record.severity === "info" || record.severity === "warning" || record.severity === "critical"
+      ? record.severity
+      : undefined;
+  const toolName = normalizeOptionalString(record.toolName);
+  const pluginId = normalizeOptionalString(record.pluginId);
+  const actions = parseExecApprovalActions(record.actions);
   return {
     approvalId,
     approvalSlug,
     approvalKind,
+    state,
     agentId,
     allowedDecisions,
     sessionKey,
+    title,
+    description,
+    severity,
+    toolName,
+    pluginId,
+    actions,
   };
 }
 
@@ -345,8 +412,10 @@ export function buildExecApprovalPendingReplyPayload(
         approvalSlug: params.approvalSlug,
         approvalKind: "exec",
         agentId: normalizeOptionalString(params.agentId),
+        actions: descriptors,
         allowedDecisions,
         sessionKey: normalizeOptionalString(params.sessionKey),
+        state: "pending",
       },
     },
   };

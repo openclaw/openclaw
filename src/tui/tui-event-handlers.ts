@@ -1,4 +1,10 @@
 import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  getExecApprovalReplyMetadata,
+  type ExecApprovalActionDescriptor,
+} from "../infra/exec-approval-reply.js";
+import type { PluginApprovalRequest, PluginApprovalResolved } from "../infra/plugin-approvals.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -46,11 +52,28 @@ type EventHandlerContext = {
   /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
   streamingWatchdogMs?: number;
   localMode?: boolean;
+  openPluginApprovalPrompt?: (params: {
+    approvalId: string;
+    title: string;
+    description?: string;
+    severity?: "info" | "warning" | "critical";
+    pluginId?: string;
+    toolName?: string;
+    actions: readonly ExecApprovalActionDescriptor[];
+  }) => void;
+  closePluginApprovalPrompt?: (approvalId?: string) => void;
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
 const STREAMING_WATCHDOG_USER_MESSAGE =
   "This response is taking longer than expected. Send another message to continue.";
+
+function asReplyPayloadRecord(message: unknown): ReplyPayload | null {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return null;
+  }
+  return message as ReplyPayload;
+}
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -69,6 +92,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
     localMode,
+    openPluginApprovalPrompt,
+    closePluginApprovalPrompt,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
@@ -177,6 +202,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
+    closePluginApprovalPrompt?.();
     btw.clear();
     clearStreamingWatchdog();
   };
@@ -407,9 +433,30 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       if (isCommandMessage(evt.message)) {
         maybeRefreshHistoryForRun(evt.runId);
+        const replyPayload = asReplyPayloadRecord(evt.message);
+        const approvalMetadata = replyPayload ? getExecApprovalReplyMetadata(replyPayload) : null;
         const text = extractTextFromMessage(evt.message);
         if (text) {
           chatLog.addSystem(text);
+        }
+        if (
+          approvalMetadata?.state === "pending" &&
+          approvalMetadata.approvalKind === "plugin" &&
+          approvalMetadata.actions &&
+          approvalMetadata.actions.length > 0
+        ) {
+          openPluginApprovalPrompt?.({
+            approvalId: approvalMetadata.approvalId,
+            title: approvalMetadata.title ?? "Plugin approval required",
+            description: approvalMetadata.description,
+            severity: approvalMetadata.severity,
+            pluginId: approvalMetadata.pluginId,
+            toolName: approvalMetadata.toolName,
+            actions: approvalMetadata.actions,
+          });
+        }
+        if (approvalMetadata?.state === "resolved") {
+          closePluginApprovalPrompt?.(approvalMetadata.approvalId);
         }
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();
@@ -563,6 +610,47 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog();
   };
 
+  const handlePluginApprovalRequested = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const request = payload as PluginApprovalRequest;
+    syncSessionKey();
+    if (!isSameSessionKey(request.request.sessionKey ?? undefined, state.currentSessionKey)) {
+      return;
+    }
+    const actions = Array.isArray(request.request.actions) ? request.request.actions : [];
+    if (actions.length === 0) {
+      return;
+    }
+    openPluginApprovalPrompt?.({
+      approvalId: request.id,
+      title: request.request.title,
+      description: request.request.description,
+      severity: request.request.severity ?? undefined,
+      pluginId: request.request.pluginId ?? undefined,
+      toolName: request.request.toolName ?? undefined,
+      actions,
+    });
+    tui.requestRender();
+  };
+
+  const handlePluginApprovalResolved = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const resolved = payload as PluginApprovalResolved;
+    syncSessionKey();
+    if (
+      resolved.request?.sessionKey &&
+      !isSameSessionKey(resolved.request.sessionKey, state.currentSessionKey)
+    ) {
+      return;
+    }
+    closePluginApprovalPrompt?.(resolved.id);
+    tui.requestRender();
+  };
+
   return {
     handleChatEvent,
     handleAgentEvent,
@@ -570,5 +658,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
     dispose,
+    handlePluginApprovalRequested,
+    handlePluginApprovalResolved,
   };
 }

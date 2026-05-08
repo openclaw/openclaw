@@ -1028,6 +1028,162 @@ describe("before_tool_call requireApproval handling", () => {
     expect(waitCall[2]).toEqual({ id: "server-id-1" });
   });
 
+  it("injects pending and resolved approval replies into the current session for detached approvals", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "World proof required",
+        description: "Verify with World before continuing",
+        keepPendingWithoutRoute: true,
+        actions: [
+          {
+            kind: "command",
+            label: "Verify with World",
+            style: "primary",
+            commandTemplate: "/agentkit approve {id}",
+          },
+          {
+            kind: "decision",
+            label: "Deny",
+            style: "danger",
+            decision: "deny",
+            commandTemplate: "/approve {id} deny",
+          },
+        ],
+      },
+    });
+
+    mockCallGateway.mockImplementation(async (method) => {
+      if (method === "plugin.approval.request") {
+        return { id: "plugin:world-1", status: "accepted" };
+      }
+      if (method === "plugin.approval.waitDecision") {
+        return { id: "plugin:world-1", decision: "allow-once" };
+      }
+      return { ok: true };
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "agents_list",
+      params: {},
+      toolCallId: "tool-call-1",
+      ctx: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+      },
+    });
+
+    expect(result).toEqual({ blocked: false, params: {} });
+    expect(mockCallGateway).toHaveBeenNthCalledWith(
+      2,
+      "chat.inject",
+      {},
+      expect.objectContaining({
+        sessionKey: "agent:main:test",
+        command: true,
+        message: expect.stringContaining("Plugin approval required"),
+        interactive: expect.objectContaining({
+          blocks: expect.any(Array),
+        }),
+        channelData: expect.objectContaining({
+          execApproval: expect.objectContaining({
+            approvalId: "plugin:world-1",
+            approvalKind: "plugin",
+            state: "pending",
+            toolName: "agents_list",
+          }),
+        }),
+        idempotencyKey: "plugin-approval:plugin:world-1:pending",
+      }),
+    );
+    expect(mockCallGateway).toHaveBeenNthCalledWith(
+      4,
+      "chat.inject",
+      {},
+      expect.objectContaining({
+        sessionKey: "agent:main:test",
+        command: true,
+        message: expect.stringContaining("allowed once"),
+        channelData: expect.objectContaining({
+          execApproval: expect.objectContaining({
+            approvalId: "plugin:world-1",
+            state: "resolved",
+          }),
+        }),
+        idempotencyKey: "plugin-approval:plugin:world-1:resolved:allow-once",
+      }),
+    );
+  });
+
+  it("forwards custom approval actions and turn-source routing metadata", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "World proof required",
+        description: "Verify with World before continuing",
+        actions: [
+          {
+            kind: "command",
+            label: "Verify with World",
+            style: "primary",
+            commandTemplate: "/agentkit approve {id}",
+          },
+          {
+            kind: "decision",
+            label: "Deny",
+            style: "danger",
+            decision: "deny",
+            commandTemplate: "/approve {id} deny",
+          },
+        ],
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "plugin:world-1", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "plugin:world-1", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "agents_list",
+      params: {},
+      ctx: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "77",
+      },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(mockCallGateway).toHaveBeenNthCalledWith(
+      1,
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        toolName: "agents_list",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "77",
+        actions: [
+          {
+            kind: "command",
+            label: "Verify with World",
+            style: "primary",
+            commandTemplate: "/agentkit approve {id}",
+          },
+          {
+            kind: "decision",
+            label: "Deny",
+            style: "danger",
+            decision: "deny",
+            commandTemplate: "/approve {id} deny",
+          },
+        ],
+      }),
+      { expectFinal: false },
+    );
+  });
+
   it("blocks on deny decision", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
@@ -1068,6 +1224,55 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval timed out");
+  });
+
+  it("closes detached approval prompts with a resolved timeout reply when verification expires", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "World proof required",
+        description: "Verify with World before continuing",
+        keepPendingWithoutRoute: true,
+      },
+    });
+
+    mockCallGateway.mockImplementation(async (method) => {
+      if (method === "plugin.approval.request") {
+        return { id: "plugin:world-timeout", status: "accepted" };
+      }
+      if (method === "plugin.approval.waitDecision") {
+        return { id: "plugin:world-timeout", decision: null };
+      }
+      return { ok: true };
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "agents_list",
+      params: {},
+      ctx: {
+        agentId: "main",
+        sessionKey: "agent:main:test",
+      },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval timed out");
+    expect(mockCallGateway).toHaveBeenNthCalledWith(
+      4,
+      "chat.inject",
+      {},
+      expect.objectContaining({
+        sessionKey: "agent:main:test",
+        command: true,
+        message: expect.stringContaining("timed out"),
+        channelData: expect.objectContaining({
+          execApproval: expect.objectContaining({
+            approvalId: "plugin:world-timeout",
+            state: "resolved",
+          }),
+        }),
+        idempotencyKey: "plugin-approval:plugin:world-timeout:resolved:timeout",
+      }),
+    );
   });
 
   it("allows on timeout when timeoutBehavior is allow and preserves hook params", async () => {

@@ -519,7 +519,6 @@ describe("EmbeddedTuiBackend", () => {
       },
     ]);
   });
-
   it("registers tool-first local runs before forwarding agent events", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{

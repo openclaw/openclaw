@@ -1203,6 +1203,7 @@
                 "pages": [
                   "plugins/codex-harness",
                   "plugins/codex-computer-use",
+                  "plugins/agentkit",
                   "plugins/google-meet",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",

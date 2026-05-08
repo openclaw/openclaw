@@ -1164,6 +1164,124 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(nodeSend?.[2].sessionKey).toBe("agent:main:canon");
   });
 
+  it("chat.inject preserves command-style approval payload metadata", async () => {
+    createTranscriptFixture("openclaw-chat-inject-command-payload-");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.inject"]({
+      params: {
+        sessionKey: "main",
+        message: "Verification required for protected action",
+        idempotencyKey: "plugin-approval:plugin-123:pending",
+        command: true,
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Verify with World",
+                  value: "/agentkit approve plugin:approval-123",
+                  style: "primary",
+                },
+              ],
+            },
+          ],
+        },
+        channelData: {
+          execApproval: {
+            approvalId: "plugin:approval-123",
+            approvalKind: "plugin",
+            approvalSlug: "plugin:a",
+            state: "pending",
+            title: "Verification required for protected action",
+            description: "Verify before continuing.",
+            actions: [
+              {
+                kind: "command",
+                label: "Verify with World",
+                style: "primary",
+                command: "/agentkit approve plugin:approval-123",
+              },
+            ],
+          },
+        },
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
+    const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+    expect(chatCall?.[0]).toBe("chat");
+    expect(chatCall?.[1]).toEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          command: true,
+          idempotencyKey: "plugin-approval:plugin-123:pending",
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Verify with World",
+                    value: "/agentkit approve plugin:approval-123",
+                    style: "primary",
+                  },
+                ],
+              },
+            ],
+          },
+          channelData: {
+            execApproval: expect.objectContaining({
+              approvalId: "plugin:approval-123",
+              approvalKind: "plugin",
+              state: "pending",
+            }),
+          },
+        }),
+      }),
+    );
+  });
+
+  it("chat.inject treats duplicate idempotency keys as successful no-ops", async () => {
+    createTranscriptFixture("openclaw-chat-inject-duplicate-idempotency-");
+    const context = createChatContext();
+    const params = {
+      sessionKey: "main",
+      message: "Verification required for protected action",
+      idempotencyKey: "plugin-approval:plugin-123:pending",
+      command: true,
+    };
+    const firstRespond = vi.fn();
+    await chatHandlers["chat.inject"]({
+      params,
+      respond: firstRespond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+    expect(firstRespond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
+
+    const secondRespond = vi.fn();
+    await chatHandlers["chat.inject"]({
+      params,
+      respond: secondRespond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(secondRespond).toHaveBeenCalledWith(true, { ok: true, duplicate: true });
+  });
+
   it("chat.send non-streaming final strips external untrusted wrapper metadata from final payload text", async () => {
     createTranscriptFixture("openclaw-chat-send-untrusted-meta-");
     mockState.finalText = `hello\n\n${UNTRUSTED_CONTEXT_SUFFIX}`;

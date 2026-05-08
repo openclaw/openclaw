@@ -252,6 +252,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/copilot-proxy/**"
+"extensions: agentkit":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agentkit/**"
 "extensions: diagnostics-otel":
   - changed-files:
       - any-glob-to-any-file:

@@ -117,6 +117,9 @@ class ExecApprovalActionButton extends Button {
 
   constructor(params: { approvalId: string; descriptor: ExecApprovalActionDescriptor }) {
     super();
+    if (!params.descriptor.decision) {
+      throw new Error("Discord approval buttons only support direct decision actions.");
+    }
     this.customId = buildExecApprovalCustomId(params.approvalId, params.descriptor.decision);
     this.label = params.descriptor.label;
     this.style =
@@ -140,10 +143,29 @@ class ExecApprovalActionRow extends Row<Button> {
   }
 }
 
-function createApprovalActionRow(view: PendingApprovalView): Row<Button> {
+function filterDecisionActions(
+  actions: readonly ExecApprovalActionDescriptor[],
+): ExecApprovalActionDescriptor[] {
+  return actions.filter(
+    (descriptor): descriptor is ExecApprovalActionDescriptor & { decision: ExecApprovalDecision } =>
+      Boolean(descriptor.decision),
+  );
+}
+
+function buildActionHintLines(actions: readonly ExecApprovalActionDescriptor[]): string[] {
+  return actions
+    .filter((descriptor) => descriptor.kind === "command")
+    .map((descriptor) => `- ${descriptor.label}: ${descriptor.command}`);
+}
+
+function createApprovalActionRow(view: PendingApprovalView): Row<Button> | undefined {
+  const decisionActions = filterDecisionActions(view.actions);
+  if (decisionActions.length === 0) {
+    return undefined;
+  }
   return new ExecApprovalActionRow({
     approvalId: view.approvalId,
-    actions: view.actions,
+    actions: decisionActions,
   });
 }
 
@@ -224,6 +246,10 @@ function createPluginApprovalRequestContainer(params: {
   const severity = params.view.severity;
   const accentColor =
     severity === "critical" ? "#ED4245" : severity === "info" ? "#5865F2" : "#FAA61A";
+  const metadataLines = [
+    ...buildApprovalMetadataLines(params.view.metadata),
+    ...buildActionHintLines(params.view.actions),
+  ];
   return new ExecApprovalContainer({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -231,7 +257,7 @@ function createPluginApprovalRequestContainer(params: {
     description: "A plugin action needs your approval.",
     commandPreview: formatCommandPreview(params.view.title, 700),
     commandSecondaryPreview: formatOptionalCommandPreview(params.view.description, 1000),
-    metadataLines: buildApprovalMetadataLines(params.view.metadata),
+    metadataLines,
     actionRow: params.actionRow,
     footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${params.view.approvalId}`,
     accentColor,

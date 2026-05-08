@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import type { ExecApprovalActionDescriptor } from "../infra/exec-approval-reply.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
@@ -27,13 +29,14 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
+import { PluginApprovalCard } from "./components/plugin-approval-card.js";
 import { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatTokens } from "./tui-formatters.js";
+import { formatTokens, sanitizeRenderableText } from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
   readTuiLastSessionKey,
@@ -1047,6 +1050,108 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       chatLog.dismissBtw();
     },
   };
+  let pendingPluginApprovalOverlay: {
+    approvalId: string;
+    handle: ReturnType<TUI["showOverlay"]>;
+  } | null = null;
+
+  const dismissPluginApprovalPrompt = (approvalId?: string) => {
+    if (!pendingPluginApprovalOverlay) {
+      return;
+    }
+    if (approvalId && pendingPluginApprovalOverlay.approvalId !== approvalId) {
+      return;
+    }
+    pendingPluginApprovalOverlay.handle.hide();
+    pendingPluginApprovalOverlay = null;
+    tui.setFocus(editor);
+    tui.requestRender();
+  };
+
+  const startPluginApprovalAction = async (
+    action: ExecApprovalActionDescriptor,
+  ): Promise<boolean> => {
+    if (!state.isConnected) {
+      chatLog.addSystem("not connected to gateway — approval action not sent");
+      setActivityStatus("disconnected");
+      tui.requestRender();
+      return false;
+    }
+    chatLog.addSystem(`Starting ${action.label}...`);
+    tui.requestRender();
+    try {
+      await client.sendChat({
+        sessionKey: state.currentSessionKey,
+        message: action.command,
+        thinking: opts.thinking,
+        deliver: deliverDefault,
+        timeoutMs: opts.timeoutMs,
+        runId: randomUUID(),
+      });
+      return true;
+    } catch (error) {
+      chatLog.addSystem(
+        `approval action failed: ${sanitizeRenderableText(
+          error instanceof Error ? error.message : String(error),
+        )}`,
+      );
+      tui.requestRender();
+      return false;
+    }
+  };
+
+  const openPluginApprovalPrompt = (params: {
+    approvalId: string;
+    title: string;
+    description?: string;
+    severity?: "info" | "warning" | "critical";
+    pluginId?: string;
+    toolName?: string;
+    actions: readonly ExecApprovalActionDescriptor[];
+  }) => {
+    if (pendingPluginApprovalOverlay?.approvalId === params.approvalId) {
+      pendingPluginApprovalOverlay.handle.focus();
+      tui.requestRender();
+      return;
+    }
+    if (pendingPluginApprovalOverlay) {
+      pendingPluginApprovalOverlay.handle.hide();
+      pendingPluginApprovalOverlay = null;
+    }
+    const handle = tui.showOverlay(
+      new PluginApprovalCard({
+        approvalId: params.approvalId,
+        title: params.title,
+        description: params.description,
+        severity: params.severity,
+        pluginId: params.pluginId,
+        toolName: params.toolName,
+        actions: params.actions,
+        onAction: (action) => {
+          void (async () => {
+            const dispatched = await startPluginApprovalAction(action);
+            if (dispatched) {
+              dismissPluginApprovalPrompt(params.approvalId);
+            }
+          })();
+        },
+        onCancel: () => {
+          dismissPluginApprovalPrompt(params.approvalId);
+        },
+      }),
+      {
+        anchor: "center",
+        width: "72%",
+        maxHeight: "80%",
+      },
+    );
+    pendingPluginApprovalOverlay = {
+      approvalId: params.approvalId,
+      handle,
+    };
+    handle.focus();
+    tui.requestRender();
+  };
 
   const initialSessionAgentId = (() => {
     if (!initialSessionInput) {
@@ -1089,6 +1194,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     handleBtwEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
+    handlePluginApprovalRequested,
+    handlePluginApprovalResolved,
   } = createEventHandlers({
     chatLog,
     btw,
@@ -1105,6 +1212,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    openPluginApprovalPrompt,
+    closePluginApprovalPrompt: dismissPluginApprovalPrompt,
   });
 
   const deferredFinish = createDeferredTuiFinish();
@@ -1278,6 +1387,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }
     if (evt.event === "agent") {
       handleAgentEvent(evt.payload);
+    }
+    if (evt.event === "plugin.approval.requested") {
+      handlePluginApprovalRequested(evt.payload);
+    }
+    if (evt.event === "plugin.approval.resolved") {
+      handlePluginApprovalResolved(evt.payload);
     }
   };
 

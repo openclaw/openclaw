@@ -49,6 +49,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
+  command?: boolean;
+  interactive?: unknown;
+  channelData?: unknown;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
@@ -90,6 +93,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     api: "openai-responses",
     provider: "openclaw",
     model: "gateway-injected",
+    ...(params.command === true ? { command: true } : {}),
+    ...(params.interactive !== undefined ? { interactive: params.interactive } : {}),
+    ...(params.channelData !== undefined ? { channelData: params.channelData } : {}),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.abortMeta
       ? {

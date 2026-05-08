@@ -1,0 +1,218 @@
+{
+  "id": "agentkit",
+  "name": "AgentKit",
+  "description": "World AgentKit support for human-backed delegation and World ID HITL approvals.",
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["agentkit"],
+    "onCapabilities": ["hook"]
+  },
+  "commandAliases": [
+    {
+      "name": "agentkit",
+      "kind": "runtime-slash",
+      "cliCommand": "agentkit"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "walletAddress": {
+        "type": "string"
+      },
+      "cli": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "string",
+            "default": "agentkit"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "hitl": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["delegation", "human-approval"],
+            "default": "delegation"
+          },
+          "resourceUrl": {
+            "type": "string"
+          },
+          "protectedTools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["info", "warning", "critical"],
+            "default": "warning"
+          },
+          "timeoutMs": {
+            "type": "number",
+            "default": 120000
+          },
+          "grantScope": {
+            "type": "string",
+            "enum": ["session", "agent"],
+            "default": "session"
+          },
+          "grantTtlMs": {
+            "type": "number",
+            "default": 1800000
+          },
+          "grantsFile": {
+            "type": "string"
+          },
+          "humanApproval": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "provider": {
+                "type": "string",
+                "enum": ["hosted", "custom"],
+                "default": "hosted"
+              },
+              "brokerUrl": {
+                "type": "string"
+              },
+              "appId": {
+                "type": "string"
+              },
+              "rpId": {
+                "type": "string"
+              },
+              "signingKey": {
+                "type": "string"
+              },
+              "signingKeyEnvVar": {
+                "type": "string"
+              },
+              "environment": {
+                "type": "string",
+                "enum": ["production", "staging"],
+                "default": "production"
+              },
+              "actionPrefix": {
+                "type": "string",
+                "default": "openclaw-approval"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "walletAddress": {
+      "label": "Agent Wallet Address",
+      "help": "Wallet address to register with World AgentKit for human-backed agent delegation."
+    },
+    "cli.command": {
+      "label": "AgentKit CLI Command",
+      "help": "Executable used for the local AgentKit registration flow. Defaults to 'agentkit'.",
+      "advanced": true
+    },
+    "cli.args": {
+      "label": "AgentKit CLI Arguments",
+      "help": "Optional fixed arguments prepended before `register <wallet>`, for example [\"-y\", \"@worldcoin/agentkit-cli\"] when using npx.",
+      "advanced": true
+    },
+    "hitl.enabled": {
+      "label": "Enable AgentKit HITL",
+      "help": "Require OpenClaw plugin approvals for selected tools until either a delegation grant or a World human approval proof is established."
+    },
+    "hitl.mode": {
+      "label": "HITL Mode",
+      "help": "Choose whether protected tools use AgentBook-backed delegation (`delegation`) or World ID approval proofs (`human-approval`)."
+    },
+    "hitl.resourceUrl": {
+      "label": "HITL Protected Resource URL",
+      "help": "AgentKit-protected resource URL used to verify proof-backed delegation before resolving pending approvals in `delegation` mode."
+    },
+    "hitl.protectedTools": {
+      "label": "HITL Protected Tools",
+      "help": "Tool names that should pause for human-backed authorization before they can run, for example [\"exec\"]."
+    },
+    "hitl.severity": {
+      "label": "HITL Approval Severity",
+      "help": "Severity shown on the pending AgentKit approval request.",
+      "advanced": true
+    },
+    "hitl.timeoutMs": {
+      "label": "HITL Approval Timeout",
+      "help": "Milliseconds before a pending AgentKit approval expires.",
+      "advanced": true
+    },
+    "hitl.grantScope": {
+      "label": "HITL Grant Scope",
+      "help": "Whether successful AgentKit delegation applies to the current session or the current agent.",
+      "advanced": true
+    },
+    "hitl.grantTtlMs": {
+      "label": "HITL Grant TTL",
+      "help": "Milliseconds that an allow-always AgentKit delegation grant stays valid.",
+      "advanced": true
+    },
+    "hitl.grantsFile": {
+      "label": "HITL Grants File",
+      "help": "Optional override path for the AgentKit HITL grant store.",
+      "advanced": true
+    },
+    "hitl.humanApproval.provider": {
+      "label": "World Approval Provider",
+      "help": "Use a configured hosted World approval broker, or custom credentials for self-hosted and enterprise deployments."
+    },
+    "hitl.humanApproval.brokerUrl": {
+      "label": "World Approval Broker URL",
+      "help": "Required hosted broker endpoint that signs short-lived World approval requests without exposing a World signing key to OpenClaw clients.",
+      "advanced": true
+    },
+    "hitl.humanApproval.appId": {
+      "label": "World App ID",
+      "help": "World ID app_id from the Developer Portal used for custom QR-based human approvals.",
+      "advanced": true
+    },
+    "hitl.humanApproval.rpId": {
+      "label": "World RP ID",
+      "help": "World ID rp_id from the Developer Portal used to verify custom human approval proofs.",
+      "advanced": true
+    },
+    "hitl.humanApproval.signingKey": {
+      "label": "World Signing Key",
+      "help": "World ID signing key used to sign custom approval requests. Prefer a secret or environment indirection outside committed config.",
+      "advanced": true
+    },
+    "hitl.humanApproval.signingKeyEnvVar": {
+      "label": "World Signing Key Env Var",
+      "help": "Environment variable name that contains the World ID signing key for custom QR-based human approvals.",
+      "advanced": true
+    },
+    "hitl.humanApproval.environment": {
+      "label": "World Environment",
+      "help": "World environment for human approval requests (`production` or `staging`).",
+      "advanced": true
+    },
+    "hitl.humanApproval.actionPrefix": {
+      "label": "World Approval Action Prefix",
+      "help": "Prefix used when binding a World approval proof to a specific pending OpenClaw approval.",
+      "advanced": true
+    }
+  }
+}

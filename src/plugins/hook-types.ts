@@ -9,6 +9,7 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
@@ -431,6 +432,10 @@ export type PluginHookToolContext = {
   sessionId?: string;
   runId?: string;
   trace?: DiagnosticTraceContext;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   toolName: string;
   toolCallId?: string;
   getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
@@ -472,12 +477,20 @@ export type PluginHookBeforeToolCallResult = {
   block?: boolean;
   blockReason?: string;
   requireApproval?: {
+    actions?: Array<{
+      kind: "decision" | "command";
+      label: string;
+      style: "primary" | "success" | "danger";
+      decision?: ExecApprovalDecision;
+      commandTemplate: string;
+    }>;
     title: string;
     description: string;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
+    keepPendingWithoutRoute?: boolean;
     pluginId?: string;
     onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
   };

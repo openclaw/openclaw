@@ -1,3 +1,4 @@
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import {
@@ -13,8 +14,19 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import {
+  expandPluginApprovalActionTemplates,
+  type PluginApprovalRequest as StoredPluginApprovalRequest,
+  type PluginApprovalRequestPayload,
+  type PluginApprovalResolved,
+} from "../infra/plugin-approvals.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  buildApprovalResolvedReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
+  buildPluginApprovalResolvedReplyPayload,
+} from "../plugin-sdk/approval-renderers.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
@@ -25,6 +37,7 @@ import {
   type PluginHookBeforeToolCallResult,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { adjustedParamsByToolCallId } from "./pi-tools.before-tool-call.state.js";
@@ -62,12 +75,13 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  sandbox?: { root: string; bridge: SandboxFsBridge };
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
-  sandbox?: {
-    root: string;
-    bridge: SandboxFsBridge;
-  };
 };
 
 type HookBlockedKind = "veto" | "failure";
@@ -81,7 +95,7 @@ type HookOutcome =
       params?: unknown;
     }
   | { blocked: false; params: unknown };
-type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
+type PluginApprovalHookRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
@@ -149,7 +163,7 @@ function unwrapErrorCause(err: unknown): unknown {
 }
 
 async function requestPluginToolApproval(params: {
-  approval: PluginApprovalRequest;
+  approval: PluginApprovalHookRequest;
   toolName: string;
   toolCallId?: string;
   ctx?: HookContext;
@@ -158,6 +172,8 @@ async function requestPluginToolApproval(params: {
   overrideParams?: unknown;
 }): Promise<HookOutcome> {
   const approval = params.approval;
+  let approvalSnapshot: StoredPluginApprovalRequest | null = null;
+  let didInjectPendingApproval = false;
   const safeOnResolution = (resolution: PluginApprovalResolution): void => {
     const onResolution = approval.onResolution;
     if (typeof onResolution !== "function") {
@@ -169,6 +185,52 @@ async function requestPluginToolApproval(params: {
       });
     } catch (err) {
       log.warn(`plugin onResolution callback failed: ${String(err)}`);
+    }
+  };
+  const maybeInjectResolvedApprovalIntoSession = async (
+    resolution: PluginApprovalResolution,
+  ): Promise<void> => {
+    if (!didInjectPendingApproval || !approvalSnapshot) {
+      return;
+    }
+    let payload: ReplyPayload;
+    if (
+      resolution === PluginApprovalResolutions.ALLOW_ONCE ||
+      resolution === PluginApprovalResolutions.ALLOW_ALWAYS ||
+      resolution === PluginApprovalResolutions.DENY
+    ) {
+      const resolved: PluginApprovalResolved = {
+        id: approvalSnapshot.id,
+        decision: resolution,
+        request: approvalSnapshot.request,
+        ts: Date.now(),
+      };
+      payload = buildPluginApprovalResolvedReplyPayload({ resolved });
+    } else if (resolution === PluginApprovalResolutions.TIMEOUT) {
+      payload = buildApprovalResolvedReplyPayload({
+        approvalId: approvalSnapshot.id,
+        approvalSlug: approvalSnapshot.id.slice(0, 8),
+        text: `Plugin approval timed out. ID: ${approvalSnapshot.id}`,
+      });
+    } else {
+      payload = buildApprovalResolvedReplyPayload({
+        approvalId: approvalSnapshot.id,
+        approvalSlug: approvalSnapshot.id.slice(0, 8),
+        text: `Plugin approval cancelled. ID: ${approvalSnapshot.id}`,
+      });
+    }
+    try {
+      await injectReplyPayloadIntoSession({
+        sessionKey: params.ctx?.sessionKey,
+        payload,
+        idempotencyKey: `plugin-approval:${approvalSnapshot.id}:resolved:${resolution}`,
+      });
+    } catch (err) {
+      log.warn(
+        `plugin approval session resolved-message injection failed: id=${approvalSnapshot.id} error=${String(
+          err,
+        )}`,
+      );
     }
   };
   try {
@@ -191,7 +253,13 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        turnSourceChannel: params.ctx?.turnSourceChannel,
+        turnSourceTo: params.ctx?.turnSourceTo,
+        turnSourceAccountId: params.ctx?.turnSourceAccountId,
+        turnSourceThreadId: params.ctx?.turnSourceThreadId,
+        actions: approval.actions,
         timeoutMs: approval.timeoutMs ?? 120_000,
+        keepPendingWithoutRoute: approval.keepPendingWithoutRoute === true,
         twoPhase: true,
       },
       { expectFinal: false },
@@ -207,6 +275,35 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
+    approvalSnapshot = buildPluginApprovalRequestSnapshot({
+      approvalId: id,
+      approval,
+      toolName: params.toolName,
+      toolCallId: params.toolCallId,
+      ctx: params.ctx,
+      nowMs: Date.now(),
+    });
+    if (
+      approval.keepPendingWithoutRoute === true &&
+      normalizeOptionalString(params.ctx?.sessionKey) &&
+      approvalSnapshot
+    ) {
+      try {
+        await injectReplyPayloadIntoSession({
+          sessionKey: params.ctx?.sessionKey,
+          payload: buildPluginApprovalPendingReplyPayload({
+            request: approvalSnapshot,
+            nowMs: approvalSnapshot.createdAtMs,
+          }),
+          idempotencyKey: `plugin-approval:${id}:pending`,
+        });
+        didInjectPendingApproval = true;
+      } catch (err) {
+        log.warn(
+          `plugin approval session pending-message injection failed: id=${id} error=${String(err)}`,
+        );
+      }
+    }
     const hasImmediateDecision = Object.prototype.hasOwnProperty.call(
       requestResult ?? {},
       "decision",
@@ -216,6 +313,7 @@ async function requestPluginToolApproval(params: {
       decision = requestResult?.decision;
       if (decision === null) {
         safeOnResolution(PluginApprovalResolutions.CANCELLED);
+        await maybeInjectResolvedApprovalIntoSession(PluginApprovalResolutions.CANCELLED);
         return {
           blocked: true,
           kind: "failure",
@@ -267,6 +365,7 @@ async function requestPluginToolApproval(params: {
         ? decision
         : PluginApprovalResolutions.TIMEOUT;
     safeOnResolution(resolution);
+    await maybeInjectResolvedApprovalIntoSession(resolution);
     if (
       decision === PluginApprovalResolutions.ALLOW_ONCE ||
       decision === PluginApprovalResolutions.ALLOW_ALWAYS
@@ -301,6 +400,7 @@ async function requestPluginToolApproval(params: {
     };
   } catch (err) {
     safeOnResolution(PluginApprovalResolutions.CANCELLED);
+    await maybeInjectResolvedApprovalIntoSession(PluginApprovalResolutions.CANCELLED);
     if (isAbortSignalCancellation(err, params.signal)) {
       log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
       return {
@@ -378,6 +478,91 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
     }
   }
   return true;
+}
+
+async function injectPluginApprovalMessageIntoSession(params: {
+  sessionKey?: string;
+  message: string;
+  command?: boolean;
+  interactive?: unknown;
+  channelData?: unknown;
+  idempotencyKey: string;
+}): Promise<void> {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return;
+  }
+  await callGatewayTool(
+    "chat.inject",
+    {},
+    {
+      sessionKey,
+      message: params.message,
+      command: params.command,
+      interactive: params.interactive,
+      channelData: params.channelData,
+      idempotencyKey: params.idempotencyKey,
+    },
+  );
+}
+
+async function injectReplyPayloadIntoSession(params: {
+  sessionKey?: string;
+  payload: ReplyPayload;
+  idempotencyKey: string;
+}): Promise<void> {
+  const message = normalizeOptionalString(params.payload.text);
+  if (!message) {
+    return;
+  }
+  await injectPluginApprovalMessageIntoSession({
+    sessionKey: params.sessionKey,
+    message,
+    command: true,
+    interactive: params.payload.interactive,
+    channelData: params.payload.channelData,
+    idempotencyKey: params.idempotencyKey,
+  });
+}
+
+function buildPluginApprovalRequestSnapshot(params: {
+  approvalId: string;
+  approval: NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
+  toolName: string;
+  toolCallId?: string;
+  ctx?: HookContext;
+  nowMs: number;
+}): StoredPluginApprovalRequest {
+  const timeoutMs = params.approval.timeoutMs ?? 120_000;
+  const request: PluginApprovalRequestPayload = {
+    ...(Array.isArray(params.approval.actions) && params.approval.actions.length > 0
+      ? {
+          actions: expandPluginApprovalActionTemplates({
+            approvalId: params.approvalId,
+            actions: params.approval.actions,
+          }),
+        }
+      : {}),
+    pluginId: params.approval.pluginId,
+    title: params.approval.title,
+    description: params.approval.description,
+    severity: params.approval.severity ?? null,
+    allowedDecisions: params.approval.allowedDecisions,
+    toolName: params.toolName,
+    toolCallId: params.toolCallId ?? params.ctx?.runId ?? null,
+    agentId: params.ctx?.agentId ?? null,
+    sessionKey: params.ctx?.sessionKey ?? null,
+    turnSourceChannel: params.ctx?.turnSourceChannel ?? null,
+    turnSourceTo: params.ctx?.turnSourceTo ?? null,
+    turnSourceAccountId: params.ctx?.turnSourceAccountId ?? null,
+    turnSourceThreadId: params.ctx?.turnSourceThreadId ?? null,
+  };
+  return {
+    id: params.approvalId,
+    request,
+    createdAtMs: params.nowMs,
+    expiresAtMs: params.nowMs + timeoutMs,
+  };
 }
 
 async function recordLoopOutcome(args: {
@@ -529,6 +714,12 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
+      ...(args.ctx?.turnSourceChannel && { turnSourceChannel: args.ctx.turnSourceChannel }),
+      ...(args.ctx?.turnSourceTo && { turnSourceTo: args.ctx.turnSourceTo }),
+      ...(args.ctx?.turnSourceAccountId && { turnSourceAccountId: args.ctx.turnSourceAccountId }),
+      ...(args.ctx?.turnSourceThreadId != null && {
+        turnSourceThreadId: args.ctx.turnSourceThreadId,
+      }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
     };

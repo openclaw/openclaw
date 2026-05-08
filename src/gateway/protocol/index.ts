@@ -198,6 +198,8 @@ import {
   type PluginsSessionActionResult,
   PluginsSessionActionParamsSchema,
   PluginsSessionActionResultSchema,
+  type PluginApprovalResolveVerifiedParams,
+  PluginApprovalResolveVerifiedParamsSchema,
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
@@ -785,6 +787,8 @@ export const validatePluginApprovalRequestParams = lazyCompile<PluginApprovalReq
 export const validatePluginApprovalResolveParams = lazyCompile<PluginApprovalResolveParams>(
   PluginApprovalResolveParamsSchema,
 );
+export const validatePluginApprovalResolveVerifiedParams =
+  lazyCompile<PluginApprovalResolveVerifiedParams>(PluginApprovalResolveVerifiedParamsSchema);
 export const validatePluginsUiDescriptorsParams = lazyCompile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );

@@ -88,6 +88,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
     const loadHistory = vi.fn();
+    const openPluginApprovalPrompt = vi.fn();
+    const closePluginApprovalPrompt = vi.fn();
     const localRunIds = new Set<string>();
     const localBtwRunIds = new Set<string>();
     const noteLocalRunId = (runId: string) => {
@@ -118,6 +120,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       forgetLocalBtwRunId,
       isLocalBtwRunId,
       clearLocalBtwRunIds,
+      openPluginApprovalPrompt,
+      closePluginApprovalPrompt,
     };
   };
 
@@ -144,6 +148,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       isLocalBtwRunId: context.isLocalBtwRunId,
       forgetLocalBtwRunId: context.forgetLocalBtwRunId,
       clearLocalBtwRunIds: context.clearLocalBtwRunIds,
+      openPluginApprovalPrompt: context.openPluginApprovalPrompt,
+      closePluginApprovalPrompt: context.closePluginApprovalPrompt,
     });
     return {
       ...context,
@@ -420,6 +426,191 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.startTool).toHaveBeenCalledWith("tc-final", "session_status", undefined);
     expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("opens the plugin approval prompt for pending plugin approval command messages", () => {
+    const { state, chatLog, openPluginApprovalPrompt, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-plugin-approval",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: {
+        command: true,
+        content: [
+          {
+            type: "text",
+            text: "Verification required for protected action",
+          },
+        ],
+        channelData: {
+          execApproval: {
+            approvalId: "plugin:approval-123",
+            approvalSlug: "plugin:a",
+            approvalKind: "plugin",
+            state: "pending",
+            title: "Verification required for protected action",
+            description: "Verify before continuing.",
+            severity: "warning",
+            toolName: "protected_tool",
+            pluginId: "test-plugin",
+            actions: [
+              {
+                kind: "command",
+                label: "Start verification",
+                style: "primary",
+                command: "/test-plugin approve plugin:approval-123",
+              },
+              {
+                kind: "decision",
+                label: "Deny",
+                style: "danger",
+                command: "/approve plugin:approval-123 deny",
+                decision: "deny",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies ChatEvent);
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("Verification required for protected action");
+    expect(openPluginApprovalPrompt).toHaveBeenCalledWith({
+      approvalId: "plugin:approval-123",
+      title: "Verification required for protected action",
+      description: "Verify before continuing.",
+      severity: "warning",
+      toolName: "protected_tool",
+      pluginId: "test-plugin",
+      actions: [
+        {
+          kind: "command",
+          label: "Start verification",
+          style: "primary",
+          command: "/test-plugin approve plugin:approval-123",
+        },
+        {
+          kind: "decision",
+          label: "Deny",
+          style: "danger",
+          command: "/approve plugin:approval-123 deny",
+          decision: "deny",
+        },
+      ],
+    });
+  });
+
+  it("closes the plugin approval prompt when a resolved approval message arrives", () => {
+    const { state, closePluginApprovalPrompt, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-plugin-approval-resolved",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: {
+        command: true,
+        content: [
+          {
+            type: "text",
+            text: "Plugin approval allowed once.",
+          },
+        ],
+        channelData: {
+          execApproval: {
+            approvalId: "plugin:approval-123",
+            approvalSlug: "plugin:a",
+            approvalKind: "plugin",
+            state: "resolved",
+          },
+        },
+      },
+    } satisfies ChatEvent);
+
+    expect(closePluginApprovalPrompt).toHaveBeenCalledWith("plugin:approval-123");
+  });
+
+  it("opens the plugin approval prompt for pending plugin approval events in the active session", () => {
+    const { state, openPluginApprovalPrompt, handlePluginApprovalRequested } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handlePluginApprovalRequested({
+      id: "plugin:approval-event-123",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        pluginId: "agentkit",
+        title: "World proof required for agents_list",
+        description: "Verify before continuing.",
+        severity: "warning",
+        toolName: "agents_list",
+        sessionKey: state.currentSessionKey,
+        actions: [
+          {
+            kind: "command",
+            label: "Verify with World",
+            style: "primary",
+            command: "/agentkit approve plugin:approval-event-123",
+          },
+          {
+            kind: "decision",
+            label: "Deny",
+            style: "danger",
+            command: "/approve plugin:approval-event-123 deny",
+            decision: "deny",
+          },
+        ],
+      },
+    });
+
+    expect(openPluginApprovalPrompt).toHaveBeenCalledWith({
+      approvalId: "plugin:approval-event-123",
+      title: "World proof required for agents_list",
+      description: "Verify before continuing.",
+      severity: "warning",
+      pluginId: "agentkit",
+      toolName: "agents_list",
+      actions: [
+        {
+          kind: "command",
+          label: "Verify with World",
+          style: "primary",
+          command: "/agentkit approve plugin:approval-event-123",
+        },
+        {
+          kind: "decision",
+          label: "Deny",
+          style: "danger",
+          command: "/approve plugin:approval-event-123 deny",
+          decision: "deny",
+        },
+      ],
+    });
+  });
+
+  it("closes the plugin approval prompt for resolved plugin approval events in the active session", () => {
+    const { state, closePluginApprovalPrompt, handlePluginApprovalResolved } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handlePluginApprovalResolved({
+      id: "plugin:approval-event-123",
+      decision: "allow-once",
+      ts: Date.now(),
+      request: {
+        title: "World proof required for agents_list",
+        description: "Verify before continuing.",
+        sessionKey: state.currentSessionKey,
+      },
+    });
+
+    expect(closePluginApprovalPrompt).toHaveBeenCalledWith("plugin:approval-event-123");
   });
 
   it("ignores lifecycle updates for non-active runs in the same session", () => {

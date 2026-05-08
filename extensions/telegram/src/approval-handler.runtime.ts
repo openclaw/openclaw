@@ -8,8 +8,10 @@ import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/appr
 import {
   buildApprovalInteractiveReplyFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
+  type ExecApprovalActionDescriptor,
+  type ExecApprovalReplyDecision,
+  type ExecApprovalPendingReplyParams,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { ExecApprovalPendingReplyParams } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
@@ -47,6 +49,16 @@ export type TelegramApprovalHandlerContext = {
   deps?: TelegramExecApprovalHandlerDeps;
 };
 
+type DecisionActionDescriptor = ExecApprovalActionDescriptor & {
+  decision: ExecApprovalReplyDecision;
+};
+
+function filterDecisionActionDescriptors(
+  actions: readonly ExecApprovalActionDescriptor[],
+): DecisionActionDescriptor[] {
+  return actions.filter((action): action is DecisionActionDescriptor => Boolean(action.decision));
+}
+
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext): {
   accountId: string;
   context: TelegramApprovalHandlerContext;
@@ -65,6 +77,7 @@ function buildPendingPayload(params: {
   nowMs: number;
   view: PendingApprovalView;
 }): TelegramPendingDelivery {
+  const decisionActions = filterDecisionActionDescriptors(params.view.actions);
   const payload =
     params.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({
@@ -85,14 +98,14 @@ function buildPendingPayload(params: {
             params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
           nodeId:
             params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          allowedDecisions: params.view.actions.map((action) => action.decision),
+          allowedDecisions: decisionActions.map((action) => action.decision),
           expiresAtMs: params.request.expiresAtMs,
           nowMs: params.nowMs,
         } satisfies ExecApprovalPendingReplyParams);
   return {
     text: payload.text ?? "",
     buttons: resolveTelegramInlineButtons({
-      interactive: buildApprovalInteractiveReplyFromActionDescriptors(params.view.actions),
+      interactive: buildApprovalInteractiveReplyFromActionDescriptors(decisionActions),
     }),
   };
 }

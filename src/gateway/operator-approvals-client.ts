@@ -25,19 +25,24 @@ function shouldOmitOperatorApprovalDeviceIdentity(params: {
   return Boolean((params.token || params.password) && isLoopbackGatewayUrl(params.url));
 }
 
-export async function createOperatorApprovalsGatewayClient(
-  params: Pick<
-    GatewayClientOptions,
-    | "clientDisplayName"
-    | "onClose"
-    | "onConnectError"
-    | "onEvent"
-    | "onHelloOk"
-    | "onReconnectPaused"
-  > & {
-    config: OpenClawConfig;
-    gatewayUrl?: string;
-  },
+type OperatorScopedGatewayClientParams = Pick<
+  GatewayClientOptions,
+  "clientDisplayName" | "onClose" | "onConnectError" | "onEvent" | "onHelloOk" | "onReconnectPaused"
+> & {
+  config: OpenClawConfig;
+  gatewayUrl?: string;
+  scopes: NonNullable<GatewayClientOptions["scopes"]>;
+};
+
+type OperatorScopedGatewayCallbackParams = {
+  config: OpenClawConfig;
+  gatewayUrl?: string;
+  clientDisplayName: string;
+  scopes: NonNullable<GatewayClientOptions["scopes"]>;
+};
+
+async function createOperatorScopedGatewayClient(
+  params: OperatorScopedGatewayClientParams,
 ): Promise<GatewayClient> {
   const bootstrap = await resolveGatewayClientBootstrap({
     config: params.config,
@@ -54,7 +59,7 @@ export async function createOperatorApprovalsGatewayClient(
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
-    scopes: ["operator.approvals"],
+    scopes: params.scopes,
     deviceIdentity: shouldOmitOperatorApprovalDeviceIdentity({
       url: bootstrap.url,
       token: bootstrap.auth.token,
@@ -70,12 +75,8 @@ export async function createOperatorApprovalsGatewayClient(
   });
 }
 
-export async function withOperatorApprovalsGatewayClient<T>(
-  params: {
-    config: OpenClawConfig;
-    gatewayUrl?: string;
-    clientDisplayName: string;
-  },
+async function withOperatorScopedGatewayClient<T>(
+  params: OperatorScopedGatewayCallbackParams,
   run: (client: GatewayClient) => Promise<T>,
 ): Promise<T> {
   let readySettled = false;
@@ -100,10 +101,11 @@ export async function withOperatorApprovalsGatewayClient<T>(
     rejectReady(err);
   };
 
-  const gatewayClient = await createOperatorApprovalsGatewayClient({
+  const gatewayClient = await createOperatorScopedGatewayClient({
     config: params.config,
     gatewayUrl: params.gatewayUrl,
     clientDisplayName: params.clientDisplayName,
+    scopes: params.scopes,
     onHelloOk: () => {
       markReady();
     },
@@ -133,4 +135,78 @@ export async function withOperatorApprovalsGatewayClient<T>(
       gatewayClient.stop();
     });
   }
+}
+
+export async function createOperatorApprovalsGatewayClient(
+  params: Pick<
+    GatewayClientOptions,
+    | "clientDisplayName"
+    | "onClose"
+    | "onConnectError"
+    | "onEvent"
+    | "onHelloOk"
+    | "onReconnectPaused"
+  > & {
+    config: OpenClawConfig;
+    gatewayUrl?: string;
+  },
+): Promise<GatewayClient> {
+  return createOperatorScopedGatewayClient({
+    ...params,
+    scopes: ["operator.approvals"],
+  });
+}
+
+export async function withOperatorApprovalsGatewayClient<T>(
+  params: {
+    config: OpenClawConfig;
+    gatewayUrl?: string;
+    clientDisplayName: string;
+  },
+  run: (client: GatewayClient) => Promise<T>,
+): Promise<T> {
+  return withOperatorScopedGatewayClient(
+    {
+      ...params,
+      scopes: ["operator.approvals"],
+    },
+    run,
+  );
+}
+
+export async function createOperatorAdminGatewayClient(
+  params: Pick<
+    GatewayClientOptions,
+    | "clientDisplayName"
+    | "onClose"
+    | "onConnectError"
+    | "onEvent"
+    | "onHelloOk"
+    | "onReconnectPaused"
+  > & {
+    config: OpenClawConfig;
+    gatewayUrl?: string;
+  },
+): Promise<GatewayClient> {
+  return createOperatorScopedGatewayClient({
+    ...params,
+    scopes: ["operator.admin"],
+  });
+}
+
+export async function withOperatorAdminGatewayClient<T>(
+  params: {
+    config: OpenClawConfig;
+    gatewayUrl?: string;
+    clientDisplayName: string;
+  },
+  run: (client: GatewayClient) => Promise<T>,
+): Promise<T> {
+  return withOperatorScopedGatewayClient(
+    {
+      ...params,
+      scopes: ["operator.admin"],
+    },
+    run,
+  );
 }

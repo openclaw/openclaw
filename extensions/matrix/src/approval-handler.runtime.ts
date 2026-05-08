@@ -56,7 +56,8 @@ type PreparedMatrixTarget = {
   threadId?: string;
 };
 type MatrixApprovalMetadataAction = {
-  decision: ExecApprovalReplyDecision;
+  kind: PendingApprovalView["actions"][number]["kind"];
+  decision?: ExecApprovalReplyDecision;
   label: string;
   style: PendingApprovalView["actions"][number]["style"];
   command: string;
@@ -141,6 +142,32 @@ export type MatrixApprovalHandlerContext = {
   client: MatrixClient;
   deps?: MatrixApprovalHandlerDeps;
 };
+
+function filterDecisionActions(
+  actions: readonly { decision?: ExecApprovalReplyDecision }[],
+): ExecApprovalReplyDecision[] {
+  return actions
+    .filter((action): action is { decision: ExecApprovalReplyDecision } => Boolean(action.decision))
+    .map((action) => action.decision);
+}
+
+function normalizePluginApprovalActionStyle(
+  style: PendingApprovalView["actions"][number]["style"],
+): NonNullable<PluginApprovalRequest["request"]["actions"]>[number]["style"] {
+  return style === "success" || style === "danger" ? style : "primary";
+}
+
+function mapPluginApprovalActions(
+  actions: PendingApprovalView["actions"],
+): NonNullable<PluginApprovalRequest["request"]["actions"]> {
+  return actions.map((action) => ({
+    kind: action.kind,
+    label: action.label,
+    style: normalizePluginApprovalActionStyle(action.style),
+    command: action.command,
+    ...(action.decision ? { decision: action.decision } : {}),
+  }));
+}
 
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext): {
   accountId: string;
@@ -257,6 +284,7 @@ function buildMatrixApprovalMetadata(params: {
     metadata: params.view.metadata,
     allowedDecisions: Array.from(params.allowedDecisions),
     actions: params.view.actions.map((action) => ({
+      kind: action.kind,
       decision: action.decision,
       label: action.label,
       style: action.style,
@@ -295,7 +323,7 @@ function buildPendingApprovalContent(params: {
   view: PendingApprovalView;
   nowMs: number;
 }): PendingApprovalContent {
-  const allowedDecisions = params.view.actions.map((action) => action.decision);
+  const allowedDecisions = filterDecisionActions(params.view.actions);
   const payload =
     params.view.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({
@@ -305,6 +333,7 @@ function buildPendingApprovalContent(params: {
               title: params.view.title,
               description: params.view.description ?? "",
               severity: params.view.severity,
+              actions: mapPluginApprovalActions(params.view.actions),
               toolName: params.view.toolName ?? undefined,
               pluginId: params.view.pluginId ?? undefined,
               agentId: params.view.agentId ?? undefined,

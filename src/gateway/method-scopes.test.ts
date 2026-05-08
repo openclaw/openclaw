@@ -329,6 +329,20 @@ describe("operator scope authorization", () => {
     });
   });
 
+  it("requires admin scope for verified plugin approval resolution", () => {
+    expect(
+      authorizeOperatorScopesForMethod("plugin.approval.resolveVerified", ["operator.approvals"]),
+    ).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(
+      authorizeOperatorScopesForMethod("plugin.approval.resolveVerified", ["operator.admin"]),
+    ).toEqual({
+      allowed: true,
+    });
+  });
+
   it("requires admin for unknown methods", () => {
     expect(authorizeOperatorScopesForMethod("unknown.method", ["operator.read"])).toEqual({
       allowed: false,
@@ -355,6 +369,7 @@ describe("plugin approval method registration", () => {
     expect(methods).toContain("plugin.approval.request");
     expect(methods).toContain("plugin.approval.waitDecision");
     expect(methods).toContain("plugin.approval.resolve");
+    expect(methods).toContain("plugin.approval.resolveVerified");
   });
 
   it("classifies plugin approval methods", () => {
@@ -362,6 +377,7 @@ describe("plugin approval method registration", () => {
     expect(isGatewayMethodClassified("plugin.approval.request")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.waitDecision")).toBe(true);
     expect(isGatewayMethodClassified("plugin.approval.resolve")).toBe(true);
+    expect(isGatewayMethodClassified("plugin.approval.resolveVerified")).toBe(true);
   });
 });
 

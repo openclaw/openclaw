@@ -11,7 +11,8 @@ import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-app
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
 export type ApprovalActionView = {
-  decision: ExecApprovalDecision;
+  kind: "decision" | "command";
+  decision?: ExecApprovalDecision;
   label: string;
   style: NonNullable<InteractiveReplyButton["style"]>;
   command: string;

@@ -454,7 +454,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).
     - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
     - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
-    - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
+    - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows. `plugin.approval.resolveVerified` is an admin-scoped resolver for plugin-owned proof flows.
 
   </Accordion>
 
@@ -606,6 +606,10 @@ terminal summary, and sanitized error text.
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
 - Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
+- Plugin approvals may restrict generic allow decisions with `allowedDecisions`.
+  Plugin-owned proof flows that verify outside the generic approval client can
+  resolve through `plugin.approval.resolveVerified` with `operator.admin` scope
+  after checking the proof.
 - For `host=node`, `exec.approval.request` must include `systemRunPlan` (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing `systemRunPlan` are rejected.
 - After approval, forwarded `node.invoke system.run` calls reuse that canonical
   `systemRunPlan` as the authoritative command/cwd/session context.

@@ -1,0 +1,37 @@
+{
+  "name": "@openclaw/agentkit",
+  "version": "2026.4.15-beta.1",
+  "private": true,
+  "description": "OpenClaw World AgentKit integration",
+  "type": "module",
+  "dependencies": {
+    "@worldcoin/agentkit": "^0.2.0",
+    "@worldcoin/idkit-core": "^4.1.4",
+    "viem": "^2.48.8"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.15-beta.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/agentkit",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.15"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.15-beta.1"
+    }
+  }
+}

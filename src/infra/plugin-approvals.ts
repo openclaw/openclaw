@@ -1,13 +1,33 @@
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
+export type PluginApprovalActionKind = "decision" | "command";
+export type PluginApprovalActionStyle = "primary" | "success" | "danger";
+
+export type PluginApprovalActionTemplate = {
+  kind: PluginApprovalActionKind;
+  label: string;
+  style: PluginApprovalActionStyle;
+  decision?: ExecApprovalDecision;
+  commandTemplate: string;
+};
+
+export type PluginApprovalAction = {
+  kind: PluginApprovalActionKind;
+  label: string;
+  style: PluginApprovalActionStyle;
+  decision?: ExecApprovalDecision;
+  command: string;
+};
+
 export type PluginApprovalRequestPayload = {
+  actions?: PluginApprovalAction[];
+  allowedDecisions?: readonly ExecApprovalDecision[];
   pluginId?: string | null;
   title: string;
   description: string;
   severity?: "info" | "warning" | "critical" | null;
   toolName?: string | null;
   toolCallId?: string | null;
-  allowedDecisions?: readonly ExecApprovalDecision[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
   turnSourceChannel?: string | null;
@@ -41,6 +61,32 @@ export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
 
+export function expandPluginApprovalCommandTemplate(params: {
+  approvalId: string;
+  commandTemplate: string;
+}): string {
+  return params.commandTemplate.replaceAll("{id}", params.approvalId);
+}
+
+export function expandPluginApprovalActionTemplates(params: {
+  approvalId: string;
+  actions?: readonly PluginApprovalActionTemplate[] | null;
+}): PluginApprovalAction[] {
+  if (!Array.isArray(params.actions) || params.actions.length === 0) {
+    return [];
+  }
+  return params.actions.map((action) => ({
+    kind: action.kind,
+    label: action.label,
+    style: action.style,
+    ...(action.decision ? { decision: action.decision } : {}),
+    command: expandPluginApprovalCommandTemplate({
+      approvalId: params.approvalId,
+      commandTemplate: action.commandTemplate,
+    }),
+  }));
+}
+
 export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
   if (decision === "allow-once") {
     return "allowed once";
@@ -54,8 +100,8 @@ export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
 export function resolvePluginApprovalRequestAllowedDecisions(params?: {
   allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
 }): readonly ExecApprovalDecision[] {
-  const explicit: ExecApprovalDecision[] = [];
   if (Array.isArray(params?.allowedDecisions)) {
+    const explicit: ExecApprovalDecision[] = [];
     for (const decision of params.allowedDecisions) {
       if (
         (decision === "allow-once" || decision === "allow-always" || decision === "deny") &&
@@ -64,8 +110,9 @@ export function resolvePluginApprovalRequestAllowedDecisions(params?: {
         explicit.push(decision);
       }
     }
+    return explicit;
   }
-  return explicit.length > 0 ? explicit : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
+  return DEFAULT_PLUGIN_APPROVAL_DECISIONS;
 }
 
 export function buildPluginApprovalRequestMessage(
@@ -90,11 +137,18 @@ export function buildPluginApprovalRequestMessage(
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
-  lines.push(
-    `Reply with: /approve <id> ${resolvePluginApprovalRequestAllowedDecisions(request.request).join(
-      "|",
-    )}`,
-  );
+  if (Array.isArray(request.request.actions) && request.request.actions.length > 0) {
+    lines.push("Reply with:");
+    for (const action of request.request.actions) {
+      lines.push(`- ${action.command}`);
+    }
+  } else {
+    lines.push(
+      `Reply with: /approve <id> ${resolvePluginApprovalRequestAllowedDecisions(
+        request.request,
+      ).join("|")}`,
+    );
+  }
   return lines.join("\n");
 }
 

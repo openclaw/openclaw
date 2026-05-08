@@ -64,7 +64,8 @@ vi.mock("./client.js", () => ({
   GatewayClient: MockGatewayClient,
 }));
 
-const { withOperatorApprovalsGatewayClient } = await import("./operator-approvals-client.js");
+const { withOperatorAdminGatewayClient, withOperatorApprovalsGatewayClient } =
+  await import("./operator-approvals-client.js");
 
 describe("withOperatorApprovalsGatewayClient", () => {
   beforeEach(() => {
@@ -142,6 +143,28 @@ describe("withOperatorApprovalsGatewayClient", () => {
     );
 
     expect(clientState.options?.deviceIdentity).toBeUndefined();
+  });
+
+  it("can request operator.admin for gateway-backed session injection", async () => {
+    await withOperatorAdminGatewayClient(
+      {
+        config: {} as never,
+        clientDisplayName: "AgentKit approval retry",
+      },
+      async (client) => {
+        await client.request("chat.inject", {
+          sessionKey: "agent:main:test",
+          message: "AgentKit approval retry is ready.",
+        });
+      },
+    );
+
+    expect(clientState.options?.scopes).toEqual(["operator.admin"]);
+    expect(clientState.requestSpy).toHaveBeenCalledWith("chat.inject", {
+      sessionKey: "agent:main:test",
+      message: "AgentKit approval retry is ready.",
+    });
+    expect(clientState.stopAndWaitSpy).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces close failures before hello", async () => {

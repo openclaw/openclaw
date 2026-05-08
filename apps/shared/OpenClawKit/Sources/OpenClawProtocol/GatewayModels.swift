@@ -5629,13 +5629,14 @@ public struct ExecApprovalResolveParams: Codable, Sendable {
 }
 
 public struct PluginApprovalRequestParams: Codable, Sendable {
+    public let actions: [[String: AnyCodable]]?
+    public let alloweddecisions: [String]?
     public let pluginid: String?
     public let title: String
     public let description: String
     public let severity: String?
     public let toolname: String?
     public let toolcallid: String?
-    public let alloweddecisions: [String]?
     public let agentid: String?
     public let sessionkey: String?
     public let turnsourcechannel: String?
@@ -5643,16 +5644,18 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let turnsourceaccountid: String?
     public let turnsourcethreadid: AnyCodable?
     public let timeoutms: Int?
+    public let keeppendingwithoutroute: Bool?
     public let twophase: Bool?
 
     public init(
+        actions: [[String: AnyCodable]]?,
+        alloweddecisions: [String]?,
         pluginid: String?,
         title: String,
         description: String,
         severity: String?,
         toolname: String?,
         toolcallid: String?,
-        alloweddecisions: [String]?,
         agentid: String?,
         sessionkey: String?,
         turnsourcechannel: String?,
@@ -5660,15 +5663,17 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         turnsourceaccountid: String?,
         turnsourcethreadid: AnyCodable?,
         timeoutms: Int?,
+        keeppendingwithoutroute: Bool?,
         twophase: Bool?)
     {
+        self.actions = actions
+        self.alloweddecisions = alloweddecisions
         self.pluginid = pluginid
         self.title = title
         self.description = description
         self.severity = severity
         self.toolname = toolname
         self.toolcallid = toolcallid
-        self.alloweddecisions = alloweddecisions
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.turnsourcechannel = turnsourcechannel
@@ -5676,17 +5681,19 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.turnsourceaccountid = turnsourceaccountid
         self.turnsourcethreadid = turnsourcethreadid
         self.timeoutms = timeoutms
+        self.keeppendingwithoutroute = keeppendingwithoutroute
         self.twophase = twophase
     }
 
     private enum CodingKeys: String, CodingKey {
+        case actions
+        case alloweddecisions = "allowedDecisions"
         case pluginid = "pluginId"
         case title
         case description
         case severity
         case toolname = "toolName"
         case toolcallid = "toolCallId"
-        case alloweddecisions = "allowedDecisions"
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case turnsourcechannel = "turnSourceChannel"
@@ -5694,6 +5701,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case turnsourceaccountid = "turnSourceAccountId"
         case turnsourcethreadid = "turnSourceThreadId"
         case timeoutms = "timeoutMs"
+        case keeppendingwithoutroute = "keepPendingWithoutRoute"
         case twophase = "twoPhase"
     }
 }
@@ -5713,6 +5721,28 @@ public struct PluginApprovalResolveParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case decision
+    }
+}
+
+public struct PluginApprovalResolveVerifiedParams: Codable, Sendable {
+    public let id: String
+    public let decision: String
+    public let pluginid: String
+
+    public init(
+        id: String,
+        decision: String,
+        pluginid: String)
+    {
+        self.id = id
+        self.decision = decision
+        self.pluginid = pluginid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case decision
+        case pluginid = "pluginId"
     }
 }
 
@@ -6226,21 +6256,37 @@ public struct ChatInjectParams: Codable, Sendable {
     public let sessionkey: String
     public let message: String
     public let label: String?
+    public let idempotencykey: String?
+    public let command: Bool?
+    public let interactive: AnyCodable?
+    public let channeldata: AnyCodable?
 
     public init(
         sessionkey: String,
         message: String,
-        label: String?)
+        label: String?,
+        idempotencykey: String?,
+        command: Bool?,
+        interactive: AnyCodable?,
+        channeldata: AnyCodable?)
     {
         self.sessionkey = sessionkey
         self.message = message
         self.label = label
+        self.idempotencykey = idempotencykey
+        self.command = command
+        self.interactive = interactive
+        self.channeldata = channeldata
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case message
         case label
+        case idempotencykey = "idempotencyKey"
+        case command
+        case interactive
+        case channeldata = "channelData"
     }
 }
 

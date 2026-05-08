@@ -644,6 +644,18 @@
     "target": "Google Meet 插件"
   },
   {
+    "source": "AgentKit plugin",
+    "target": "AgentKit 插件"
+  },
+  {
+    "source": "Agentkit plugin",
+    "target": "AgentKit 插件"
+  },
+  {
+    "source": "agentkit",
+    "target": "agentkit"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },

@@ -167,6 +167,11 @@ const baseConfig: OpenClawConfig = {
       },
     },
   },
+  // Vitest disables bundled plugins by default unless fixtures opt in. These
+  // snapshots intentionally model the default runtime tool surface.
+  plugins: {
+    enabled: true,
+  },
   tools: {
     profiles: {
       coding: {

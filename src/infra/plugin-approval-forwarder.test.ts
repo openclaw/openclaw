@@ -212,6 +212,61 @@ describe("plugin approval forwarding", () => {
       expect(text).toMatch(/🚨/);
     });
 
+    it("uses custom plugin approval actions when provided", async () => {
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const request = makePluginRequest({
+        request: {
+          ...makePluginRequest().request,
+          actions: [
+            {
+              kind: "command",
+              label: "Verify with World",
+              style: "primary",
+              command: "/agentkit approve plugin-req-1",
+            },
+            {
+              kind: "decision",
+              label: "Deny",
+              style: "danger",
+              decision: "deny",
+              command: "/approve plugin-req-1 deny",
+            },
+          ],
+        },
+      });
+
+      await forwarder.handlePluginApprovalRequested!(request);
+      await flushPendingDelivery();
+
+      const deliveryArgs = deliver.mock.calls[0]?.[0] as
+        | { payloads?: Array<{ text?: string; interactive?: unknown }> }
+        | undefined;
+      const payload = deliveryArgs?.payloads?.[0];
+      const text = payload?.text ?? "";
+      expect(text).toContain("/agentkit approve plugin-req-1");
+      expect(text).not.toContain("/approve <id> allow-once|allow-always|deny");
+      expect(payload?.interactive).toEqual({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Verify with World",
+                value: "/agentkit approve plugin-req-1",
+                style: "primary",
+              },
+              {
+                label: "Deny",
+                value: "/approve plugin-req-1 deny",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      });
+    });
+
     it("returns false when exec enabled but plugin disabled", async () => {
       const cfg = {
         approvals: {

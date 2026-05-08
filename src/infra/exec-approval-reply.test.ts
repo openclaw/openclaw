@@ -219,9 +219,36 @@ describe("exec approval reply helpers", () => {
           execApproval: {
             approvalId: " req-1 ",
             approvalSlug: " slug-1 ",
+            state: "pending",
             agentId: " agent-1 ",
             allowedDecisions: ["allow-once", "bad", "deny", "allow-always", 3],
             sessionKey: " session-1 ",
+            title: " World proof required ",
+            description: " Verify before continuing. ",
+            severity: "warning",
+            toolName: " agents_list ",
+            pluginId: " agentkit ",
+            actions: [
+              {
+                kind: "command",
+                label: " Verify with World ",
+                style: "primary",
+                command: " /agentkit approve req-1 ",
+              },
+              {
+                kind: "decision",
+                label: " Deny ",
+                style: "danger",
+                command: " /approve req-1 deny ",
+                decision: "deny",
+              },
+              {
+                kind: "wat",
+                label: "bad",
+                style: "primary",
+                command: "/bad",
+              },
+            ],
           },
         },
       }),
@@ -229,9 +256,30 @@ describe("exec approval reply helpers", () => {
       approvalId: "req-1",
       approvalSlug: "slug-1",
       approvalKind: "exec",
+      state: "pending",
       agentId: "agent-1",
       allowedDecisions: ["allow-once", "deny", "allow-always"],
       sessionKey: "session-1",
+      title: "World proof required",
+      description: "Verify before continuing.",
+      severity: "warning",
+      toolName: "agents_list",
+      pluginId: "agentkit",
+      actions: [
+        {
+          kind: "command",
+          label: "Verify with World",
+          style: "primary",
+          command: "/agentkit approve req-1",
+        },
+        {
+          kind: "decision",
+          label: "Deny",
+          style: "danger",
+          command: "/approve req-1 deny",
+          decision: "deny",
+        },
+      ],
     });
   });
 
@@ -254,8 +302,32 @@ describe("exec approval reply helpers", () => {
         approvalSlug: "slug-1",
         approvalKind: "exec",
         agentId: undefined,
+        actions: [
+          {
+            kind: "decision",
+            decision: "allow-once",
+            label: "Allow Once",
+            style: "success",
+            command: "/approve slug-1 allow-once",
+          },
+          {
+            kind: "decision",
+            decision: "allow-always",
+            label: "Allow Always",
+            style: "primary",
+            command: "/approve slug-1 allow-always",
+          },
+          {
+            kind: "decision",
+            decision: "deny",
+            label: "Deny",
+            style: "danger",
+            command: "/approve slug-1 deny",
+          },
+        ],
         allowedDecisions: ["allow-once", "allow-always", "deny"],
         sessionKey: undefined,
+        state: "pending",
       },
     });
     expect(payload.interactive).toEqual({
@@ -316,7 +388,24 @@ describe("exec approval reply helpers", () => {
         approvalId: "req-ask-always",
         approvalSlug: "slug-always",
         approvalKind: "exec",
+        actions: [
+          {
+            kind: "decision",
+            decision: "allow-once",
+            label: "Allow Once",
+            style: "success",
+            command: "/approve slug-always allow-once",
+          },
+          {
+            kind: "decision",
+            decision: "deny",
+            label: "Deny",
+            style: "danger",
+            command: "/approve slug-always deny",
+          },
+        ],
         allowedDecisions: ["allow-once", "deny"],
+        state: "pending",
       },
     });
     expect(payload.text).toContain("```txt\n/approve slug-always allow-once\n```");
@@ -361,8 +450,32 @@ describe("exec approval reply helpers", () => {
         approvalSlug: "slug-meta",
         approvalKind: "exec",
         agentId: "ops-agent",
+        actions: [
+          {
+            kind: "decision",
+            decision: "allow-once",
+            label: "Allow Once",
+            style: "success",
+            command: "/approve slug-meta allow-once",
+          },
+          {
+            kind: "decision",
+            decision: "allow-always",
+            label: "Allow Always",
+            style: "primary",
+            command: "/approve slug-meta allow-always",
+          },
+          {
+            kind: "decision",
+            decision: "deny",
+            label: "Deny",
+            style: "danger",
+            command: "/approve slug-meta deny",
+          },
+        ],
         allowedDecisions: ["allow-once", "allow-always", "deny"],
         sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+        state: "pending",
       },
     });
   });
@@ -414,18 +527,21 @@ describe("exec approval reply helpers", () => {
       }),
     ).toEqual([
       {
+        kind: "decision",
         decision: "allow-once",
         label: "Allow Once",
         style: "success",
         command: "/approve req-1 allow-once",
       },
       {
+        kind: "decision",
         decision: "allow-always",
         label: "Allow Always",
         style: "primary",
         command: "/approve req-1 allow-always",
       },
       {
+        kind: "decision",
         decision: "deny",
         label: "Deny",
         style: "danger",

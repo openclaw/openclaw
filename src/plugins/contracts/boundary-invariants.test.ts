@@ -11,6 +11,7 @@ const tsFilesCache = new Map<string, string[]>();
 const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/acpx/index.ts",
   "extensions/active-memory/index.ts",
+  "extensions/agentkit/index.ts",
   "extensions/codex/index.ts",
   "extensions/diffs/src/plugin.ts",
   "extensions/discord/subagent-hooks-api.ts",
@@ -24,6 +25,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
 const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/acpx/index.ts": ["reply_dispatch"],
   "extensions/active-memory/index.ts": ["before_prompt_build"],
+  "extensions/agentkit/index.ts": ["before_tool_call"],
   "extensions/codex/index.ts": ["inbound_claim"],
   "extensions/diffs/src/plugin.ts": ["before_prompt_build"],
   "extensions/discord/subagent-hooks-api.ts": [

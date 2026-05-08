@@ -66,6 +66,10 @@ export const ChatInjectParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     message: NonEmptyString,
     label: Type.Optional(Type.String({ maxLength: 100 })),
+    idempotencyKey: Type.Optional(NonEmptyString),
+    command: Type.Optional(Type.Boolean()),
+    interactive: Type.Optional(Type.Unknown()),
+    channelData: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );

@@ -18,6 +18,7 @@ import {
   buildPluginApprovalText,
   buildApprovalKeyboard,
   resolveApprovalTarget,
+  type ApprovalDecision,
   type ExecApprovalRequest,
   type PluginApprovalRequest,
 } from "../../engine/approval/index.js";
@@ -46,8 +47,30 @@ type QQBotPendingPayload = {
   keyboard: InlineKeyboard;
 };
 
+type ApprovalActionView = {
+  kind?: string;
+  label: string;
+  command: string;
+  decision?: ApprovalDecision;
+};
+
 function isExecRequest(request: ApprovalRequest): request is ExecApprovalRequest {
-  return "expiresAtMs" in request;
+  return typeof (request.request as { title?: unknown }).title !== "string";
+}
+
+function appendCommandActionsToText(text: string, actions: readonly ApprovalActionView[]): string {
+  const commandActions = actions.filter(
+    (action) => action.kind === "command" && action.command.trim().length > 0,
+  );
+  if (commandActions.length === 0) {
+    return text;
+  }
+  return [
+    text,
+    "",
+    "\u53ef\u7528\u547d\u4ee4:",
+    ...commandActions.map((action) => `- ${action.label}: ${action.command}`),
+  ].join("\n");
 }
 
 function resolveQQTarget(request: ApprovalRequest): { type: ChatScope; id: string } | null {
@@ -131,11 +154,15 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
   presentation: {
     buildPendingPayload: ({ request, view }) => {
       const req = request as ApprovalRequest;
-      const text = isExecRequest(req) ? buildExecApprovalText(req) : buildPluginApprovalText(req);
-      const keyboard = buildApprovalKeyboard(
-        req.id,
-        view.actions.map((action) => action.decision),
+      const actions = view.actions as ApprovalActionView[];
+      const text = appendCommandActionsToText(
+        isExecRequest(req) ? buildExecApprovalText(req) : buildPluginApprovalText(req),
+        actions,
       );
+      const allowedDecisions = view.actions
+        .map((action) => action.decision)
+        .filter((decision): decision is ApprovalDecision => decision !== undefined);
+      const keyboard = buildApprovalKeyboard(req.id, allowedDecisions);
       getBridgeLogger().debug?.(
         `[qqbot:approval-runtime] buildPendingPayload requestId=${req.id} kind=${
           isExecRequest(req) ? "exec" : "plugin"

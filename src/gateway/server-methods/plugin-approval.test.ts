@@ -154,6 +154,7 @@ describe("createPluginApprovalHandlers", () => {
       "plugin.approval.list",
       "plugin.approval.request",
       "plugin.approval.resolve",
+      "plugin.approval.resolveVerified",
       "plugin.approval.waitDecision",
     ]);
   });
@@ -215,6 +216,132 @@ describe("createPluginApprovalHandlers", () => {
       expect(responseCall(respond as unknown as MockCallSource, 1).error).toBeUndefined();
     });
 
+    it("stores explicit allowed decisions", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "AgentKit proof",
+          description: "World proof required",
+          allowedDecisions: ["deny"],
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: expect.any(String) }),
+          undefined,
+        );
+      });
+
+      const approvalId = (
+        respond.mock.calls.find(
+          (c) => (c[1] as Record<string, unknown>)?.status === "accepted",
+        )?.[1] as Record<string, unknown>
+      ).id as string;
+      expect(manager.getSnapshot(approvalId)?.request.allowedDecisions).toEqual(["deny"]);
+
+      manager.resolve(approvalId, "deny");
+      await handlerPromise;
+    });
+
+    it("derives allowed decisions from custom decision actions", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "AgentKit proof",
+          description: "World proof required",
+          actions: [
+            {
+              kind: "command",
+              label: "Verify with World",
+              style: "primary",
+              commandTemplate: "/agentkit approve {id} allow-once",
+            },
+            {
+              kind: "decision",
+              label: "Deny",
+              style: "danger",
+              decision: "deny",
+              commandTemplate: "/approve {id} deny",
+            },
+          ],
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: expect.any(String) }),
+          undefined,
+        );
+      });
+
+      const approvalId = (
+        respond.mock.calls.find(
+          (c) => (c[1] as Record<string, unknown>)?.status === "accepted",
+        )?.[1] as Record<string, unknown>
+      ).id as string;
+      expect(manager.getSnapshot(approvalId)?.request.allowedDecisions).toEqual(["deny"]);
+
+      manager.resolve(approvalId, "deny");
+      await handlerPromise;
+    });
+
+    it("stores an empty decision list for command-only custom actions", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "AgentKit proof",
+          description: "World proof required",
+          actions: [
+            {
+              kind: "command",
+              label: "Verify with World",
+              style: "primary",
+              commandTemplate: "/agentkit approve {id} allow-once",
+            },
+          ],
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: expect.any(String) }),
+          undefined,
+        );
+      });
+
+      const approvalId = (
+        respond.mock.calls.find(
+          (c) => (c[1] as Record<string, unknown>)?.status === "accepted",
+        )?.[1] as Record<string, unknown>
+      ).id as string;
+      expect(manager.getSnapshot(approvalId)?.request.allowedDecisions).toEqual([]);
+
+      manager.expire(approvalId, "test-cleanup");
+      await handlerPromise;
+    });
+
     it("expires immediately when no approval route", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions(
@@ -231,6 +358,48 @@ describe("createPluginApprovalHandlers", () => {
       expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(true);
       expect(responseResult(opts.respond as unknown as MockCallSource).decision).toBeNull();
       expect(responseCall(opts.respond as unknown as MockCallSource).error).toBeUndefined();
+    });
+
+    it("keeps plugin approvals pending without a route when explicitly requested", async () => {
+      vi.useFakeTimers();
+      try {
+        const handlers = createPluginApprovalHandlers(manager);
+        const respond = vi.fn();
+        const opts = createMockOptions(
+          "plugin.approval.request",
+          {
+            title: "Sensitive action",
+            description: "Desc",
+            keepPendingWithoutRoute: true,
+            twoPhase: true,
+          },
+          {
+            respond,
+            context: createNoExecApprovalContext(),
+          },
+        );
+
+        const requestPromise = handlers["plugin.approval.request"](opts);
+
+        await vi.waitFor(() => {
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ status: "accepted", id: expect.any(String) }),
+            undefined,
+          );
+        });
+        expect(manager.listPendingRecords()).toHaveLength(1);
+
+        const acceptedCall = respond.mock.calls.find(
+          (call) => (call[1] as Record<string, unknown>)?.status === "accepted",
+        );
+        const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+        manager.resolve(approvalId, "allow-once");
+
+        await requestPromise;
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("passes caller connId to hasExecApprovalClients to exclude self", async () => {
@@ -709,7 +878,46 @@ describe("createPluginApprovalHandlers", () => {
       const error = responseError(opts.respond as unknown as MockCallSource);
       expect(error.code).toBe("INVALID_REQUEST");
       expect(error.message).toBe("allow-always is unavailable for this plugin approval");
-      expect(error.details).toEqual({ allowedDecisions: ["allow-once", "deny"] });
+      expect(error.details).toEqual({
+        reason: "PLUGIN_APPROVAL_DECISION_UNAVAILABLE",
+        allowedDecisions: ["allow-once", "deny"],
+      });
+      expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
+    });
+
+    it("rejects generic decisions for command-only custom action approvals", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          title: "T",
+          description: "D",
+          actions: [
+            {
+              kind: "command",
+              label: "Verify with World",
+              style: "primary",
+              command: "/agentkit approve plugin:approval-1 allow-once",
+            },
+          ],
+          allowedDecisions: [],
+        },
+        60_000,
+      );
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolve", {
+        id: record.id,
+        decision: "allow-once",
+      });
+      await handlers["plugin.approval.resolve"](opts);
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      const error = responseError(opts.respond as unknown as MockCallSource);
+      expect(error.code).toBe("INVALID_REQUEST");
+      expect(error.message).toBe("allow-once is unavailable for this plugin approval");
+      expect(error.details).toEqual({
+        reason: "PLUGIN_APPROVAL_DECISION_UNAVAILABLE",
+        allowedDecisions: [],
+      });
       expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
     });
 
@@ -757,6 +965,62 @@ describe("createPluginApprovalHandlers", () => {
       const error = responseError(opts.respond as unknown as MockCallSource);
       expect(error.code).toBe("INVALID_REQUEST");
       expect(error.message).toBe("unknown or expired approval id");
+    });
+  });
+
+  describe("plugin.approval.resolveVerified", () => {
+    it("allows the owning plugin to resolve a proof-backed approval", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          pluginId: "agentkit",
+          title: "World proof",
+          description: "Verify with World",
+          allowedDecisions: ["deny"],
+        },
+        60_000,
+      );
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolveVerified", {
+        id: record.id,
+        decision: "allow-once",
+        pluginId: "agentkit",
+      });
+      await handlers["plugin.approval.resolveVerified"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+    });
+
+    it("rejects verified resolution for a different plugin", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          pluginId: "other",
+          title: "Approval",
+          description: "Different plugin",
+          allowedDecisions: ["deny"],
+        },
+        60_000,
+      );
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolveVerified", {
+        id: record.id,
+        decision: "allow-once",
+        pluginId: "agentkit",
+      });
+      await handlers["plugin.approval.resolveVerified"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "verified plugin approval resolver does not match pending approval plugin",
+          details: expect.objectContaining({ reason: "PLUGIN_APPROVAL_PLUGIN_MISMATCH" }),
+        }),
+      );
+      expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
     });
   });
 });

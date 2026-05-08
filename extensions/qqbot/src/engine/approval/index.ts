@@ -42,7 +42,7 @@ export interface PluginApprovalRequest {
   };
 }
 
-type ApprovalDecision = "allow-once" | "allow-always" | "deny";
+export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 interface ApprovalTarget {
   type: ChatScope;

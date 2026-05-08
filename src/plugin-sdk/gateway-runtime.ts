@@ -35,7 +35,9 @@ export { rawDataToString } from "../infra/ws.js";
 export { GatewayClient } from "../gateway/client.js";
 export { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 export {
+  createOperatorAdminGatewayClient,
   createOperatorApprovalsGatewayClient,
+  withOperatorAdminGatewayClient,
   withOperatorApprovalsGatewayClient,
 } from "../gateway/operator-approvals-client.js";
 export { ErrorCodes, errorShape } from "../gateway/protocol/index.js";

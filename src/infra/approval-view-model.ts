@@ -1,5 +1,6 @@
 import type {
   ApprovalMetadataView,
+  ApprovalActionView,
   ApprovalRequest,
   ApprovalResolved,
   ExecApprovalViewBase,
@@ -18,6 +19,34 @@ import {
   resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequest,
 } from "./plugin-approvals.js";
+
+function resolveActionStyle(value: unknown): ApprovalActionView["style"] {
+  return value === "danger" || value === "primary" || value === "secondary" || value === "success"
+    ? value
+    : "primary";
+}
+
+function mapActionsToView(
+  actions: readonly {
+    kind: unknown;
+    command: string;
+    decision?: unknown;
+    label: string;
+    style: unknown;
+  }[],
+): ApprovalActionView[] {
+  return actions.map((action) => ({
+    kind: action.kind === "command" ? "command" : "decision",
+    command: action.command,
+    ...(action.decision === "allow-once" ||
+    action.decision === "allow-always" ||
+    action.decision === "deny"
+      ? { decision: action.decision }
+      : {}),
+    label: action.label,
+    style: resolveActionStyle(action.style),
+  }));
+}
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -106,21 +135,30 @@ export function buildPendingApprovalView(request: ApprovalRequest): PendingAppro
     const pluginRequest = request as PluginApprovalRequest;
     return {
       ...buildPluginViewBase(pluginRequest, "pending"),
-      actions: buildExecApprovalActionDescriptors({
-        approvalCommandId: pluginRequest.id,
-        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(pluginRequest.request),
-      }),
+      actions:
+        Array.isArray(pluginRequest.request.actions) && pluginRequest.request.actions.length > 0
+          ? mapActionsToView(pluginRequest.request.actions)
+          : mapActionsToView(
+              buildExecApprovalActionDescriptors({
+                approvalCommandId: pluginRequest.id,
+                allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(
+                  pluginRequest.request,
+                ),
+              }),
+            ),
       expiresAtMs: pluginRequest.expiresAtMs,
     };
   }
   const execRequest = request as ExecApprovalRequest;
   return {
     ...buildExecViewBase(execRequest, "pending"),
-    actions: buildExecApprovalActionDescriptors({
-      approvalCommandId: execRequest.id,
-      ask: execRequest.request.ask,
-      allowedDecisions: resolveExecApprovalRequestAllowedDecisions(execRequest.request),
-    }),
+    actions: mapActionsToView(
+      buildExecApprovalActionDescriptors({
+        approvalCommandId: execRequest.id,
+        ask: execRequest.request.ask,
+        allowedDecisions: resolveExecApprovalRequestAllowedDecisions(execRequest.request),
+      }),
+    ),
     expiresAtMs: execRequest.expiresAtMs,
   };
 }
