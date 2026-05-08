@@ -454,8 +454,9 @@ describe("bundled plugin metadata", () => {
 
   it("keeps config schemas on all bundled plugin manifests", () => {
     for (const entry of listRepoBundledPluginMetadata()) {
-      expect(entry.manifest.configSchema).toBeTypeOf("object");
+      expect(typeof entry.manifest.configSchema).toBe("object");
       expect(entry.manifest.configSchema).not.toBeNull();
+      expect(Array.isArray(entry.manifest.configSchema)).toBe(false);
     }
   });
 

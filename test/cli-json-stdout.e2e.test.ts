@@ -23,10 +23,10 @@ describe("cli json stdout contract", () => {
         delete env.OPENCLAW_CONFIG_PATH;
         delete env.VITEST;
 
-        const entry = path.resolve(process.cwd(), "openclaw.mjs");
+        const entry = path.resolve(process.cwd(), "src/entry.ts");
         const result = spawnSync(
           process.execPath,
-          [entry, "update", "status", "--json", "--timeout", "1"],
+          ["--import", "tsx", entry, "update", "status", "--json", "--timeout", "1"],
           { cwd: process.cwd(), env, encoding: "utf8" },
         );
 
@@ -34,7 +34,14 @@ describe("cli json stdout contract", () => {
         const stdout = result.stdout.trim();
         expect(stdout.length).toBeGreaterThan(0);
         const parsed = JSON.parse(stdout) as unknown;
-        expect(parsed).toEqual(expect.any(Object));
+        expect(typeof parsed).toBe("object");
+        expect(parsed).not.toBeNull();
+        expect(Array.isArray(parsed)).toBe(false);
+        expect(Object.keys(parsed as Record<string, unknown>).sort()).toEqual([
+          "availability",
+          "channel",
+          "update",
+        ]);
         expect(stdout).not.toContain("Doctor warnings");
         expect(stdout).not.toContain("Doctor changes");
         expect(stdout).not.toContain("Config invalid");

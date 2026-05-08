@@ -119,7 +119,7 @@ describeLive("xai live", () => {
       const doneMessage = await collectDoneMessage(
         stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
       );
-      expect(doneMessage.content).toEqual(expect.any(Array));
+      expect(Array.isArray(doneMessage.content)).toBe(true);
       const payload = requireLiveValue(capturedPayload, "captured xAI payload");
       if ("tool_stream" in payload) {
         expect(payload.tool_stream).toBe(true);
