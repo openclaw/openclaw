@@ -745,7 +745,6 @@ export async function initSessionState(params: {
   const resolvedSessionFile = await resolveAndPersistSessionFile({
     sessionId: sessionEntry.sessionId,
     sessionKey,
-    sessionStore,
     sessionEntry,
     agentId,
     fallbackSessionFile,
