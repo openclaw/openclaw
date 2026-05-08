@@ -304,6 +304,9 @@ The remaining cleanup is mostly consolidation and deletion:
   `.openclaw-wiki/log.jsonl`. The Memory Wiki migration provider imports old
   JSONL logs; wiki markdown and user vault content stay file-backed as
   workspace content.
+- Memory Wiki no longer creates `.openclaw-wiki/state.json` or the unused
+  `.openclaw-wiki/locks` directory. The migration provider removes those retired
+  plugin metadata files if an older vault still has them.
 - Crestodian audit entries now use core SQLite plugin state instead of
   `audit/crestodian.jsonl`. Doctor imports the legacy JSONL audit log and
   removes it after successful import.
@@ -1082,6 +1085,8 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `crestodian/rescue-pending/*.json`
 - `plugins/phone-control/armed.json`
 - Memory Wiki `.openclaw-wiki/log.jsonl`
+- Memory Wiki `.openclaw-wiki/state.json`
+- Memory Wiki `.openclaw-wiki/locks/`
 - Memory Wiki `.openclaw-wiki/source-sync.json`
 - Memory Wiki `.openclaw-wiki/import-runs/*.json`
 - Memory Wiki `.openclaw-wiki/cache/agent-digest.json`

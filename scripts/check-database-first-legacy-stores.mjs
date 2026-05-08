@@ -73,6 +73,8 @@ const legacyStoreMarkers = [
   },
   { label: "Memory Wiki source sync JSON", pattern: /\bsource-sync\.json\b/u },
   { label: "Memory Wiki activity JSONL", pattern: /\b\.openclaw-wiki[/\\]log\.jsonl\b/u },
+  { label: "Memory Wiki vault metadata JSON", pattern: /\b\.openclaw-wiki[/\\]state\.json\b/u },
+  { label: "Memory Wiki vault lock directory", pattern: /\b\.openclaw-wiki[/\\]locks\b/u },
   {
     label: "Memory Wiki import run JSON",
     pattern: /\bimport-runs[/\\][A-Za-z0-9._-]+\.json\b/u,
