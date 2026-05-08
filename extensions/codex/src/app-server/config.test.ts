@@ -12,9 +12,15 @@ import {
   resolveCodexPluginsPolicy,
 } from "./config.js";
 
+type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
+
+function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
+  return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
+}
+
 describe("Codex app-server config", () => {
   it("parses typed plugin config before falling back to environment knobs", () => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
+    const runtime = resolveRuntimeForTest({
       pluginConfig: {
         appServer: {
           mode: "guardian",
@@ -51,7 +57,7 @@ describe("Codex app-server config", () => {
   });
 
   it("ignores app-server environment clearing for websocket transports", () => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
+    const runtime = resolveRuntimeForTest({
       pluginConfig: {
         appServer: {
           transport: "websocket",
@@ -66,7 +72,7 @@ describe("Codex app-server config", () => {
   });
 
   it("normalizes app-server environment variables to clear", () => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
+    const runtime = resolveRuntimeForTest({
       pluginConfig: {
         appServer: {
           clearEnv: [" OPENAI_API_KEY ", "", "  "],
@@ -83,7 +89,7 @@ describe("Codex app-server config", () => {
   });
 
   it("normalizes legacy service tiers without discarding the rest of the config", () => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
+    const runtime = resolveRuntimeForTest({
       pluginConfig: {
         appServer: {
           mode: "guardian",
@@ -130,7 +136,7 @@ describe("Codex app-server config", () => {
 
   it("requires a websocket url when websocket transport is configured", () => {
     expect(() =>
-      resolveCodexAppServerRuntimeOptions({
+      resolveRuntimeForTest({
         pluginConfig: { appServer: { transport: "websocket" } },
         env: {},
       }),
@@ -138,9 +144,8 @@ describe("Codex app-server config", () => {
   });
 
   it("defaults native Codex approvals to unchained local execution", () => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
+    const runtime = resolveRuntimeForTest({
       pluginConfig: {},
-      env: {},
     });
 
     expect(runtime).toEqual(
@@ -152,6 +157,298 @@ describe("Codex app-server config", () => {
           command: "codex",
           commandSource: "managed",
         }),
+      }),
+    );
+  });
+
+  it("defaults native Codex approvals to guardian when requirements disallow full access", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("uses read-only sandbox for guardian defaults when requirements only allow read-only", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_sandbox_modes = ["read-only"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "read-only",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("defaults native Codex approvals to guardian when requirements disallow never approval", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_approval_policies = ["on-request"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("selects an allowed guardian approval policy when on-request is unavailable", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_approval_policies = ["on-failure"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-failure",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("keeps native Codex approvals unchained when requirements allow never approval", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_approval_policies = ["never"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  it("defaults native Codex approvals to guardian when requirements disallow user reviewer", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("selects an allowed reviewer when sandbox requirements force guardian defaults", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml:
+        'allowed_sandbox_modes = ["read-only", "workspace-write"]\nallowed_approvals_reviewers = ["user"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  it("ignores quoted sandbox modes inside requirements comments", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: `allowed_sandbox_modes = [
+  "read-only",
+  # "danger-full-access",
+  "workspace-write",
+]
+`,
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("applies the first matching remote sandbox requirements before resolving local stdio defaults", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      hostName: "BUILD-01.EXAMPLE.COM.",
+      requirementsToml: `[[remote_sandbox_config]]
+hostname_patterns = ["build-*.example.com"]
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+
+[[remote_sandbox_config]]
+hostname_patterns = ["build-01.example.com"]
+allowed_sandbox_modes = ["read-only", "danger-full-access"]
+`,
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("ignores non-matching remote-only sandbox requirements when resolving local stdio defaults", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      hostName: "laptop.example.com",
+      requirementsToml: `[[remote_sandbox_config]]
+hostname_patterns = ["build-*.example.com"]
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+`,
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  it("reads local requirements policy from the configured requirements path", () => {
+    const readPaths: string[] = [];
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: {},
+      requirementsPath: "/custom/codex/requirements.toml",
+      readRequirementsFile: (path) => {
+        readPaths.push(path);
+        return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
+      },
+    });
+
+    expect(readPaths).toEqual(["/custom/codex/requirements.toml"]);
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("reads local requirements policy from the Codex Windows requirements path", () => {
+    const readPaths: string[] = [];
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: { ProgramData: "D:\\ManagedData" },
+      platform: "win32",
+      readRequirementsFile: (path) => {
+        readPaths.push(path);
+        return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
+      },
+    });
+
+    expect(readPaths).toEqual(["D:\\ManagedData\\OpenAI\\Codex\\requirements.toml"]);
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("keeps native Codex approvals unchained when requirements allow full access", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml:
+        'allowed_sandbox_modes = ["ReadOnly", "WorkspaceWrite", "DangerFullAccess"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  it("keeps native Codex approvals unchained when requirements are malformed", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: "allowed_sandbox_modes = [read-only]\n",
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  it("does not apply local requirements policy to websocket app-server transports", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+      requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  it("keeps explicit yolo mode when requirements disallow full access", () => {
+    const requirementsToml = 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
+    expect(
+      resolveRuntimeForTest({
+        pluginConfig: { appServer: { mode: "yolo" } },
+        requirementsToml,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+    expect(
+      resolveRuntimeForTest({
+        pluginConfig: {},
+        env: { OPENCLAW_CODEX_APP_SERVER_MODE: "yolo" },
+        requirementsToml,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
       }),
     );
   });
@@ -237,7 +534,7 @@ describe("Codex app-server config", () => {
 
   it("treats configured and environment commands as explicit overrides", () => {
     expect(
-      resolveCodexAppServerRuntimeOptions({
+      resolveRuntimeForTest({
         pluginConfig: { appServer: { command: "/opt/codex/bin/codex" } },
         env: { OPENCLAW_CODEX_APP_SERVER_BIN: "/usr/local/bin/codex" },
       }).start,
@@ -249,7 +546,7 @@ describe("Codex app-server config", () => {
     );
 
     expect(
-      resolveCodexAppServerRuntimeOptions({
+      resolveRuntimeForTest({
         pluginConfig: {},
         env: { OPENCLAW_CODEX_APP_SERVER_BIN: "/usr/local/bin/codex" },
       }).start,
@@ -304,7 +601,7 @@ describe("Codex app-server config", () => {
   });
 
   it("allows plugin config to opt in to guardian-reviewed local execution", () => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
+    const runtime = resolveRuntimeForTest({
       pluginConfig: {
         appServer: {
           mode: "guardian",
@@ -323,7 +620,7 @@ describe("Codex app-server config", () => {
   });
 
   it("allows environment mode fallback to opt in to guardian-reviewed local execution", () => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
+    const runtime = resolveRuntimeForTest({
       pluginConfig: {},
       env: { OPENCLAW_CODEX_APP_SERVER_MODE: "guardian" },
     });
@@ -339,13 +636,13 @@ describe("Codex app-server config", () => {
 
   it("accepts the latest auto_review reviewer and legacy guardian_subagent alias", () => {
     expect(
-      resolveCodexAppServerRuntimeOptions({
+      resolveRuntimeForTest({
         pluginConfig: { appServer: { approvalsReviewer: "auto_review" } },
         env: {},
       }).approvalsReviewer,
     ).toBe("auto_review");
     expect(
-      resolveCodexAppServerRuntimeOptions({
+      resolveRuntimeForTest({
         pluginConfig: { appServer: { approvalsReviewer: "guardian_subagent" } },
         env: {},
       }).approvalsReviewer,
@@ -353,7 +650,7 @@ describe("Codex app-server config", () => {
   });
 
   it("ignores removed OPENCLAW_CODEX_APP_SERVER_GUARDIAN fallback", () => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
+    const runtime = resolveRuntimeForTest({
       pluginConfig: {},
       env: { OPENCLAW_CODEX_APP_SERVER_GUARDIAN: "1" },
     });
@@ -368,7 +665,7 @@ describe("Codex app-server config", () => {
   });
 
   it("lets explicit policy fields override guardian mode", () => {
-    const runtime = resolveCodexAppServerRuntimeOptions({
+    const runtime = resolveRuntimeForTest({
       pluginConfig: {
         appServer: {
           mode: "guardian",
