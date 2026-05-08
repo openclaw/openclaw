@@ -701,6 +701,7 @@ describe("promptAuthConfig", () => {
 
   it("keeps the user selected OpenRouter default model after auth", async () => {
     mocks.promptAuthChoiceGrouped.mockResolvedValue("openrouter-api-key");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openrouter");
     mocks.applyAuthChoice.mockResolvedValue({
       config: {
         agents: {
@@ -714,5 +715,12 @@ describe("promptAuthConfig", () => {
 
     const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
     expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openrouter/free");
+    expect(mocks.promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeProviderPluginSetups: true,
+        loadCatalog: true,
+        preferredProvider: "openrouter",
+      }),
+    );
   });
 });
