@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { GatewayLockError, acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -539,6 +539,21 @@ export async function runGatewayLoop(params: {
         server = await params.start({ startupStartedAt });
         isFirstStart = false;
       } catch (err) {
+        // EADDRINUSE means the old gateway process is still holding the port —
+        // this is a lock-recovery situation, not a startup crash. Throw
+        // GatewayLockError so runGatewayLoopWithSupervisedLockRecovery's
+        // 120s timeout can break the crash loop.
+        const errMsg = formatErrorMessage(err);
+        if (
+          errMsg.includes("EADDRINUSE") ||
+          errMsg.includes("address already in use") ||
+          (err instanceof Error && err.message?.includes("EADDRINUSE"))
+        ) {
+          throw new GatewayLockError(
+            `gateway port already in use (${errMsg}); old gateway process is still alive — lock-recovery will handle`,
+            err,
+          );
+        }
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only
         // swallow errors on subsequent in-process restarts to keep the
@@ -552,7 +567,6 @@ export async function runGatewayLoop(params: {
         // Without this, the process holds the lock but is not listening,
         // forcing manual cleanup. (#35862)
         await releaseLockIfHeld();
-        const errMsg = formatErrorMessage(err);
         const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
         await writeStabilityBundle("gateway.restart_startup_failed", err);
         gatewayLog.error(
