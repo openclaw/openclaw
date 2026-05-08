@@ -761,7 +761,6 @@ export async function initSessionState(params: {
     agentId,
     sessionsDir: path.dirname(storePath),
     fallbackSessionFile,
-    activeSessionKey: sessionKey,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
@@ -784,19 +783,13 @@ export async function initSessionState(params: {
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
-  await updateSessionStore(
-    storePath,
-    (store) => {
-      // Preserve per-session overrides while resetting compaction state on /new.
-      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
-      if (retiredLegacyMainDelivery) {
-        store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
-      }
-    },
-    {
-      activeSessionKey: sessionKey,
-    },
-  );
+  await updateSessionStore(storePath, (store) => {
+    // Preserve per-session overrides while resetting compaction state on /new.
+    store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+    if (retiredLegacyMainDelivery) {
+      store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+    }
+  });
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   let previousSessionTranscript: {

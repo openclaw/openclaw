@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   markRestartAbortedMainSessionsFromLocks,
   recoverRestartAbortedMainSessions,
@@ -19,9 +20,12 @@ let tmpDir: string;
 beforeEach(async () => {
   vi.clearAllMocks();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-restart-recovery-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
 });
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -32,7 +36,7 @@ async function makeSessionsDir(agentId = "main"): Promise<string> {
 }
 
 async function writeStore(sessionsDir: string, store: Record<string, SessionEntry>): Promise<void> {
-  await fs.writeFile(path.join(sessionsDir, "sessions.json"), JSON.stringify(store, null, 2));
+  await saveSessionStore(path.join(sessionsDir, "sessions.json"), store);
 }
 
 async function writeTranscript(

@@ -8,8 +8,6 @@ export type ReadSessionUpdatedAt = (params: {
 }) => number | undefined;
 
 export type SaveSessionStoreOptions = {
-  skipMaintenance?: boolean;
-  activeSessionKey?: string;
   allowDropAcpMetaSessionKeys?: string[];
 };
 

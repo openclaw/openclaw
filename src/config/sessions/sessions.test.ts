@@ -326,13 +326,9 @@ describe("session store writer queue", () => {
     });
 
     const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
-    await updateSessionStore(
-      storePath,
-      async () => {
-        // Intentionally no-op mutation.
-      },
-      { skipMaintenance: true },
-    );
+    await updateSessionStore(storePath, async () => {
+      // Intentionally no-op mutation.
+    });
     expect(writeSpy).not.toHaveBeenCalled();
     writeSpy.mockRestore();
   });

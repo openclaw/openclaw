@@ -49,9 +49,11 @@ This plan has started landing in slices:
 - Canonical per-agent session stores use SQLite by default. The `openclaw doctor`
   fix mode imports legacy `sessions.json` indexes into SQLite and removes the
   JSON index after import, instead of keeping a startup migration or parallel
-  compatibility/export store. Runtime session reads and writes no longer run
-  JSON import, pruning, capping, archive cleanup, or disk-budget cleanup; those
-  mutations now live behind explicit doctor/session-cleanup steps.
+  compatibility/export store. Runtime session reads and writes normalize and
+  persist only: no JSON import, pruning, capping, archive cleanup, or
+  disk-budget cleanup runs on the hot path. The old maintenance write options
+  have been removed from the session-store API; doctor owns legacy import and
+  `openclaw sessions cleanup` owns explicit cleanup.
 - Transcript events have a SQLite store primitive with JSONL import/export.
   Transcript append paths dual-write when the caller already has agent and
   session scope, including gateway-injected assistant messages. Scoped appends
@@ -341,10 +343,12 @@ Migration order:
 
 1. Keep current task registry and plugin state as is.
 2. Add shared SQLite connection and migration helpers.
-3. Move `sessions.json` behind a `SessionStoreBackend` interface.
-4. Make SQLite primary for session entries.
+3. Move `sessions.json` behind a `SessionStoreBackend` interface. Done for
+   canonical per-agent stores.
+4. Make SQLite primary for session entries. Done for canonical per-agent
+   stores.
 5. Import old `sessions.json` only from `openclaw doctor --fix`, then remove the
-   JSON index after SQLite has the rows.
+   JSON index after SQLite has the rows. Done for session indexes.
 6. Leave `*.jsonl` transcripts on disk while PI owns transcript semantics.
 7. After session manager ownership moves behind OpenClaw APIs, store transcript
    events in SQLite and export JSONL for compatibility.
@@ -543,10 +547,10 @@ Phase 1: SQLite session index
 - Add shared state DB helper.
 - Add a doctor migration that imports `sessions.json` into SQLite and removes
   the JSON index.
-- Move session entries to SQLite behind a flag.
+- Move canonical session entries to SQLite by default.
 - Prove current session list, patch, reset, cleanup, and UI flows.
-- Remove load-time/startup session JSON migration and write-time pruning from
-  the runtime store path.
+- Remove load-time/startup session JSON migration, write-time pruning, and
+  migration-era maintenance options from the runtime store path.
 
 Phase 2: VFS scratch
 

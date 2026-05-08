@@ -119,17 +119,13 @@ async function restoreMainSessionMapping(
     return undefined;
   }
   try {
-    await updateSessionStore(
-      snapshot.storePath,
-      (store) => {
-        if (snapshot.hadEntry && snapshot.entry) {
-          store[snapshot.sessionKey] = snapshot.entry;
-          return;
-        }
-        delete store[snapshot.sessionKey];
-      },
-      { activeSessionKey: snapshot.sessionKey },
-    );
+    await updateSessionStore(snapshot.storePath, (store) => {
+      if (snapshot.hadEntry && snapshot.entry) {
+        store[snapshot.sessionKey] = snapshot.entry;
+        return;
+      }
+      delete store[snapshot.sessionKey];
+    });
     return undefined;
   } catch (err) {
     return formatErrorMessage(err);

@@ -11,7 +11,6 @@ export async function resolveAndPersistSessionFile(params: {
   agentId?: string;
   sessionsDir?: string;
   fallbackSessionFile?: string;
-  activeSessionKey?: string;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey, sessionStore, storePath } = params;
   const now = Date.now();
@@ -39,16 +38,12 @@ export async function resolveAndPersistSessionFile(params: {
   };
   if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {
     sessionStore[sessionKey] = persistedEntry;
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        store[sessionKey] = {
-          ...store[sessionKey],
-          ...persistedEntry,
-        };
-      },
-      params.activeSessionKey ? { activeSessionKey: params.activeSessionKey } : undefined,
-    );
+    await updateSessionStore(storePath, (store) => {
+      store[sessionKey] = {
+        ...store[sessionKey],
+        ...persistedEntry,
+      };
+    });
     return { sessionFile, sessionEntry: persistedEntry };
   }
   sessionStore[sessionKey] = persistedEntry;

@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionScope } from "../config/sessions/types.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const agentCommand = vi.fn();
 
@@ -37,8 +38,19 @@ describe("runBootOnce", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const { storePath } = resolveMainStore();
     await fs.rm(storePath, { force: true });
+  });
+
+  afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
+    if (stateDir) {
+      await fs.rm(stateDir, { recursive: true, force: true });
+      stateDir = "";
+    }
   });
 
   const makeDeps = () => ({
@@ -261,3 +273,4 @@ describe("runBootOnce", () => {
     });
   });
 });
+let stateDir = "";

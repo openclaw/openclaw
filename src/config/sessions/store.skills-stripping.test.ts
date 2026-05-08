@@ -91,7 +91,7 @@ describe("session store strips resolvedSkills from persistence", () => {
       "agent:main:test:1": makeEntry("session-1", makeSnapshot(5)),
     };
 
-    await saveSessionStore(storePath, store, { skipMaintenance: true });
+    await saveSessionStore(storePath, store);
 
     const raw = await fs.readFile(storePath, "utf-8");
     expect(raw).not.toContain("resolvedSkills");
@@ -107,7 +107,7 @@ describe("session store strips resolvedSkills from persistence", () => {
       "agent:main:test:1": makeEntry("session-1", snapshot),
     };
 
-    await saveSessionStore(storePath, store, { skipMaintenance: true });
+    await saveSessionStore(storePath, store);
     const loaded = loadSessionStore(storePath, { skipCache: true });
 
     const persistedSnapshot = loaded["agent:main:test:1"]?.skillsSnapshot;
@@ -137,7 +137,7 @@ describe("session store strips resolvedSkills from persistence", () => {
     );
 
     // Saving the loaded record should rewrite the file in stripped form.
-    await saveSessionStore(storePath, loaded, { skipMaintenance: true });
+    await saveSessionStore(storePath, loaded);
     const rawAfter = await fs.readFile(storePath, "utf-8");
     expect(rawAfter).not.toContain("resolvedSkills");
   });
@@ -145,13 +145,9 @@ describe("session store strips resolvedSkills from persistence", () => {
   it("strips resolvedSkills written via updateSessionStore mutator", async () => {
     // Simulate the production hot path where ensureSkillSnapshot puts a
     // freshly-built snapshot (with resolvedSkills) into the store via mutator.
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        store["agent:main:test:1"] = makeEntry("session-1", makeSnapshot(6));
-      },
-      { skipMaintenance: true },
-    );
+    await updateSessionStore(storePath, (store) => {
+      store["agent:main:test:1"] = makeEntry("session-1", makeSnapshot(6));
+    });
 
     const raw = await fs.readFile(storePath, "utf-8");
     expect(raw).not.toContain("resolvedSkills");
@@ -168,7 +164,7 @@ describe("session store strips resolvedSkills from persistence", () => {
       store[`agent:main:scale:${i}`] = makeEntry(`session-${i}`, makeSnapshot(SKILLS_PER_SESSION));
     }
 
-    await saveSessionStore(storePath, store, { skipMaintenance: true });
+    await saveSessionStore(storePath, store);
 
     const stat = await fs.stat(storePath);
     // Pre-fix: ~SESSION_COUNT * SKILLS_PER_SESSION * ~3KB ≈ 15MB.
