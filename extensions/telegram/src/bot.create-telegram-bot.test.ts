@@ -202,7 +202,7 @@ describe("createTelegramBot", () => {
     const errorHandler = catchMock.mock.calls[0]?.[0];
 
     expect(errorHandler).toBeTypeOf("function");
-    expect(() => errorHandler?.(new Error("handler boom"))).not.toThrow();
+    errorHandler?.(new Error("handler boom"));
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("telegram bot error:"));
   });
 
