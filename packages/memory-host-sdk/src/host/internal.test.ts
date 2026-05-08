@@ -17,6 +17,9 @@ import {
 } from "./multimodal.js";
 
 type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
+type MultimodalIndexingChunk = NonNullable<
+  Awaited<ReturnType<typeof buildMultimodalChunkForIndexing>>
+>;
 
 let sharedTempRoot = "";
 let sharedTempId = 0;
@@ -41,10 +44,21 @@ function setupTempDirLifecycle(prefix: string): () => string {
 }
 
 function expectFileEntry(entry: Awaited<ReturnType<typeof buildFileEntry>>): FileEntry {
+  expect(entry).toBeTruthy();
   if (!entry) {
     throw new Error("Expected file entry to be built");
   }
   return entry;
+}
+
+function expectMultimodalIndexingChunk(
+  built: Awaited<ReturnType<typeof buildMultimodalChunkForIndexing>>,
+): MultimodalIndexingChunk {
+  expect(built).toBeTruthy();
+  if (!built) {
+    throw new Error("Expected multimodal indexing chunk to be built");
+  }
+  return built;
 }
 
 const multimodal: MemoryMultimodalSettings = {
@@ -118,8 +132,8 @@ describe("memory host SDK package internals", () => {
     fsSync.writeFileSync(imagePath, Buffer.from("png"));
 
     const entry = expectFileEntry(await buildFileEntry(imagePath, tmpDir, multimodal));
-    const built = await buildMultimodalChunkForIndexing(entry);
-    expect(built?.chunk.embeddingInput?.parts).toEqual([
+    const built = expectMultimodalIndexingChunk(await buildMultimodalChunkForIndexing(entry));
+    expect(built.chunk.embeddingInput.parts).toEqual([
       { type: "text", text: "Image file: diagram.png" },
       expect.objectContaining({ type: "inline-data", mimeType: "image/png" }),
     ]);
