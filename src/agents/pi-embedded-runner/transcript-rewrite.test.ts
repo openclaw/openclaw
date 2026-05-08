@@ -2,8 +2,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionManager } from "../transcript/session-transcript-contract.js";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions/paths.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  CURRENT_SESSION_VERSION,
+  SessionManager,
+  type SessionEntry,
+  type SessionHeader,
+} from "../transcript/session-transcript-contract.js";
+import { readTranscriptState, type TranscriptState } from "../transcript/transcript-state.js";
 
 let rewriteTranscriptEntriesInSqliteTranscript: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSqliteTranscript;
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
@@ -12,12 +22,21 @@ let installSessionToolResultGuard: typeof import("../session-tool-result-guard.j
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
+const tmpDirs: string[] = [];
+
 function asAppendMessage(message: unknown): AppendMessage {
   return message as AppendMessage;
 }
 
 function getBranchMessages(sessionManager: SessionManager): AgentMessage[] {
   return sessionManager
+    .getBranch()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => entry.message);
+}
+
+function getStateBranchMessages(state: TranscriptState): AgentMessage[] {
+  return state
     .getBranch()
     .filter((entry) => entry.type === "message")
     .map((entry) => entry.message);
@@ -119,20 +138,6 @@ function findAssistantEntryByText(sessionManager: SessionManager, text: string) 
     );
 }
 
-function requireValue<T>(value: T | undefined, label: string): T {
-  if (value === undefined) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
 beforeAll(async () => {
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
@@ -140,7 +145,80 @@ beforeAll(async () => {
     await import("./transcript-rewrite.js"));
 });
 
-beforeEach(() => {});
+afterEach(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+  await Promise.all(tmpDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+async function makeTmpDir(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
+  tmpDirs.push(dir);
+  return dir;
+}
+
+async function seedSqliteRewriteSession(): Promise<{
+  sessionFile: string;
+  toolResultEntryId: string;
+}> {
+  const dir = await makeTmpDir();
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  const sessionId = "rewrite-test";
+  const sessionFile = createSqliteSessionTranscriptLocator({ agentId: "main", sessionId });
+  const header: SessionHeader = {
+    type: "session",
+    id: sessionId,
+    version: CURRENT_SESSION_VERSION,
+    timestamp: new Date(0).toISOString(),
+    cwd: dir,
+  };
+  const entries: SessionEntry[] = [
+    {
+      type: "message",
+      id: "user-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: asAppendMessage({
+        role: "user",
+        content: "run tool",
+        timestamp: 1,
+      }),
+    },
+    {
+      type: "message",
+      id: "tool-result-1",
+      parentId: "user-1",
+      timestamp: new Date(2).toISOString(),
+      message: asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: createTextContent("before rewrite"),
+        isError: false,
+        timestamp: 2,
+      }),
+    },
+    {
+      type: "message",
+      id: "assistant-1",
+      parentId: "tool-result-1",
+      timestamp: new Date(3).toISOString(),
+      message: asAppendMessage({
+        role: "assistant",
+        content: createTextContent("summarized"),
+        timestamp: 3,
+      }),
+    },
+  ];
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId,
+    transcriptPath: sessionFile,
+    events: [header, ...entries],
+  });
+  return { sessionFile, toolResultEntryId: "tool-result-1" };
+}
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {
   it("branches from the first replaced message and re-appends the remaining suffix", () => {
@@ -175,11 +253,9 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 
   it("preserves active-branch labels after rewritten entries are re-appended", () => {
     const { sessionManager, toolResultEntryId } = createReadRewriteSession();
-    const summaryEntry = requireValue(
-      findAssistantEntryByText(sessionManager, "summarized"),
-      "summary entry",
-    );
-    sessionManager.appendLabelChange(summaryEntry.id, "bookmark");
+    const summaryEntry = findAssistantEntryByText(sessionManager, "summarized");
+    expect(summaryEntry).toBeDefined();
+    sessionManager.appendLabelChange(summaryEntry!.id, "bookmark");
 
     const result = rewriteTranscriptEntriesInSessionManager({
       sessionManager,
@@ -192,12 +268,10 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     });
 
     expect(result.changed).toBe(true);
-    const rewrittenSummaryEntry = requireValue(
-      findAssistantEntryByText(sessionManager, "summarized"),
-      "rewritten summary entry",
-    );
-    expect(sessionManager.getLabel(rewrittenSummaryEntry.id)).toBe("bookmark");
-    expect(sessionManager.getBranch().map((entry) => entry.type)).toContain("label");
+    const rewrittenSummaryEntry = findAssistantEntryByText(sessionManager, "summarized");
+    expect(rewrittenSummaryEntry).toBeDefined();
+    expect(sessionManager.getLabel(rewrittenSummaryEntry!.id)).toBe("bookmark");
+    expect(sessionManager.getBranch().some((entry) => entry.type === "label")).toBe(true);
   });
 
   it("remaps compaction keep markers when rewritten entries change ids", () => {
@@ -229,13 +303,10 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     );
     const compactionEntry = branch.find((entry) => entry.type === "compaction");
 
-    const keptAssistant = requireValue(keptAssistantEntry, "kept assistant entry");
-    const compaction = requireValue(compactionEntry, "compaction entry");
-    if (compaction.type !== "compaction") {
-      throw new Error("expected compaction entry");
-    }
-    expect(compaction.firstKeptEntryId).toBe(keptAssistant.id);
-    expect(compaction.firstKeptEntryId).not.toBe(keptAssistantEntryId);
+    expect(keptAssistantEntry).toBeDefined();
+    expect(compactionEntry).toBeDefined();
+    expect(compactionEntry?.firstKeptEntryId).toBe(keptAssistantEntry?.id);
+    expect(compactionEntry?.firstKeptEntryId).not.toBe(keptAssistantEntryId);
   });
 
   it("bypasses persistence hooks when replaying rewritten messages", () => {
@@ -279,30 +350,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 
 describe("rewriteTranscriptEntriesInSqliteTranscript", () => {
   it("emits transcript updates when the active SQLite branch changes without opening a manager", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
-    const sessionManager = SessionManager.create(dir);
-    const entryIds = appendSessionMessages(sessionManager, [
-      asAppendMessage({
-        role: "user",
-        content: "run tool",
-        timestamp: 1,
-      }),
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "exec",
-        content: createTextContent("before rewrite"),
-        isError: false,
-        timestamp: 2,
-      }),
-      asAppendMessage({
-        role: "assistant",
-        content: createTextContent("summarized"),
-        timestamp: 3,
-      }),
-    ]);
-    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
-    const toolResultEntryId = entryIds[1];
+    const { sessionFile, toolResultEntryId } = await seedSqliteRewriteSession();
 
     const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
       throw new Error("SessionManager.open should not be used for SQLite transcript rewrites");
@@ -328,8 +376,8 @@ describe("rewriteTranscriptEntriesInSqliteTranscript", () => {
       expect(listener).toHaveBeenCalledWith({ sessionFile, sessionKey: "agent:main:test" });
 
       openSpy.mockRestore();
-      const rewrittenSession = SessionManager.open(sessionFile);
-      const rewrittenToolResult = getBranchMessages(rewrittenSession)[1] as Extract<
+      const rewrittenState = await readTranscriptState(sessionFile);
+      const rewrittenToolResult = getStateBranchMessages(rewrittenState)[1] as Extract<
         AgentMessage,
         { role: "toolResult" }
       >;
