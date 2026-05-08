@@ -32,6 +32,10 @@ function isSessionStoreRecord(value: unknown): value is Record<string, SessionEn
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   const normalized = normalizeSessionDeliveryFields({
     channel: entry.channel,
@@ -192,4 +196,127 @@ export function loadSessionStore(
   }
 
   return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
+}
+
+export async function loadSessionStoreAsync(
+  storePath: string,
+  opts: LoadSessionStoreOptions = {},
+): Promise<Record<string, SessionEntry>> {
+  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+    const currentFileStat = getFileStatSnapshot(storePath);
+    const cached = readSessionStoreCache({
+      storePath,
+      mtimeMs: currentFileStat?.mtimeMs,
+      sizeBytes: currentFileStat?.sizeBytes,
+      clone: opts.clone,
+    });
+    if (cached) {
+      return cached;
+    }
+  }
+
+  let store: Record<string, SessionEntry> = {};
+  let fileStat = getFileStatSnapshot(storePath);
+  let mtimeMs = fileStat?.mtimeMs;
+  let serializedFromDisk: string | undefined;
+  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
+  for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
+    try {
+      const raw = await fs.promises.readFile(storePath, "utf-8");
+      if (raw.length === 0 && attempt < maxReadAttempts - 1) {
+        await delay(50);
+        continue;
+      }
+      const parsed = JSON.parse(raw);
+      if (isSessionStoreRecord(parsed)) {
+        store = parsed;
+        serializedFromDisk = raw;
+      }
+      fileStat = getFileStatSnapshot(storePath) ?? fileStat;
+      mtimeMs = fileStat?.mtimeMs;
+      break;
+    } catch {
+      if (attempt < maxReadAttempts - 1) {
+        await delay(50);
+        continue;
+      }
+    }
+  }
+
+  const migrated = applySessionStoreMigrations(store);
+  const normalized = normalizeSessionStore(store);
+  if (migrated || normalized) {
+    serializedFromDisk = undefined;
+  }
+  if (opts.runMaintenance) {
+    const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
+    const beforeCount = Object.keys(store).length;
+    let pruned = 0;
+    let capped = 0;
+    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+      pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      const countAfterPrune = Object.keys(store).length;
+      capped = shouldRunSessionEntryMaintenance({
+        entryCount: countAfterPrune,
+        maxEntries: maintenance.maxEntries,
+      })
+        ? capEntryCount(store, maintenance.maxEntries, { log: false })
+        : 0;
+    }
+    const afterCount = Object.keys(store).length;
+    if (pruned > 0 || capped > 0) {
+      serializedFromDisk = undefined;
+      log.info("applied load-time maintenance to session store", {
+        storePath,
+        before: beforeCount,
+        after: afterCount,
+        pruned,
+        capped,
+        maxEntries: maintenance.maxEntries,
+      });
+    }
+  }
+
+  setSerializedSessionStore(storePath, serializedFromDisk);
+
+  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+    writeSessionStoreCache({
+      storePath,
+      store,
+      mtimeMs,
+      sizeBytes: fileStat?.sizeBytes,
+      serialized: serializedFromDisk,
+    });
+  }
+
+  return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
+}
+
+export async function loadSessionStoreEntriesAsync(
+  storePath: string,
+  sessionKeys: string[],
+  opts: Omit<LoadSessionStoreOptions, "runMaintenance" | "maintenanceConfig"> = {},
+): Promise<Record<string, SessionEntry>> {
+  if (sessionKeys.length === 0) {
+    return {};
+  }
+  const store = await loadSessionStoreAsync(storePath, {
+    ...opts,
+    clone: false,
+  });
+  const selected: Record<string, SessionEntry> = {};
+  for (const sessionKey of sessionKeys) {
+    const key = sessionKey.trim();
+    if (!key || selected[key]) {
+      continue;
+    }
+    const entry = store[key];
+    if (entry) {
+      selected[key] = entry;
+    }
+  }
+  if (opts.clone === false) {
+    return selected;
+  }
+  return cloneSessionStoreRecord(selected);
 }
