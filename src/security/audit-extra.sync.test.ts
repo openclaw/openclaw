@@ -12,7 +12,6 @@ vi.mock("../plugins/web-search-credential-presence.js", () => ({
 
 function requireFirstFinding<T>(findings: readonly T[], label: string): T {
   const [finding] = findings;
-  expect(finding).toBeDefined();
   if (!finding) {
     throw new Error(`Expected ${label} finding`);
   }
