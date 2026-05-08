@@ -313,7 +313,32 @@ describe("AcpSessionManager", () => {
         yield {
           type: "text_delta" as const,
           stream: "output" as const,
-          text: "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
+          text: "Write failed: ",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "permission ",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "denied for ",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "/root/",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "oc-acp-write-",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "should-fail.txt.",
         };
         yield { type: "done" as const };
       });
@@ -370,6 +395,90 @@ describe("AcpSessionManager", () => {
         progressSummary: "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
         terminalOutcome: "blocked",
         terminalSummary: "Permission denied for /root/oc-acp-write-should-fail.txt.",
+      });
+    });
+  }, 300_000);
+
+  it("preserves token-streamed ACP progress boundaries in parented task summaries", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const chunks = [
+        "현재 ",
+        "작업 ",
+        "디",
+        "렉토",
+        "리는 ",
+        "/home/",
+        "by",
+        "kim",
+        "0119/",
+        ".open",
+        "claw/",
+        "workspace",
+        "\n\t",
+        "입니다",
+      ];
+      runtimeState.runTurn.mockImplementation(async function* () {
+        for (const text of chunks) {
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text,
+          };
+        }
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Korean path",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Print the current directory in Korean",
+        mode: "prompt",
+        requestId: "direct-parented-korean-path-run",
+      });
+      await flushMicrotasks();
+
+      expect(findTaskByRunId("direct-parented-korean-path-run")).toMatchObject({
+        runtime: "acp",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child-1",
+        label: "Korean path",
+        task: "Print the current directory in Korean",
+        status: "succeeded",
+        progressSummary: "현재 작업 디렉토리는 /home/bykim0119/.openclaw/workspace 입니다",
       });
     });
   }, 300_000);
@@ -1552,6 +1661,44 @@ describe("AcpSessionManager", () => {
     expect(closeResult.runtimeNotice).toBe("Could not initialize ACP session runtime.");
     expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
       sessionKey: "agent:claude:acp:session-1",
+    });
+  });
+
+  it("treats unsupported close controls as recoverable during discard cleanup", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.close.mockRejectedValueOnce(
+      new AcpRuntimeError(
+        "ACP_BACKEND_UNSUPPORTED_CONTROL",
+        'ACP backend "acpx" does not support session/close.',
+      ),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:openclaw:acp:session-1",
+      storeSessionKey: "agent:openclaw:acp:session-1",
+      acp: readySessionMeta({
+        agent: "openclaw",
+      }),
+    });
+
+    const manager = new AcpSessionManager();
+    const closeResult = await manager.closeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:openclaw:acp:session-1",
+      reason: "terminal-task-cleanup",
+      allowBackendUnavailable: true,
+      discardPersistentState: true,
+      clearMeta: true,
+    });
+
+    expect(closeResult.runtimeClosed).toBe(false);
+    expect(closeResult.runtimeNotice).toContain("does not support session/close");
+    expect(closeResult.metaCleared).toBe(true);
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+      sessionKey: "agent:openclaw:acp:session-1",
     });
   });
 

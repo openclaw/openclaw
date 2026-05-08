@@ -73,9 +73,10 @@ In JSON mode, the CLI emits `type`-tagged objects:
 - `notice`: truncation / rotation hints
 - `raw`: unparsed log line
 
-If the local loopback Gateway asks for pairing, `openclaw logs` falls back to
-the configured local log file automatically. Explicit `--url` targets do not
-use this fallback.
+If the implicit local loopback Gateway asks for pairing, closes during connect,
+or times out before `logs.tail` answers, `openclaw logs` falls back to the
+configured Gateway file log automatically. Explicit `--url` targets do not use
+this fallback.
 
 If the Gateway is unreachable, the CLI prints a short hint to run:
 
@@ -85,8 +86,8 @@ openclaw doctor
 
 ### Control UI (web)
 
-The Control UI’s **Logs** tab tails the same file using `logs.tail`.
-See [/web/control-ui](/web/control-ui) for how to open it.
+The Control UI's **Logs** tab tails the same file using `logs.tail`.
+See [Control UI](/web/control-ui) for how to open it.
 
 ### Channel-only logs
 
@@ -114,6 +115,11 @@ available:
 
 OpenClaw preserves the original structured log arguments alongside these fields
 so existing parsers that read numbered tslog argument keys keep working.
+
+Talk, realtime voice, and managed-room activity emits bounded lifecycle log
+records through this same file-log pipeline. These records include event type,
+mode, transport, provider, and size/timing measurements when available, but omit
+transcript text, audio payloads, turn ids, call ids, and provider item ids.
 
 ### Console output
 
@@ -183,6 +189,9 @@ model-call traces become children of the active request trace, so local logs,
 diagnostic snapshots, OTEL spans, and trusted provider `traceparent` headers can
 be joined by `traceId` without logging raw request or model content.
 
+Talk lifecycle log records also flow to OTLP logs when OpenTelemetry log export
+is enabled, using the same bounded attributes as file logs.
+
 ### Model call size and timing
 
 Model-call diagnostics record bounded request/response measurements without
@@ -218,6 +227,10 @@ File logs and session transcripts stay JSONL, but matching secret values are
 masked before the line or message is written to disk. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
+
+The built-in defaults cover common API credentials and payment-credential field
+names such as card number, CVC/CVV, shared payment token, and payment credential
+when they appear as JSON fields, URL parameters, CLI flags, or assignments.
 
 `logging.redactSensitive: "off"` only disables this general log/transcript
 policy. OpenClaw still redacts safety-boundary payloads that can be shown to UI

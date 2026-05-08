@@ -3,7 +3,7 @@ import {
   buildChannelConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 
 const AudioFormatPolicySchema = z
   .object({
@@ -32,7 +32,7 @@ const QQBotStreamingSchema = z
       .object({
         /** "partial" (default) enables block streaming; "off" disables it. */
         mode: z.enum(["off", "partial"]).default("partial"),
-        /** Use QQ C2C official stream_messages API; legacy, prefer `streaming: true`. */
+        /** @deprecated Prefer `streaming: true`. */
         c2cStreamApi: z.boolean().optional(),
       })
       .passthrough(),

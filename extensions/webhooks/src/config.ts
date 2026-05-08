@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import { normalizeWebhookPath } from "../runtime-api.js";
 
 const secretRefSchema = z
@@ -30,7 +30,7 @@ const webhooksPluginConfigSchema = z
 
 export type WebhookSecretInput = z.infer<typeof secretInputSchema>;
 
-export type ConfiguredWebhookRouteConfig = {
+type ConfiguredWebhookRouteConfig = {
   routeId: string;
   path: string;
   sessionKey: string;

@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
@@ -29,13 +30,14 @@ import type {
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
   describeImageFile,
   describeImageFileWithModel,
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
-import { getImageMetadata } from "../media/image-ops.js";
+import { convertHeicToJpeg, getImageMetadata } from "../media/image-ops.js";
 import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
@@ -88,6 +90,8 @@ import { collectOption } from "./program/helpers.js";
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
+const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
 type CapabilityMetadata = {
   id: string;
@@ -104,6 +108,7 @@ type CapabilityEnvelope = {
   provider?: string;
   model?: string;
   attempts: Array<Record<string, unknown>>;
+  inputs?: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
   ignoredOverrides?: Array<Record<string, unknown>>;
   error?: string;
@@ -112,9 +117,9 @@ type CapabilityEnvelope = {
 const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
-    description: "Run a one-shot text inference turn through the selected model provider.",
+    description: "Run a one-shot inference turn through the selected model provider.",
     transports: ["local", "gateway"],
-    flags: ["--prompt", "--model", "--local", "--gateway", "--json"],
+    flags: ["--prompt", "--file", "--model", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
   },
   {
@@ -584,13 +589,71 @@ function requireModelRunPrompt(value: unknown): string {
   return value;
 }
 
+type ModelRunImageFile = {
+  path: string;
+  fileName: string;
+  mimeType: string;
+  data: string;
+};
+
+async function readModelRunImageFiles(files: string[] | undefined): Promise<ModelRunImageFile[]> {
+  if (!files || files.length === 0) {
+    return [];
+  }
+  return await Promise.all(
+    files.map(async (filePath) => {
+      const resolvedPath = path.resolve(filePath);
+      const buffer = await fs.readFile(resolvedPath);
+      const mimeType = normalizeMimeType(
+        await detectMime({
+          buffer,
+          filePath: resolvedPath,
+        }),
+      );
+      if (!mimeType?.startsWith("image/")) {
+        throw new Error(
+          `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
+        );
+      }
+      if (HEIC_MODEL_RUN_MIMES.has(mimeType)) {
+        const converted = await convertHeicToJpeg(buffer);
+        return {
+          path: resolvedPath,
+          fileName: path.basename(resolvedPath),
+          mimeType: "image/jpeg",
+          data: converted.toString("base64"),
+        };
+      }
+      return {
+        path: resolvedPath,
+        fileName: path.basename(resolvedPath),
+        mimeType,
+        data: buffer.toString("base64"),
+      };
+    }),
+  );
+}
+
 async function runModelRun(params: {
   prompt: string;
+  files?: string[];
   model?: string;
   transport: CapabilityTransport;
 }) {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
+  const imageFiles = await readModelRunImageFiles(params.files);
+  const messageContent =
+    imageFiles.length > 0
+      ? [
+          { type: "text" as const, text: params.prompt },
+          ...imageFiles.map((image) => ({
+            type: "image" as const,
+            data: image.data,
+            mimeType: image.mimeType,
+          })),
+        ]
+      : params.prompt;
   if (params.transport === "local") {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
@@ -602,14 +665,26 @@ async function runModelRun(params: {
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
+    if (prepared.selection.provider === "codex") {
+      throw new Error(
+        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+      );
+    }
+    const localModelRunSystemPrompt =
+      prepared.selection.provider === "openai-codex" ||
+      prepared.model.api === "openai-codex-responses"
+        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
+        : undefined;
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
+      cfg,
       context: {
+        ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
         messages: [
           {
             role: "user",
-            content: params.prompt,
+            content: messageContent,
             timestamp: Date.now(),
           },
         ],
@@ -623,8 +698,13 @@ async function runModelRun(params: {
     });
     const text = collectModelRunText(result.content);
     if (!text) {
+      const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
+      const detail =
+        typeof providerErrorMessage === "string" && providerErrorMessage.trim()
+          ? `: ${providerErrorMessage.trim()}`
+          : "";
       throw new Error(
-        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
       );
     }
     return {
@@ -634,6 +714,14 @@ async function runModelRun(params: {
       provider: prepared.selection.provider,
       model: prepared.selection.modelId,
       attempts: [],
+      ...(imageFiles.length > 0
+        ? {
+            inputs: imageFiles.map((image) => ({
+              path: image.path,
+              mimeType: image.mimeType,
+            })),
+          }
+        : {}),
       outputs: [
         {
           text,
@@ -644,16 +732,34 @@ async function runModelRun(params: {
   }
 
   const { provider, model } = resolveModelRefOverride(params.model);
+  // Provider/model overrides require trusted-operator scope. Use the backend
+  // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
+  const hasModelOverride = Boolean(provider || model);
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
-      meta?: { agentMeta?: { provider?: string; model?: string } };
+      meta?: {
+        agentMeta?: {
+          provider?: string;
+          model?: string;
+          fallbackAttempts?: Array<Record<string, unknown>>;
+        };
+      };
     };
   } = await callGateway({
     method: "agent",
     params: {
       agentId,
       message: params.prompt,
+      attachments:
+        imageFiles.length > 0
+          ? imageFiles.map((image) => ({
+              type: "image",
+              fileName: image.fileName,
+              mimeType: image.mimeType,
+              content: image.data,
+            }))
+          : undefined,
       provider,
       model,
       modelRun: true,
@@ -663,8 +769,9 @@ async function runModelRun(params: {
     },
     expectFinal: true,
     timeoutMs: 120_000,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
+    clientName: hasModelOverride ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+    mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
   });
   return {
     ok: true,
@@ -672,12 +779,20 @@ async function runModelRun(params: {
     transport: "gateway" as const,
     provider: response?.result?.meta?.agentMeta?.provider,
     model: response?.result?.meta?.agentMeta?.model,
-    attempts: [],
+    attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
     outputs: (response?.result?.payloads ?? []).map((payload) => ({
       text: payload.text,
       mediaUrl: payload.mediaUrl,
       mediaUrls: payload.mediaUrls,
     })),
+    ...(imageFiles.length > 0
+      ? {
+          inputs: imageFiles.map((image) => ({
+            path: image.path,
+            mimeType: image.mimeType,
+          })),
+        }
+      : {}),
   } satisfies CapabilityEnvelope;
 }
 
@@ -883,6 +998,11 @@ async function runImageDescribe(params: {
             timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
+        if (isMissingMediaUnderstandingProvider(result)) {
+          throw new Error(
+            "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
+          );
+        }
         throw new Error(`No description returned for image: ${resolvedPath}`);
       }
       return {
@@ -905,6 +1025,15 @@ async function runImageDescribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
+function isMissingMediaUnderstandingProvider(result: RunMediaUnderstandingFileResult): boolean {
+  const decision = result.decision;
+  return (
+    decision?.outcome === "skipped" &&
+    decision.attachments.length > 0 &&
+    decision.attachments.every((attachment) => attachment.attempts.length === 0)
+  );
+}
+
 async function runAudioTranscribe(params: {
   file: string;
   language?: string;
@@ -921,6 +1050,11 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
+    if (isMissingMediaUnderstandingProvider(result)) {
+      throw new Error(
+        "No audio transcription provider is configured or ready. Configure tools.media.audio.models, or pass --model <provider/model> after configuring that provider's auth/API key.",
+      );
+    }
     throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
   }
   return {
@@ -1494,6 +1628,7 @@ export function registerCapabilityCli(program: Command) {
     .command("run")
     .description("Run a one-shot model turn")
     .requiredOption("--prompt <text>", "Prompt text")
+    .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
@@ -1509,6 +1644,7 @@ export function registerCapabilityCli(program: Command) {
         });
         const result = await runModelRun({
           prompt,
+          files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
           transport,
         });

@@ -33,7 +33,34 @@ export type CliBackendPreparedExecution = {
   cleanup?: () => Promise<void>;
 };
 
+export type CliBackendThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
+
+export type CliBackendResolveExecutionArgsContext = {
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  provider: string;
+  modelId: string;
+  authProfileId?: string;
+  thinkingLevel?: CliBackendThinkingLevel;
+  useResume: boolean;
+  baseArgs: readonly string[];
+};
+
+export type CliBackendResolveExecutionArgs = (
+  ctx: CliBackendResolveExecutionArgsContext,
+) => readonly string[] | null | undefined;
+
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
+
+export type CliBackendNativeToolMode = "none" | "always-on";
 
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
@@ -139,4 +166,19 @@ export type CliBackendPlugin = {
     | CliBackendPreparedExecution
     | null
     | undefined;
+  /**
+   * Backend-owned per-run argv rewrite.
+   *
+   * Use this for request-scoped CLI dialect flags that should not be modeled
+   * as static config, such as mapping OpenClaw thinking levels to a backend's
+   * native effort flag.
+   */
+  resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  /**
+   * Whether this CLI backend can expose native tools outside OpenClaw's tool
+   * catalog. Backends that cannot provide a true no-tools mode must mark
+   * themselves as `always-on` so callers that require disabled tools fail
+   * closed instead of launching a native harness.
+   */
+  nativeToolMode?: CliBackendNativeToolMode;
 };

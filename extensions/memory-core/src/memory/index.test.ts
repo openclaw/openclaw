@@ -172,6 +172,7 @@ describe("memory index", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
     await closeAllMemorySearchManagers();
     clearRegistry();
     managersForCleanup.clear();
@@ -329,7 +330,7 @@ describe("memory index", () => {
     return manager.status().fts?.available ? manager : null;
   }
 
-  it.skip("indexes memory files and searches", async () => {
+  it("indexes memory files and searches", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -380,7 +381,7 @@ describe("memory index", () => {
     expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
   });
 
-  it.skip("finds keyword matches via hybrid search when query embedding is zero", async () => {
+  it("finds keyword matches via hybrid search when query embedding is zero", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
         storePath: indexMainPath,
@@ -389,7 +390,7 @@ describe("memory index", () => {
     );
   });
 
-  it.skip("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
+  it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
         storePath: indexMainPath,
@@ -406,7 +407,27 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.vector?.enabled).toBe(true);
     expect(typeof status.vector?.available).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBe(available);
     expect(status.vector?.available).toBe(available);
+  });
+
+  it("probes sqlite vector store availability without initializing embeddings", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-vector-store-only.sqlite"),
+      vectorEnabled: true,
+    });
+    const manager = await getPersistentManager(cfg);
+
+    const available = await manager.probeVectorStoreAvailability?.();
+    const status = manager.status();
+
+    expect(providerCalls).toEqual([]);
+    expect(typeof status.vector?.storeAvailable).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBeUndefined();
+    expect(status.vector?.available).toBeUndefined();
   });
 
   it("caches embedding probe readiness across transient status managers", async () => {

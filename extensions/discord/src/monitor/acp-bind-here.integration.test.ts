@@ -1,5 +1,5 @@
-import { ChannelType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "../internal/discord.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
@@ -200,6 +200,7 @@ describe("Discord ACP bind here end-to-end flow", () => {
         client: createDmClient("dm-1"),
         botUserId: "bot-1",
       }),
+      allowFrom: ["*"],
     });
 
     expect(preflight).not.toBeNull();

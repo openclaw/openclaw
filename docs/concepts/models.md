@@ -23,7 +23,7 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-Model refs choose a provider and model. They do not usually choose the low-level agent runtime. For example, `openai/gpt-5.5` can run through the normal OpenAI provider path or through the Codex app-server runtime, depending on `agents.defaults.agentRuntime.id`. See [Agent runtimes](/concepts/agent-runtimes).
+Model refs choose a provider and model. They do not usually choose the low-level agent runtime. For example, `openai/gpt-5.5` can run through the normal OpenAI provider path or through the Codex app-server runtime, depending on `agents.defaults.agentRuntime.id`. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes).
 
 ## How model selection works
 
@@ -63,7 +63,7 @@ The same `provider/model` can mean different things depending on where it came f
 - User session selections are exact. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`; if that selected provider/model is unreachable, OpenClaw fails visibly instead of falling through to another configured model.
 - Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
-- The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, otherwise explicit `models.providers.*.models`, otherwise the full catalog so fresh installs are not blank.
+- The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
 
 ## Quick model policy
 
@@ -119,7 +119,8 @@ openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for session overrides. When a user selects a model that isn't in that allowlist, OpenClaw returns:
 
 ```
-Model "provider/model" is not allowed. Use /model to list available models.
+Model "provider/model" is not allowed. Use /models to list providers, or /models <provider> to list models.
+Add it with: openclaw config set agents.defaults.models '{"provider/model":{}}' --strict-json --merge
 ```
 
 <Warning>
@@ -130,6 +131,14 @@ This happens **before** a normal reply is generated, so the message can feel lik
 - Pick a model from `/model list`.
 
 </Warning>
+
+When the rejected command included a runtime override such as `/model openai/gpt-5.5 --runtime codex`, fix the allowlist first, then retry the same `/model ... --runtime ...` command. For native Codex execution, the selected model is still `openai/gpt-5.5`; the `codex` runtime selects the harness and uses Codex auth separately.
+
+For local/GGUF models, store the full provider-prefixed ref in the allowlist,
+for example `ollama/gemma4:26b`, `lmstudio/Gemma4-26b-a4-it-gguf`, or the
+exact provider/model shown by `openclaw models list --provider <provider>`.
+Bare local filenames or display names are not enough when the allowlist is
+active.
 
 Example allowlist config:
 
@@ -161,6 +170,7 @@ You can switch models for the current session without restarting:
   <Accordion title="Picker behavior">
     - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
     - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
+    - On Telegram, `/models` picker selections are session-scoped; they do not change the agent's persistent default in `openclaw.json`.
     - `/models add` is deprecated and now returns a deprecation message instead of registering models from chat.
     - `/model <#>` selects from that picker.
 
@@ -213,7 +223,7 @@ openclaw models image-fallbacks clear
 
 ### `models list`
 
-Shows configured models by default. Useful flags:
+Shows configured/auth-available models by default. Useful flags:
 
 <ParamField path="--all" type="boolean">
   Full catalog. Includes bundled provider-owned static catalog rows before auth is configured, so discovery-only views can show models that are unavailable until you add matching provider credentials.

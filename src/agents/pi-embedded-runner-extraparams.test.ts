@@ -9,7 +9,6 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   },
   prepareProviderExtraParams: () => undefined,
   resolveProviderExtraParamsForTransport: () => undefined,
-  resetProviderRuntimeHookCacheForTest: () => {},
   wrapProviderStreamFn: (params: { context: { streamFn?: StreamFn } }) => params.context.streamFn,
 }));
 
@@ -467,7 +466,7 @@ describe("applyExtraParamsToAgent", () => {
     };
   }
 
-  function buildAnthropicModelConfig(modelKey: string, params: Record<string, unknown>) {
+  function buildModelConfig(modelKey: string, params: Record<string, unknown>) {
     return {
       agents: {
         defaults: {
@@ -687,7 +686,7 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-responses",
         provider: "xai",
         id: "grok-4.20-beta-latest-reasoning",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
       payload: {
         model: "grok-4.20-beta-latest-reasoning",
         input: [],
@@ -744,7 +743,7 @@ describe("applyExtraParamsToAgent", () => {
         id: "gpt-5",
         baseUrl: "http://127.0.0.1:19191/v1",
         reasoning: true,
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
       payload: {
         model: "gpt-5",
         input: [],
@@ -812,6 +811,60 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-completions",
         provider: "nvidia-nim",
         id: "moonshotai/kimi-k2.5",
+      } as unknown as Model<"openai-completions">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("uses canonical model config keys for provider-prefixed model ids", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openrouter",
+      applyModelId: "openrouter/auto",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/auto": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/auto",
+      } as unknown as Model<"openai-completions">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("keeps legacy double-prefixed model config fallback for provider-prefixed model ids", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openrouter",
+      applyModelId: "openrouter/auto",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/openrouter/auto": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "openrouter/auto",
       } as Model<"openai-completions">,
     });
 
@@ -1855,7 +1908,7 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-responses",
         provider: "openai",
         id: "gpt-5.4",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
       payload: {},
     });
 
@@ -1972,7 +2025,7 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-responses",
         provider: "openai",
         id: "gpt-5",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
       payload: { tools: [{ type: "function", name: "read" }] },
     });
 
@@ -2202,6 +2255,82 @@ describe("applyExtraParamsToAgent", () => {
         }),
       }),
     );
+  });
+
+  it("keys prepared extra-param memoization by resolved model transport inputs", () => {
+    const resolveProviderExtraParamsForTransport = vi.fn((params) => ({
+      patch: {
+        transportFamily: params.context.model?.api,
+        baseUrl: (params.context.model as Record<string, unknown> | undefined)?.baseUrl,
+        headerAuth: (
+          (params.context.model as Record<string, unknown> | undefined)?.headers as
+            | Record<string, unknown>
+            | undefined
+        )?.["X-Test"],
+      },
+    }));
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: (params) => params.context.extraParams,
+      resolveProviderExtraParamsForTransport,
+      wrapProviderStreamFn: (params) => params.context.streamFn,
+    });
+    const cfg = {};
+
+    const responsesParams = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api-one.example/v1",
+        headers: { "X-Test": "one" },
+      } as unknown as Model<"openai-responses">,
+    });
+    const completionsParams = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5",
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api-one.example/v1",
+        headers: { "X-Test": "one" },
+      } as unknown as Model<"openai-completions">,
+    });
+    const differentModelHeadersParams = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api-two.example/v1",
+        headers: { "X-Test": "two" },
+      } as unknown as Model<"openai-responses">,
+    });
+    const repeatedResponsesParams = resolvePreparedExtraParams({
+      cfg,
+      provider: "openai",
+      modelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api-one.example/v1",
+        headers: { "X-Test": "one" },
+      } as unknown as Model<"openai-responses">,
+    });
+
+    expect(responsesParams.transportFamily).toBe("openai-responses");
+    expect(completionsParams.transportFamily).toBe("openai-completions");
+    expect(differentModelHeadersParams.baseUrl).toBe("https://api-two.example/v1");
+    expect(differentModelHeadersParams.headerAuth).toBe("two");
+    expect(repeatedResponsesParams.transportFamily).toBe("openai-responses");
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(3);
   });
 
   it("passes explicit settings transport to transport extra-param hooks", () => {
@@ -2446,7 +2575,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
     const { calls, agent } = createOptionsCaptureAgent();
-    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
+    const cfg = buildModelConfig("anthropic/claude-opus-4-6", { context1m: true });
 
     applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-6");
 
@@ -2473,7 +2602,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("does not add Anthropic 1M beta header when context1m is not enabled", () => {
-    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
+    const cfg = buildModelConfig("anthropic/claude-opus-4-6", {
       temperature: 0.2,
     });
     const headers = runAnthropicHeaderCase({
@@ -2530,7 +2659,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("merges existing anthropic-beta headers with configured betas", () => {
-    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-5", {
+    const cfg = buildModelConfig("anthropic/claude-sonnet-4-5", {
       context1m: true,
       anthropicBeta: ["files-api-2025-04-14"],
     });
@@ -2550,7 +2679,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
-    const cfg = buildAnthropicModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
+    const cfg = buildModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
     const headers = runAnthropicHeaderCase({
       cfg,
       modelId: "claude-haiku-3-5",

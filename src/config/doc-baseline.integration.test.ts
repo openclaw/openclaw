@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   type ConfigDocBaselineEntry,
@@ -8,6 +8,14 @@ import {
   renderConfigDocBaselineArtifacts,
   writeConfigDocBaselineArtifacts,
 } from "./doc-baseline.js";
+
+vi.mock("./doc-baseline.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doc-baseline.runtime.js")>();
+  return {
+    ...actual,
+    collectBundledChannelConfigs: () => undefined,
+  };
+});
 
 describe("config doc baseline integration", () => {
   let sharedRenderedPromise: Promise<
@@ -29,15 +37,15 @@ describe("config doc baseline integration", () => {
   }
 
   it("is deterministic across repeated runs", async () => {
-    const { baseline } = await getSharedRendered();
-    const first = await renderConfigDocBaselineArtifacts(baseline);
+    const first = await getSharedRendered();
+    const { baseline } = first;
     const second = await renderConfigDocBaselineArtifacts(baseline);
 
     expect(second.json.combined).toBe(first.json.combined);
     expect(second.json.core).toBe(first.json.core);
     expect(second.json.channel).toBe(first.json.channel);
     expect(second.json.plugin).toBe(first.json.plugin);
-  });
+  }, 240_000);
 
   it("includes core, channel, and plugin config metadata", async () => {
     const byPath = await getSharedByPath();

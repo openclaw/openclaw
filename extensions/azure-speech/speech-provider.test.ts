@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { azureSpeechTTSMock, listAzureSpeechVoicesMock } = vi.hoisted(() => ({
   azureSpeechTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
@@ -37,6 +37,11 @@ describe("buildAzureSpeechProvider", () => {
     azureSpeechTTSMock.mockClear();
     listAzureSpeechVoicesMock.mockClear();
     vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./tts.js");
+    vi.resetModules();
   });
 
   it("reports configured only when key plus region or endpoint is available", () => {
@@ -173,6 +178,42 @@ describe("buildAzureSpeechProvider", () => {
       outputFormat: "ogg-24khz-16bit-mono-opus",
       fileExtension: ".ogg",
       voiceCompatible: true,
+    });
+  });
+
+  it("honors voice and language overrides for telephony output", async () => {
+    const provider = buildAzureSpeechProvider();
+    const result = await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "key",
+        region: "eastus",
+        voice: "en-US-JennyNeural",
+        lang: "en-US",
+      },
+      providerOverrides: {
+        voice: "en-US-AriaNeural",
+        lang: "es-US",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(azureSpeechTTSMock).toHaveBeenCalledWith({
+      text: "hello",
+      apiKey: "key",
+      baseUrl: "https://eastus.tts.speech.microsoft.com",
+      endpoint: undefined,
+      region: "eastus",
+      voice: "en-US-AriaNeural",
+      lang: "es-US",
+      outputFormat: "raw-8khz-8bit-mono-mulaw",
+      timeoutMs: 30_000,
+    });
+    expect(result).toEqual({
+      audioBuffer: Buffer.from("audio-bytes"),
+      outputFormat: "raw-8khz-8bit-mono-mulaw",
+      sampleRate: 8_000,
     });
   });
 

@@ -21,11 +21,13 @@ export type BuildPluginApiParams = {
       | "registerTool"
       | "registerHook"
       | "registerHttpRoute"
+      | "registerHostedMediaResolver"
       | "registerChannel"
       | "registerGatewayMethod"
       | "registerCli"
       | "registerReload"
       | "registerNodeHostCommand"
+      | "registerNodeInvokePolicy"
       | "registerSecurityAuditCollector"
       | "registerService"
       | "registerGatewayDiscoveryService"
@@ -79,11 +81,13 @@ export type BuildPluginApiParams = {
 const noopRegisterTool: OpenClawPluginApi["registerTool"] = () => {};
 const noopRegisterHook: OpenClawPluginApi["registerHook"] = () => {};
 const noopRegisterHttpRoute: OpenClawPluginApi["registerHttpRoute"] = () => {};
+const noopRegisterHostedMediaResolver: OpenClawPluginApi["registerHostedMediaResolver"] = () => {};
 const noopRegisterChannel: OpenClawPluginApi["registerChannel"] = () => {};
 const noopRegisterGatewayMethod: OpenClawPluginApi["registerGatewayMethod"] = () => {};
 const noopRegisterCli: OpenClawPluginApi["registerCli"] = () => {};
 const noopRegisterReload: OpenClawPluginApi["registerReload"] = () => {};
 const noopRegisterNodeHostCommand: OpenClawPluginApi["registerNodeHostCommand"] = () => {};
+const noopRegisterNodeInvokePolicy: OpenClawPluginApi["registerNodeInvokePolicy"] = () => {};
 const noopRegisterSecurityAuditCollector: OpenClawPluginApi["registerSecurityAuditCollector"] =
   () => {};
 const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
@@ -151,6 +155,7 @@ const noopOn: OpenClawPluginApi["on"] = () => {};
 
 export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi {
   const handlers = params.handlers ?? {};
+  const registerCli = handlers.registerCli ?? noopRegisterCli;
   return {
     id: params.id,
     name: params.name,
@@ -166,11 +171,19 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerTool: handlers.registerTool ?? noopRegisterTool,
     registerHook: handlers.registerHook ?? noopRegisterHook,
     registerHttpRoute: handlers.registerHttpRoute ?? noopRegisterHttpRoute,
+    registerHostedMediaResolver:
+      handlers.registerHostedMediaResolver ?? noopRegisterHostedMediaResolver,
     registerChannel: handlers.registerChannel ?? noopRegisterChannel,
     registerGatewayMethod: handlers.registerGatewayMethod ?? noopRegisterGatewayMethod,
-    registerCli: handlers.registerCli ?? noopRegisterCli,
+    registerCli,
+    registerNodeCliFeature: (registrar, opts) =>
+      registerCli(registrar, {
+        ...opts,
+        parentPath: ["nodes"],
+      }),
     registerReload: handlers.registerReload ?? noopRegisterReload,
     registerNodeHostCommand: handlers.registerNodeHostCommand ?? noopRegisterNodeHostCommand,
+    registerNodeInvokePolicy: handlers.registerNodeInvokePolicy ?? noopRegisterNodeInvokePolicy,
     registerSecurityAuditCollector:
       handlers.registerSecurityAuditCollector ?? noopRegisterSecurityAuditCollector,
     registerService: handlers.registerService ?? noopRegisterService,

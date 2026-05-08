@@ -21,6 +21,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
+import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -236,12 +237,18 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
-export function hasPromptSubmissionContent(params: {
+export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
+
+export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
   imageCount: number;
-}): boolean {
-  return params.prompt.trim().length > 0 || params.messages.length > 0 || params.imageCount > 0;
+  runtimeOnly?: boolean;
+}): PromptSubmissionSkipReason | null {
+  if (params.prompt.trim().length > 0 || params.imageCount > 0) {
+    return null;
+  }
+  return params.messages.length > 0 ? "blank_user_prompt" : "empty_prompt_history_images";
 }
 
 const QUEUED_USER_MESSAGE_MARKER =
@@ -506,6 +513,8 @@ export function buildAfterTurnRuntimeContext(params: {
   >;
   workspaceDir: string;
   agentDir: string;
+  activeAgentId?: string;
+  contextEnginePluginId?: string;
   tokenBudget?: number;
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
@@ -533,6 +542,13 @@ export function buildAfterTurnRuntimeContext(params: {
       bashElevated: params.attempt.bashElevated,
       extraSystemPrompt: params.attempt.extraSystemPrompt,
       ownerNumbers: params.attempt.ownerNumbers,
+    }),
+    ...resolveContextEngineCapabilities({
+      config: params.attempt.config,
+      sessionKey: params.attempt.sessionKey,
+      agentId: params.activeAgentId,
+      contextEnginePluginId: params.contextEnginePluginId,
+      purpose: "context-engine.after-turn",
     }),
     ...(typeof params.tokenBudget === "number" &&
     Number.isFinite(params.tokenBudget) &&

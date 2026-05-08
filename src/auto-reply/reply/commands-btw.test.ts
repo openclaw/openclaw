@@ -39,7 +39,7 @@ describe("handleBtwCommand", () => {
 
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "Usage: /btw <side question>" },
+      reply: { text: "Usage: /btw [side question]" },
     });
   });
 
@@ -136,6 +136,28 @@ describe("handleBtwCommand", () => {
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "nothing important", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("accepts /side as a /btw alias", async () => {
+    const params = buildParams("/side what changed?");
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "alias answer" });
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        question: "what changed?",
+      }),
+    );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "alias answer", btw: { question: "what changed?" } },
     });
   });
 

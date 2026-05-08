@@ -1,10 +1,15 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  createDeferredTuiFinish,
   drainAndStopTuiSafely,
+  installTuiTerminalLossExitHandler,
   isIgnorableTuiStopError,
+  isTuiTerminalLossError,
   resolveCodexCliBin,
   resolveCtrlCAction,
   resolveFinalAssistantText,
@@ -39,6 +44,16 @@ describe("resolveFinalAssistantText", () => {
         errorMessage: '401 {"error":{"message":"Missing scopes: model.request"}}',
       }),
     ).toContain("HTTP 401");
+  });
+
+  it("formats malformed streaming fragment errors when final and streamed text are empty", () => {
+    expect(
+      resolveFinalAssistantText({
+        finalText: "",
+        streamedText: "",
+        errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+      }),
+    ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 });
 
@@ -325,6 +340,44 @@ describe("TUI shutdown safety", () => {
         throw new Error("boom");
       });
     }).toThrow("boom");
+  });
+
+  it("classifies terminal-loss IO errors", () => {
+    expect(isTuiTerminalLossError({ code: "EIO", syscall: "read" })).toBe(true);
+    expect(isTuiTerminalLossError({ code: "EPIPE", syscall: "write" })).toBe(true);
+    expect(isTuiTerminalLossError(new Error("read EIO at TTY.onStreamRead"))).toBe(true);
+    expect(isTuiTerminalLossError(new Error("ordinary failure"))).toBe(false);
+  });
+
+  it("requests exit once when the TUI terminal closes", () => {
+    const stdin = new EventEmitter() as EventEmitter & {
+      on(event: "close" | "end", listener: () => void): unknown;
+      off(event: "close" | "end", listener: () => void): unknown;
+    };
+    const stdout = new EventEmitter() as EventEmitter & {
+      on(event: "close" | "end", listener: () => void): unknown;
+      off(event: "close" | "end", listener: () => void): unknown;
+    };
+    const requestExit = vi.fn();
+
+    const cleanup = installTuiTerminalLossExitHandler(requestExit, { stdin, stdout });
+    stdin.emit("end");
+    stdout.emit("close");
+    cleanup();
+    stdin.emit("close");
+
+    expect(requestExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves terminal-loss exits requested before the TUI finish handler is installed", () => {
+    const deferredFinish = createDeferredTuiFinish();
+    const finish = vi.fn();
+
+    deferredFinish.requestFinish();
+    expect(finish).not.toHaveBeenCalled();
+
+    deferredFinish.setFinish(finish);
+    expect(finish).toHaveBeenCalledTimes(1);
   });
 });
 
