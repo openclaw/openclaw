@@ -9,6 +9,7 @@ import {
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { selectCrestodianLocalPlannerBackends } from "./assistant-backends.js";
 import {
   CRESTODIAN_ASSISTANT_MAX_TOKENS,
@@ -181,8 +182,11 @@ async function runLocalRuntimePlanner(
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
   try {
     const runId = `crestodian-planner-${randomUUID()}`;
-    const sessionFile = path.join(tempDir, "session.jsonl");
     const sessionId = `${runId}-session`;
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "crestodian",
+      sessionId,
+    });
     const sessionKey = `temp:crestodian-planner:${runId}`;
     switch (backend.runner) {
       case "cli": {

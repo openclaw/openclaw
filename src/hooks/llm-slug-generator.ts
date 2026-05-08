@@ -2,9 +2,7 @@
  * LLM-based slug generator for session memory filenames
  */
 
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
@@ -13,6 +11,7 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -35,16 +34,12 @@ export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
 }): Promise<string | null> {
-  let tempSessionFile: string | null = null;
-
   try {
     const agentId = resolveDefaultAgentId(params.cfg);
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     const agentDir = resolveAgentDir(params.cfg, agentId);
-
-    // Create a temporary session file for this one-off LLM call
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-slug-"));
-    tempSessionFile = path.join(tempDir, "session.jsonl");
+    const sessionId = `slug-generator-${randomUUID()}`;
+    const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
 
     const prompt = `Based on this conversation, generate a short 1-2 word filename slug (lowercase, hyphen-separated, no file extension).
 
@@ -60,10 +55,10 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
     const result = await runEmbeddedPiAgent({
-      sessionId: `slug-generator-${Date.now()}`,
+      sessionId,
       sessionKey: "temp:slug-generator",
       agentId,
-      sessionFile: tempSessionFile,
+      sessionFile,
       workspaceDir,
       agentDir,
       config: params.cfg,
@@ -95,14 +90,5 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
     log.error(`Failed to generate slug: ${message}`);
     return null;
-  } finally {
-    // Clean up temporary session file
-    if (tempSessionFile) {
-      try {
-        await fs.rm(path.dirname(tempSessionFile), { recursive: true, force: true });
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
   }
 }

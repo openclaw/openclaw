@@ -200,6 +200,10 @@ The remaining cleanup is mostly consolidation and deletion:
   locators to embedded agents instead of creating temporary or persisted
   `session.jsonl` files under plugin state. The old `transcriptDir` option is
   now a compatibility no-op.
+- One-off slug generation and Crestodian planner runs now use virtual SQLite
+  transcript locators instead of creating temporary `session.jsonl` files.
+  `SessionManager.open()` preserves those locators instead of resolving them as
+  filesystem paths.
 - Parent transcript fork decisions and fork creation no longer accept
   `storePath` or `sessionsDir`; they use `{agentId, sessionId}` SQLite
   transcript scope and derive any retained path metadata from the parent

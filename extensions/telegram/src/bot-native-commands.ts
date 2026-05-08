@@ -192,7 +192,6 @@ async function resolveTelegramCommandSessionFile(params: {
     const persisted = await resolveAndPersistSessionFile({
       sessionId,
       sessionKey: resolved.normalizedKey,
-      sessionStore: resolved.existing ? { [resolved.normalizedKey]: resolved.existing } : {},
       sessionEntry: resolved.existing,
       agentId: params.agentId,
       fallbackSessionFile,
