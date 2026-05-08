@@ -5,17 +5,22 @@ export class SessionActorQueueTimeoutError extends Error {
   readonly timeoutMs: number;
 
   constructor(actorKey: string, timeoutMs: number) {
-    super(`ACP session lane task timed out after ${timeoutMs}ms for ${actorKey}.`);
+    super(`ACP session lane task timed out after ${timeoutMs}ms.`);
     this.name = "SessionActorQueueTimeoutError";
     this.actorKey = actorKey;
     this.timeoutMs = timeoutMs;
   }
 }
 
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
+export const MAX_SESSION_ACTOR_QUEUE_TIMEOUT_MS = 2_147_483_647;
+
+export type SessionActorQueueTaskContext = {
+  signal: AbortSignal;
+  isStale: () => boolean;
+};
 
 function clampTimerDelayMs(timeoutMs: number): number {
-  return Math.min(MAX_TIMER_DELAY_MS, Math.max(1, Math.round(timeoutMs)));
+  return Math.min(MAX_SESSION_ACTOR_QUEUE_TIMEOUT_MS, Math.max(1, Math.round(timeoutMs)));
 }
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
@@ -29,11 +34,17 @@ function runWithTaskTimeout<T>(params: {
   actorKey: string;
   timeoutMs?: number;
   onTimeout?: () => void;
-  op: () => Promise<T>;
+  op: (context: SessionActorQueueTaskContext) => Promise<T>;
 }): Promise<T> {
   const timeoutMs = params.timeoutMs;
+  const abortController = new AbortController();
+  let stale = false;
+  const context: SessionActorQueueTaskContext = {
+    signal: abortController.signal,
+    isStale: () => stale,
+  };
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return params.op();
+    return params.op(context);
   }
   const timerDelayMs = clampTimerDelayMs(timeoutMs);
 
@@ -44,6 +55,8 @@ function runWithTaskTimeout<T>(params: {
         return;
       }
       settled = true;
+      stale = true;
+      abortController.abort();
       try {
         params.onTimeout?.();
       } catch {
@@ -53,7 +66,7 @@ function runWithTaskTimeout<T>(params: {
     }, timerDelayMs);
     unrefTimer(timer);
 
-    void params.op().then(
+    void params.op(context).then(
       (value) => {
         if (settled) {
           return;
@@ -96,7 +109,7 @@ export class SessionActorQueue {
 
   async run<T>(
     actorKey: string,
-    op: () => Promise<T>,
+    op: (context: SessionActorQueueTaskContext) => Promise<T>,
     options?: {
       timeoutMs?: number;
       onTimeout?: () => void;

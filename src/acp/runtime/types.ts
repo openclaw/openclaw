@@ -42,6 +42,12 @@ export type AcpRuntimeEnsureInput = {
   thinking?: string;
   cwd?: string;
   env?: Record<string, string>;
+  /**
+   * Cooperative cancellation signal for session creation. Runtime adapters
+   * should abort pending startup work when possible; the manager also fences
+   * stale post-timeout side effects for adapters that cannot stop immediately.
+   */
+  signal?: AbortSignal;
 };
 
 export type AcpRuntimeTurnAttachment = {
@@ -128,7 +134,11 @@ export interface AcpRuntime {
     handle?: AcpRuntimeHandle;
   }): Promise<AcpRuntimeCapabilities> | AcpRuntimeCapabilities;
 
-  getStatus?(input: { handle: AcpRuntimeHandle; signal?: AbortSignal }): Promise<AcpRuntimeStatus>;
+  getStatus?(input: {
+    handle: AcpRuntimeHandle;
+    /** Cooperative cancellation signal for status probes. */
+    signal?: AbortSignal;
+  }): Promise<AcpRuntimeStatus>;
 
   setMode?(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
 
@@ -142,7 +152,12 @@ export interface AcpRuntime {
    */
   prepareFreshSession?(input: { sessionKey: string }): Promise<void>;
 
-  cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
+  cancel(input: {
+    handle: AcpRuntimeHandle;
+    reason?: string;
+    /** Cooperative cancellation signal for cancel requests. */
+    signal?: AbortSignal;
+  }): Promise<void>;
 
   close(input: {
     handle: AcpRuntimeHandle;
@@ -152,5 +167,7 @@ export interface AcpRuntime {
      * starts fresh instead of reopening the same conversation.
      */
     discardPersistentState?: boolean;
+    /** Cooperative cancellation signal for close requests. */
+    signal?: AbortSignal;
   }): Promise<void>;
 }

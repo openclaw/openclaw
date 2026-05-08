@@ -21,6 +21,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  signal?: AbortSignal;
   setCachedHandle: (sessionKey: string, handle: AcpRuntimeHandle) => void;
   writeSessionMeta: (params: {
     cfg: OpenClawConfig;
@@ -43,6 +44,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         run: async () =>
           await params.runtime.getStatus!({
             handle: params.handle,
+            ...(params.signal ? { signal: params.signal } : {}),
           }),
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "Could not read ACP runtime status.",

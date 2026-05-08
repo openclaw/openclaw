@@ -1137,6 +1137,10 @@ Notes:
       maxSessionUpdateChars: 500,
     },
 
+    sessionLane: {
+      taskTimeoutMs: 600000,
+    },
+
     runtime: {
       ttlMinutes: 30,
     },
@@ -1159,6 +1163,7 @@ Notes:
 - `stream.maxOutputChars`: maximum assistant output characters projected per ACP turn.
 - `stream.maxSessionUpdateChars`: maximum characters for projected ACP status/update lines.
 - `stream.tagVisibility`: record of tag names to boolean visibility overrides for streamed events.
+- `sessionLane.taskTimeoutMs`: maximum milliseconds a single ACP session-lane task may hold initialize, status, cancel, or close serialization before OpenClaw aborts cooperative runtime calls and fences stale side effects. Default: `600000`; set `0` to disable; maximum: `2147483647`.
 - `runtime.ttlMinutes`: idle TTL in minutes for ACP session workers before eligible cleanup.
 - `runtime.installCommand`: optional install command to run when bootstrapping an ACP runtime environment.
 

@@ -16,6 +16,11 @@ type RuntimeCacheEntry = {
   lastTouchedAt: number;
 };
 
+export type ClosingRuntimeCacheEntry = RuntimeCacheEntry & {
+  actorKey: string;
+  token: symbol;
+};
+
 export type CachedRuntimeSnapshot = {
   actorKey: string;
   state: CachedRuntimeState;
@@ -25,9 +30,10 @@ export type CachedRuntimeSnapshot = {
 
 export class RuntimeCache {
   private readonly cache = new Map<string, RuntimeCacheEntry>();
+  private readonly closing = new Map<symbol, ClosingRuntimeCacheEntry>();
 
   size(): number {
-    return this.cache.size;
+    return this.cache.size + this.closing.size;
   }
 
   has(actorKey: string): boolean {
@@ -74,6 +80,42 @@ export class RuntimeCache {
 
   clear(actorKey: string): void {
     this.cache.delete(actorKey);
+  }
+
+  markClosing(actorKey: string): ClosingRuntimeCacheEntry | null {
+    const entry = this.cache.get(actorKey);
+    if (!entry) {
+      return null;
+    }
+    this.cache.delete(actorKey);
+    const closing: ClosingRuntimeCacheEntry = {
+      actorKey,
+      token: Symbol(`closing-runtime:${actorKey}`),
+      state: entry.state,
+      lastTouchedAt: entry.lastTouchedAt,
+    };
+    this.closing.set(closing.token, closing);
+    return closing;
+  }
+
+  clearClosing(entry: ClosingRuntimeCacheEntry | null | undefined): boolean {
+    if (!entry) {
+      return false;
+    }
+    return this.closing.delete(entry.token);
+  }
+
+  restoreClosing(entry: ClosingRuntimeCacheEntry | null | undefined): boolean {
+    if (!entry || !this.closing.delete(entry.token)) {
+      return false;
+    }
+    if (!this.cache.has(entry.actorKey)) {
+      this.cache.set(entry.actorKey, {
+        state: entry.state,
+        lastTouchedAt: Date.now(),
+      });
+    }
+    return true;
   }
 
   snapshot(params: { now?: number } = {}): CachedRuntimeSnapshot[] {

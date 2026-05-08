@@ -12,8 +12,10 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpSessionResolution } from "./manager.types.js";
+import { MAX_SESSION_ACTOR_QUEUE_TIMEOUT_MS } from "./session-actor-queue.js";
 
 export const DEFAULT_ACP_SESSION_LANE_TASK_TIMEOUT_MS = 600_000;
+export const MAX_ACP_SESSION_LANE_TASK_TIMEOUT_MS = MAX_SESSION_ACTOR_QUEUE_TIMEOUT_MS;
 
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
   const parsed = parseAgentSessionKey(sessionKey);
@@ -123,7 +125,7 @@ export function resolveSessionLaneTaskTimeoutMs(cfg: OpenClawConfig): number {
   if (timeoutMs <= 0) {
     return 0;
   }
-  return Math.round(timeoutMs);
+  return Math.min(Math.round(timeoutMs), MAX_ACP_SESSION_LANE_TASK_TIMEOUT_MS);
 }
 
 export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {

@@ -198,7 +198,7 @@ export const FIELD_HELP: Record<string, string> = {
   "acp.sessionLane":
     "ACP per-session lane controls for serial actor tasks such as initialize, status, cancel, and close.",
   "acp.sessionLane.taskTimeoutMs":
-    "Maximum milliseconds a single ACP session-lane task may hold the lane before OpenClaw releases it and lets the next queued task run. Default: 600000. Set 0 to disable.",
+    "Maximum milliseconds a single ACP session-lane task may hold the lane before OpenClaw aborts cooperative runtime calls, fences stale side effects, and lets the next queued task run. Default: 600000. Set 0 to disable. Maximum: 2147483647.",
   "acp.stream":
     "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
   "acp.stream.coalesceIdleMs":

@@ -46,11 +46,16 @@ declare module "acpx/runtime" {
     getStatus(input: { handle: AcpRuntimeHandle; signal?: AbortSignal }): Promise<AcpRuntimeStatus>;
     setMode(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
     setConfigOption(input: { handle: AcpRuntimeHandle; key: string; value: string }): Promise<void>;
-    cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
+    cancel(input: {
+      handle: AcpRuntimeHandle;
+      reason?: string;
+      signal?: AbortSignal;
+    }): Promise<void>;
     close(input: {
       handle: AcpRuntimeHandle;
       reason?: string;
       discardPersistentState?: boolean;
+      signal?: AbortSignal;
     }): Promise<void>;
   }
 

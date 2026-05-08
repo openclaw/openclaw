@@ -35,7 +35,7 @@ export type AcpRuntimeConfig = {
 };
 
 export type AcpSessionLaneConfig = {
-  /** Maximum time a single ACP session-lane task may hold the lane before release. */
+  /** Maximum time a single ACP session-lane task may hold the lane before cooperative abort and stale fencing; 0 disables. */
   taskTimeoutMs?: number;
 };
 

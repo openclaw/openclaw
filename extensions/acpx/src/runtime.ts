@@ -1104,6 +1104,7 @@ export class AcpxRuntime implements AcpRuntime {
         handle: input.handle,
         reason: input.reason,
         discardPersistentState: input.discardPersistentState,
+        signal: input.signal,
       });
       closeSucceeded = true;
     } finally {

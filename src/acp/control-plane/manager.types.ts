@@ -47,6 +47,7 @@ export type AcpInitializeSessionInput = {
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
   cwd?: string;
   backendId?: string;
+  signal?: AbortSignal;
 };
 
 export type AcpTurnAttachment = {
@@ -79,6 +80,7 @@ export type AcpCloseSessionInput = {
   clearMeta?: boolean;
   allowBackendUnavailable?: boolean;
   requireAcpSession?: boolean;
+  signal?: AbortSignal;
 };
 
 export type AcpCloseSessionResult = {
