@@ -9,6 +9,7 @@ export {
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
   type OpenKeyedStoreOptions,
+  type PluginStateEntry,
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
