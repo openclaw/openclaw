@@ -865,12 +865,8 @@ describe("memory cli", () => {
     await runMemoryCli(["status", "--json"]);
 
     const payload = firstWrittenJsonArg<unknown[]>(writeJson);
-    expect(payload).not.toBeNull();
-    if (!payload) {
-      throw new Error("expected json payload");
-    }
     expect(Array.isArray(payload)).toBe(true);
-    expect((payload[0] as Record<string, unknown>)?.agentId).toBe("main");
+    expect((payload?.[0] as Record<string, unknown>)?.agentId).toBe("main");
     expect(probeVectorAvailability).not.toHaveBeenCalled();
     expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
@@ -885,10 +881,6 @@ describe("memory cli", () => {
     await runMemoryCli(["status", "--json"]);
 
     const payload = firstWrittenJsonArg<unknown[]>(writeJson);
-    expect(payload).not.toBeNull();
-    if (!payload) {
-      throw new Error("expected json payload");
-    }
     expect(Array.isArray(payload)).toBe(true);
     expect(hasLoggedInactiveSecretDiagnostic(error)).toBe(true);
   });
@@ -1000,12 +992,8 @@ describe("memory cli", () => {
     await runMemoryCli(["search", "hello", "--json"]);
 
     const payload = firstWrittenJsonArg<{ results: unknown[] }>(writeJson);
-    expect(payload).not.toBeNull();
-    if (!payload) {
-      throw new Error("expected json payload");
-    }
-    expect(Array.isArray(payload.results)).toBe(true);
-    expect(payload.results).toHaveLength(1);
+    expect(Array.isArray(payload?.results)).toBe(true);
+    expect(payload?.results).toHaveLength(1);
     expect(close).toHaveBeenCalled();
   });
 
@@ -1062,12 +1050,8 @@ describe("memory cli", () => {
       ]);
 
       const payload = firstWrittenJsonArg<{ candidates: unknown[] }>(writeJson);
-      expect(payload).not.toBeNull();
-      if (!payload) {
-        throw new Error("expected json payload");
-      }
-      expect(Array.isArray(payload.candidates)).toBe(true);
-      expect(payload.candidates).toHaveLength(1);
+      expect(Array.isArray(payload?.candidates)).toBe(true);
+      expect(payload?.candidates).toHaveLength(1);
       expect(close).toHaveBeenCalled();
     });
   });
