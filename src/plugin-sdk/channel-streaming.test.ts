@@ -334,6 +334,13 @@ describe("channel-streaming", () => {
     ).toBe("🛠️ Bash: print lines 1-80 from extensions/discord/src/draft-stream.ts");
     expect(
       formatChannelProgressDraftLine({
+        event: "tool",
+        name: "web_search",
+        args: { search_query: [{ q: "Codex OAuth API key" }], response_length: "short" },
+      }),
+    ).toBe('🔎 Web Search: for "Codex OAuth API key"');
+    expect(
+      formatChannelProgressDraftLine({
         event: "item",
         itemKind: "command",
         name: "exec",
