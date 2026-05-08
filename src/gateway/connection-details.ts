@@ -17,6 +17,26 @@ type GatewayConnectionDetailResolvers = {
   resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
 };
 
+export function normalizeGatewayWebSocketUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === "http:") {
+      parsed.protocol = "ws:";
+      return parsed.toString();
+    }
+    if (parsed.protocol === "https:") {
+      parsed.protocol = "wss:";
+      return parsed.toString();
+    }
+  } catch {
+    return value;
+  }
+  return value;
+}
+
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
     config?: OpenClawConfig;
@@ -40,11 +60,11 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const bindMode = config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
-  const cliUrlOverride = normalizeOptionalString(options.url);
+  const cliUrlOverride = normalizeGatewayWebSocketUrl(normalizeOptionalString(options.url));
   const envUrlOverride =
     cliUrlOverride || options.ignoreEnvUrlOverride
       ? undefined
-      : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
+      : normalizeGatewayWebSocketUrl(normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL));
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl = normalizeOptionalString(remote?.url);
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
