@@ -165,8 +165,8 @@ describe("command queue", () => {
       releaseFirst();
       await Promise.all([first, second]);
 
-      expect(waited).not.toBeNull();
-      expect(waited as unknown as number).toBeGreaterThanOrEqual(5);
+      expect(typeof waited).toBe("number");
+      expect(waited).toBeGreaterThanOrEqual(5);
       expect(queuedAhead).toBe(0);
     } finally {
       vi.useRealTimers();
