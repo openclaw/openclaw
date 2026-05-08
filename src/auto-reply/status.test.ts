@@ -2103,7 +2103,7 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast status|on|off");
+    expect(buildHelpMessage()).toContain("/fast status|on|off|default");
   });
 
   it("includes raw trace mode in help output", () => {
