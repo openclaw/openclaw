@@ -54,7 +54,11 @@ function expectCompactionCompleteAndAutoClears(host: MutableHost) {
     startedAt: expect.any(Number),
     completedAt: expect.any(Number),
   });
-  expect(host.compactionClearTimer).not.toBeNull();
+  expect(host.compactionClearTimer).toMatchObject({
+    hasRef: expect.any(Function),
+    ref: expect.any(Function),
+    unref: expect.any(Function),
+  });
 
   vi.advanceTimersByTime(5_000);
   expect(host.compactionStatus).toBeNull();
@@ -141,9 +145,17 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       },
     });
 
-    expect(host.fallbackStatus).not.toBeNull();
+    expect(host.fallbackStatus).toMatchObject({
+      phase: "active",
+      selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+      active: "deepinfra/moonshotai/Kimi-K2.5",
+    });
     vi.advanceTimersByTime(7_999);
-    expect(host.fallbackStatus).not.toBeNull();
+    expect(host.fallbackStatus).toMatchObject({
+      phase: "active",
+      selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+      active: "deepinfra/moonshotai/Kimi-K2.5",
+    });
     vi.advanceTimersByTime(1);
     expect(host.fallbackStatus).toBeNull();
     vi.useRealTimers();
