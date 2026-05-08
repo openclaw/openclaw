@@ -235,11 +235,9 @@ describe("QmdMemoryManager", () => {
 
   function seedSessionTranscript(params?: { sessionId?: string; content?: string }): string {
     const sessionId = params?.sessionId ?? "session-1";
-    const transcriptPath = path.join(stateDir, "agents", agentId, "sessions", `${sessionId}.jsonl`);
     replaceSqliteSessionTranscriptEvents({
       agentId,
       sessionId,
-      transcriptPath,
       events: [
         {
           type: "message",
@@ -247,7 +245,7 @@ describe("QmdMemoryManager", () => {
         },
       ],
     });
-    return transcriptPath;
+    return `sqlite-transcript://${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}.jsonl`;
   }
 
   beforeAll(async () => {

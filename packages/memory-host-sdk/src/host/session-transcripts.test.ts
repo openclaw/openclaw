@@ -17,6 +17,10 @@ let tmpDir: string;
 let originalStateDir: string | undefined;
 let fixtureId = 0;
 
+function sqliteTranscriptLocator(agentId: string, sessionId: string): string {
+  return `sqlite-transcript://${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}.jsonl`;
+}
+
 beforeAll(() => {
   fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-"));
 });
@@ -60,17 +64,15 @@ function seedTranscript(params: {
   now?: number;
 }): string {
   const agentId = params.agentId ?? "main";
-  const transcriptPath =
-    params.transcriptPath ??
-    path.join(tmpDir, "agents", agentId, "sessions", `${params.sessionId}.jsonl`);
+  const transcriptPath = params.transcriptPath;
   replaceSqliteSessionTranscriptEvents({
     agentId,
     sessionId: params.sessionId,
-    ...(params.rememberPath === false ? {} : { transcriptPath }),
+    ...(params.rememberPath === false || !transcriptPath ? {} : { transcriptPath }),
     events: params.events,
     now: () => params.now ?? 1_770_000_000_000,
   });
-  return transcriptPath;
+  return transcriptPath ?? sqliteTranscriptLocator(agentId, params.sessionId);
 }
 
 describe("listSessionTranscriptsForAgent", () => {
