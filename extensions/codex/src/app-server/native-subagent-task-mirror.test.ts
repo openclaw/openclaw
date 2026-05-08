@@ -57,7 +57,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
         requesterSessionKey: "agent:main:main",
         ownerKey: "agent:main:main",
         scopeKind: "session",
-        childSessionKey: "child-thread",
         agentId: "main",
         runId: "codex-thread:child-thread",
         label: "Poincare",
@@ -67,6 +66,9 @@ describe("CodexNativeSubagentTaskMirror", () => {
         startedAt: 10_000,
         progressSummary: "Codex native subagent started.",
       }),
+    );
+    expect(vi.mocked(runtime.createRunningTaskRun).mock.calls[0]?.[0]).not.toHaveProperty(
+      "childSessionKey",
     );
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -242,13 +244,15 @@ describe("CodexNativeSubagentTaskMirror", () => {
         requesterSessionKey: "agent:main:main",
         ownerKey: "agent:main:main",
         scopeKind: "session",
-        childSessionKey: "child-thread",
         runId: "codex-thread:child-thread",
         label: "Codex subagent",
         task: "write the proof file",
         notifyPolicy: "silent",
         deliveryStatus: "not_applicable",
       }),
+    );
+    expect(vi.mocked(runtime.createRunningTaskRun).mock.calls[0]?.[0]).not.toHaveProperty(
+      "childSessionKey",
     );
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({

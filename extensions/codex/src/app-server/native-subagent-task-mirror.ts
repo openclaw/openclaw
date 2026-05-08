@@ -105,7 +105,6 @@ export class CodexNativeSubagentTaskMirror {
             scopeKind: "session" as const,
           }
         : {}),
-      childSessionKey: threadId,
       agentId: this.params.agentId,
       runId,
       label,
@@ -224,7 +223,6 @@ export class CodexNativeSubagentTaskMirror {
             scopeKind: "session" as const,
           }
         : {}),
-      childSessionKey: normalizedThreadId,
       agentId: this.params.agentId,
       runId,
       label: "Codex subagent",
