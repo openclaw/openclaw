@@ -338,7 +338,8 @@ describe("chunkMarkdownText", () => {
         const text = `${prefix}\n\n${fence}\n\n${suffix}`;
 
         const chunks = chunkMarkdownText(text, 40);
-        expect(chunks.some((chunk) => chunk.trimEnd() === fence)).toBe(true);
+        const intactFenceChunks = chunks.filter((chunk) => chunk.trimEnd() === fence);
+        expect(intactFenceChunks.length).toBeGreaterThan(0);
         expectFencesBalanced(chunks);
       },
     },
