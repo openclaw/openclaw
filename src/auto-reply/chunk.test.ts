@@ -17,10 +17,19 @@ function expectFencesBalanced(chunks: string[]) {
   }
 }
 
+function requireChunk(chunks: string[], index: number): string {
+  const chunk = chunks[index];
+  expect(chunk).toBeDefined();
+  if (chunk === undefined) {
+    throw new Error(`expected chunk ${index}`);
+  }
+  return chunk;
+}
+
 function expectChunkLengths(chunks: string[], expectedLengths: number[]) {
   expect(chunks).toHaveLength(expectedLengths.length);
   expectedLengths.forEach((length, index) => {
-    expect(chunks[index]?.length).toBe(length);
+    expect(requireChunk(chunks, index).length).toBe(length);
   });
 }
 
@@ -191,8 +200,8 @@ describe("chunkText", () => {
       text: "This is a message that should break nicely near a word boundary.",
       limit: 30,
       assert: (chunks: string[], text: string) => {
-        expect(chunks[0]?.length).toBeLessThanOrEqual(30);
-        expect(chunks[1]?.length).toBeLessThanOrEqual(30);
+        expect(requireChunk(chunks, 0).length).toBeLessThanOrEqual(30);
+        expect(requireChunk(chunks, 1).length).toBeLessThanOrEqual(30);
         expectNormalizedChunkJoin(chunks, text);
       },
     },
@@ -395,7 +404,7 @@ describe("chunkMarkdownText", () => {
       run: () => {
         const text = `(${"a".repeat(80)})`;
         const chunks = chunkMarkdownText(text, 20);
-        expect(chunks[0]?.length).toBe(20);
+        expect(requireChunk(chunks, 0).length).toBe(20);
         expect(chunks.join("")).toBe(text);
       },
     },
