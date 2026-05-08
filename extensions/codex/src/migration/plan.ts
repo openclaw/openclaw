@@ -12,6 +12,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { exists, sanitizeName } from "./helpers.js";
 import {
@@ -31,6 +32,13 @@ const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
   "codex",
   "config",
   "codexPlugins",
+] as const;
+const CODEX_APP_SERVER_CONFIG_PATH = [
+  "plugins",
+  "entries",
+  "codex",
+  "config",
+  "appServer",
 ] as const;
 
 export type CodexPluginMigrationConfigEntry = {
@@ -188,9 +196,44 @@ function readExistingAllowDestructiveActions(
   return typeof value === "boolean" ? value : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function hasCustomAppServerConfig(config: MigrationProviderContext["config"]): boolean {
+  const value = readMigrationConfigPath(
+    config as Record<string, unknown>,
+    CODEX_APP_SERVER_CONFIG_PATH,
+  );
+  if (value === undefined) {
+    return false;
+  }
+  if (!isRecord(value)) {
+    return true;
+  }
+  return Object.keys(value).length > 0;
+}
+
+function shouldEnableGuardianAppServerMode(params: {
+  ctx: MigrationProviderContext;
+  agentDir: string;
+}): boolean {
+  if (hasCustomAppServerConfig(params.ctx.config)) {
+    return false;
+  }
+  return isProviderAuthProfileConfigured({
+    provider: "openai-codex",
+    cfg: params.ctx.config,
+    agentDir: params.agentDir,
+  });
+}
+
 export function buildCodexPluginsConfigValue(
   entries: readonly CodexPluginMigrationConfigEntry[],
-  params: { config?: MigrationProviderContext["config"] } = {},
+  params: {
+    config?: MigrationProviderContext["config"];
+    guardianAppServerMode?: boolean;
+  } = {},
 ): Record<string, unknown> {
   const plugins = Object.fromEntries(
     entries
@@ -204,19 +247,37 @@ export function buildCodexPluginsConfigValue(
         },
       ]),
   );
-  return {
-    enabled: true,
-    config: {
-      codexPlugins: {
-        enabled: true,
-        allow_destructive_actions:
-          params.config === undefined
-            ? false
-            : (readExistingAllowDestructiveActions(params.config) ?? false),
-        plugins,
-      },
+  const config: Record<string, unknown> = {
+    codexPlugins: {
+      enabled: true,
+      allow_destructive_actions:
+        params.config === undefined
+          ? false
+          : (readExistingAllowDestructiveActions(params.config) ?? false),
+      plugins,
     },
   };
+  if (params.guardianAppServerMode === true) {
+    config.appServer = { mode: "guardian" };
+  }
+  return {
+    enabled: true,
+    config,
+  };
+}
+
+export function buildCodexPluginsConfigValueForContext(
+  ctx: MigrationProviderContext,
+  entries: readonly CodexPluginMigrationConfigEntry[],
+  params: { agentDir: string },
+): Record<string, unknown> {
+  return buildCodexPluginsConfigValue(entries, {
+    config: ctx.config,
+    guardianAppServerMode: shouldEnableGuardianAppServerMode({
+      ctx,
+      agentDir: params.agentDir,
+    }),
+  });
 }
 
 export function hasCodexPluginConfigConflict(
@@ -237,6 +298,7 @@ export function hasCodexPluginConfigConflict(
 function buildPluginConfigItem(
   ctx: MigrationProviderContext,
   pluginItems: readonly MigrationItem[],
+  params: { agentDir: string },
 ): MigrationItem | undefined {
   const entries = pluginItems
     .map((item) => readCodexPluginMigrationConfigEntry(item, true))
@@ -244,7 +306,9 @@ function buildPluginConfigItem(
   if (entries.length === 0) {
     return undefined;
   }
-  const value = buildCodexPluginsConfigValue(entries, { config: ctx.config });
+  const value = buildCodexPluginsConfigValueForContext(ctx, entries, {
+    agentDir: params.agentDir,
+  });
   const conflict = !ctx.overwrite && hasCodexPluginConfigConflict(ctx.config, value);
   return createMigrationItem({
     id: CODEX_PLUGIN_CONFIG_ITEM_ID,
@@ -282,7 +346,9 @@ export async function buildCodexMigrationPlan(
   );
   const pluginItems = buildPluginItems(source.plugins);
   items.push(...pluginItems);
-  const pluginConfigItem = buildPluginConfigItem(ctx, pluginItems);
+  const pluginConfigItem = buildPluginConfigItem(ctx, pluginItems, {
+    agentDir: targets.agentDir,
+  });
   if (pluginConfigItem) {
     items.push(pluginConfigItem);
   }
