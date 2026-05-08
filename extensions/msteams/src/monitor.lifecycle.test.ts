@@ -21,8 +21,11 @@ const expressControl = vi.hoisted(() => ({
   }>,
 }));
 
+const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
+
 vi.mock("../runtime-api.js", () => ({
   DEFAULT_WEBHOOK_MAX_BODY_BYTES: 1024 * 1024,
+  isDangerousNameMatchingEnabled,
   normalizeSecretInputString: (value: unknown) =>
     typeof value === "string" && value.trim() ? value.trim() : undefined,
   hasConfiguredSecretInput: (value: unknown) =>
@@ -115,12 +118,17 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
 );
 
 vi.mock("./monitor-handler.js", () => ({
-  registerMSTeamsHandlers: () => registerMSTeamsHandlers(),
+  registerMSTeamsHandlers: (...args: unknown[]) => registerMSTeamsHandlers(...args),
+}));
+
+const resolveAllowlistMocks = vi.hoisted(() => ({
+  resolveMSTeamsChannelAllowlist: vi.fn(async () => []),
+  resolveMSTeamsUserAllowlist: vi.fn(async () => []),
 }));
 
 vi.mock("./resolve-allowlist.js", () => ({
-  resolveMSTeamsChannelAllowlist: vi.fn(async () => []),
-  resolveMSTeamsUserAllowlist: vi.fn(async () => []),
+  resolveMSTeamsChannelAllowlist: resolveAllowlistMocks.resolveMSTeamsChannelAllowlist,
+  resolveMSTeamsUserAllowlist: resolveAllowlistMocks.resolveMSTeamsUserAllowlist,
 }));
 
 vi.mock("./sdk.js", () => ({
@@ -192,6 +200,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     vi.clearAllMocks();
     expressControl.mode.value = "listening";
     expressControl.apps.length = 0;
+    isDangerousNameMatchingEnabled.mockReset().mockReturnValue(false);
+    resolveAllowlistMocks.resolveMSTeamsChannelAllowlist.mockReset().mockResolvedValue([]);
+    resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockReset().mockResolvedValue([]);
     jwtValidate.mockReset().mockResolvedValue(true);
   });
 
@@ -273,6 +284,108 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect(jwtValidate).toHaveBeenCalledWith("Bearer token");
       expect(next).toHaveBeenCalledTimes(1);
     });
+
+    abort.abort();
+    await task;
+  });
+
+  it("does not resolve user allowlists by display name unless name matching is enabled", async () => {
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    cfg.channels!.msteams = {
+      ...cfg.channels!.msteams!,
+      allowFrom: ["Alice", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
+      groupAllowFrom: ["Bob", "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198"],
+      teams: {
+        Product: {
+          channels: {
+            Roadmap: {},
+          },
+        },
+      },
+    };
+    resolveAllowlistMocks.resolveMSTeamsChannelAllowlist.mockResolvedValueOnce([
+      {
+        input: "Product/Roadmap",
+        resolved: true,
+        teamId: "team-id",
+        channelId: "channel-id",
+      },
+    ]);
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).not.toHaveBeenCalled();
+    expect(resolveAllowlistMocks.resolveMSTeamsChannelAllowlist).toHaveBeenCalledWith({
+      cfg,
+      entries: ["Product/Roadmap"],
+    });
+
+    const registeredCfg = registerMSTeamsHandlers.mock.calls[0]?.[1] as { cfg: OpenClawConfig };
+    expect(registeredCfg.cfg.channels?.msteams?.allowFrom).toEqual([
+      "Alice",
+      "user:40a1a0ed-4ff2-4164-a219-55518990c197",
+      "40a1a0ed-4ff2-4164-a219-55518990c197",
+    ]);
+    expect(registeredCfg.cfg.channels?.msteams?.groupAllowFrom).toEqual([
+      "Bob",
+      "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198",
+      "50a1a0ed-4ff2-4164-a219-55518990c198",
+    ]);
+
+    abort.abort();
+    await task;
+  });
+
+  it("resolves user allowlists when name matching is enabled", async () => {
+    isDangerousNameMatchingEnabled.mockReturnValue(true);
+    resolveAllowlistMocks.resolveMSTeamsUserAllowlist
+      .mockResolvedValueOnce([{ input: "Alice", resolved: true, id: "alice-aad" }])
+      .mockResolvedValueOnce([{ input: "Bob", resolved: true, id: "bob-aad" }]);
+
+    const abort = new AbortController();
+    const cfg = createConfig(0);
+    cfg.channels!.msteams = {
+      ...cfg.channels!.msteams!,
+      dangerouslyAllowNameMatching: true,
+      allowFrom: ["Alice"],
+      groupAllowFrom: ["Bob"],
+    };
+
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: createStores().conversationStore,
+      pollStore: createStores().pollStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(registerMSTeamsHandlers).toHaveBeenCalled();
+    });
+
+    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(1, {
+      cfg,
+      entries: ["Alice"],
+    });
+    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(2, {
+      cfg,
+      entries: ["Bob"],
+    });
+
+    const registeredCfg = registerMSTeamsHandlers.mock.calls[0]?.[1] as { cfg: OpenClawConfig };
+    expect(registeredCfg.cfg.channels?.msteams?.allowFrom).toEqual(["Alice", "alice-aad"]);
+    expect(registeredCfg.cfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob", "bob-aad"]);
 
     abort.abort();
     await task;
