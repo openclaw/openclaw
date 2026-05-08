@@ -9,7 +9,6 @@ import {
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
-import { maskApiKey } from "../utils/mask-api-key.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
@@ -194,24 +193,13 @@ export async function promptRemoteGatewayConfig(
       });
       token = resolved.ref;
     } else {
-      const existingToken = typeof token === "string" ? token : undefined;
-      if (
-        existingToken &&
-        (await prompter.confirm({
-          message: `Use existing gateway token (${maskApiKey(existingToken)})?`,
-          initialValue: true,
-        }))
-      ) {
-        token = existingToken;
-      } else {
-        token = (
-          await prompter.text({
-            message: "Gateway token",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-            sensitive: true,
-          })
-        ).trim();
-      }
+      token = (
+        await prompter.text({
+          message: "Gateway token",
+          initialValue: typeof token === "string" ? token : undefined,
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        })
+      ).trim();
     }
     password = undefined;
   } else if (authChoice === "password") {
@@ -237,24 +225,13 @@ export async function promptRemoteGatewayConfig(
       });
       password = resolved.ref;
     } else {
-      const existingPassword = typeof password === "string" ? password : undefined;
-      if (
-        existingPassword &&
-        (await prompter.confirm({
-          message: `Use existing gateway password (${maskApiKey(existingPassword)})?`,
-          initialValue: true,
-        }))
-      ) {
-        password = existingPassword;
-      } else {
-        password = (
-          await prompter.text({
-            message: "Gateway password",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-            sensitive: true,
-          })
-        ).trim();
-      }
+      password = (
+        await prompter.text({
+          message: "Gateway password",
+          initialValue: typeof password === "string" ? password : undefined,
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        })
+      ).trim();
     }
     token = undefined;
   } else {

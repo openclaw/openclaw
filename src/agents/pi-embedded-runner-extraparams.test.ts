@@ -9,6 +9,7 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   },
   prepareProviderExtraParams: () => undefined,
   resolveProviderExtraParamsForTransport: () => undefined,
+  resetProviderRuntimeHookCacheForTest: () => {},
   wrapProviderStreamFn: (params: { context: { streamFn?: StreamFn } }) => params.context.streamFn,
 }));
 
@@ -466,7 +467,7 @@ describe("applyExtraParamsToAgent", () => {
     };
   }
 
-  function buildModelConfig(modelKey: string, params: Record<string, unknown>) {
+  function buildAnthropicModelConfig(modelKey: string, params: Record<string, unknown>) {
     return {
       agents: {
         defaults: {
@@ -477,40 +478,6 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
   }
-
-  it("passes agentDir and workspaceDir to provider stream wrappers", () => {
-    let capturedContext: WrapProviderStreamFnParams["context"] | undefined;
-    extraParamsTesting.setProviderRuntimeDepsForTest({
-      prepareProviderExtraParams: () => undefined,
-      wrapProviderStreamFn: (params) => {
-        capturedContext = params.context;
-        return params.context.streamFn;
-      },
-    });
-
-    const agent = { streamFn: (() => ({}) as ReturnType<StreamFn>) as StreamFn };
-    const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      id: "gpt-5.4",
-    } as Model<"openai-codex-responses">;
-
-    applyExtraParamsToAgent(
-      agent,
-      undefined,
-      "openai-codex",
-      "gpt-5.4",
-      undefined,
-      "high",
-      "cass",
-      "/tmp/openclaw-workspace",
-      model,
-      "/tmp/openclaw-agent",
-    );
-
-    expect(capturedContext?.agentDir).toBe("/tmp/openclaw-agent");
-    expect(capturedContext?.workspaceDir).toBe("/tmp/openclaw-workspace");
-  });
 
   function runResponsesPayloadMutationCase(params: {
     applyProvider: string;
@@ -525,7 +492,6 @@ describe("applyExtraParamsToAgent", () => {
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
-    thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
   }) {
     const payload = params.payload ?? { store: false };
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -539,7 +505,6 @@ describe("applyExtraParamsToAgent", () => {
       params.applyProvider,
       params.applyModelId,
       params.extraParamsOverride,
-      params.thinkingLevel,
     );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
@@ -686,7 +651,7 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-responses",
         provider: "xai",
         id: "grok-4.20-beta-latest-reasoning",
-      } as unknown as Model<"openai-responses">,
+      } as Model<"openai-responses">,
       payload: {
         model: "grok-4.20-beta-latest-reasoning",
         input: [],
@@ -731,36 +696,6 @@ describe("applyExtraParamsToAgent", () => {
       store: true,
       text: { verbosity: "low" },
     });
-  });
-
-  it("keeps OpenAI Responses web_search compatible when thinking is minimal", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5",
-        baseUrl: "http://127.0.0.1:19191/v1",
-        reasoning: true,
-      } as unknown as Model<"openai-responses">,
-      payload: {
-        model: "gpt-5",
-        input: [],
-        tools: [
-          {
-            type: "function",
-            name: "web_search",
-            description: "Search the web",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-        reasoning: { effort: "low", summary: "auto" },
-      },
-      thinkingLevel: "minimal",
-    });
-
-    expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 
   it("strips disabled reasoning payloads for proxied OpenAI responses routes", () => {
@@ -811,243 +746,10 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-completions",
         provider: "nvidia-nim",
         id: "moonshotai/kimi-k2.5",
-      } as unknown as Model<"openai-completions">,
-    });
-
-    expect(payload.parallel_tool_calls).toBe(false);
-  });
-
-  it("uses canonical model config keys for provider-prefixed model ids", () => {
-    const payload = runParallelToolCallsPayloadMutationCase({
-      applyProvider: "openrouter",
-      applyModelId: "openrouter/auto",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/auto": {
-                params: {
-                  parallel_tool_calls: false,
-                },
-              },
-            },
-          },
-        },
-      },
-      model: {
-        api: "openai-completions",
-        provider: "openrouter",
-        id: "openrouter/auto",
-      } as unknown as Model<"openai-completions">,
-    });
-
-    expect(payload.parallel_tool_calls).toBe(false);
-  });
-
-  it("keeps legacy double-prefixed model config fallback for provider-prefixed model ids", () => {
-    const payload = runParallelToolCallsPayloadMutationCase({
-      applyProvider: "openrouter",
-      applyModelId: "openrouter/auto",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openrouter/openrouter/auto": {
-                params: {
-                  parallel_tool_calls: false,
-                },
-              },
-            },
-          },
-        },
-      },
-      model: {
-        api: "openai-completions",
-        provider: "openrouter",
-        id: "openrouter/auto",
       } as Model<"openai-completions">,
     });
 
     expect(payload.parallel_tool_calls).toBe(false);
-  });
-
-  it("strips store from proxied openai-completions payloads", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "google",
-      applyModelId: "gemini-2.5-pro",
-      model: {
-        api: "openai-completions",
-        provider: "google",
-        id: "gemini-2.5-pro",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-        store: false,
-      },
-    });
-
-    expect(payload).not.toHaveProperty("store");
-  });
-
-  it("keeps store untouched for native openai-completions payloads", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-4.1",
-      model: {
-        api: "openai-completions",
-        provider: "openai",
-        id: "gpt-4.1",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-        store: false,
-      },
-    });
-
-    expect(payload.store).toBe(false);
-  });
-
-  it("merges extra_body into openai-completions payloads before proxy store stripping", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "google",
-      applyModelId: "gemini-2.5-pro",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "google/gemini-2.5-pro": {
-                params: {
-                  extraBody: {
-                    google: { thinking_config: { thinking_budget: 0 } },
-                    store: false,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      model: {
-        api: "openai-completions",
-        provider: "google",
-        id: "gemini-2.5-pro",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-      },
-    });
-
-    expect(payload.google).toEqual({ thinking_config: { thinking_budget: 0 } });
-    expect(payload).not.toHaveProperty("store");
-  });
-
-  it("forwards chat_template_kwargs params as top-level openai-completions payload fields", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "vllm",
-      applyModelId: "nemotron-3-super",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/nemotron-3-super": {
-                params: {
-                  chat_template_kwargs: {
-                    enable_thinking: false,
-                    force_nonempty_content: true,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      model: {
-        api: "openai-completions",
-        provider: "vllm",
-        id: "nemotron-3-super",
-        baseUrl: "http://127.0.0.1:8000/v1",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-      },
-    });
-
-    expect(payload.chat_template_kwargs).toEqual({
-      enable_thinking: false,
-      force_nonempty_content: true,
-    });
-  });
-
-  it("warns and skips invalid chat_template_kwargs params", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      const payload = runResponsesPayloadMutationCase({
-        applyProvider: "vllm",
-        applyModelId: "nemotron-3-super",
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "vllm/nemotron-3-super": {
-                  params: { chat_template_kwargs: "not-an-object" },
-                },
-              },
-            },
-          },
-        },
-        model: {
-          api: "openai-completions",
-          provider: "vllm",
-          id: "nemotron-3-super",
-          baseUrl: "http://127.0.0.1:8000/v1",
-        } as Model<"openai-completions">,
-        payload: {
-          messages: [],
-        },
-      });
-
-      expect(payload).not.toHaveProperty("chat_template_kwargs");
-      expect(warnSpy).toHaveBeenCalledWith(
-        "ignoring invalid chat_template_kwargs param: not-an-object",
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it("warns and skips invalid extra_body params", () => {
-    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      const payload = runResponsesPayloadMutationCase({
-        applyProvider: "google",
-        applyModelId: "gemini-2.5-pro",
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "google/gemini-2.5-pro": {
-                  params: { extra_body: "not-an-object" },
-                },
-              },
-            },
-          },
-        },
-        model: {
-          api: "openai-completions",
-          provider: "google",
-          id: "gemini-2.5-pro",
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-        } as Model<"openai-completions">,
-      });
-
-      expect(payload).not.toHaveProperty("extra_body");
-      expect(warnSpy).toHaveBeenCalledWith("ignoring invalid extra_body param: not-an-object");
-    } finally {
-      warnSpy.mockRestore();
-    }
   });
 
   it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
@@ -1908,7 +1610,7 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-responses",
         provider: "openai",
         id: "gpt-5.4",
-      } as unknown as Model<"openai-responses">,
+      } as Model<"openai-responses">,
       payload: {},
     });
 
@@ -2025,7 +1727,7 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-responses",
         provider: "openai",
         id: "gpt-5",
-      } as unknown as Model<"openai-responses">,
+      } as Model<"openai-responses">,
       payload: { tools: [{ type: "function", name: "read" }] },
     });
 
@@ -2255,82 +1957,6 @@ describe("applyExtraParamsToAgent", () => {
         }),
       }),
     );
-  });
-
-  it("keys prepared extra-param memoization by resolved model transport inputs", () => {
-    const resolveProviderExtraParamsForTransport = vi.fn((params) => ({
-      patch: {
-        transportFamily: params.context.model?.api,
-        baseUrl: (params.context.model as Record<string, unknown> | undefined)?.baseUrl,
-        headerAuth: (
-          (params.context.model as Record<string, unknown> | undefined)?.headers as
-            | Record<string, unknown>
-            | undefined
-        )?.["X-Test"],
-      },
-    }));
-    extraParamsTesting.setProviderRuntimeDepsForTest({
-      prepareProviderExtraParams: (params) => params.context.extraParams,
-      resolveProviderExtraParamsForTransport,
-      wrapProviderStreamFn: (params) => params.context.streamFn,
-    });
-    const cfg = {};
-
-    const responsesParams = resolvePreparedExtraParams({
-      cfg,
-      provider: "openai",
-      modelId: "gpt-5",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5",
-        baseUrl: "https://api-one.example/v1",
-        headers: { "X-Test": "one" },
-      } as unknown as Model<"openai-responses">,
-    });
-    const completionsParams = resolvePreparedExtraParams({
-      cfg,
-      provider: "openai",
-      modelId: "gpt-5",
-      model: {
-        api: "openai-completions",
-        provider: "openai",
-        id: "gpt-5",
-        baseUrl: "https://api-one.example/v1",
-        headers: { "X-Test": "one" },
-      } as unknown as Model<"openai-completions">,
-    });
-    const differentModelHeadersParams = resolvePreparedExtraParams({
-      cfg,
-      provider: "openai",
-      modelId: "gpt-5",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5",
-        baseUrl: "https://api-two.example/v1",
-        headers: { "X-Test": "two" },
-      } as unknown as Model<"openai-responses">,
-    });
-    const repeatedResponsesParams = resolvePreparedExtraParams({
-      cfg,
-      provider: "openai",
-      modelId: "gpt-5",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5",
-        baseUrl: "https://api-one.example/v1",
-        headers: { "X-Test": "one" },
-      } as unknown as Model<"openai-responses">,
-    });
-
-    expect(responsesParams.transportFamily).toBe("openai-responses");
-    expect(completionsParams.transportFamily).toBe("openai-completions");
-    expect(differentModelHeadersParams.baseUrl).toBe("https://api-two.example/v1");
-    expect(differentModelHeadersParams.headerAuth).toBe("two");
-    expect(repeatedResponsesParams.transportFamily).toBe("openai-responses");
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(3);
   });
 
   it("passes explicit settings transport to transport extra-param hooks", () => {
@@ -2575,7 +2201,7 @@ describe("applyExtraParamsToAgent", () => {
 
   it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
     const { calls, agent } = createOptionsCaptureAgent();
-    const cfg = buildModelConfig("anthropic/claude-opus-4-6", { context1m: true });
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
 
     applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-6");
 
@@ -2602,7 +2228,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("does not add Anthropic 1M beta header when context1m is not enabled", () => {
-    const cfg = buildModelConfig("anthropic/claude-opus-4-6", {
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
       temperature: 0.2,
     });
     const headers = runAnthropicHeaderCase({
@@ -2659,7 +2285,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("merges existing anthropic-beta headers with configured betas", () => {
-    const cfg = buildModelConfig("anthropic/claude-sonnet-4-5", {
+    const cfg = buildAnthropicModelConfig("anthropic/claude-sonnet-4-5", {
       context1m: true,
       anthropicBeta: ["files-api-2025-04-14"],
     });
@@ -2679,7 +2305,7 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
-    const cfg = buildModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
+    const cfg = buildAnthropicModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
     const headers = runAnthropicHeaderCase({
       cfg,
       modelId: "claude-haiku-3-5",

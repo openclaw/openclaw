@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { getRuntimeConfig } from "../../config/io.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadConfig } from "../../config/config.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   approveNodePairing,
   listNodePairing,
   rejectNodePairing,
-  removePairedNode,
   renamePairedNode,
   requestNodePairing,
   verifyNodeToken,
@@ -32,7 +30,6 @@ import {
 } from "../canvas-capability.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import {
   type ConnectParams,
@@ -46,19 +43,10 @@ import {
   validateNodePairApproveParams,
   validateNodePairListParams,
   validateNodePairRejectParams,
-  validateNodePairRemoveParams,
   validateNodePairRequestParams,
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
-import {
-  NODE_WAKE_RECONNECT_POLL_MS,
-  NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
-  NODE_WAKE_RECONNECT_WAIT_MS,
-  nodeWakeById,
-  nodeWakeNudgeById,
-  type NodeWakeAttempt,
-} from "./nodes-wake-state.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondInvalidParams,
@@ -68,16 +56,30 @@ import {
 } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-export {
-  clearNodeWakeState,
-  NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
-  NODE_WAKE_RECONNECT_WAIT_MS,
-} from "./nodes-wake-state.js";
-
+export const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
+export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
+export const NODE_WAKE_RECONNECT_POLL_MS = 150;
 const NODE_WAKE_THROTTLE_MS = 15_000;
 const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_MAX_PER_NODE = 64;
+
+type NodeWakeState = {
+  lastWakeAtMs: number;
+  inFlight?: Promise<NodeWakeAttempt>;
+};
+
+const nodeWakeById = new Map<string, NodeWakeState>();
+const nodeWakeNudgeById = new Map<string, number>();
+
+type NodeWakeAttempt = {
+  available: boolean;
+  throttled: boolean;
+  path: "throttled" | "no-registration" | "no-auth" | "sent" | "send-error";
+  durationMs: number;
+  apnsStatus?: number;
+  apnsReason?: string;
+};
 
 type NodeWakeNudgeAttempt = {
   sent: boolean;
@@ -139,8 +141,8 @@ async function resolveDirectNodePushConfig() {
     : { ok: false as const, error: auth.error };
 }
 
-function resolveRelayNodePushConfig(cfg: OpenClawConfig) {
-  const relay = resolveApnsRelayConfigFromEnv(process.env, cfg.gateway);
+function resolveRelayNodePushConfig() {
+  const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
   return relay.ok
     ? { ok: true as const, relayConfig: relay.value }
     : { ok: false as const, error: relay.error };
@@ -248,7 +250,6 @@ function listPendingNodeActions(nodeId: string): PendingNodeAction[] {
 function resolveAllowedPendingNodeActions(params: {
   nodeId: string;
   client: { connect?: ConnectParams | null } | null;
-  cfg: OpenClawConfig;
 }): PendingNodeAction[] {
   const pending = listPendingNodeActions(params.nodeId);
   if (pending.length === 0) {
@@ -256,7 +257,7 @@ function resolveAllowedPendingNodeActions(params: {
   }
   const connect = params.client?.connect;
   const declaredCommands = Array.isArray(connect?.commands) ? connect.commands : [];
-  const allowlist = resolveNodeCommandAllowlist(params.cfg, {
+  const allowlist = resolveNodeCommandAllowlist(loadConfig(), {
     platform: connect?.client?.platform,
     deviceFamily: connect?.client?.deviceFamily,
   });
@@ -306,7 +307,7 @@ function toPendingParamsJSON(params: unknown): string | undefined {
 
 export async function maybeWakeNodeWithApns(
   nodeId: string,
-  opts?: { force?: boolean; wakeReason?: string; cfg?: OpenClawConfig },
+  opts?: { force?: boolean; wakeReason?: string },
 ): Promise<NodeWakeAttempt> {
   const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
   nodeWakeById.set(nodeId, state);
@@ -336,7 +337,7 @@ export async function maybeWakeNodeWithApns(
 
       let wakeResult;
       if (registration.transport === "relay") {
-        const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig());
+        const relay = resolveRelayNodePushConfig();
         if (!relay.ok) {
           return withDuration({
             available: false,
@@ -414,10 +415,7 @@ export async function maybeWakeNodeWithApns(
   }
 }
 
-export async function maybeSendNodeWakeNudge(
-  nodeId: string,
-  opts?: { cfg?: OpenClawConfig },
-): Promise<NodeWakeNudgeAttempt> {
+export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNudgeAttempt> {
   const startedAtMs = Date.now();
   const withDuration = (
     attempt: Omit<NodeWakeNudgeAttempt, "durationMs">,
@@ -438,7 +436,7 @@ export async function maybeSendNodeWakeNudge(
   try {
     let result;
     if (registration.transport === "relay") {
-      const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig());
+      const relay = resolveRelayNodePushConfig();
       if (!relay.ok) {
         return withDuration({
           sent: false,
@@ -518,6 +516,15 @@ export async function waitForNodeReconnect(params: {
     await delayMs(pollMs);
   }
   return Boolean(params.context.nodeRegistry.get(params.nodeId));
+}
+
+/**
+ * Remove cached wake/nudge state for a node that has disconnected.
+ * Called from the WS close handler to prevent unbounded growth.
+ */
+export function clearNodeWakeState(nodeId: string): void {
+  nodeWakeById.delete(nodeId);
+  nodeWakeNudgeById.delete(nodeId);
 }
 
 export const nodeHandlers: GatewayRequestHandlers = {
@@ -640,35 +647,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
         { dropIfSlow: true },
       );
       respond(true, rejected, undefined);
-    });
-  },
-  "node.pair.remove": async ({ params, respond, context }) => {
-    if (!validateNodePairRemoveParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.remove",
-        validator: validateNodePairRemoveParams,
-      });
-      return;
-    }
-    const { nodeId } = params as { nodeId: string };
-    await respondUnavailableOnThrow(respond, async () => {
-      const removed = await removePairedNode(nodeId);
-      if (!removed) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
-        return;
-      }
-      context.broadcast(
-        "node.pair.resolved",
-        {
-          requestId: "",
-          nodeId: removed.nodeId,
-          decision: "removed",
-          ts: Date.now(),
-        },
-        { dropIfSlow: true },
-      );
-      respond(true, removed, undefined);
     });
   },
   "node.pair.verify": async ({ params, respond }) => {
@@ -817,7 +795,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "node.pending.pull": async ({ params, respond, client, context }) => {
+  "node.pending.pull": async ({ params, respond, client }) => {
     if (!validateNodeListParams(params)) {
       respondInvalidParams({
         respond,
@@ -833,11 +811,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const pending = resolveAllowedPendingNodeActions({
-      nodeId: trimmedNodeId,
-      client,
-      cfg: context.getRuntimeConfig(),
-    });
+    const pending = resolveAllowedPendingNodeActions({ nodeId: trimmedNodeId, client });
     respond(
       true,
       {
@@ -935,7 +909,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
-      const cfg = context.getRuntimeConfig();
       let nodeSession = context.nodeRegistry.get(nodeId);
       if (!nodeSession) {
         const wakeReqId = req.id;
@@ -944,7 +917,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake start node=${nodeId} req=${wakeReqId} command=${command}`,
         );
 
-        const wake = await maybeWakeNodeWithApns(nodeId, { cfg });
+        const wake = await maybeWakeNodeWithApns(nodeId);
         context.logGateway.info(
           `node wake stage=wake1 node=${nodeId} req=${wakeReqId} ` +
             `available=${wake.available} throttled=${wake.throttled} ` +
@@ -967,7 +940,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         }
         nodeSession = context.nodeRegistry.get(nodeId);
         if (!nodeSession && wake.available) {
-          const retryWake = await maybeWakeNodeWithApns(nodeId, { force: true, cfg });
+          const retryWake = await maybeWakeNodeWithApns(nodeId, { force: true });
           context.logGateway.info(
             `node wake stage=wake2 node=${nodeId} req=${wakeReqId} force=true ` +
               `available=${retryWake.available} throttled=${retryWake.throttled} ` +
@@ -992,7 +965,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         }
         if (!nodeSession) {
           const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
-          const nudge = await maybeSendNodeWakeNudge(nodeId, { cfg });
+          const nudge = await maybeSendNodeWakeNudge(nodeId);
           context.logGateway.info(
             `node wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
               `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
@@ -1017,6 +990,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
         );
       }
+      const cfg = loadConfig();
       const allowlist = resolveNodeCommandAllowlist(cfg, nodeSession);
       const allowed = isNodeCommandAllowed({
         command,
@@ -1034,7 +1008,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-
       const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
         nodeId,
         command,
@@ -1049,45 +1022,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
           errorShape(ErrorCodes.INVALID_REQUEST, forwardedParams.message, {
             details: forwardedParams.details ?? null,
           }),
-        );
-        return;
-      }
-      const policyResult = await applyPluginNodeInvokePolicy({
-        context,
-        client,
-        nodeSession,
-        command,
-        params: forwardedParams.params,
-        timeoutMs: p.timeoutMs,
-        idempotencyKey: p.idempotencyKey,
-      });
-      if (policyResult) {
-        if (!policyResult.ok) {
-          const errorCode = policyResult.unavailable
-            ? ErrorCodes.UNAVAILABLE
-            : ErrorCodes.INVALID_REQUEST;
-          respond(
-            false,
-            undefined,
-            errorShape(errorCode, policyResult.message, {
-              details: {
-                ...policyResult.details,
-                ...(policyResult.code ? { code: policyResult.code } : {}),
-              },
-            }),
-          );
-          return;
-        }
-        respond(
-          true,
-          {
-            ok: true,
-            nodeId,
-            command,
-            payload: policyResult.payload,
-            payloadJSON: policyResult.payloadJSON ?? null,
-          },
-          undefined,
         );
         return;
       }
@@ -1113,7 +1047,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
             paramsJSON,
             idempotencyKey: p.idempotencyKey,
           });
-          const wake = await maybeWakeNodeWithApns(nodeId, { cfg });
+          const wake = await maybeWakeNodeWithApns(nodeId);
           context.logGateway.info(
             `node pending queued node=${nodeId} req=${req.id} command=${command} ` +
               `queuedId=${queued.id} wakePath=${wake.path} wakeAvailable=${wake.available}`,
@@ -1204,16 +1138,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         logGateway: { warn: context.logGateway.warn },
       };
-      const result = await handleNodeEvent(
-        nodeContext,
-        nodeId,
-        {
-          event: p.event,
-          payloadJSON,
-        },
-        { deviceId: client?.connect?.device?.id },
-      );
-      respond(true, result ?? { ok: true }, undefined);
+      await handleNodeEvent(nodeContext, nodeId, {
+        event: p.event,
+        payloadJSON,
+      });
+      respond(true, { ok: true }, undefined);
     });
   },
 };

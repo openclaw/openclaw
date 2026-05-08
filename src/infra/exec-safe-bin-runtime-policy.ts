@@ -14,7 +14,7 @@ import {
   type WritableTrustedSafeBinDir,
 } from "./exec-safe-bin-trust.js";
 
-type ExecSafeBinConfigScope = {
+export type ExecSafeBinConfigScope = {
   safeBins?: string[] | null;
   safeBinProfiles?: SafeBinProfileFixtures | null;
   safeBinTrustedDirs?: string[] | null;

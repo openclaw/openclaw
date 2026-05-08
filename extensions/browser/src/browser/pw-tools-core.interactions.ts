@@ -592,35 +592,6 @@ export async function clickViaPlaywright(opts: {
   }
 }
 
-export async function clickCoordsViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  x: number;
-  y: number;
-  doubleClick?: boolean;
-  button?: "left" | "right" | "middle";
-  delayMs?: number;
-  timeoutMs?: number;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<void> {
-  const page = await getRestoredPageForTarget(opts);
-  const previousUrl = page.url();
-  await assertInteractionNavigationCompletedSafely({
-    action: async () => {
-      await page.mouse.click(opts.x, opts.y, {
-        button: opts.button,
-        clickCount: opts.doubleClick ? 2 : 1,
-        delay: resolveBoundedDelayMs(opts.delayMs, "clickCoords delayMs", ACT_MAX_CLICK_DELAY_MS),
-      });
-    },
-    cdpUrl: opts.cdpUrl,
-    page,
-    previousUrl,
-    ssrfPolicy: opts.ssrfPolicy,
-    targetId: opts.targetId,
-  });
-}
-
 export async function hoverViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -1034,7 +1005,6 @@ export async function takeScreenshotViaPlaywright(opts: {
   element?: string;
   fullPage?: boolean;
   type?: "png" | "jpeg";
-  timeoutMs?: number;
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -1045,7 +1015,7 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = refLocator(page, opts.ref);
-    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
+    const buffer = await locator.screenshot({ type });
     return { buffer };
   }
   if (opts.element) {
@@ -1053,13 +1023,12 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = page.locator(opts.element).first();
-    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
+    const buffer = await locator.screenshot({ type });
     return { buffer };
   }
   const buffer = await page.screenshot({
     type,
     fullPage: Boolean(opts.fullPage),
-    timeout: opts.timeoutMs,
   });
   return { buffer };
 }
@@ -1070,7 +1039,6 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   maxLabels?: number;
   type?: "png" | "jpeg";
-  timeoutMs?: number;
 }): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -1180,7 +1148,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
       }, boxes);
     }
 
-    const buffer = await page.screenshot({ type, timeout: opts.timeoutMs });
+    const buffer = await page.screenshot({ type });
     return { buffer, labels: boxes.length, skipped };
   } finally {
     await page
@@ -1268,19 +1236,6 @@ async function executeSingleAction(
         modifiers: action.modifiers as Array<
           "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
         >,
-        delayMs: action.delayMs,
-        timeoutMs: action.timeoutMs,
-        ssrfPolicy,
-      });
-      break;
-    case "clickCoords":
-      await clickCoordsViaPlaywright({
-        cdpUrl,
-        targetId: effectiveTargetId,
-        x: action.x,
-        y: action.y,
-        doubleClick: action.doubleClick,
-        button: action.button as "left" | "right" | "middle" | undefined,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,

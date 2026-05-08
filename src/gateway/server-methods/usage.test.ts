@@ -7,7 +7,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   );
   return {
     ...actual,
-    loadCostUsageSummaryFromCache: vi.fn(async () => ({
+    loadCostUsageSummary: vi.fn(async () => ({
       updatedAt: Date.now(),
       startDate: "2026-02-01",
       endDate: "2026-02-02",
@@ -17,7 +17,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   };
 });
 
-import { loadCostUsageSummaryFromCache } from "../../infra/session-cost-usage.js";
+import { loadCostUsageSummary } from "../../infra/session-cost-usage.js";
 import { __test } from "./usage.js";
 
 describe("gateway usage helpers", () => {
@@ -156,9 +156,6 @@ describe("gateway usage helpers", () => {
 
     expect(a.totals.totalTokens).toBe(1);
     expect(b.totals.totalTokens).toBe(1);
-    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]).toMatchObject({
-      refreshMode: "sync-when-empty",
-    });
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(1);
   });
 });

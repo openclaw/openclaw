@@ -8,14 +8,14 @@ import {
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
-} from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveChannelContextVisibilityMode,
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+} from "openclaw/plugin-sdk/config-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
@@ -111,7 +111,7 @@ function hasIMessageEchoMatch(params: {
   );
 }
 
-type IMessageInboundDispatchDecision = {
+export type IMessageInboundDispatchDecision = {
   kind: "dispatch";
   isGroup: boolean;
   chatId?: number;
@@ -132,7 +132,7 @@ type IMessageInboundDispatchDecision = {
   effectiveGroupAllowFrom: string[];
 };
 
-type IMessageInboundDecision =
+export type IMessageInboundDecision =
   | { kind: "drop"; reason: string }
   | { kind: "pairing"; senderId: string }
   | IMessageInboundDispatchDecision;
@@ -653,7 +653,7 @@ export function buildIMessageInboundContext(params: {
   return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };
 }
 
-function buildIMessageEchoScope(params: {
+export function buildIMessageEchoScope(params: {
   accountId: string;
   isGroup: boolean;
   chatId?: number;

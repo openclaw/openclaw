@@ -23,17 +23,14 @@ import { normalizeUsage } from "./usage.js";
 
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
-type ReplayModelInfo = { input?: ReadonlyArray<string>; api?: string };
+export type ReplayModelInfo = { input?: ReadonlyArray<string>; api?: string };
 type ReplayableReasoningItem = Extract<InputItem, { type: "reasoning" }>;
 type ReplayableReasoningSignature = {
   type: "reasoning" | `reasoning.${string}`;
   id?: string;
-  content?: unknown;
-  encrypted_content?: string;
-  summary?: unknown;
 };
 type ToolCallReplayId = { callId: string; itemId?: string };
-type PlannedTurnInput = {
+export type PlannedTurnInput = {
   inputItems: InputItem[];
   previousResponseId?: string;
   mode: "incremental_tool_results" | "full_context_initial" | "full_context_restart";
@@ -169,10 +166,26 @@ function toReplayableReasoningId(value: unknown): string | null {
   return id && id.startsWith("rs_") ? id : null;
 }
 
-function toReasoningSignature(
-  value: unknown,
-  options?: { requireReplayableId?: boolean },
-): ReplayableReasoningSignature | null {
+function toReasoningSignature(value: unknown): ReplayableReasoningSignature | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as { type?: unknown; id?: unknown };
+  if (!isReplayableReasoningType(record.type)) {
+    return null;
+  }
+  const reasoningId = toReplayableReasoningId(record.id);
+  return {
+    type: record.type,
+    ...(reasoningId ? { id: reasoningId } : {}),
+  };
+}
+
+function encodeThinkingSignature(signature: ReplayableReasoningSignature): string {
+  return JSON.stringify(signature);
+}
+
+function parseReasoningItem(value: unknown): ReplayableReasoningItem | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -187,37 +200,14 @@ function toReasoningSignature(
     return null;
   }
   const reasoningId = toReplayableReasoningId(record.id);
-  if (options?.requireReplayableId && !reasoningId) {
-    return null;
-  }
   return {
-    type: record.type,
+    type: "reasoning",
     ...(reasoningId ? { id: reasoningId } : {}),
-    ...(record.content !== undefined ? { content: record.content } : {}),
+    ...(typeof record.content === "string" ? { content: record.content } : {}),
     ...(typeof record.encrypted_content === "string"
       ? { encrypted_content: record.encrypted_content }
       : {}),
-    ...(record.summary !== undefined ? { summary: record.summary } : {}),
-  };
-}
-
-function encodeThinkingSignature(signature: ReplayableReasoningSignature): string {
-  return JSON.stringify(signature);
-}
-
-function parseReasoningItem(value: unknown): ReplayableReasoningItem | null {
-  const signature = toReasoningSignature(value);
-  if (!signature) {
-    return null;
-  }
-  return {
-    type: "reasoning",
-    ...(signature.id ? { id: signature.id } : {}),
-    ...(signature.content !== undefined ? { content: signature.content } : {}),
-    ...(signature.encrypted_content !== undefined
-      ? { encrypted_content: signature.encrypted_content }
-      : {}),
-    ...(signature.summary !== undefined ? { summary: signature.summary } : {}),
+    ...(typeof record.summary === "string" ? { summary: record.summary } : {}),
   };
 }
 
@@ -226,7 +216,8 @@ function parseThinkingSignature(value: unknown): ReplayableReasoningItem | null 
     return null;
   }
   try {
-    return parseReasoningItem(JSON.parse(value));
+    const signature = toReasoningSignature(JSON.parse(value));
+    return signature ? parseReasoningItem(signature) : null;
   } catch {
     return null;
   }
@@ -280,25 +271,7 @@ function extractResponseReasoningText(item: unknown): string {
   if (summaryText) {
     return summaryText;
   }
-  if (typeof record.content === "string") {
-    return normalizeOptionalString(record.content) ?? "";
-  }
-  if (Array.isArray(record.content)) {
-    return record.content
-      .map((part) => {
-        if (typeof part === "string") {
-          return part.trim();
-        }
-        if (!part || typeof part !== "object") {
-          return "";
-        }
-        return normalizeOptionalString((part as { text?: unknown }).text) ?? "";
-      })
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-  }
-  return "";
+  return normalizeOptionalString(record.content) ?? "";
 }
 
 export function convertTools(
@@ -600,16 +573,21 @@ export function buildAssistantMessageFromResponse(
       if (!isReplayableReasoningType(item.type)) {
         continue;
       }
-      const reasoningSignature = toReasoningSignature(item, { requireReplayableId: true });
       const reasoning = extractResponseReasoningText(item);
-      if (!reasoning && !reasoningSignature) {
+      if (!reasoning) {
         continue;
       }
+      const reasoningId = toReplayableReasoningId(item.id);
       content.push({
         type: "thinking",
         thinking: reasoning,
-        ...(reasoningSignature
-          ? { thinkingSignature: encodeThinkingSignature(reasoningSignature) }
+        ...(reasoningId
+          ? {
+              thinkingSignature: encodeThinkingSignature({
+                id: reasoningId,
+                type: item.type,
+              }),
+            }
           : {}),
       } as AssistantMessage["content"][number]);
     }
@@ -648,14 +626,4 @@ export function buildAssistantMessageFromResponse(
   return finalAssistantPhase
     ? ({ ...message, phase: finalAssistantPhase } as AssistantMessageWithPhase)
     : message;
-}
-
-export function convertResponseToInputItems(
-  response: ResponseObject,
-  modelInfo: { api: string; provider: string; id: string; input?: ReadonlyArray<string> },
-): InputItem[] {
-  return convertMessagesToInputItems(
-    [buildAssistantMessageFromResponse(response, modelInfo)] as Message[],
-    modelInfo,
-  );
 }

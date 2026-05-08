@@ -4,12 +4,28 @@ import {
 } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
-  buildZaiCatalogModels,
+  buildZaiModelDefinition,
   resolveZaiBaseUrl,
   ZAI_DEFAULT_MODEL_ID,
 } from "./model-definitions.js";
 
 export const ZAI_DEFAULT_MODEL_REF = `zai/${ZAI_DEFAULT_MODEL_ID}`;
+
+const ZAI_DEFAULT_MODELS = [
+  buildZaiModelDefinition({ id: "glm-5.1" }),
+  buildZaiModelDefinition({ id: "glm-5" }),
+  buildZaiModelDefinition({ id: "glm-5-turbo" }),
+  buildZaiModelDefinition({ id: "glm-5v-turbo" }),
+  buildZaiModelDefinition({ id: "glm-4.7" }),
+  buildZaiModelDefinition({ id: "glm-4.7-flash" }),
+  buildZaiModelDefinition({ id: "glm-4.7-flashx" }),
+  buildZaiModelDefinition({ id: "glm-4.6" }),
+  buildZaiModelDefinition({ id: "glm-4.6v" }),
+  buildZaiModelDefinition({ id: "glm-4.5" }),
+  buildZaiModelDefinition({ id: "glm-4.5-air" }),
+  buildZaiModelDefinition({ id: "glm-4.5-flash" }),
+  buildZaiModelDefinition({ id: "glm-4.5v" }),
+];
 
 function resolveZaiPresetBaseUrl(cfg: OpenClawConfig, endpoint?: string): string {
   const existingProvider = cfg.models?.providers?.zai;
@@ -28,7 +44,7 @@ function applyZaiPreset(
     providerId: "zai",
     api: "openai-completions",
     baseUrl: resolveZaiPresetBaseUrl(cfg, params?.endpoint),
-    catalogModels: buildZaiCatalogModels(),
+    catalogModels: ZAI_DEFAULT_MODELS,
     aliases: [{ modelRef, alias: "GLM" }],
     primaryModelRef,
   });

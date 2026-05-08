@@ -15,7 +15,6 @@ export type CostUsageSummary = {
   days: number;
   daily: CostUsageDailyEntry[];
   totals: SessionsUsageTotals;
-  cacheStatus?: SharedSessionsUsageResult["cacheStatus"];
 };
 
 export type SessionUsageTimePoint = SharedSessionUsageTimePoint;

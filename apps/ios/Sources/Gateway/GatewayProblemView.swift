@@ -59,57 +59,58 @@ struct GatewayProblemBanner: View {
         .padding(14)
         .background(
             .thinMaterial,
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
     }
 
     private var iconName: String {
         switch self.problem.kind {
         case .pairingRequired,
-             .pairingRoleUpgradeRequired,
-             .pairingScopeUpgradeRequired,
-             .pairingMetadataUpgradeRequired:
-            "person.crop.circle.badge.clock"
+            .pairingRoleUpgradeRequired,
+            .pairingScopeUpgradeRequired,
+            .pairingMetadataUpgradeRequired:
+            return "person.crop.circle.badge.clock"
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
-            "wifi.exclamationmark"
+            return "wifi.exclamationmark"
         case .deviceIdentityRequired,
-             .deviceSignatureExpired,
-             .deviceNonceRequired,
-             .deviceNonceMismatch,
-             .deviceSignatureInvalid,
-             .devicePublicKeyInvalid,
-             .deviceIdMismatch:
-            "lock.shield"
+            .deviceSignatureExpired,
+            .deviceNonceRequired,
+            .deviceNonceMismatch,
+            .deviceSignatureInvalid,
+            .devicePublicKeyInvalid,
+            .deviceIdMismatch:
+            return "lock.shield"
         default:
-            "exclamationmark.triangle.fill"
+            return "exclamationmark.triangle.fill"
         }
     }
 
     private var tint: Color {
         switch self.problem.kind {
         case .pairingRequired,
-             .pairingRoleUpgradeRequired,
-             .pairingScopeUpgradeRequired,
-             .pairingMetadataUpgradeRequired:
-            .orange
+            .pairingRoleUpgradeRequired,
+            .pairingScopeUpgradeRequired,
+            .pairingMetadataUpgradeRequired:
+            return .orange
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
-            .yellow
+            return .yellow
         default:
-            .red
+            return .red
         }
     }
 
     private var ownerLabel: String {
         switch self.problem.owner {
         case .gateway:
-            "Fix on gateway"
+            return "Fix on gateway"
         case .iphone:
-            "Fix on iPhone"
+            return "Fix on iPhone"
         case .both:
-            "Check both"
+            return "Check both"
         case .network:
-            "Check network"
+            return "Check network"
         case .unknown:
-            "Needs attention"
+            return "Needs attention"
         }
     }
 }
@@ -217,15 +218,15 @@ struct GatewayProblemDetailsSheet: View {
     private var ownerSummary: String {
         switch self.problem.owner {
         case .gateway:
-            "Primary fix: gateway"
+            return "Primary fix: gateway"
         case .iphone:
-            "Primary fix: this iPhone"
+            return "Primary fix: this iPhone"
         case .both:
-            "Primary fix: check both this iPhone and the gateway"
+            return "Primary fix: check both this iPhone and the gateway"
         case .network:
-            "Primary fix: network or remote access"
+            return "Primary fix: network or remote access"
         case .unknown:
-            "Primary fix: review details and retry"
+            return "Primary fix: review details and retry"
         }
     }
 }

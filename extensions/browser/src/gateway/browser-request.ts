@@ -9,9 +9,9 @@ import {
   createBrowserControlContext,
   createBrowserRouteDispatcher,
   errorShape,
-  getRuntimeConfig,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
+  loadConfig,
   persistBrowserProxyFiles,
   resolveNodeCommandAllowlist,
   resolveRequestedBrowserProfile,
@@ -21,7 +21,6 @@ import {
   withTimeout,
   type GatewayRequestHandlers,
   type NodeSession,
-  type OpenClawConfig,
 } from "../core-api.js";
 
 type BrowserRequestParams = {
@@ -89,7 +88,7 @@ function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | 
 }
 
 function resolveBrowserNodeTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: ReturnType<typeof loadConfig>;
   nodes: NodeSession[];
 }): NodeSession | null {
   const policy = params.cfg.gateway?.nodes?.browser;
@@ -172,7 +171,7 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = loadConfig();
   let nodeTarget: NodeSession | null = null;
   try {
     nodeTarget = resolveBrowserNodeTarget({

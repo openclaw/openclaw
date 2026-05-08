@@ -1,10 +1,10 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({

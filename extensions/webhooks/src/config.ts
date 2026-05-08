@@ -30,7 +30,7 @@ const webhooksPluginConfigSchema = z
 
 export type WebhookSecretInput = z.infer<typeof secretInputSchema>;
 
-type ConfiguredWebhookRouteConfig = {
+export type ConfiguredWebhookRouteConfig = {
   routeId: string;
   path: string;
   sessionKey: string;

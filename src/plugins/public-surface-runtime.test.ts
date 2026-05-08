@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
-  normalizeBundledPluginDirName,
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
 } from "./public-surface-runtime.js";
@@ -70,25 +69,6 @@ describe("bundled plugin public surface runtime", () => {
     ).toBe(sourceModulePath);
   });
 
-  it("falls back from an incomplete package dist-runtime override to packaged dist", () => {
-    const packageRoot = createTempDir();
-    const distModulePath = path.join(packageRoot, "dist", "extensions", "demo", "api.js");
-    fs.mkdirSync(path.dirname(distModulePath), { recursive: true });
-    fs.writeFileSync(distModulePath, "export const marker = 'dist';\n", "utf8");
-
-    const runtimeBundledPluginsDir = path.join(packageRoot, "dist-runtime", "extensions");
-    fs.mkdirSync(path.join(runtimeBundledPluginsDir, "demo"), { recursive: true });
-
-    expect(
-      resolveBundledPluginPublicSurfacePath({
-        rootDir: packageRoot,
-        bundledPluginsDir: runtimeBundledPluginsDir,
-        dirName: "demo",
-        artifactBasename: "api.js",
-      }),
-    ).toBe(distModulePath);
-  });
-
   it("allows plugin-local nested artifact paths", () => {
     expect(normalizeBundledPluginArtifactSubpath("src/outbound-adapter.js")).toBe(
       "src/outbound-adapter.js",
@@ -115,13 +95,5 @@ describe("bundled plugin public surface runtime", () => {
     expect(() => normalizeBundledPluginArtifactSubpath("src/C:outside.js")).toThrow(
       /must stay plugin-local/,
     );
-  });
-
-  it("rejects bundled plugin directory traversal", () => {
-    expect(normalizeBundledPluginDirName("document-extract")).toBe("document-extract");
-    expect(() => normalizeBundledPluginDirName("../outside")).toThrow(/single directory/);
-    expect(() => normalizeBundledPluginDirName("nested/plugin")).toThrow(/single directory/);
-    expect(() => normalizeBundledPluginDirName("nested\\plugin")).toThrow(/single directory/);
-    expect(() => normalizeBundledPluginDirName("C:plugin")).toThrow(/single directory/);
   });
 });

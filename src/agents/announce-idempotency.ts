@@ -1,4 +1,4 @@
-type AnnounceIdFromChildRunParams = {
+export type AnnounceIdFromChildRunParams = {
   childSessionKey: string;
   childRunId: string;
 };

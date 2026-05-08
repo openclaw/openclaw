@@ -34,7 +34,7 @@ export function createMockAccount(
       password: "test-password",
       dmPolicy: "open",
       groupPolicy: "open",
-      allowFrom: ["*"],
+      allowFrom: [],
       groupAllowFrom: [],
       ...overrides,
     },
@@ -68,7 +68,7 @@ export function createTimestampedNewMessagePayloadForTest(
   });
 }
 
-function createMessageReactionPayloadForTest(dataOverrides: Record<string, unknown> = {}) {
+export function createMessageReactionPayloadForTest(dataOverrides: Record<string, unknown> = {}) {
   return {
     type: "message-reaction",
     data: {
@@ -128,7 +128,7 @@ export function createMockRequest(
   return req;
 }
 
-function createMockRequestForTest(params: WebhookRequestParams = {}): IncomingMessage {
+export function createMockRequestForTest(params: WebhookRequestParams = {}): IncomingMessage {
   return createMockRequest(
     params.method ?? "POST",
     params.url ?? "/bluebubbles-webhook",
@@ -198,7 +198,7 @@ export function createHangingWebhookRequestForTest(
   return { req, destroyMock };
 }
 
-function createMockResponse(): ServerResponse & { body: string; statusCode: number } {
+export function createMockResponse(): ServerResponse & { body: string; statusCode: number } {
   const res = {
     statusCode: 200,
     body: "",
@@ -210,7 +210,7 @@ function createMockResponse(): ServerResponse & { body: string; statusCode: numb
   return res;
 }
 
-async function flushAsync() {
+export async function flushAsync() {
   for (let i = 0; i < 2; i += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -269,7 +269,7 @@ export function trackWebhookRegistrationForTest<T extends { unregister: () => vo
   return registration;
 }
 
-function registerWebhookTargetForTest(params: {
+export function registerWebhookTargetForTest(params: {
   core: PluginRuntime;
   account?: ResolvedBlueBubblesAccount;
   config?: OpenClawConfig;
@@ -292,7 +292,7 @@ function registerWebhookTargetForTest(params: {
   });
 }
 
-function registerWebhookTargetsForTest(params: {
+export function registerWebhookTargetsForTest(params: {
   core: PluginRuntime;
   accounts: Array<{
     account: ResolvedBlueBubblesAccount;

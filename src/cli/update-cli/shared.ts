@@ -22,7 +22,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
-import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -65,7 +64,7 @@ export function normalizeTag(value?: string | null): string | null {
   return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
 }
 
-function normalizeVersionTag(tag: string): string | null {
+export function normalizeVersionTag(tag: string): string | null {
   const trimmed = tag.trim();
   if (!trimmed) {
     return null;
@@ -100,7 +99,7 @@ export async function isGitCheckout(root: string): Promise<boolean> {
   }
 }
 
-async function isCorePackage(root: string): Promise<boolean> {
+export async function isCorePackage(root: string): Promise<boolean> {
   const name = await readPackageName(root);
   return Boolean(name && CORE_PACKAGE_NAMES.has(name));
 }
@@ -260,8 +259,6 @@ export async function resolveGlobalManager(params: {
 }
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
-const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
-  "Shell tab-completion may be stale; refresh manually with: openclaw completion --write-state";
 
 export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
   const binPath = path.join(root, "openclaw.mjs");
@@ -271,26 +268,14 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
 
   const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
     cwd: root,
-    env: {
-      ...process.env,
-      [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
-    },
+    env: process.env,
     encoding: "utf-8",
     timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   });
 
   if (result.error) {
     if (!jsonMode) {
-      const err = result.error as NodeJS.ErrnoException;
-      const reason =
-        err.code === "ETIMEDOUT"
-          ? `timed out after ${COMPLETION_CACHE_WRITE_TIMEOUT_MS / 1000}s`
-          : String(result.error);
-      defaultRuntime.log(
-        theme.warn(
-          `Completion cache update failed: ${reason}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-        ),
-      );
+      defaultRuntime.log(theme.warn(`Completion cache update failed: ${String(result.error)}`));
     }
     return;
   }
@@ -298,11 +283,7 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
   if (result.status !== 0 && !jsonMode) {
     const stderr = (result.stderr ?? "").trim();
     const detail = stderr ? ` (${stderr})` : "";
-    defaultRuntime.log(
-      theme.warn(
-        `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
-      ),
-    );
+    defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
   }
 }
 

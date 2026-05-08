@@ -1,34 +1,22 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { undiciFetchMock, agentSpy, proxyAgentSpy } = vi.hoisted(() => ({
+const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
   undiciFetchMock: vi.fn(),
-  agentSpy: vi.fn(),
   proxyAgentSpy: vi.fn(),
 }));
 
 vi.mock("undici", () => {
-  class Agent {
-    options: unknown;
-    constructor(options?: unknown) {
-      this.options = options;
-      agentSpy(options);
-    }
-  }
   class ProxyAgent {
-    options: unknown;
-    uri: string;
-    constructor(options: string | { uri: string; allowH2?: boolean }) {
-      const resolved = typeof options === "string" ? { uri: options } : options;
-      if (resolved.uri === "bad-proxy") {
+    proxyUrl: string;
+    constructor(proxyUrl: string) {
+      if (proxyUrl === "bad-proxy") {
         throw new Error("bad proxy");
       }
-      this.options = resolved;
-      this.uri = resolved.uri;
-      proxyAgentSpy(resolved);
+      this.proxyUrl = proxyUrl;
+      proxyAgentSpy(proxyUrl);
     }
   }
   return {
-    Agent,
     ProxyAgent,
     fetch: undiciFetchMock,
   };
@@ -44,7 +32,6 @@ describe("resolveDiscordRestFetch", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     undiciFetchMock.mockReset();
-    agentSpy.mockReset();
     proxyAgentSpy.mockReset();
   });
 
@@ -60,19 +47,11 @@ describe("resolveDiscordRestFetch", () => {
 
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        uri: "http://127.0.0.1:8080",
-        allowH2: false,
-      }),
-    );
+    expect(proxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
     expect(undiciFetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/v10/oauth2/applications/@me",
       expect.objectContaining({
-        dispatcher: expect.objectContaining({
-          uri: "http://127.0.0.1:8080",
-          options: expect.objectContaining({ allowH2: false }),
-        }),
+        dispatcher: expect.objectContaining({ proxyUrl: "http://127.0.0.1:8080" }),
       }),
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
@@ -119,44 +98,8 @@ describe("resolveDiscordRestFetch", () => {
 
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        uri: "http://[::1]:8080",
-        allowH2: false,
-      }),
-    );
+    expect(proxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
     expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("uses undici Agent with IPv4-first lookup when no discord proxy URL is configured", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as const;
-    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
-
-    const fetcher = resolveDiscordRestFetch(undefined, runtime);
-    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
-
-    expect(agentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowH2: false,
-        connect: expect.objectContaining({ lookup: expect.any(Function) }),
-      }),
-    );
-    expect(undiciFetchMock).toHaveBeenCalledWith(
-      "https://discord.com/api/v10/oauth2/applications/@me",
-      expect.objectContaining({
-        dispatcher: expect.objectContaining({
-          options: expect.objectContaining({
-            allowH2: false,
-            connect: expect.objectContaining({ lookup: expect.any(Function) }),
-          }),
-        }),
-      }),
-    );
-    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("uses debug proxy env when no discord proxy URL is configured", async () => {
@@ -172,12 +115,7 @@ describe("resolveDiscordRestFetch", () => {
     const fetcher = resolveDiscordRestFetch(undefined, runtime);
     await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        uri: "http://127.0.0.1:7777",
-        allowH2: false,
-      }),
-    );
+    expect(proxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:7777");
     expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
   });
 });

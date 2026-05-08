@@ -1,8 +1,5 @@
 {
   "id": "synology-chat",
-  "activation": {
-    "onStartup": false
-  },
   "channels": ["synology-chat"],
   "channelEnvVars": {
     "synology-chat": [

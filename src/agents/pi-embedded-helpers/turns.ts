@@ -10,10 +10,6 @@ type AnthropicContentBlock = {
   toolUseId?: string;
   toolCallId?: string;
 };
-type UserContentBlock = Extract<
-  Extract<AgentMessage, { role: "user" }>["content"],
-  readonly unknown[]
->[number];
 
 function isToolCallBlock(block: AnthropicContentBlock): boolean {
   return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
@@ -354,8 +350,8 @@ export function mergeConsecutiveUserTurns(
   current: Extract<AgentMessage, { role: "user" }>,
 ): Extract<AgentMessage, { role: "user" }> {
   const mergedContent = [
-    ...normalizeUserContentForMerge(previous.content),
-    ...normalizeUserContentForMerge(current.content),
+    ...(Array.isArray(previous.content) ? previous.content : []),
+    ...(Array.isArray(current.content) ? current.content : []),
   ];
 
   return {
@@ -363,16 +359,6 @@ export function mergeConsecutiveUserTurns(
     content: mergedContent,
     timestamp: current.timestamp ?? previous.timestamp,
   };
-}
-
-function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
-  if (Array.isArray(content)) {
-    return content as UserContentBlock[];
-  }
-  if (typeof content === "string") {
-    return [{ type: "text", text: content }];
-  }
-  return [];
 }
 
 /**

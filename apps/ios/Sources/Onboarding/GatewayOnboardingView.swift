@@ -95,6 +95,7 @@ private struct AutoDetectStep: View {
         }
         return nil
     }
+
 }
 
 private struct ManualEntryStep: View {
@@ -228,7 +229,7 @@ private struct ManualEntryStep: View {
     private func manualPortValue() -> Int? {
         let trimmed = self.manualPortText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return Int(trimmed.filter(\.isNumber))
+        return Int(trimmed.filter { $0.isNumber })
     }
 
     private func resetManualForm() {
@@ -248,23 +249,38 @@ private struct ManualEntryStep: View {
             return
         }
 
-        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
-            self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
+        guard let payload = GatewaySetupCode.decode(raw: raw) else {
+            self.setupStatusText = "Setup code not recognized."
             return
         }
 
-        self.manualHost = link.host
-        self.manualPortText = String(link.port)
-        self.manualUseTLS = link.tls
+        if let urlString = payload.url, let url = URL(string: urlString) {
+            self.applyURL(url)
+        } else if let host = payload.host, !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.manualHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let port = payload.port {
+                self.manualPortText = String(port)
+            } else {
+                self.manualPortText = ""
+            }
+            if let tls = payload.tls {
+                self.manualUseTLS = tls
+            }
+        } else if let url = URL(string: raw), url.scheme != nil {
+            self.applyURL(url)
+        } else {
+            self.setupStatusText = "Setup code missing URL or host."
+            return
+        }
 
-        if let token = link.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let token = payload.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             self.manualToken = ""
         }
-        if let password = link.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let password = payload.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             self.manualPassword = ""
         }
 
@@ -272,12 +288,30 @@ private struct ManualEntryStep: View {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedInstanceId.isEmpty {
             let trimmedBootstrapToken =
-                link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
         }
 
         self.setupStatusText = "Setup code applied."
     }
+
+    private func applyURL(_ url: URL) {
+        guard let host = url.host, !host.isEmpty else { return }
+        self.manualHost = host
+        if let port = url.port {
+            self.manualPortText = String(port)
+        } else {
+            self.manualPortText = ""
+        }
+        let scheme = (url.scheme ?? "").lowercased()
+        if scheme == "wss" || scheme == "https" {
+            self.manualUseTLS = true
+        } else if scheme == "ws" || scheme == "http" {
+            self.manualUseTLS = false
+        }
+    }
+
+    // (GatewaySetupCode) decode raw setup codes.
 }
 
 @MainActor
@@ -300,6 +334,7 @@ private func resetGatewayConnectionState(
 }
 
 @MainActor
+@ViewBuilder
 private func gatewayConnectionStatusSection(
     appModel: NodeAppModel,
     gatewayController: GatewayConnectionController,
@@ -338,8 +373,8 @@ private struct ConnectionStatusBox: View {
 
     static func defaultLines(
         appModel: NodeAppModel,
-        gatewayController: GatewayConnectionController) -> [String]
-    {
+        gatewayController: GatewayConnectionController
+    ) -> [String] {
         var lines: [String] = [
             "gateway: \(appModel.gatewayDisplayStatusText)",
             "discovery: \(gatewayController.discoveryStatusText)",

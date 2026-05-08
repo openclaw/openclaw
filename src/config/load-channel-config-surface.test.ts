@@ -1,27 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { createJiti as createJitiType } from "jiti";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { loadChannelConfigSurfaceModule } from "../../scripts/load-channel-config-surface.ts";
+import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-
-const jitiFactoryOverrideKey = Symbol.for("openclaw.channelConfigSurfaceJitiFactoryOverride");
-
-function stubChannelConfigSurfaceJitiFactory(createJiti: typeof createJitiType): void {
-  (
-    globalThis as typeof globalThis & {
-      [jitiFactoryOverrideKey]?: typeof createJitiType;
-    }
-  )[jitiFactoryOverrideKey] = createJiti;
-}
-
-afterEach(() => {
-  delete (
-    globalThis as typeof globalThis & {
-      [jitiFactoryOverrideKey]?: typeof createJitiType;
-    }
-  )[jitiFactoryOverrideKey];
-});
 
 async function importLoaderWithMissingBun() {
   const spawnSync = vi.fn(() => ({
@@ -60,7 +42,7 @@ async function importLoaderWithFailingJitiAndWorkingBun() {
     throw new Error("jiti failed");
   });
   vi.doMock("node:child_process", () => ({ spawnSync }));
-  stubChannelConfigSurfaceJitiFactory(createJiti as unknown as typeof createJitiType);
+  vi.doMock("jiti", () => ({ createJiti }));
 
   try {
     const imported = await importFreshModule<
@@ -73,6 +55,7 @@ async function importLoaderWithFailingJitiAndWorkingBun() {
     };
   } finally {
     vi.doUnmock("node:child_process");
+    vi.doUnmock("jiti");
   }
 }
 
@@ -167,7 +150,7 @@ describe("loadChannelConfigSurfaceModule", () => {
 
   it("falls back to bun when the source-aware loader fails", async () => {
     await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
-      const { modulePath } = createDemoConfigSchemaModule(repoRoot, ["export const = ;"]);
+      const { modulePath } = createDemoConfigSchemaModule(repoRoot);
 
       const {
         loadChannelConfigSurfaceModule: loadWithFailingJiti,
@@ -180,6 +163,56 @@ describe("loadChannelConfigSurfaceModule", () => {
       );
       expect(createJiti).toHaveBeenCalled();
       expect(spawnSync).toHaveBeenCalledWith("bun", expect.any(Array), expect.any(Object));
+    });
+  });
+
+  it("retries from an isolated package copy when extension-local node_modules is broken", async () => {
+    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+      const { packageRoot, modulePath } = createDemoConfigSchemaModule(repoRoot, [
+        "import { z } from 'zod';",
+        "export const DemoChannelConfigSchema = {",
+        "  schema: {",
+        "    type: 'object',",
+        "    properties: { ok: { type: z.object({}).shape ? 'string' : 'string' } },",
+        "  },",
+        "};",
+      ]);
+
+      fs.mkdirSync(path.join(repoRoot, "node_modules", "zod"), { recursive: true });
+      fs.writeFileSync(
+        path.join(repoRoot, "node_modules", "zod", "package.json"),
+        JSON.stringify({
+          name: "zod",
+          type: "module",
+          exports: { ".": "./index.js" },
+        }),
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(repoRoot, "node_modules", "zod", "index.js"),
+        "export const z = { object: () => ({ shape: {} }) };\n",
+        "utf8",
+      );
+
+      const poisonedStorePackage = path.join(
+        repoRoot,
+        "node_modules",
+        ".pnpm",
+        "zod@0.0.0",
+        "node_modules",
+        "zod",
+      );
+      fs.mkdirSync(poisonedStorePackage, { recursive: true });
+      fs.mkdirSync(path.join(packageRoot, "node_modules"), { recursive: true });
+      fs.symlinkSync(
+        "../../../node_modules/.pnpm/zod@0.0.0/node_modules/zod",
+        path.join(packageRoot, "node_modules", "zod"),
+        "dir",
+      );
+
+      await expect(loadChannelConfigSurfaceModule(modulePath, { repoRoot })).resolves.toMatchObject(
+        expectedOkSchema("string"),
+      );
     });
   });
 });

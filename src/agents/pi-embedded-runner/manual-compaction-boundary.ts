@@ -1,11 +1,10 @@
+import fs from "node:fs/promises";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionEntry } from "@mariozechner/pi-coding-agent";
-import {
-  readTranscriptFileState,
-  TranscriptFileState,
-  writeTranscriptFileAtomic,
-} from "./transcript-file-state.js";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 
+type SessionManagerLike = ReturnType<typeof SessionManager.open>;
+type SessionEntry = ReturnType<SessionManagerLike["getEntries"]>[number];
+type SessionHeader = NonNullable<ReturnType<SessionManagerLike["getHeader"]>>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 
 export type HardenedManualCompactionBoundary = {
@@ -14,6 +13,12 @@ export type HardenedManualCompactionBoundary = {
   leafId?: string;
   messages: AgentMessage[];
 };
+
+function serializeSessionFile(header: SessionHeader, entries: SessionEntry[]): string {
+  return (
+    [JSON.stringify(header), ...entries.map((entry) => JSON.stringify(entry))].join("\n") + "\n"
+  );
+}
 
 function replaceLatestCompactionBoundary(params: {
   entries: SessionEntry[];
@@ -35,62 +40,64 @@ function replaceLatestCompactionBoundary(params: {
 
 export async function hardenManualCompactionBoundary(params: {
   sessionFile: string;
-  preserveRecentTail?: boolean;
 }): Promise<HardenedManualCompactionBoundary> {
-  const state = await readTranscriptFileState(params.sessionFile);
-  const header = state.getHeader();
-  if (!header) {
+  const sessionManager = SessionManager.open(params.sessionFile) as Partial<SessionManagerLike>;
+  if (
+    typeof sessionManager.getHeader !== "function" ||
+    typeof sessionManager.getLeafEntry !== "function" ||
+    typeof sessionManager.buildSessionContext !== "function" ||
+    typeof sessionManager.getEntries !== "function"
+  ) {
     return {
       applied: false,
       messages: [],
     };
   }
 
-  const leaf = state.getLeafEntry();
-  if (leaf?.type !== "compaction") {
-    const sessionContext = state.buildSessionContext();
+  const header = sessionManager.getHeader();
+  const leaf = sessionManager.getLeafEntry();
+  if (!header || leaf?.type !== "compaction") {
+    const sessionContext = sessionManager.buildSessionContext();
     return {
       applied: false,
-      leafId: state.getLeafId() ?? undefined,
-      messages: sessionContext.messages,
-    };
-  }
-
-  if (params.preserveRecentTail) {
-    const sessionContext = state.buildSessionContext();
-    return {
-      applied: false,
-      firstKeptEntryId: leaf.firstKeptEntryId,
-      leafId: state.getLeafId() ?? undefined,
+      leafId:
+        typeof sessionManager.getLeafId === "function"
+          ? (sessionManager.getLeafId() ?? undefined)
+          : undefined,
       messages: sessionContext.messages,
     };
   }
 
   if (leaf.firstKeptEntryId === leaf.id) {
-    const sessionContext = state.buildSessionContext();
+    const sessionContext = sessionManager.buildSessionContext();
     return {
       applied: false,
       firstKeptEntryId: leaf.id,
-      leafId: state.getLeafId() ?? undefined,
+      leafId:
+        typeof sessionManager.getLeafId === "function"
+          ? (sessionManager.getLeafId() ?? undefined)
+          : undefined,
       messages: sessionContext.messages,
     };
   }
 
-  const replacedEntries = replaceLatestCompactionBoundary({
-    entries: state.getEntries(),
-    compactionEntryId: leaf.id,
-  });
-  const replacedState = new TranscriptFileState({
+  const content = serializeSessionFile(
     header,
-    entries: replacedEntries,
-  });
-  await writeTranscriptFileAtomic(params.sessionFile, [header, ...replacedEntries]);
+    replaceLatestCompactionBoundary({
+      entries: sessionManager.getEntries(),
+      compactionEntryId: leaf.id,
+    }),
+  );
+  const tmpFile = `${params.sessionFile}.manual-compaction-tmp`;
+  await fs.writeFile(tmpFile, content, "utf-8");
+  await fs.rename(tmpFile, params.sessionFile);
 
-  const sessionContext = replacedState.buildSessionContext();
+  const refreshed = SessionManager.open(params.sessionFile);
+  const sessionContext = refreshed.buildSessionContext();
   return {
     applied: true,
     firstKeptEntryId: leaf.id,
-    leafId: replacedState.getLeafId() ?? undefined,
+    leafId: refreshed.getLeafId() ?? undefined,
     messages: sessionContext.messages,
   };
 }

@@ -5,6 +5,8 @@ read_when:
 title: "Remote access"
 ---
 
+# Remote access (SSH, tunnels, and tailnets)
+
 This repo supports “remote over SSH” by keeping a single Gateway (the master) running on a dedicated host (desktop/server) and connecting clients to it.
 
 - For **operators (you / the macOS app)**: SSH tunneling is the universal fallback.
@@ -15,37 +17,38 @@ This repo supports “remote over SSH” by keeping a single Gateway (the master
 - The Gateway WebSocket binds to **loopback** on your configured port (defaults to 18789).
 - For remote use, you forward that loopback port over SSH (or use a tailnet/VPN and tunnel less).
 
-## Common VPN and tailnet setups
+## Common VPN/tailnet setups (where the agent lives)
 
-Think of the **Gateway host** as where the agent lives. It owns sessions, auth profiles, channels, and state. Your laptop, desktop, and nodes connect to that host.
+Think of the **Gateway host** as “where the agent lives.” It owns sessions, auth profiles, channels, and state.
+Your laptop/desktop (and nodes) connect to that host.
 
-### Always-on Gateway in your tailnet
+### 1) Always-on Gateway in your tailnet (VPS or home server)
 
-Run the Gateway on a persistent host (VPS or home server) and reach it via **Tailscale** or SSH.
+Run the Gateway on a persistent host and reach it via **Tailscale** or SSH.
 
 - **Best UX:** keep `gateway.bind: "loopback"` and use **Tailscale Serve** for the Control UI.
-- **Fallback:** keep loopback plus SSH tunnel from any machine that needs access.
+- **Fallback:** keep loopback + SSH tunnel from any machine that needs access.
 - **Examples:** [exe.dev](/install/exe-dev) (easy VM) or [Hetzner](/install/hetzner) (production VPS).
 
-Ideal when your laptop sleeps often but you want the agent always-on.
+This is ideal when your laptop sleeps often but you want the agent always-on.
 
-### Home desktop runs the Gateway
+### 2) Home desktop runs the Gateway, laptop is remote control
 
 The laptop does **not** run the agent. It connects remotely:
 
-- Use the macOS app's **Remote over SSH** mode (Settings → General → OpenClaw runs).
-- The app opens and manages the tunnel, so WebChat and health checks just work.
+- Use the macOS app’s **Remote over SSH** mode (Settings → General → “OpenClaw runs”).
+- The app opens and manages the tunnel, so WebChat + health checks “just work.”
 
 Runbook: [macOS remote access](/platforms/mac/remote).
 
-### Laptop runs the Gateway
+### 3) Laptop runs the Gateway, remote access from other machines
 
 Keep the Gateway local but expose it safely:
 
 - SSH tunnel to the laptop from other machines, or
 - Tailscale Serve the Control UI and keep the Gateway loopback-only.
 
-Guides: [Tailscale](/gateway/tailscale) and [Web overview](/web).
+Guide: [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
 ## Command flow (what runs where)
 
@@ -76,13 +79,9 @@ With the tunnel up:
 - `openclaw health` and `openclaw status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
 - `openclaw gateway status`, `openclaw gateway health`, `openclaw gateway probe`, and `openclaw gateway call` can also target the forwarded URL via `--url` when needed.
 
-<Note>
-Replace `18789` with your configured `gateway.port` (or `--port` or `OPENCLAW_GATEWAY_PORT`).
-</Note>
-
-<Warning>
-When you pass `--url`, the CLI does not fall back to config or environment credentials. Include `--token` or `--password` explicitly. Missing explicit credentials is an error.
-</Warning>
+Note: replace `18789` with your configured `gateway.port` (or `--port`/`OPENCLAW_GATEWAY_PORT`).
+Note: when you pass `--url`, the CLI does not fall back to config or environment credentials.
+Include `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ## CLI remote defaults
 
@@ -101,8 +100,6 @@ You can persist a remote target so CLI commands use it by default:
 ```
 
 When the gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first.
-In the macOS app’s SSH tunnel transport, discovered gateway hostnames belong in
-`gateway.remote.sshTarget`; `gateway.remote.url` remains the local tunnel URL.
 
 ## Credential precedence
 
@@ -129,7 +126,7 @@ WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects direct
 - Forward `18789` over SSH (see above), then connect clients to `ws://127.0.0.1:18789`.
 - On macOS, prefer the app’s “Remote over SSH” mode, which manages the tunnel automatically.
 
-## macOS app Remote over SSH
+## macOS app "Remote over SSH"
 
 The macOS menu bar app can drive the same setup end-to-end (remote status checks, WebChat, and Voice Wake forwarding).
 
@@ -154,8 +151,8 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
   use that Tailscale header auth and instead follow the gateway's normal HTTP
   auth mode. This tokenless flow assumes the gateway host is trusted. Set it to
   `false` if you want shared-secret auth everywhere.
-- **Trusted-proxy** auth expects non-loopback identity-aware proxy setups by default.
-  Same-host loopback reverse proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`.
+- **Trusted-proxy** auth is for non-loopback identity-aware proxy setups only.
+  Same-host loopback reverse proxies do not satisfy `gateway.auth.mode: "trusted-proxy"`.
 - Treat browser control like operator access: tailnet-only + deliberate node pairing.
 
 Deep dive: [Security](/gateway/security).
@@ -225,9 +222,7 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist
 
 The tunnel will start automatically at login, restart on crash, and keep the forwarded port live.
 
-<Note>
-If you have a leftover `com.openclaw.ssh-tunnel` LaunchAgent from an older setup, unload and delete it.
-</Note>
+Note: if you have a leftover `com.openclaw.ssh-tunnel` LaunchAgent from an older setup, unload and delete it.
 
 #### Troubleshooting
 

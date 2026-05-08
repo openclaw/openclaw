@@ -7,9 +7,9 @@ export function isValidTimeZone(tz: string): boolean {
   }
 }
 
-type TimestampStyle = "short" | "medium" | "long";
+export type TimestampStyle = "short" | "medium" | "long";
 
-type FormatTimestampOptions = {
+export type FormatTimestampOptions = {
   style?: TimestampStyle;
   timeZone?: string;
 };

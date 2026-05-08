@@ -10,11 +10,7 @@ import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-fil
 import { buildEmbeddedSystemPrompt } from "../../../src/agents/pi-embedded-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/pi-tool-stubs.js";
-import {
-  buildDirectChatContext,
-  buildGroupChatContext,
-  buildGroupIntro,
-} from "../../../src/auto-reply/reply/groups.js";
+import { buildGroupChatContext, buildGroupIntro } from "../../../src/auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -78,7 +74,6 @@ function buildSystemPrompt(params: {
   skillsPrompt?: string;
   reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
-  silentReplyPromptMode?: "generic" | "none";
 }) {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames } =
     buildCommonSystemParams(params.workspaceDir);
@@ -92,7 +87,6 @@ function buildSystemPrompt(params: {
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
-    silentReplyPromptMode: params.silentReplyPromptMode,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: params.reactionGuidance,
@@ -124,21 +118,7 @@ function buildAutoReplySystemPrompt(params: {
 }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx),
-    params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
-      ? buildDirectChatContext({
-          sessionCtx: params.sessionCtx,
-          silentToken: SILENT_REPLY_TOKEN,
-          silentReplyPolicy: "disallow",
-          silentReplyRewrite: true,
-        })
-      : "",
-    params.includeGroupChatContext
-      ? buildGroupChatContext({
-          sessionCtx: params.sessionCtx,
-          silentToken: SILENT_REPLY_TOKEN,
-          silentReplyPolicy: "allow",
-        })
-      : "",
+    params.includeGroupChatContext ? buildGroupChatContext({ sessionCtx: params.sessionCtx }) : "",
     params.includeGroupIntro
       ? buildGroupIntro({
           cfg: {} as OpenClawConfig,
@@ -152,12 +132,6 @@ function buildAutoReplySystemPrompt(params: {
   return buildSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
-    silentReplyPromptMode:
-      params.sessionCtx.ChatType === "direct" ||
-      params.sessionCtx.ChatType === "dm" ||
-      params.includeGroupChatContext
-        ? "none"
-        : "generic",
   });
 }
 
@@ -205,7 +179,7 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
     OriginatingChannel: "slack",
     OriginatingTo: "D123",
     AccountId: "A1",
-    ChatType: "dm",
+    ChatType: "direct",
     SenderId: "U1",
     SenderName: "Alice",
     Body: "hi",

@@ -1,16 +1,14 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-
 type ModelDisplaySelectionParams = {
-  runtimeProvider?: unknown;
-  runtimeModel?: unknown;
-  overrideProvider?: unknown;
-  overrideModel?: unknown;
-  fallbackModel?: unknown;
+  runtimeProvider?: string | null;
+  runtimeModel?: string | null;
+  overrideProvider?: string | null;
+  overrideModel?: string | null;
+  fallbackModel?: string | null;
 };
 
 export function resolveModelDisplayRef(params: ModelDisplaySelectionParams): string | undefined {
-  const runtimeModel = normalizeOptionalString(params.runtimeModel);
-  const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
+  const runtimeModel = params.runtimeModel?.trim();
+  const runtimeProvider = params.runtimeProvider?.trim();
   if (runtimeModel) {
     if (runtimeModel.includes("/")) {
       return runtimeModel;
@@ -24,8 +22,8 @@ export function resolveModelDisplayRef(params: ModelDisplaySelectionParams): str
     return runtimeProvider;
   }
 
-  const overrideModel = normalizeOptionalString(params.overrideModel);
-  const overrideProvider = normalizeOptionalString(params.overrideProvider);
+  const overrideModel = params.overrideModel?.trim();
+  const overrideProvider = params.overrideProvider?.trim();
   if (overrideModel) {
     if (overrideModel.includes("/")) {
       return overrideModel;
@@ -39,7 +37,7 @@ export function resolveModelDisplayRef(params: ModelDisplaySelectionParams): str
     return overrideProvider;
   }
 
-  const fallbackModel = normalizeOptionalString(params.fallbackModel);
+  const fallbackModel = params.fallbackModel?.trim();
   return fallbackModel || undefined;
 }
 
@@ -56,39 +54,33 @@ export function resolveModelDisplayName(params: ModelDisplaySelectionParams): st
 }
 
 type SessionInfoModelSelectionParams = {
-  currentProvider?: unknown;
-  currentModel?: unknown;
-  defaultProvider?: unknown;
-  defaultModel?: unknown;
-  entryProvider?: unknown;
-  entryModel?: unknown;
-  overrideProvider?: unknown;
-  overrideModel?: unknown;
+  currentProvider?: string | null;
+  currentModel?: string | null;
+  defaultProvider?: string | null;
+  defaultModel?: string | null;
+  entryProvider?: string | null;
+  entryModel?: string | null;
+  overrideProvider?: string | null;
+  overrideModel?: string | null;
 };
 
 export function resolveSessionInfoModelSelection(params: SessionInfoModelSelectionParams): {
   modelProvider?: string;
   model?: string;
 } {
-  const fallbackProvider =
-    normalizeOptionalString(params.currentProvider) ??
-    normalizeOptionalString(params.defaultProvider) ??
-    undefined;
-  const fallbackModel =
-    normalizeOptionalString(params.currentModel) ??
-    normalizeOptionalString(params.defaultModel) ??
-    undefined;
+  const fallbackProvider = params.currentProvider ?? params.defaultProvider ?? undefined;
+  const fallbackModel = params.currentModel ?? params.defaultModel ?? undefined;
 
   if (params.entryProvider !== undefined || params.entryModel !== undefined) {
     return {
-      modelProvider: normalizeOptionalString(params.entryProvider) ?? fallbackProvider,
-      model: normalizeOptionalString(params.entryModel) ?? fallbackModel,
+      modelProvider: params.entryProvider ?? fallbackProvider,
+      model: params.entryModel ?? fallbackModel,
     };
   }
 
-  const overrideModel = normalizeOptionalString(params.overrideModel);
+  const overrideModel = params.overrideModel?.trim();
   if (overrideModel) {
-    const overrideProvider = normalizeOptionalString(params.overrideProvider);
+    const overrideProvider = params.overrideProvider?.trim();
     return {
       modelProvider: overrideProvider || fallbackProvider,
       model: overrideModel,

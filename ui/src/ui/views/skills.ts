@@ -28,15 +28,7 @@ function showDialogWhenClosed(el?: Element) {
   if (!(el instanceof HTMLDialogElement) || el.open) {
     return;
   }
-  if (el.isConnected) {
-    el.showModal();
-  } else {
-    queueMicrotask(() => {
-      if (el.isConnected && !el.open) {
-        el.showModal();
-      }
-    });
-  }
+  el.showModal();
 }
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";

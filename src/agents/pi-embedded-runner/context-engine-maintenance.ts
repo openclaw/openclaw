@@ -22,7 +22,6 @@ import {
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import {
@@ -46,7 +45,6 @@ type DeferredTurnMaintenanceScheduleParams = {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
-  config?: SessionWriteLockAcquireTimeoutConfig;
 };
 
 type DeferredTurnMaintenanceRunState = {
@@ -277,7 +275,6 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   runtimeContext?: ContextEngineRuntimeContext;
   allowDeferredCompactionExecution?: boolean;
   deferTranscriptRewriteToSessionLane?: boolean;
-  config?: SessionWriteLockAcquireTimeoutConfig;
 }): ContextEngineRuntimeContext {
   return {
     ...params.runtimeContext,
@@ -294,7 +291,6 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           sessionFile: params.sessionFile,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
-          config: params.config,
           request,
         });
       const rewriteSessionKey = normalizeSessionKey(params.sessionKey ?? params.sessionId);
@@ -318,7 +314,6 @@ async function executeContextEngineMaintenance(params: {
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode: "foreground" | "background";
-  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine.maintain !== "function") {
     return undefined;
@@ -335,7 +330,6 @@ async function executeContextEngineMaintenance(params: {
       runtimeContext: params.runtimeContext,
       allowDeferredCompactionExecution: params.executionMode === "background",
       deferTranscriptRewriteToSessionLane: params.executionMode === "background",
-      config: params.config,
     }),
   });
   if (result.changed) {
@@ -356,7 +350,6 @@ async function runDeferredTurnMaintenanceWorker(params: {
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   runId: string;
-  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<void> {
   let surfacedUserNotice = false;
   let longRunningTimer: ReturnType<typeof setTimeout> | null = null;
@@ -435,7 +428,6 @@ async function runDeferredTurnMaintenanceWorker(params: {
       reason: "turn",
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
-      config: params.config,
       executionMode: "background",
     });
     if (longRunningTimer) {
@@ -558,7 +550,6 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
-        config: params.config,
         runId: task.runId!,
       }),
     );
@@ -615,7 +606,6 @@ export async function runContextEngineMaintenance(params: {
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode?: "foreground" | "background";
-  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine?.maintain !== "function") {
     return undefined;
@@ -636,7 +626,6 @@ export async function runContextEngineMaintenance(params: {
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
-        config: params.config,
       });
     } catch (err) {
       log.warn(`failed to schedule deferred context engine maintenance: ${String(err)}`);
@@ -654,7 +643,6 @@ export async function runContextEngineMaintenance(params: {
       sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
       executionMode,
-      config: params.config,
     });
   } catch (err) {
     log.warn(`context engine maintain failed (${params.reason}): ${String(err)}`);

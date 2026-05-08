@@ -1,3 +1,8 @@
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/config-runtime";
+import {
+  DEFAULT_COPILOT_API_BASE_URL,
+  resolveCopilotApiToken,
+} from "openclaw/plugin-sdk/github-copilot-token";
 import {
   buildRemoteBaseUrlPolicy,
   sanitizeAndNormalizeEmbedding,
@@ -5,10 +10,8 @@ import {
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
-import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 
 const COPILOT_EMBEDDING_PROVIDER_ID = "github-copilot";
 

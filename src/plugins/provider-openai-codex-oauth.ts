@@ -15,10 +15,7 @@ const openAICodexOAuthOriginator = "openclaw";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
 
-type OpenAICodexOAuthFailureCode =
-  | "callback_timeout"
-  | "callback_validation_failed"
-  | "unsupported_region";
+type OpenAICodexOAuthFailureCode = "callback_timeout" | "callback_validation_failed";
 
 function waitForDelayOrLoginSettle(params: {
   delayMs: number;
@@ -57,16 +54,6 @@ function createOpenAICodexOAuthError(
 
 function rewriteOpenAICodexOAuthError(error: unknown): Error {
   const message = formatErrorMessage(error);
-  if (/unsupported_country_region_territory/i.test(message)) {
-    return createOpenAICodexOAuthError(
-      "unsupported_region",
-      [
-        "OpenAI rejected the token exchange for this country, region, or network route.",
-        "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry `openclaw models auth login --provider openai-codex`.",
-      ].join(" "),
-      error,
-    );
-  }
   if (/state mismatch|missing authorization code/i.test(message)) {
     return createOpenAICodexOAuthError("callback_validation_failed", message, error);
   }
@@ -77,30 +64,25 @@ function createManualCodeInputHandler(params: {
   isRemote: boolean;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   runtime: RuntimeEnv;
-  updateProgress: (message: string) => void;
-  stopProgress: (message?: string) => void;
+  spin: ReturnType<WizardPrompter["progress"]>;
   waitForLoginToSettle: Promise<void>;
   hasBrowserAuthStarted: () => boolean;
 }): (() => Promise<string>) | undefined {
-  let manualFallbackPromise: Promise<string> | undefined;
   if (params.isRemote) {
-    return async () => {
-      manualFallbackPromise ??= params.onPrompt({
+    return async () =>
+      await params.onPrompt({
         message: manualInputPromptMessage,
       });
-      return await manualFallbackPromise;
-    };
   }
 
-  const runLocalManualFallback = async () => {
+  return async () => {
     if (!params.hasBrowserAuthStarted()) {
-      params.updateProgress(
+      params.spin.update(
         "Local OAuth callback was unavailable. Paste the redirect URL to continue…",
       );
       params.runtime.log(
         "OpenAI Codex OAuth local callback did not start; switching to manual entry immediately.",
       );
-      params.stopProgress("Manual OAuth entry required");
       return await params.onPrompt({
         message: manualInputPromptMessage,
       });
@@ -126,19 +108,13 @@ function createManualCodeInputHandler(params: {
       return await createNeverSettlingPromptResult();
     }
 
-    params.updateProgress("Browser callback did not finish. Paste the redirect URL to continue…");
+    params.spin.update("Browser callback did not finish. Paste the redirect URL to continue…");
     params.runtime.log(
       `OpenAI Codex OAuth callback did not arrive within ${localManualFallbackDelayMs}ms; switching to manual entry (callback_timeout).`,
     );
-    params.stopProgress("Manual OAuth entry required");
     return await params.onPrompt({
       message: manualInputPromptMessage,
     });
-  };
-
-  return async () => {
-    manualFallbackPromise ??= runLocalManualFallback();
-    return await manualFallbackPromise;
   };
 }
 
@@ -177,18 +153,6 @@ export async function loginOpenAICodexOAuth(params: {
   );
 
   const spin = prompter.progress("Starting OAuth flow…");
-  let progressActive = true;
-  const updateProgress = (message: string) => {
-    if (progressActive) {
-      spin.update(message);
-    }
-  };
-  const stopProgress = (message?: string) => {
-    if (progressActive) {
-      progressActive = false;
-      spin.stop(message);
-    }
-  };
   let browserAuthStarted = false;
   let markLoginSettled!: () => void;
   const waitForLoginToSettle = new Promise<void>((resolve) => {
@@ -217,17 +181,16 @@ export async function loginOpenAICodexOAuth(params: {
         isRemote,
         onPrompt,
         runtime,
-        updateProgress,
-        stopProgress,
+        spin,
         waitForLoginToSettle,
         hasBrowserAuthStarted: () => browserAuthStarted,
       }),
-      onProgress: (msg: string) => updateProgress(msg),
+      onProgress: (msg: string) => spin.update(msg),
     });
-    stopProgress("OpenAI OAuth complete");
+    spin.stop("OpenAI OAuth complete");
     return creds ?? null;
   } catch (err) {
-    stopProgress("OpenAI OAuth failed");
+    spin.stop("OpenAI OAuth failed");
     const rewrittenError = rewriteOpenAICodexOAuthError(err);
     runtime.error(String(rewrittenError));
     await prompter.note("Trouble with OAuth? See https://docs.openclaw.ai/start/faq", "OAuth help");

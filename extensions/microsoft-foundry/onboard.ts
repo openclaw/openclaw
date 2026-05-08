@@ -30,7 +30,7 @@ import {
 
 export { listSubscriptions } from "./cli.js";
 
-function listFoundryResources(subscriptionId?: string): FoundryResourceOption[] {
+export function listFoundryResources(subscriptionId?: string): FoundryResourceOption[] {
   try {
     const accounts = JSON.parse(
       execAz([
@@ -121,7 +121,7 @@ export function listResourceDeployments(
   }
 }
 
-function buildCreateFoundryHint(selectedSub: AzAccount): string {
+export function buildCreateFoundryHint(selectedSub: AzAccount): string {
   return [
     `No Azure AI Foundry or Azure OpenAI resources were found in subscription ${selectedSub.name} (${selectedSub.id}).`,
     "Create one in Azure AI Foundry or Azure Portal, then rerun onboard.",
@@ -341,7 +341,9 @@ export function buildFoundryConnectionTest(params: {
   };
 }
 
-function extractTenantSuggestions(rawMessage: string): Array<{ id: string; label?: string }> {
+export function extractTenantSuggestions(
+  rawMessage: string,
+): Array<{ id: string; label?: string }> {
   const suggestions: Array<{ id: string; label?: string }> = [];
   const seen = new Set<string>();
   const regex = /([0-9a-fA-F-]{36})(?:\s+'([^'\r\n]+)')?/g;

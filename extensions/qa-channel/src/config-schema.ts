@@ -1,7 +1,4 @@
-import {
-  ToolPolicySchema,
-  buildChannelConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 
 const QaChannelActionConfigSchema = z
@@ -13,15 +10,7 @@ const QaChannelActionConfigSchema = z
   })
   .strict();
 
-const QaChannelGroupConfigSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema.optional(),
-    toolsBySender: z.record(z.string(), ToolPolicySchema).optional(),
-  })
-  .strict();
-
-const QaChannelAccountConfigSchema = z
+export const QaChannelAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -30,15 +19,12 @@ const QaChannelAccountConfigSchema = z
     botDisplayName: z.string().optional(),
     pollTimeoutMs: z.number().int().min(100).max(30_000).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groupPolicy: z.enum(["open", "allowlist", "disabled"]).optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    groups: z.record(z.string(), QaChannelGroupConfigSchema).optional(),
     defaultTo: z.string().optional(),
     actions: QaChannelActionConfigSchema.optional(),
   })
   .strict();
 
-const QaChannelConfigSchema = QaChannelAccountConfigSchema.extend({
+export const QaChannelConfigSchema = QaChannelAccountConfigSchema.extend({
   accounts: z.record(z.string(), QaChannelAccountConfigSchema.partial()).optional(),
   defaultAccount: z.string().optional(),
 }).strict();

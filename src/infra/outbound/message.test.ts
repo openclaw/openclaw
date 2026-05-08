@@ -204,29 +204,6 @@ describe("sendMessage", () => {
     );
   });
 
-  it("maps voice media sends onto outbound audioAsVoice payloads", async () => {
-    await sendMessage({
-      cfg: {},
-      channel: "forum",
-      to: "123456",
-      content: "voice note",
-      mediaUrl: "file:///tmp/openclaw-voice.ogg",
-      asVoice: true,
-    });
-
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [
-          expect.objectContaining({
-            text: "voice note",
-            mediaUrl: "file:///tmp/openclaw-voice.ogg",
-            audioAsVoice: true,
-          }),
-        ],
-      }),
-    );
-  });
-
   it("applies mirror matrix semantics for MEDIA and silent token variants", async () => {
     const matrix: Array<{
       name: string;
@@ -330,7 +307,7 @@ describe("sendMessage", () => {
     }
   });
 
-  it("does not load registries while resolving outbound plugins", async () => {
+  it("recovers plugin resolution after registry refresh", async () => {
     const forumPlugin = {
       outbound: { deliveryMode: "direct" },
     };
@@ -352,6 +329,6 @@ describe("sendMessage", () => {
       via: "direct",
     });
 
-    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 });

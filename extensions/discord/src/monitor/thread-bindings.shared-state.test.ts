@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   __testing as threadBindingsTesting,
   createThreadBindingManager,
@@ -21,16 +20,15 @@ describe("thread binding manager state", () => {
   });
 
   it("shares managers between ESM and alternate-loaded module instances", async () => {
-    const viaAlternateLoader = await loadThreadBindingsViaAlternateLoader();
+    const viaJiti = await loadThreadBindingsViaAlternateLoader();
 
     createThreadBindingManager({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
       accountId: "work",
       persist: false,
       enableSweeper: false,
     });
 
     expect(getThreadBindingManager("work")).not.toBeNull();
-    expect(viaAlternateLoader.getThreadBindingManager("work")).not.toBeNull();
+    expect(viaJiti.getThreadBindingManager("work")).not.toBeNull();
   });
 });

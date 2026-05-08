@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   OPENCLAW_DEBUG_PROXY_ENABLED,
   OPENCLAW_DEBUG_PROXY_SESSION_ID,
@@ -6,13 +6,18 @@ import {
 } from "./env.js";
 
 describe("resolveDebugProxySettings", () => {
-  it("keeps an implicit debug proxy session id stable within one process", () => {
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it("keeps an implicit debug proxy session id stable within one process", async () => {
+    const mod = await import("./env.js");
     const env = {
       [OPENCLAW_DEBUG_PROXY_ENABLED]: "1",
     } satisfies NodeJS.ProcessEnv;
 
-    const first = resolveDebugProxySettings(env);
-    const second = resolveDebugProxySettings(env);
+    const first = mod.resolveDebugProxySettings(env);
+    const second = mod.resolveDebugProxySettings(env);
 
     expect(first.sessionId).toBe(second.sessionId);
   });

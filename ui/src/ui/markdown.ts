@@ -1,7 +1,6 @@
 import DOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
-import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "./format.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
@@ -432,7 +431,7 @@ md.renderer.rules.fence = (tokens, idx) => {
   const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
   const attrSafe = escapeHtml(text);
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
   const trimmed = text.trim();
@@ -458,7 +457,7 @@ md.renderer.rules.code_block = (tokens, idx) => {
   const safeText = escapeHtml(text);
   const codeBlock = `<pre><code>${safeText}</code></pre>`;
   const attrSafe = escapeHtml(text);
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
   const header = `<div class="code-block-header">${copyBtn}</div>`;
 
   const trimmed = text.trim();
@@ -481,9 +480,8 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     return "";
   }
   installHooks();
-  const cacheKey = `${i18n.getLocale()}\0${input}`;
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-    const cached = getCachedMarkdown(cacheKey);
+    const cached = getCachedMarkdown(input);
     if (cached !== null) {
       return cached;
     }
@@ -499,7 +497,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-      setCachedMarkdown(cacheKey, sanitized);
+      setCachedMarkdown(input, sanitized);
     }
     return sanitized;
   }
@@ -514,7 +512,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-    setCachedMarkdown(cacheKey, sanitized);
+    setCachedMarkdown(input, sanitized);
   }
   return sanitized;
 }

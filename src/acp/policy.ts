@@ -46,13 +46,6 @@ export function resolveAcpDispatchPolicyError(cfg: OpenClawConfig): AcpRuntimeEr
   return new AcpRuntimeError("ACP_DISPATCH_DISABLED", message);
 }
 
-export function resolveAcpExplicitTurnPolicyError(cfg: OpenClawConfig): AcpRuntimeError | null {
-  if (isAcpEnabledByPolicy(cfg)) {
-    return null;
-  }
-  return new AcpRuntimeError("ACP_DISPATCH_DISABLED", ACP_DISABLED_MESSAGE);
-}
-
 export function isAcpAgentAllowedByPolicy(cfg: OpenClawConfig, agentId: string): boolean {
   const allowed = (cfg.acp?.allowedAgents ?? [])
     .map((entry) => normalizeAgentId(entry))

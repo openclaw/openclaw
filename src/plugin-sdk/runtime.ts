@@ -29,8 +29,5 @@ export {
   formatPluginInstallPathIssue,
 } from "../infra/plugin-install-path-warnings.js";
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
-export {
-  registerUncaughtExceptionHandler,
-  registerUnhandledRejectionHandler,
-} from "../infra/unhandled-rejections.js";
+export { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 export { removePluginFromConfig } from "../plugins/uninstall.js";

@@ -12,7 +12,6 @@ struct TalkModeGatewayConfigState {
     let rawConfigApiKey: String?
     let interruptOnSpeech: Bool?
     let silenceTimeoutMs: Int
-    let speechLocaleID: String?
 }
 
 enum TalkModeGatewayConfigParser {
@@ -20,8 +19,8 @@ enum TalkModeGatewayConfigParser {
         config: [String: Any],
         defaultProvider: String,
         defaultModelIdFallback: String,
-        defaultSilenceTimeoutMs: Int) -> TalkModeGatewayConfigState
-    {
+        defaultSilenceTimeoutMs: Int
+    ) -> TalkModeGatewayConfigState {
         let talk = TalkConfigParsing.bridgeFoundationDictionary(config["talk"] as? [String: Any])
         let selection = TalkConfigParsing.selectProviderConfig(
             talk,
@@ -54,7 +53,6 @@ enum TalkModeGatewayConfigParser {
         let silenceTimeoutMs = TalkConfigParsing.resolvedSilenceTimeoutMs(
             talk,
             fallback: defaultSilenceTimeoutMs)
-        let speechLocaleID = TalkConfigParsing.resolvedSpeechLocaleID(talk)
 
         return TalkModeGatewayConfigState(
             activeProvider: activeProvider,
@@ -66,7 +64,6 @@ enum TalkModeGatewayConfigParser {
             defaultOutputFormat: defaultOutputFormat,
             rawConfigApiKey: rawConfigApiKey,
             interruptOnSpeech: interruptOnSpeech,
-            silenceTimeoutMs: silenceTimeoutMs,
-            speechLocaleID: speechLocaleID)
+            silenceTimeoutMs: silenceTimeoutMs)
     }
 }

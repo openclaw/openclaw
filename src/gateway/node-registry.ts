@@ -30,7 +30,7 @@ type PendingInvoke = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-type NodeInvokeResult = {
+export type NodeInvokeResult = {
   ok: boolean;
   payload?: unknown;
   payloadJSON?: string | null;

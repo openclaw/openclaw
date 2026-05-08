@@ -44,9 +44,8 @@ export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }
     "frame-ancestors 'none'",
     scriptSrc,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: blob:",
+    "img-src 'self' data:",
     "font-src 'self' https://fonts.gstatic.com",
-    "worker-src 'self'",
-    "connect-src 'self' ws: wss: https://api.openai.com",
+    "connect-src 'self' ws: wss:",
   ].join("; ");
 }

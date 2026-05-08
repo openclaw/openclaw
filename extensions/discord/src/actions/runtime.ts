@@ -58,13 +58,7 @@ export async function handleDiscordAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
   options?: {
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-      workspaceDir?: string;
-    };
     mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
@@ -72,7 +66,7 @@ export async function handleDiscordAction(
   const isActionEnabled = createDiscordActionGate({ cfg, accountId });
 
   if (messagingActions.has(action)) {
-    return await handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
+    return await handleDiscordMessagingAction(action, params, isActionEnabled, options, cfg);
   }
   if (guildActions.has(action)) {
     return await handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);

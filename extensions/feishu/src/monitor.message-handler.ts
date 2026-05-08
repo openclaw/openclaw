@@ -1,5 +1,4 @@
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { isMentionForwardRequest } from "./mention.js";
 import {
@@ -60,9 +59,7 @@ type FeishuMessageReceiveHandlerContext = {
 };
 
 function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
-  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
-    ? value
-    : undefined;
+  return value === "group" || value === "private" || value === "p2p" ? value : undefined;
 }
 
 function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | null {
@@ -111,21 +108,21 @@ function mergeFeishuDebounceMentions(
   return merged.size > 0 ? Array.from(merged.values()) : undefined;
 }
 
-function dedupeFeishuDebounceEntriesByDedupeKey(
+function dedupeFeishuDebounceEntriesByMessageId(
   entries: FeishuMessageEvent[],
 ): FeishuMessageEvent[] {
   const seen = new Set<string>();
   const deduped: FeishuMessageEvent[] = [];
   for (const entry of entries) {
-    const dedupeKey = resolveFeishuMessageDedupeKey(entry);
-    if (!dedupeKey) {
+    const messageId = entry.message.message_id?.trim();
+    if (!messageId) {
       deduped.push(entry);
       continue;
     }
-    if (seen.has(dedupeKey)) {
+    if (seen.has(messageId)) {
       continue;
     }
-    seen.add(dedupeKey);
+    seen.add(messageId);
     deduped.push(entry);
   }
   return deduped;
@@ -181,13 +178,7 @@ export function createFeishuMessageReceiveHandler({
   });
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
-  const enqueue = createSequentialQueue({
-    onTaskTimeout: (key, timeoutMs) => {
-      log(
-        `feishu[${accountId}]: per-chat task exceeded ${timeoutMs}ms cap (key=${key}); evicting from queue so later same-key messages can proceed (#70133)`,
-      );
-    },
-  });
+  const enqueue = createSequentialQueue();
 
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const sequentialKey = resolveSequentialKey({
@@ -226,13 +217,13 @@ export function createFeishuMessageReceiveHandler({
 
   const recordSuppressedMessageIds = async (
     entries: FeishuMessageEvent[],
-    dispatchDedupeKey?: string,
+    dispatchMessageId?: string,
   ) => {
-    const keepDedupeKey = dispatchDedupeKey?.trim();
+    const keepMessageId = dispatchMessageId?.trim();
     const suppressedIds = new Set(
       entries
-        .map((entry) => resolveFeishuMessageDedupeKey(entry))
-        .filter((id): id is string => Boolean(id) && (!keepDedupeKey || id !== keepDedupeKey)),
+        .map((entry) => entry.message.message_id?.trim())
+        .filter((id): id is string => Boolean(id) && (!keepMessageId || id !== keepMessageId)),
     );
     for (const messageId of suppressedIds) {
       try {
@@ -273,10 +264,10 @@ export function createFeishuMessageReceiveHandler({
         await dispatchFeishuMessage(last);
         return;
       }
-      const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(entries);
+      const dedupedEntries = dedupeFeishuDebounceEntriesByMessageId(entries);
       const freshEntries: FeishuMessageEvent[] = [];
       for (const entry of dedupedEntries) {
-        if (!(await hasProcessedMessage(resolveFeishuMessageDedupeKey(entry), accountId, log))) {
+        if (!(await hasProcessedMessage(entry.message.message_id, accountId, log))) {
           freshEntries.push(entry);
         }
       }
@@ -284,10 +275,7 @@ export function createFeishuMessageReceiveHandler({
       if (!dispatchEntry) {
         return;
       }
-      await recordSuppressedMessageIds(
-        dedupedEntries,
-        resolveFeishuMessageDedupeKey(dispatchEntry),
-      );
+      await recordSuppressedMessageIds(dedupedEntries, dispatchEntry.message.message_id);
       const combinedText = freshEntries
         .map((entry) => resolveDebounceText(entry))
         .filter(Boolean)
@@ -312,7 +300,7 @@ export function createFeishuMessageReceiveHandler({
     },
     onError: (err, entries) => {
       for (const entry of entries) {
-        releaseFeishuMessageProcessing(resolveFeishuMessageDedupeKey(entry), accountId);
+        releaseFeishuMessageProcessing(entry.message.message_id, accountId);
       }
       error(`feishu[${accountId}]: inbound debounce flush failed: ${String(err)}`);
     },
@@ -325,8 +313,7 @@ export function createFeishuMessageReceiveHandler({
       return;
     }
     const messageId = event.message?.message_id?.trim();
-    const messageDedupeKey = resolveFeishuMessageDedupeKey(event);
-    if (!tryBeginFeishuMessageProcessing(messageDedupeKey, accountId)) {
+    if (!tryBeginFeishuMessageProcessing(messageId, accountId)) {
       log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
       return;
     }
@@ -335,7 +322,7 @@ export function createFeishuMessageReceiveHandler({
     };
     if (fireAndForget) {
       void processMessage().catch((err) => {
-        releaseFeishuMessageProcessing(messageDedupeKey, accountId);
+        releaseFeishuMessageProcessing(messageId, accountId);
         error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       });
       return;
@@ -343,7 +330,7 @@ export function createFeishuMessageReceiveHandler({
     try {
       await processMessage();
     } catch (err) {
-      releaseFeishuMessageProcessing(messageDedupeKey, accountId);
+      releaseFeishuMessageProcessing(messageId, accountId);
       error(`feishu[${accountId}]: error handling message: ${String(err)}`);
     }
   };

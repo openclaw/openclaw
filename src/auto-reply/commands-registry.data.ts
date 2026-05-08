@@ -6,7 +6,6 @@ import {
   defineChatCommand,
 } from "./commands-registry.shared.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
 
 type ChannelPlugin = ReturnType<typeof listLoadedChannelPlugins>[number];
 
@@ -26,10 +25,12 @@ function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
 
 let cachedCommands: ChatCommandDefinition[] | null = null;
 let cachedRegistryVersion = -1;
+let cachedNativeCommandSurfaces: Set<string> | null = null;
+let cachedNativeRegistryVersion = -1;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
-    ...buildBuiltinChatCommands({ listThinkingLevels }),
+    ...buildBuiltinChatCommands(),
     ...listLoadedChannelPlugins()
       .filter(supportsNativeCommands)
       .map((plugin) => defineDockCommand(plugin)),
@@ -47,5 +48,20 @@ export function getChatCommands(): ChatCommandDefinition[] {
   const commands = buildChatCommands();
   cachedCommands = commands;
   cachedRegistryVersion = registryVersion;
+  cachedNativeCommandSurfaces = null;
   return commands;
+}
+
+export function getNativeCommandSurfaces(): Set<string> {
+  const registryVersion = getActivePluginChannelRegistryVersionFromState();
+  if (cachedNativeCommandSurfaces && registryVersion === cachedNativeRegistryVersion) {
+    return cachedNativeCommandSurfaces;
+  }
+  cachedNativeCommandSurfaces = new Set(
+    listLoadedChannelPlugins()
+      .filter(supportsNativeCommands)
+      .map((plugin) => plugin.id),
+  );
+  cachedNativeRegistryVersion = registryVersion;
+  return cachedNativeCommandSurfaces;
 }

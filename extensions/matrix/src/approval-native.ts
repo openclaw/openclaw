@@ -9,11 +9,8 @@ import {
   createChannelNativeOriginTargetResolver,
   resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalStringifiedId,
@@ -85,11 +82,11 @@ function resolveSessionMatrixOriginTarget(sessionTarget: {
   };
 }
 
-function normalizeMatrixOriginTarget(target: MatrixOriginTarget): MatrixOriginTarget {
-  return {
-    ...target,
-    to: normalizeComparableTarget(target.to),
-  };
+function matrixTargetsMatch(a: MatrixOriginTarget, b: MatrixOriginTarget): boolean {
+  return (
+    normalizeComparableTarget(a.to) === normalizeComparableTarget(b.to) &&
+    (a.threadId ?? "") === (b.threadId ?? "")
+  );
 }
 
 function hasMatrixPluginApprovers(params: { cfg: CoreConfig; accountId?: string | null }): boolean {
@@ -159,7 +156,7 @@ const resolveMatrixOriginTarget = createChannelNativeOriginTargetResolver({
     }),
   resolveTurnSourceTarget: resolveTurnSourceMatrixOriginTarget,
   resolveSessionTarget: resolveSessionMatrixOriginTarget,
-  normalizeTargetForMatch: normalizeMatrixOriginTarget,
+  targetsMatch: matrixTargetsMatch,
   resolveFallbackTarget: (request) => {
     const sessionConversation = resolveApprovalRequestSessionConversation({
       request,

@@ -1,9 +1,16 @@
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 
 export type DeliveryProgress = {
   hasReplied: boolean;
   hasDelivered: boolean;
 };
+
+export function createDeliveryProgress(): DeliveryProgress {
+  return {
+    hasReplied: false,
+    hasDelivered: false,
+  };
+}
 
 export function resolveReplyToForSend(params: {
   replyToId?: number;
@@ -21,7 +28,7 @@ export function markReplyApplied(progress: DeliveryProgress, replyToId?: number)
   }
 }
 
-function markDelivered(progress: DeliveryProgress): void {
+export function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
 }
 

@@ -13,7 +13,6 @@ export async function scanStatus(
     json?: boolean;
     timeoutMs?: number;
     all?: boolean;
-    deep?: boolean;
   },
   _runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
@@ -47,13 +46,10 @@ export async function scanStatus(
       enabled: true,
     },
     async (progress) => {
-      const includeLiveChannelChecks = opts.all === true || opts.deep === true;
       const overview = await collectStatusScanOverview({
         commandName: "status",
         opts,
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
-        includeLiveChannelStatus: includeLiveChannelChecks,
-        includeChannelSetupRuntimeFallback: true,
         progress,
         labels: {
           loadingConfig: "Loading config…",
@@ -67,22 +63,18 @@ export async function scanStatus(
       });
 
       progress.setLabel("Checking plugins…");
-      const pluginCompatibility = opts.all
-        ? buildPluginCompatibilitySnapshotNotices({ config: overview.cfg })
-        : [];
+      const pluginCompatibility = buildPluginCompatibilitySnapshotNotices({ config: overview.cfg });
       progress.tick();
 
       progress.setLabel("Checking memory and sessions…");
       const result = await executeStatusScanFromOverview({
         overview,
         resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
-          opts.all
-            ? await resolveStatusMemoryStatusSnapshot({
-                cfg,
-                agentStatus,
-                memoryPlugin,
-              })
-            : null,
+          await resolveStatusMemoryStatusSnapshot({
+            cfg,
+            agentStatus,
+            memoryPlugin,
+          }),
         channelIssues: overview.channelIssues,
         channels: overview.channels,
         pluginCompatibility,

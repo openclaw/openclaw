@@ -9,7 +9,6 @@ export {
   browserCreateProfile,
   browserConsoleMessages,
   browserDeleteProfile,
-  browserDoctor,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
@@ -53,8 +52,6 @@ export {
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
-  BrowserDoctorCheck,
-  BrowserDoctorReport,
   BrowserFormField,
   BrowserResetProfileResult,
   BrowserRouteRegistrar,
@@ -83,14 +80,14 @@ export {
   selectDefaultNodeFromList,
   stringEnum,
   theme,
-} from "./sdk-setup-tools.js";
+} from "openclaw/plugin-sdk/browser-setup-tools";
 export {
-  getRuntimeConfig,
+  loadConfig,
   normalizePluginsConfig,
   parseBooleanValue,
   resolveEffectiveEnableState,
   shortenHomePath,
-} from "./sdk-config.js";
+} from "openclaw/plugin-sdk/browser-config-runtime";
 export {
   addGatewayClientOptions,
   callGatewayFromCli,
@@ -103,13 +100,16 @@ export {
   runCommandWithRuntime,
   safeParseJson,
   withTimeout,
-} from "./sdk-node-runtime.js";
-export { createSubsystemLogger, wrapExternalContent } from "./sdk-security-runtime.js";
-export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
-export type { OpenClawConfig } from "./sdk-config.js";
+} from "openclaw/plugin-sdk/browser-node-runtime";
+export {
+  createSubsystemLogger,
+  wrapExternalContent,
+} from "openclaw/plugin-sdk/browser-security-runtime";
+export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/browser-setup-tools";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/browser-config-runtime";
 export type {
   GatewayRequestHandlers,
   GatewayRpcOpts,
   NodeSession,
   OpenClawPluginService,
-} from "./sdk-node-runtime.js";
+} from "openclaw/plugin-sdk/browser-node-runtime";

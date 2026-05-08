@@ -11,7 +11,7 @@ import {
   type ResolvedTimeFormat,
 } from "./date-time.js";
 
-type RuntimeInfoInput = {
+export type RuntimeInfoInput = {
   agentId?: string;
   host: string;
   os: string;
@@ -28,7 +28,7 @@ type RuntimeInfoInput = {
   canvasRootDir?: string;
 };
 
-type SystemPromptRuntimeParams = {
+export type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
   userTimezone: string;
   userTime?: string;

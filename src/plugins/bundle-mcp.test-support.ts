@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { captureEnv } from "../test-utils/env.js";
+import { clearPluginDiscoveryCache } from "./discovery.js";
+import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 
 export function createBundleMcpTempHarness() {
   const tempDirs: string[] = [];
@@ -13,6 +15,8 @@ export function createBundleMcpTempHarness() {
       return dir;
     },
     async cleanup() {
+      clearPluginDiscoveryCache();
+      clearPluginManifestRegistryCache();
       await Promise.all(
         tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       );
@@ -20,7 +24,7 @@ export function createBundleMcpTempHarness() {
   };
 }
 
-function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
+export function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
   return path.join(homeDir, ".openclaw", "extensions", pluginId);
 }
 
@@ -37,6 +41,19 @@ export async function writeClaudeBundleManifest(params: {
     "utf-8",
   );
   return pluginRoot;
+}
+
+export async function writeBundleTextFiles(
+  rootDir: string,
+  files: Readonly<Record<string, string>>,
+) {
+  await Promise.all(
+    Object.entries(files).map(async ([relativePath, contents]) => {
+      const filePath = path.join(rootDir, relativePath);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, contents, "utf-8");
+    }),
+  );
 }
 
 export function createEnabledPluginEntries(pluginIds: readonly string[]) {

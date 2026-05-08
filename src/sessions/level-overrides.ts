@@ -6,8 +6,6 @@ import {
 } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
 
-const INVALID_VERBOSE_LEVEL_ERROR = 'invalid verboseLevel (use "on"|"off"|"full")';
-
 export function parseVerboseOverride(
   raw: unknown,
 ): { ok: true; value: VerboseLevel | null | undefined } | { ok: false; error: string } {
@@ -18,11 +16,11 @@ export function parseVerboseOverride(
     return { ok: true, value: undefined };
   }
   if (typeof raw !== "string") {
-    return { ok: false, error: INVALID_VERBOSE_LEVEL_ERROR };
+    return { ok: false, error: 'invalid verboseLevel (use "on"|"off")' };
   }
   const normalized = normalizeVerboseLevel(raw);
   if (!normalized) {
-    return { ok: false, error: INVALID_VERBOSE_LEVEL_ERROR };
+    return { ok: false, error: 'invalid verboseLevel (use "on"|"off")' };
   }
   return { ok: true, value: normalized };
 }

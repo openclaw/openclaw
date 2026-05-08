@@ -1,6 +1,7 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
@@ -269,8 +270,8 @@ class InvokeDispatcherTest {
     )
   }
 
-  private fun newCameraHandler(appContext: Context): CameraHandler =
-    CameraHandler(
+  private fun newCameraHandler(appContext: Context): CameraHandler {
+    return CameraHandler(
       appContext = appContext,
       camera = CameraCaptureManager(appContext),
       externalAudioCaptureActive = MutableStateFlow(false),
@@ -278,6 +279,7 @@ class InvokeDispatcherTest {
       triggerCameraFlash = {},
       invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
     )
+  }
 }
 
 private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
@@ -296,14 +298,15 @@ private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
 }
 
 private class InvokeDispatcherFakeNotificationsStateProvider : NotificationsStateProvider {
-  override fun readSnapshot(context: Context): DeviceNotificationSnapshot = DeviceNotificationSnapshot(enabled = false, connected = false, notifications = emptyList())
+  override fun readSnapshot(context: Context): DeviceNotificationSnapshot {
+    return DeviceNotificationSnapshot(enabled = false, connected = false, notifications = emptyList())
+  }
 
   override fun requestServiceRebind(context: Context) = Unit
 
-  override fun executeAction(
-    context: Context,
-    request: NotificationActionRequest,
-  ): NotificationActionResult = NotificationActionResult(ok = true, code = null, message = null)
+  override fun executeAction(context: Context, request: NotificationActionRequest): NotificationActionResult {
+    return NotificationActionResult(ok = true, code = null, message = null)
+  }
 }
 
 private class InvokeDispatcherFakeSystemNotificationPoster : SystemNotificationPoster {
@@ -315,10 +318,7 @@ private class InvokeDispatcherFakeSystemNotificationPoster : SystemNotificationP
 private class InvokeDispatcherFakePhotosDataSource : PhotosDataSource {
   override fun hasPermission(context: Context): Boolean = true
 
-  override fun latest(
-    context: Context,
-    request: PhotosLatestRequest,
-  ): List<EncodedPhotoPayload> = emptyList()
+  override fun latest(context: Context, request: PhotosLatestRequest): List<EncodedPhotoPayload> = emptyList()
 }
 
 private class InvokeDispatcherFakeContactsDataSource : ContactsDataSource {
@@ -326,15 +326,9 @@ private class InvokeDispatcherFakeContactsDataSource : ContactsDataSource {
 
   override fun hasWritePermission(context: Context): Boolean = true
 
-  override fun search(
-    context: Context,
-    request: ContactsSearchRequest,
-  ): List<ContactRecord> = emptyList()
+  override fun search(context: Context, request: ContactsSearchRequest): List<ContactRecord> = emptyList()
 
-  override fun add(
-    context: Context,
-    request: ContactsAddRequest,
-  ): ContactRecord {
+  override fun add(context: Context, request: ContactsAddRequest): ContactRecord {
     error("unused in InvokeDispatcherTest")
   }
 }
@@ -344,15 +338,9 @@ private class InvokeDispatcherFakeCalendarDataSource : CalendarDataSource {
 
   override fun hasWritePermission(context: Context): Boolean = true
 
-  override fun events(
-    context: Context,
-    request: CalendarEventsRequest,
-  ): List<CalendarEventRecord> = emptyList()
+  override fun events(context: Context, request: CalendarEventsRequest): List<CalendarEventRecord> = emptyList()
 
-  override fun add(
-    context: Context,
-    request: CalendarAddRequest,
-  ): CalendarEventRecord {
+  override fun add(context: Context, request: CalendarAddRequest): CalendarEventRecord {
     error("unused in InvokeDispatcherTest")
   }
 }
@@ -364,17 +352,11 @@ private class InvokeDispatcherFakeMotionDataSource : MotionDataSource {
 
   override fun hasPermission(context: Context): Boolean = true
 
-  override suspend fun activity(
-    context: Context,
-    request: MotionActivityRequest,
-  ): MotionActivityRecord {
+  override suspend fun activity(context: Context, request: MotionActivityRequest): MotionActivityRecord {
     error("unused in InvokeDispatcherTest")
   }
 
-  override suspend fun pedometer(
-    context: Context,
-    request: MotionPedometerRequest,
-  ): PedometerRecord {
+  override suspend fun pedometer(context: Context, request: MotionPedometerRequest): PedometerRecord {
     error("unused in InvokeDispatcherTest")
   }
 }
@@ -382,8 +364,5 @@ private class InvokeDispatcherFakeMotionDataSource : MotionDataSource {
 private class InvokeDispatcherFakeCallLogDataSource : CallLogDataSource {
   override fun hasReadPermission(context: Context): Boolean = true
 
-  override fun search(
-    context: Context,
-    request: CallLogSearchRequest,
-  ): List<CallLogRecord> = emptyList()
+  override fun search(context: Context, request: CallLogSearchRequest): List<CallLogRecord> = emptyList()
 }

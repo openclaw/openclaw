@@ -1,41 +1,34 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
-import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
-import { channelLabel } from "./runtime-label.js";
-import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
+import { channelLabel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 type ChannelSetupPluginInstallModule = typeof import("../channel-setup/plugin-install.js");
 type OnboardChannelsModule = typeof import("../onboard-channels.js");
 
-const channelSetupPluginInstallLoader = createLazyImportLoader<ChannelSetupPluginInstallModule>(
-  () => import("../channel-setup/plugin-install.js"),
-);
-const onboardChannelsLoader = createLazyImportLoader<OnboardChannelsModule>(
-  () => import("../onboard-channels.js"),
-);
+let channelSetupPluginInstallPromise: Promise<ChannelSetupPluginInstallModule> | undefined;
+let onboardChannelsPromise: Promise<OnboardChannelsModule> | undefined;
 
 function loadChannelSetupPluginInstall(): Promise<ChannelSetupPluginInstallModule> {
-  return channelSetupPluginInstallLoader.load();
+  channelSetupPluginInstallPromise ??= import("../channel-setup/plugin-install.js");
+  return channelSetupPluginInstallPromise;
 }
 
 function loadOnboardChannels(): Promise<OnboardChannelsModule> {
-  return onboardChannelsLoader.load();
+  onboardChannelsPromise ??= import("../onboard-channels.js");
+  return onboardChannelsPromise;
 }
 
 export type ChannelsAddOptions = {
@@ -51,19 +44,9 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
   if (!trimmed) {
     return undefined;
   }
-  const entries = cfg
-    ? await import("../channel-setup/trusted-catalog.js").then(
-        ({ listTrustedChannelPluginCatalogEntries }) =>
-          listTrustedChannelPluginCatalogEntries({
-            cfg,
-            workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
-          }),
-      )
-    : await import("../../channels/plugins/catalog.js").then(
-        ({ listChannelPluginCatalogEntries }) =>
-          listChannelPluginCatalogEntries({ excludeWorkspace: true }),
-      );
-  return entries.find((entry) => {
+  const { listChannelPluginCatalogEntries } = await import("../../channels/plugins/catalog.js");
+  const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
+  return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }
@@ -128,7 +111,6 @@ export async function channelsAddCommand(
   const cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
   const baseHash = configSnapshot.hash;
   let nextConfig = cfg;
-  let pluginRegistrySourceChanged = false;
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
@@ -255,22 +237,13 @@ export async function channelsAddCommand(
       }
     }
 
-    const committed = await commitConfigWithPendingPluginInstalls({
+    await replaceConfigFile({
       nextConfig,
       ...(baseHash !== undefined ? { baseHash } : {}),
     });
-    const writtenConfig = committed.config;
-    if (committed.movedInstallRecords) {
-      await refreshPluginRegistryAfterConfigMutation({
-        config: writtenConfig,
-        reason: "source-changed",
-        installRecords: committed.installRecords,
-        logger: { warn: (message) => runtime.log(message) },
-      });
-    }
     await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),
-      cfg: writtenConfig,
+      cfg: nextConfig,
       runtime,
     });
     await prompter.outro("Channels updated.");
@@ -282,13 +255,13 @@ export async function channelsAddCommand(
   let catalogEntry = channel ? undefined : await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
-  // May load a scoped plugin when the channel is not already registered.
+  // May trigger loadOpenClawPlugins on cache miss (disk scan + jiti import)
   const loadScopedPlugin = async (
     channelId: ChannelId,
     pluginId?: string,
   ): Promise<ChannelPlugin | undefined> => {
     const existing = getLoadedChannelPlugin(channelId);
-    if (existing?.setup?.applyAccountConfig) {
+    if (existing) {
       return existing;
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
@@ -299,13 +272,11 @@ export async function channelsAddCommand(
       channel: channelId,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
-      forceSetupOnlyChannelPlugins: true,
+      installRuntimeDeps: false,
     });
     return (
       snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      getBundledChannelSetupPlugin(channelId) ??
-      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      existing
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin
     );
   };
 
@@ -327,13 +298,11 @@ export async function channelsAddCommand(
         prompter,
         runtime,
         workspaceDir,
-        promptInstall: false,
       });
       nextConfig = result.cfg;
       if (!result.installed) {
         return;
       }
-      pluginRegistrySourceChanged = true;
       catalogEntry = {
         ...catalogEntry,
         ...(result.pluginId ? { pluginId: result.pluginId } : {}),
@@ -399,19 +368,10 @@ export async function channelsAddCommand(
     runtime,
   });
 
-  const committed = await commitConfigWithPendingPluginInstalls({
+  await replaceConfigFile({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
   });
-  const writtenConfig = committed.config;
-  if (committed.movedInstallRecords || pluginRegistrySourceChanged) {
-    await refreshPluginRegistryAfterConfigMutation({
-      config: writtenConfig,
-      reason: "source-changed",
-      ...(committed.movedInstallRecords ? { installRecords: committed.installRecords } : {}),
-      logger: { warn: (message) => runtime.log(message) },
-    });
-  }
   runtime.log(`Added ${plugin.meta.label ?? channelLabel(channel)} account "${accountId}".`);
   const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
@@ -431,7 +391,7 @@ export async function channelsAddCommand(
             }),
         },
       ],
-      cfg: writtenConfig,
+      cfg: nextConfig,
       runtime,
     });
   }

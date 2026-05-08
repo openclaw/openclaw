@@ -1,8 +1,8 @@
+import { describe, expect, it } from "vitest";
 import {
   expectProviderOnboardMergedLegacyConfig,
   expectProviderOnboardPrimaryAndFallbacks,
-} from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it } from "vitest";
+} from "../../test/helpers/plugins/provider-onboard.js";
 import { buildMistralModelDefinition as buildBundledMistralModelDefinition } from "./model-definitions.js";
 import {
   applyMistralConfig,

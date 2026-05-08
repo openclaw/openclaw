@@ -1,5 +1,4 @@
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
-import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -25,20 +24,6 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
     return undefined;
   }
   return trimmed as CronMessageChannel;
-}
-
-function resolveAnnounceChannel(params: {
-  channel?: CronMessageChannel;
-  to?: string;
-}): CronMessageChannel {
-  if (params.channel && params.channel !== "last") {
-    return params.channel;
-  }
-  return (
-    (resolveTargetPrefixedChannel(params.to) as CronMessageChannel | undefined) ??
-    params.channel ??
-    "last"
-  );
 }
 
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
@@ -71,10 +56,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   );
   if (hasDelivery) {
     const resolvedMode = mode ?? "announce";
-    const channel =
-      resolvedMode === "announce"
-        ? resolveAnnounceChannel({ channel: deliveryChannel, to })
-        : deliveryChannel;
+    const channel = resolvedMode === "announce" ? (deliveryChannel ?? "last") : deliveryChannel;
     return {
       mode: resolvedMode,
       channel: resolvedMode === "webhook" ? undefined : channel,
@@ -186,7 +168,7 @@ export function resolveFailureDestination(
 
   const result: CronFailureDeliveryPlan = {
     mode: resolvedMode,
-    channel: resolvedMode === "announce" ? resolveAnnounceChannel({ channel, to }) : undefined,
+    channel: resolvedMode === "announce" ? (channel ?? "last") : undefined,
     to,
     accountId,
   };
@@ -207,17 +189,15 @@ function isSameDeliveryTarget(
     return false;
   }
 
-  const primaryTo = normalizeOptionalString(delivery.to);
-  const primaryAccountId = normalizeOptionalString(delivery.accountId);
+  const primaryChannel = delivery.channel;
+  const primaryTo = delivery.to;
+  const primaryAccountId = delivery.accountId;
 
   if (failurePlan.mode === "webhook") {
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
   }
 
-  const primaryChannelNormalized = resolveAnnounceChannel({
-    channel: normalizeChannel(delivery.channel),
-    to: primaryTo,
-  });
+  const primaryChannelNormalized = primaryChannel ?? "last";
   const failureChannelNormalized = failurePlan.channel ?? "last";
 
   return (

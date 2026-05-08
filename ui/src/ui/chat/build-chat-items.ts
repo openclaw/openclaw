@@ -1,7 +1,6 @@
 import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
-import { normalizeMessage } from "./message-normalizer.ts";
-import { normalizeRoleForGrouping } from "./role-normalizer.ts";
+import { normalizeMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
 import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
 
@@ -180,16 +179,12 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         key: `group:${role}:${item.key}`,
         role,
         senderLabel,
-        messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
+        messages: [{ message: item.message, key: item.key }],
         timestamp,
         isStreaming: false,
       };
     } else {
-      currentGroup.messages.push({
-        message: item.message,
-        key: item.key,
-        duplicateCount: item.duplicateCount,
-      });
+      currentGroup.messages.push({ message: item.message, key: item.key });
     }
   }
 
@@ -197,53 +192,6 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     result.push(currentGroup);
   }
   return result;
-}
-
-function collapseDuplicateDisplaySignature(message: unknown): string | null {
-  const normalized = normalizeMessage(message);
-  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  if (!role || role === "tool") {
-    return null;
-  }
-  if (normalized.content.length === 0) {
-    return null;
-  }
-  const textParts: string[] = [];
-  for (const block of normalized.content) {
-    if (block.type !== "text" || typeof block.text !== "string") {
-      return null;
-    }
-    textParts.push(block.text);
-  }
-  const text = textParts.join("\n").trim().replace(/\s+/g, " ");
-  if (!text) {
-    return null;
-  }
-  const senderLabel = role === "user" ? (normalized.senderLabel ?? "").trim() : "";
-  return `${role}:${senderLabel}:${text}`;
-}
-
-function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
-  const collapsed: ChatItem[] = [];
-  let previousSignature: string | null = null;
-
-  for (const item of items) {
-    if (item.kind !== "message") {
-      collapsed.push(item);
-      previousSignature = null;
-      continue;
-    }
-    const signature = collapseDuplicateDisplaySignature(item.message);
-    const previous = collapsed[collapsed.length - 1];
-    if (signature && previousSignature === signature && previous?.kind === "message") {
-      previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
-      continue;
-    }
-    collapsed.push(item);
-    previousSignature = signature;
-  }
-
-  return collapsed;
 }
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
@@ -274,13 +222,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compacted history",
-        description:
-          "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
-        action: {
-          kind: "session-checkpoints",
-          label: "Open checkpoints",
-        },
+        label: "Compaction",
         timestamp: normalized.timestamp ?? Date.now(),
       });
       continue;
@@ -360,7 +302,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
-  return groupMessages(collapseSequentialDuplicateMessages(items));
+  return groupMessages(items);
 }
 
 function messageKey(message: unknown, index: number): string {

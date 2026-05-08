@@ -1,17 +1,17 @@
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-type AcpSessionInteractionMode = "interactive" | "parent-owned-background";
+export type AcpSessionInteractionMode = "interactive" | "parent-owned-background";
 
 type SessionInteractionEntry = Pick<SessionEntry, "spawnedBy" | "parentSessionKey" | "acp">;
 
-function resolveAcpSessionInteractionMode(
+export function resolveAcpSessionInteractionMode(
   entry?: SessionInteractionEntry | null,
 ): AcpSessionInteractionMode {
-  // Parent-owned ACP sessions are background work delegated from another session.
+  // Parent-owned oneshot ACP sessions are background work delegated from another session.
   // They should report back through the parent task notifier instead of speaking directly
   // on the user-facing channel themselves.
-  if (!entry?.acp) {
+  if (entry?.acp?.mode !== "oneshot") {
     return "interactive";
   }
   if (normalizeOptionalString(entry.spawnedBy) || normalizeOptionalString(entry.parentSessionKey)) {

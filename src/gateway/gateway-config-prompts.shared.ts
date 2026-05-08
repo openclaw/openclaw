@@ -43,7 +43,7 @@ function normalizeTailnetHostForUrl(rawHost: string): string | null {
   return trimmed;
 }
 
-function buildTailnetHttpsOrigin(rawHost: string): string | null {
+export function buildTailnetHttpsOrigin(rawHost: string): string | null {
   const normalizedHost = normalizeTailnetHostForUrl(rawHost);
   if (!normalizedHost) {
     return null;
@@ -55,7 +55,7 @@ function buildTailnetHttpsOrigin(rawHost: string): string | null {
   }
 }
 
-function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {
+export function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {
   const current = existing ?? [];
   const normalized = normalizeLowercaseStringOrEmpty(origin);
   if (current.some((entry) => normalizeLowercaseStringOrEmpty(entry) === normalized)) {

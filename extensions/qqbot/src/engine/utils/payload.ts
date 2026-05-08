@@ -27,10 +27,10 @@ export interface MediaPayload {
   caption?: string;
 }
 
-type QQBotPayload = CronReminderPayload | MediaPayload;
+export type QQBotPayload = CronReminderPayload | MediaPayload;
 
 /** Result of parsing model output into a structured payload. */
-interface ParseResult {
+export interface ParseResult {
   isPayload: boolean;
   payload?: QQBotPayload;
   text?: string;

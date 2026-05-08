@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -24,36 +24,25 @@ function createMockChild() {
   return child;
 }
 
-let fixtureRoot = "";
 let tempDir = "";
 let platformSpy: { mockRestore(): void } | null = null;
-let fixtureId = 0;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 
-beforeAll(async () => {
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
+beforeEach(async () => {
+  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
   platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 });
 
-afterAll(async () => {
+afterEach(async () => {
   platformSpy?.mockRestore();
-  platformSpy = null;
-  if (fixtureRoot) {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  }
-});
-
-beforeEach(async () => {
-  tempDir = path.join(fixtureRoot, `case-${fixtureId++}`);
-  await fs.mkdir(tempDir, { recursive: true });
-});
-
-afterEach(() => {
   process.env.PATH = originalPath;
   process.env.PATHEXT = originalPathExt;
   spawnMock.mockReset();
-  tempDir = "";
+  if (tempDir) {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    tempDir = "";
+  }
 });
 
 describe("resolveCliSpawnInvocation", () => {

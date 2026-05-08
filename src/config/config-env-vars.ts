@@ -20,7 +20,7 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
 
   if (envConfig.vars) {
     for (const [rawKey, value] of Object.entries(envConfig.vars)) {
-      if (typeof value !== "string" || !value.trim()) {
+      if (!value) {
         continue;
       }
       const key = normalizeEnvVarKey(rawKey, { portable: true });
@@ -60,6 +60,11 @@ export function collectConfigRuntimeEnvVars(cfg?: OpenClawConfig): Record<string
 
 export function collectConfigServiceEnvVars(cfg?: OpenClawConfig): Record<string, string> {
   return collectConfigEnvVarsByTarget(cfg);
+}
+
+/** @deprecated Use `collectConfigRuntimeEnvVars` or `collectConfigServiceEnvVars`. */
+export function collectConfigEnvVars(cfg?: OpenClawConfig): Record<string, string> {
+  return collectConfigRuntimeEnvVars(cfg);
 }
 
 export function createConfigRuntimeEnv(

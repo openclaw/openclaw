@@ -1,5 +1,4 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -16,7 +15,7 @@ import type {
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
-type EmbeddedSubscribeLogger = {
+export type EmbeddedSubscribeLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -45,18 +44,8 @@ export type EmbeddedPiSubscribeState = {
 
   deltaBuffer: string;
   blockBuffer: string;
-  blockState: {
-    thinking: boolean;
-    final: boolean;
-    inlineCode: InlineCodeState;
-    pendingTagFragment?: string;
-  };
-  partialBlockState: {
-    thinking: boolean;
-    final: boolean;
-    inlineCode: InlineCodeState;
-    pendingTagFragment?: string;
-  };
+  blockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
+  partialBlockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
   lastStreamedAssistant?: string;
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
@@ -75,7 +64,6 @@ export type EmbeddedPiSubscribeState = {
   assistantUsageCommitted: boolean;
 
   compactionInFlight: boolean;
-  lastCompactionTokensAfter?: number;
   pendingCompactionRetry: number;
   compactionRetryResolve?: () => void;
   compactionRetryReject?: (reason?: unknown) => void;
@@ -83,14 +71,11 @@ export type EmbeddedPiSubscribeState = {
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
-  terminalStopReason?: string;
-  yielded?: boolean;
   hadDeterministicSideEffect?: boolean;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
   messagingToolSentTargets: MessagingToolSend[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
@@ -124,22 +109,10 @@ export type EmbeddedPiSubscribeContext = {
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   stripBlockTags: (
     text: string,
-    state: {
-      thinking: boolean;
-      final: boolean;
-      inlineCode?: InlineCodeState;
-      pendingTagFragment?: string;
-    },
-    options?: { final?: boolean },
+    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
   ) => string;
-  emitBlockChunk: (
-    text: string,
-    options?: { assistantMessageIndex?: number; final?: boolean },
-  ) => void;
-  flushBlockReplyBuffer: (options?: {
-    assistantMessageIndex?: number;
-    final?: boolean;
-  }) => void | Promise<void>;
+  emitBlockChunk: (text: string, options?: { assistantMessageIndex?: number }) => void;
+  flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
     text: string,
@@ -164,10 +137,8 @@ export type EmbeddedPiSubscribeContext = {
   recordAssistantUsage: (usage: unknown) => void;
   commitAssistantUsage: () => void;
   incrementCompactionCount: () => void;
-  noteCompactionTokensAfter: (value: unknown) => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
-  getLastCompactionTokensAfter: () => number | undefined;
   emitBlockReply: (payload: BlockReplyPayload) => void;
 };
 
@@ -176,7 +147,7 @@ export type EmbeddedPiSubscribeContext = {
  * tests provide only the fields they exercise
  * without needing the full `EmbeddedPiSubscribeContext`.
  */
-type ToolHandlerParams = Pick<
+export type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
   | "runId"
   | "onBlockReplyFlush"
@@ -186,10 +157,9 @@ type ToolHandlerParams = Pick<
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
-  | "toolProgressDetail"
 >;
 
-type ToolHandlerState = Pick<
+export type ToolHandlerState = Pick<
   EmbeddedPiSubscribeState,
   | "toolMetaById"
   | "toolMetas"
@@ -210,7 +180,6 @@ type ToolHandlerState = Pick<
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
-  | "heartbeatToolResponse"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
 >;

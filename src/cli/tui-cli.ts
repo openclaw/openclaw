@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { runTui } from "../tui/tui.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 
 export function registerTuiCli(program: Command) {
@@ -42,7 +43,6 @@ export function registerTuiCli(program: Command) {
           );
         }
         const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
-        const { runTui } = await import("../tui/tui.js");
         await runTui({
           local: isLocal,
           url: opts.url as string | undefined,

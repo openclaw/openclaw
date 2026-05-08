@@ -1,7 +1,10 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
+import {
+  getChannelSetupPlugin,
+  listActiveChannelSetupPlugins,
+  listChannelSetupPlugins,
+} from "../channels/plugins/setup-registry.js";
 import type {
   ChannelSetupPlugin,
   ChannelSetupWizardAdapter,
@@ -28,7 +31,6 @@ import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -41,9 +43,7 @@ import {
 } from "./channel-setup.prompts.js";
 import {
   collectChannelStatus,
-  findBundledSourceForCatalogChannel,
   noteChannelPrimer,
-  resolveCatalogChannelSelectionHint,
   resolveChannelSelectionNoteLines,
   resolveChannelSetupSelectionContributions,
   resolveQuickstartDefault,
@@ -113,6 +113,7 @@ export async function setupChannels(
 ): Promise<OpenClawConfig> {
   let next = cfg;
   const deferStatusUntilSelection = options?.deferStatusUntilSelection === true;
+  const includeRegistryBeforeSelection = !deferStatusUntilSelection;
   const forceAllowFromChannels = new Set(options?.forceAllowFromChannels ?? []);
   const accountOverrides: Partial<Record<ChannelChoice, string>> = {
     ...options?.accountIds,
@@ -130,10 +131,17 @@ export async function setupChannels(
     return plugin;
   };
   const getVisibleChannelPlugin = (channel: ChannelChoice): ChannelSetupPlugin | undefined =>
-    scopedPluginsById.get(channel) ?? activePluginsById.get(channel);
-  const listVisibleInstalledPlugins = (): ChannelSetupPlugin[] => {
+    scopedPluginsById.get(channel) ??
+    activePluginsById.get(channel) ??
+    (deferStatusUntilSelection ? undefined : getChannelSetupPlugin(channel));
+  const listVisibleInstalledPlugins = (params?: {
+    includeRegistry?: boolean;
+  }): ChannelSetupPlugin[] => {
+    const includeRegistry = params?.includeRegistry ?? includeRegistryBeforeSelection;
     const merged = new Map<string, ChannelSetupPlugin>();
-    const registryPlugins = listActiveChannelSetupPlugins().map(rememberActivePlugin);
+    const registryPlugins = includeRegistry
+      ? listChannelSetupPlugins()
+      : listActiveChannelSetupPlugins().map(rememberActivePlugin);
     for (const plugin of registryPlugins) {
       if (shouldShowChannelInSetup(plugin.meta)) {
         merged.set(plugin.id, plugin);
@@ -146,22 +154,18 @@ export async function setupChannels(
     }
     return Array.from(merged.values());
   };
-  const resolveVisibleChannelEntries = () =>
+  const resolveVisibleChannelEntries = (params?: { includeRegistry?: boolean }) =>
     resolveChannelSetupEntries({
       cfg: next,
-      installedPlugins: listVisibleInstalledPlugins(),
+      installedPlugins: listVisibleInstalledPlugins(params),
       workspaceDir: resolveWorkspaceDir(),
     });
   const loadScopedChannelPlugin = async (
     channel: ChannelChoice,
     pluginId?: string,
-    setup?: {
-      forceReload?: boolean;
-      forceSetupOnlyChannelPlugins?: boolean;
-    },
   ): Promise<ChannelSetupPlugin | undefined> => {
     const existing = getVisibleChannelPlugin(channel);
-    if (existing && setup?.forceReload !== true) {
+    if (existing) {
       return existing;
     }
     const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
@@ -170,7 +174,7 @@ export async function setupChannels(
       channel,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
-      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins ?? true,
+      installRuntimeDeps: false,
     });
     const plugin =
       snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
@@ -178,11 +182,6 @@ export async function setupChannels(
     if (plugin) {
       rememberScopedPlugin(plugin);
       return plugin;
-    }
-    const bundledPlugin = getBundledChannelSetupPlugin(channel);
-    if (bundledPlugin) {
-      rememberScopedPlugin(bundledPlugin);
-      return bundledPlugin;
     }
     return undefined;
   };
@@ -195,7 +194,6 @@ export async function setupChannels(
   };
   const preloadConfiguredExternalPlugins = async () => {
     // Keep setup memory bounded by snapshot-loading only configured external plugins.
-    listVisibleInstalledPlugins();
     const workspaceDir = resolveWorkspaceDir();
     const preloadTasks: Promise<unknown>[] = [];
     // Security: keep trusted workspace overrides eligible during setup while
@@ -242,7 +240,9 @@ export async function setupChannels(
     return cfg;
   }
 
-  const primerChannels = resolveVisibleChannelEntries().entries.map((entry) => ({
+  const primerChannels = resolveVisibleChannelEntries({
+    includeRegistry: includeRegistryBeforeSelection,
+  }).entries.map((entry) => ({
     id: entry.id,
     label: entry.meta.label,
     blurb: entry.meta.blurb,
@@ -308,49 +308,14 @@ export async function setupChannels(
   };
 
   const getChannelEntries = () => {
-    const resolved = resolveVisibleChannelEntries();
+    const resolved = resolveVisibleChannelEntries({
+      includeRegistry: includeRegistryBeforeSelection,
+    });
     return {
       entries: resolved.entries,
       catalogById: resolved.installableCatalogById,
       installedCatalogById: resolved.installedCatalogById,
     };
-  };
-
-  // Decorates the runtime status map with synthetic `selectionHint` entries for
-  // installable catalog channels (e.g. WeCom shipped via npm). In QuickStart we
-  // run with `deferStatusUntilSelection`, which leaves `statusByChannel` empty
-  // until the user picks a channel — without this overlay the selection menu
-  // would render those options without any "download from <npm-spec>" hint.
-  //
-  // Bundled channels (Signal / Tlon / Twitch / Slack ...) reach this code path
-  // too whenever their plugin is not yet enabled, because they share the same
-  // "installable catalog" bucket. For those we must NOT show "download from
-  // <npm-spec>" — the plugin already lives under `extensions/<id>` and the
-  // hint would mislead users into thinking the plugin is missing.
-  const buildStatusByChannelForSelection = (
-    catalogById: ReturnType<typeof getChannelEntries>["catalogById"],
-  ): Map<ChannelChoice, ChannelSetupStatus> => {
-    const decorated = new Map(statusByChannel);
-    if (catalogById.size === 0) {
-      return decorated;
-    }
-    const bundledSources = resolveBundledPluginSources({
-      workspaceDir: resolveWorkspaceDir(),
-    });
-    for (const [channel, entry] of catalogById) {
-      if (decorated.has(channel)) {
-        continue;
-      }
-      const bundledLocalPath =
-        findBundledSourceForCatalogChannel({ bundled: bundledSources, entry })?.localPath ?? null;
-      decorated.set(channel, {
-        channel,
-        configured: false,
-        statusLines: [],
-        selectionHint: resolveCatalogChannelSelectionHint(entry, { bundledLocalPath }),
-      });
-    }
-    return decorated;
   };
 
   const refreshStatus = async (channel: ChannelChoice) => {
@@ -436,12 +401,6 @@ export async function setupChannels(
   };
 
   const configureChannel = async (channel: ChannelChoice) => {
-    if (scopedPluginsById.has(channel)) {
-      await loadScopedChannelPlugin(channel, undefined, {
-        forceReload: true,
-        forceSetupOnlyChannelPlugins: true,
-      });
-    }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
       await prompter.note(`${channel} does not support guided setup yet.`, "Channel setup");
@@ -575,7 +534,6 @@ export async function setupChannels(
         prompter,
         runtime,
         workspaceDir,
-        autoConfirmSingleSource: true,
       });
       next = result.cfg;
       if (!result.installed) {
@@ -629,13 +587,13 @@ export async function setupChannels(
 
   if (options?.quickstartDefaults) {
     while (true) {
-      const { entries, catalogById } = getChannelEntries();
+      const { entries } = getChannelEntries();
       const choice = await prompter.select({
         message: "Select channel (QuickStart)",
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
-            statusByChannel: buildStatusByChannelForSelection(catalogById),
+            statusByChannel,
             resolveDisabledHint,
           }).map((contribution) => contribution.option),
           {
@@ -658,13 +616,13 @@ export async function setupChannels(
     const doneValue = "__done__" as const;
     const initialValue = options?.initialSelection?.[0] ?? quickstartDefault;
     while (true) {
-      const { entries, catalogById } = getChannelEntries();
+      const { entries } = getChannelEntries();
       const choice = await prompter.select({
         message: "Select a channel",
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
-            statusByChannel: buildStatusByChannelForSelection(catalogById),
+            statusByChannel,
             resolveDisabledHint,
           }).map((contribution) => contribution.option),
           {
@@ -686,7 +644,9 @@ export async function setupChannels(
 
   const selectedLines = resolveChannelSelectionNoteLines({
     cfg: next,
-    installedPlugins: listVisibleInstalledPlugins(),
+    installedPlugins: listVisibleInstalledPlugins({
+      includeRegistry: includeRegistryBeforeSelection,
+    }),
     selection,
   });
   if (selectedLines.length > 0) {

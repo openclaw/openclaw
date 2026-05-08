@@ -1,8 +1,8 @@
-import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describePluginRegistrationContract } from "../../test/helpers/plugins/plugin-registration-contract.js";
 
 describePluginRegistrationContract({
   pluginId: "qwen",
-  providerIds: ["qwen", "qwencloud", "modelstudio", "dashscope"],
+  providerIds: ["qwen"],
   mediaUnderstandingProviderIds: ["qwen"],
   videoGenerationProviderIds: ["qwen"],
   requireDescribeImages: true,

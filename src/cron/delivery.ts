@@ -13,11 +13,7 @@ import {
   type CronDeliveryPlan,
   resolveCronDeliveryPlan,
 } from "./delivery-plan.js";
-import {
-  resolveDeliveryTarget,
-  type DeliveryTargetResolution,
-} from "./isolated-agent/delivery-target.js";
-import { resolveCronNotificationSessionKey } from "./session-target.js";
+import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import type { CronMessageChannel } from "./types.js";
 
 export {
@@ -31,123 +27,35 @@ export {
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
 const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
 
-export type CronAnnounceTarget = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  sessionKey?: string;
-};
-
-type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
-
-async function resolveCronAnnounceDelivery(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  jobId: string;
-  target: CronAnnounceTarget;
-}): Promise<
-  | {
-      ok: true;
-      resolvedTarget: SuccessfulDeliveryTarget;
-      session: ReturnType<typeof buildOutboundSessionContext>;
-      identity: ReturnType<typeof resolveAgentOutboundIdentity>;
-    }
-  | { ok: false; error: Error }
-> {
-  const resolvedTarget = await resolveDeliveryTarget(params.cfg, params.agentId, {
-    channel: params.target.channel as CronMessageChannel | undefined,
-    to: params.target.to,
-    accountId: params.target.accountId,
-    sessionKey: params.target.sessionKey,
-  });
-
-  if (!resolvedTarget.ok) {
-    return { ok: false, error: resolvedTarget.error };
-  }
-
-  const identity = resolveAgentOutboundIdentity(params.cfg, params.agentId);
-  const session = buildOutboundSessionContext({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: resolveCronNotificationSessionKey({
-      jobId: params.jobId,
-      sessionKey: params.target.sessionKey,
-    }),
-  });
-
-  return {
-    ok: true,
-    resolvedTarget,
-    session,
-    identity,
-  };
-}
-
-async function deliverCronAnnouncePayload(params: {
-  deps: CliDeps;
-  cfg: OpenClawConfig;
-  delivery: {
-    resolvedTarget: SuccessfulDeliveryTarget;
-    session: ReturnType<typeof buildOutboundSessionContext>;
-    identity: ReturnType<typeof resolveAgentOutboundIdentity>;
-  };
-  message: string;
-  abortSignal: AbortSignal;
-}): Promise<void> {
-  await deliverOutboundPayloads({
-    cfg: params.cfg,
-    channel: params.delivery.resolvedTarget.channel,
-    to: params.delivery.resolvedTarget.to,
-    accountId: params.delivery.resolvedTarget.accountId,
-    threadId: params.delivery.resolvedTarget.threadId,
-    payloads: [{ text: params.message }],
-    session: params.delivery.session,
-    identity: params.delivery.identity,
-    bestEffort: false,
-    deps: createOutboundSendDeps(params.deps),
-    abortSignal: params.abortSignal,
-  });
-}
-
-export async function sendCronAnnouncePayloadStrict(params: {
-  deps: CliDeps;
-  cfg: OpenClawConfig;
-  agentId: string;
-  jobId: string;
-  target: CronAnnounceTarget;
-  message: string;
-  abortSignal: AbortSignal;
-}): Promise<void> {
-  const delivery = await resolveCronAnnounceDelivery(params);
-  if (!delivery.ok) {
-    throw delivery.error;
-  }
-  await deliverCronAnnouncePayload({
-    deps: params.deps,
-    cfg: params.cfg,
-    delivery,
-    message: params.message,
-    abortSignal: params.abortSignal,
-  });
-}
-
 export async function sendFailureNotificationAnnounce(
   deps: CliDeps,
   cfg: OpenClawConfig,
   agentId: string,
   jobId: string,
-  target: CronAnnounceTarget,
+  target: { channel?: string; to?: string; accountId?: string; sessionKey?: string },
   message: string,
 ): Promise<void> {
-  const delivery = await resolveCronAnnounceDelivery({ cfg, agentId, jobId, target });
+  const resolvedTarget = await resolveDeliveryTarget(cfg, agentId, {
+    channel: target.channel as CronMessageChannel | undefined,
+    to: target.to,
+    accountId: target.accountId,
+    sessionKey: target.sessionKey,
+  });
 
-  if (!delivery.ok) {
+  if (!resolvedTarget.ok) {
     cronDeliveryLogger.warn(
-      { error: delivery.error.message },
+      { error: resolvedTarget.error.message },
       "cron: failed to resolve failure destination target",
     );
     return;
   }
+
+  const identity = resolveAgentOutboundIdentity(cfg, agentId);
+  const session = buildOutboundSessionContext({
+    cfg,
+    agentId,
+    sessionKey: `cron:${jobId}:failure`,
+  });
 
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
@@ -155,19 +63,25 @@ export async function sendFailureNotificationAnnounce(
   }, FAILURE_NOTIFICATION_TIMEOUT_MS);
 
   try {
-    await deliverCronAnnouncePayload({
-      deps,
+    await deliverOutboundPayloads({
       cfg,
-      delivery,
-      message,
+      channel: resolvedTarget.channel,
+      to: resolvedTarget.to,
+      accountId: resolvedTarget.accountId,
+      threadId: resolvedTarget.threadId,
+      payloads: [{ text: message }],
+      session,
+      identity,
+      bestEffort: false,
+      deps: createOutboundSendDeps(deps),
       abortSignal: abortController.signal,
     });
   } catch (err) {
     cronDeliveryLogger.warn(
       {
         err: formatErrorMessage(err),
-        channel: delivery.resolvedTarget.channel,
-        to: delivery.resolvedTarget.to,
+        channel: resolvedTarget.channel,
+        to: resolvedTarget.to,
       },
       "cron: failure destination announce failed",
     );

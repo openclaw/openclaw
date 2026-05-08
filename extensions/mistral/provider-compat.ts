@@ -23,7 +23,7 @@ function isMistralModelHint(modelId: string): boolean {
   );
 }
 
-function shouldContributeMistralCompat(params: {
+export function shouldContributeMistralCompat(params: {
   modelId: string;
   model: { api?: unknown; baseUrl?: unknown; provider?: unknown; compat?: unknown };
 }): boolean {

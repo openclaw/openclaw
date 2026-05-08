@@ -7,8 +7,8 @@ import {
   type StreamingMode,
 } from "./streaming-compat.js";
 
-type SlackStreamMode = SlackLegacyDraftStreamMode;
-type SlackStreamingMode = StreamingMode;
+export type SlackStreamMode = SlackLegacyDraftStreamMode;
+export type SlackStreamingMode = StreamingMode;
 const DEFAULT_STREAM_MODE: SlackStreamMode = "replace";
 
 export function resolveSlackStreamMode(raw: unknown): SlackStreamMode {

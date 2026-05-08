@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { QaProviderMode } from "./model-selection.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
@@ -46,14 +46,14 @@ export type QaTransportState = {
   waitFor: (input: QaBusWaitForInput) => Promise<unknown>;
 };
 
-type QaTransportFailureCursorSpace = "all" | "outbound";
+export type QaTransportFailureCursorSpace = "all" | "outbound";
 
-type QaTransportFailureAssertionOptions = {
+export type QaTransportFailureAssertionOptions = {
   sinceIndex?: number;
   cursorSpace?: QaTransportFailureCursorSpace;
 };
 
-type QaTransportCommonCapabilities = {
+export type QaTransportCommonCapabilities = {
   sendInboundMessage: QaTransportState["addInboundMessage"];
   injectOutboundMessage: QaTransportState["addOutboundMessage"];
   waitForOutboundMessage: (input: QaBusWaitForInput) => Promise<unknown>;
@@ -113,7 +113,7 @@ export function findFailureOutboundMessage(
   );
 }
 
-function assertNoFailureReplies(
+export function assertNoFailureReplies(
   state: QaTransportState,
   options?: QaTransportFailureAssertionOptions,
 ) {

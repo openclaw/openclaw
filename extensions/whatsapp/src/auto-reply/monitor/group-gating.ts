@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -31,10 +31,8 @@ export type GroupHistoryEntry = {
 };
 
 type ApplyGroupGatingParams = {
-  cfg: OpenClawConfig;
+  cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
-  mentionText?: string;
-  deferMissingMention?: boolean;
   conversationId: string;
   groupHistoryKey: string;
   agentId: string;
@@ -60,7 +58,6 @@ function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
 
 function recordPendingGroupHistoryEntry(params: {
   msg: WebInboundMsg;
-  body?: string;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryKey: string;
   groupHistoryLimit: number;
@@ -79,7 +76,7 @@ function recordPendingGroupHistoryEntry(params: {
     limit: params.groupHistoryLimit,
     entry: {
       sender,
-      body: params.body ?? params.msg.body,
+      body: params.msg.body,
       timestamp: params.msg.timestamp,
       id: params.msg.id,
       senderJid: senderIdentity.jid ?? params.msg.senderJid,
@@ -87,15 +84,10 @@ function recordPendingGroupHistoryEntry(params: {
   });
 }
 
-function skipGroupMessageAndStoreHistory(
-  params: ApplyGroupGatingParams,
-  verboseMessage: string,
-  body?: string,
-) {
+function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verboseMessage: string) {
   params.logVerbose(verboseMessage);
   recordPendingGroupHistoryEntry({
     msg: params.msg,
-    body,
     groupHistories: params.groupHistories,
     groupHistoryKey: params.groupHistoryKey,
     groupHistoryLimit: params.groupHistoryLimit,
@@ -134,10 +126,8 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     ...buildMentionConfig(params.cfg, params.agentId),
     allowFrom: inboundPolicy.configuredAllowFrom,
   };
-  const mentionMsg =
-    params.mentionText !== undefined ? { ...params.msg, body: params.mentionText } : params.msg;
   const commandBody = stripMentionsForCommand(
-    mentionMsg.body,
+    params.msg.body,
     mentionConfig.mentionRegexes,
     self.e164,
   );
@@ -152,7 +142,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     );
   }
 
-  const mentionDebug = debugMention(mentionMsg, mentionConfig, params.authDir);
+  const mentionDebug = debugMention(params.msg, mentionConfig, params.authDir);
   params.replyLogger.debug(
     {
       conversationId: params.conversationId,
@@ -200,16 +190,9 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
   params.msg.wasMentioned = effectiveWasMentioned;
   if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
-    if (params.deferMissingMention === true) {
-      params.logVerbose(
-        `Deferring group mention skip until audio preflight completes in ${params.conversationId}`,
-      );
-      return { shouldProcess: false, needsMentionText: true } as const;
-    }
     return skipGroupMessageAndStoreHistory(
       params,
-      `Group message stored for context (no mention detected) in ${params.conversationId}: ${mentionMsg.body}`,
-      params.mentionText,
+      `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,
     );
   }
 

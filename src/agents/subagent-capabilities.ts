@@ -10,17 +10,13 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
-export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
-const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
-  "main",
-  "orchestrator",
-  "leaf",
-] as const;
+export const SUBAGENT_SESSION_ROLES = ["main", "orchestrator", "leaf"] as const;
+export type SubagentSessionRole = (typeof SUBAGENT_SESSION_ROLES)[number];
 
-type SubagentControlScope = "children" | "none";
-const SUBAGENT_CONTROL_SCOPES: readonly SubagentControlScope[] = ["children", "none"] as const;
+export const SUBAGENT_CONTROL_SCOPES = ["children", "none"] as const;
+export type SubagentControlScope = (typeof SUBAGENT_CONTROL_SCOPES)[number];
 
-type SessionCapabilityEntry = {
+export type SessionCapabilityEntry = {
   sessionId?: unknown;
   spawnDepth?: unknown;
   subagentRole?: unknown;
@@ -28,16 +24,7 @@ type SessionCapabilityEntry = {
   spawnedBy?: unknown;
 };
 
-export type SessionCapabilityStore = Record<
-  string,
-  {
-    sessionId?: unknown;
-    spawnDepth?: unknown;
-    subagentRole?: unknown;
-    subagentControlScope?: unknown;
-    spawnedBy?: unknown;
-  }
->;
+export type SessionCapabilityStore = Record<string, SessionCapabilityEntry>;
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
@@ -133,7 +120,7 @@ export function resolveSubagentCapabilityStore(
   return readSessionStore(storePath);
 }
 
-function resolveSubagentRoleForDepth(params: {
+export function resolveSubagentRoleForDepth(params: {
   depth: number;
   maxSpawnDepth?: number;
 }): SubagentSessionRole {
@@ -148,7 +135,9 @@ function resolveSubagentRoleForDepth(params: {
   return depth < maxSpawnDepth ? "orchestrator" : "leaf";
 }
 
-function resolveSubagentControlScopeForRole(role: SubagentSessionRole): SubagentControlScope {
+export function resolveSubagentControlScopeForRole(
+  role: SubagentSessionRole,
+): SubagentControlScope {
   return role === "leaf" ? "none" : "children";
 }
 

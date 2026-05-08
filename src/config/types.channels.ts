@@ -57,11 +57,7 @@ export type ExtensionChannelConfig = {
   execApprovals?: Record<string, unknown>;
   threadBindings?: {
     enabled?: boolean;
-    spawnSessions?: boolean;
-    defaultSpawnContext?: "isolated" | "fork";
-    /** @deprecated Use spawnSessions instead. */
     spawnAcpSessions?: boolean;
-    /** @deprecated Use spawnSessions instead. */
     spawnSubagentSessions?: boolean;
   };
   spawnSubagentSessions?: boolean;

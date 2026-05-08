@@ -11,7 +11,7 @@ export async function requestMatrixJson<T>(params: {
   body?: unknown;
   endpoint: string;
   fetchImpl: MatrixQaFetchLike;
-  method: "DELETE" | "GET" | "POST" | "PUT";
+  method: "GET" | "POST" | "PUT";
   okStatuses?: number[];
   query?: Record<string, string | number | undefined>;
   timeoutMs?: number;

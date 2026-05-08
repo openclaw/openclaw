@@ -138,7 +138,7 @@ describe("session conversation bundled fallback", () => {
     });
   });
 
-  it("delegates repeated fallback calls through the public-surface loader", () => {
+  it("reuses the bundled fallback loader result across repeated calls", () => {
     enableThreadedFallback();
 
     expect(resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42")).toEqual(
@@ -155,6 +155,6 @@ describe("session conversation bundled fallback", () => {
         threadId: "43",
       }),
     );
-    expect(fallbackState.loadCalls).toBe(2);
+    expect(fallbackState.loadCalls).toBe(1);
   });
 });

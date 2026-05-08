@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearPluginDiscoveryCache } from "../../../plugins/discovery.js";
+import { clearPluginManifestRegistryCache } from "../../../plugins/manifest-registry.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -100,6 +102,8 @@ describe("channel plugin loader", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    clearPluginDiscoveryCache();
+    clearPluginManifestRegistryCache();
   });
 
   it.each([
@@ -116,7 +120,7 @@ describe("channel plugin loader", () => {
       expectedOutbound: demoOutbound,
     },
     {
-      name: "reads updated plugin values when registry changes",
+      name: "refreshes cached plugin values when registry changes",
       kind: "reload-plugin" as const,
       firstRegistry: registryWithDemoLoader,
       secondRegistry: registryWithDemoLoaderV2,
@@ -124,7 +128,7 @@ describe("channel plugin loader", () => {
       secondExpected: demoLoaderPluginV2,
     },
     {
-      name: "reads updated outbound values when registry changes",
+      name: "refreshes cached outbound values when registry changes",
       kind: "reload-outbound" as const,
       firstRegistry: registryWithDemoLoader,
       secondRegistry: registryWithDemoLoaderV2,

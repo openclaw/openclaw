@@ -1,5 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 import type { DiscordTargetParseOptions } from "./targets.js";
@@ -16,8 +15,8 @@ type DiscordRecipient =
 
 export async function parseAndResolveRecipient(
   raw: string,
-  cfg: OpenClawConfig,
   accountId?: string,
+  cfg?: OpenClawConfig,
   parseOptions: DiscordTargetParseOptions = {},
 ): Promise<DiscordRecipient> {
   if (!cfg) {
@@ -27,13 +26,18 @@ export async function parseAndResolveRecipient(
   }
   const resolvedCfg = requireRuntimeConfig(cfg, "Discord recipient resolution");
   const accountInfo = resolveDiscordAccount({ cfg: resolvedCfg, accountId });
+  const trimmed = raw.trim();
+  const resolvedParseOptions = {
+    ...parseOptions,
+    ambiguousMessage: `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
+  };
   const resolved = await parseAndResolveDiscordTarget(
     raw,
     {
       cfg: resolvedCfg,
       accountId: accountInfo.accountId,
     },
-    parseOptions,
+    resolvedParseOptions,
   );
   return { kind: resolved.kind, id: resolved.id };
 }

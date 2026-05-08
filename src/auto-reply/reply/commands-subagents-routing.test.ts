@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   COMMAND,
   COMMAND_KILL,
+  COMMAND_STEER,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
@@ -78,7 +79,7 @@ describe("subagents command dispatch", () => {
   it("maps slash aliases to the right handled prefix", () => {
     expect(resolveHandledPrefix("/subagents list")).toBe(COMMAND);
     expect(resolveHandledPrefix("/kill 1")).toBe(COMMAND_KILL);
-    expect(resolveHandledPrefix("/steer 1 continue")).toBeNull();
+    expect(resolveHandledPrefix("/steer 1 continue")).toBe(COMMAND_STEER);
     expect(resolveHandledPrefix("/unknown")).toBeNull();
   });
 
@@ -93,11 +94,10 @@ describe("subagents command dispatch", () => {
     );
     expect(killTokens).toEqual(["1"]);
 
-    const steerTokens = ["steer", "1", "continue"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens: steerTokens })).toBe(
+    const steerTokens = ["1", "continue"];
+    expect(resolveSubagentsAction({ handledPrefix: COMMAND_STEER, restTokens: steerTokens })).toBe(
       "steer",
     );
-    expect(steerTokens).toEqual(["1", "continue"]);
   });
 
   it("returns null for invalid /subagents actions", () => {

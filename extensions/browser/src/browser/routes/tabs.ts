@@ -1,4 +1,3 @@
-import { resolveBrowserNavigationProxyMode } from "../browser-proxy-mode.js";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -31,15 +30,6 @@ function resolveTabsProfileContext(
     return null;
   }
   return profileCtx;
-}
-
-function browserNavigationPolicyForProfile(ctx: BrowserRouteContext, profileCtx: ProfileContext) {
-  return withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy, {
-    browserProxyMode: resolveBrowserNavigationProxyMode({
-      resolved: ctx.state().resolved,
-      profile: profileCtx.profile,
-    }),
-  });
 }
 
 function handleTabsRouteError(
@@ -131,11 +121,6 @@ function parseRequiredTargetId(res: BrowserResponse, rawTargetId: unknown): stri
   return targetId;
 }
 
-function readOptionalTabLabel(body: unknown): string | undefined {
-  const label = toStringOrEmpty((body as { label?: unknown })?.label);
-  return label || undefined;
-}
-
 async function runTabTargetMutation(params: {
   req: BrowserRequest;
   res: BrowserResponse;
@@ -185,7 +170,6 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     "/tabs/open",
     asyncBrowserRoute(async (req, res) => {
       const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
-      const label = readOptionalTabLabel(req.body);
       if (!url) {
         return jsonError(res, 400, "url is required");
       }
@@ -198,10 +182,10 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         run: async (profileCtx) => {
           await assertBrowserNavigationAllowed({
             url,
-            ...browserNavigationPolicyForProfile(ctx, profileCtx),
+            ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
           });
           await profileCtx.ensureBrowserAvailable();
-          const tab = await profileCtx.openTab(url, { label });
+          const tab = await profileCtx.openTab(url);
           res.json(tab);
         },
       });
@@ -227,13 +211,13 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             if (resolved.reason === "ambiguous") {
               throw new BrowserTargetAmbiguousError();
             }
-            throw new BrowserTabNotFoundError({ input: id });
+            throw new BrowserTabNotFoundError();
           }
           const tab = tabs.find((currentTab) => currentTab.targetId === resolved.targetId);
           if (!tab) {
-            throw new BrowserTabNotFoundError({ input: id });
+            throw new BrowserTabNotFoundError();
           }
-          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+          const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
           if (ssrfPolicyOpts.ssrfPolicy) {
             await assertBrowserNavigationResultAllowed({
               url: tab.url,
@@ -291,28 +275,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
 
           if (action === "new") {
             await profileCtx.ensureBrowserAvailable();
-            const tab = await profileCtx.openTab("about:blank", {
-              label: readOptionalTabLabel(req.body),
-            });
-            return res.json({ ok: true, tab });
-          }
-
-          if (action === "label") {
-            if (!(await ensureBrowserRunning(profileCtx, res))) {
-              return;
-            }
-            const targetId = parseRequiredTargetId(
-              res,
-              (req.body as { targetId?: unknown })?.targetId,
-            );
-            if (!targetId) {
-              return;
-            }
-            const label = readOptionalTabLabel(req.body);
-            if (!label) {
-              return jsonError(res, 400, "label is required");
-            }
-            const tab = await profileCtx.labelTab(targetId, label);
+            const tab = await profileCtx.openTab("about:blank");
             return res.json({ ok: true, tab });
           }
 
@@ -341,7 +304,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             if (!target) {
               throw new BrowserTabNotFoundError();
             }
-            const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+            const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
             if (ssrfPolicyOpts.ssrfPolicy) {
               await assertBrowserNavigationResultAllowed({
                 url: target.url,

@@ -13,7 +13,6 @@
   },
   "include": [
     "src/plugin-sdk/**/*.ts",
-    "packages/memory-host-sdk/src/**/*.ts",
     "src/video-generation/dashscope-compatible.ts",
     "src/video-generation/types.ts",
     "src/types/**/*.d.ts"

@@ -295,7 +295,7 @@ export function resolveSafeBinProfiles(
   };
 }
 
-function resolveSafeBinDeniedFlags(
+export function resolveSafeBinDeniedFlags(
   fixtures: Readonly<Record<string, SafeBinProfileFixture>> = SAFE_BIN_PROFILE_FIXTURES,
 ): Record<string, string[]> {
   const out: Record<string, string[]> = {};

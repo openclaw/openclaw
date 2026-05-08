@@ -1,9 +1,11 @@
+import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import { z } from "openclaw/plugin-sdk/zod";
+import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
 
-const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
+export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 
-const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
+export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
 export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
@@ -115,3 +117,7 @@ export const AcpxPluginConfigSchema = z.strictObject({
     )
     .optional(),
 });
+
+export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
+  return buildPluginConfigSchema(AcpxPluginConfigSchema);
+}

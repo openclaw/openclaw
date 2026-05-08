@@ -1,7 +1,6 @@
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -17,36 +16,38 @@ import type { TypingController } from "./typing.js";
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
-const commandsStatusLoader = createLazyImportLoader(() => import("./commands-status.runtime.js"));
-const directiveLevelsLoader = createLazyImportLoader(
-  () => import("./directive-handling.levels.js"),
-);
-const directiveImplLoader = createLazyImportLoader(() => import("./directive-handling.impl.js"));
-const directiveFastLaneLoader = createLazyImportLoader(
-  () => import("./directive-handling.fast-lane.js"),
-);
-const directivePersistLoader = createLazyImportLoader(
-  () => import("./directive-handling.persist.runtime.js"),
-);
+let commandsStatusPromise: Promise<typeof import("./commands-status.runtime.js")> | null = null;
+let directiveLevelsPromise: Promise<typeof import("./directive-handling.levels.js")> | null = null;
+let directiveImplPromise: Promise<typeof import("./directive-handling.impl.js")> | null = null;
+let directiveFastLanePromise: Promise<typeof import("./directive-handling.fast-lane.js")> | null =
+  null;
+let directivePersistPromise: Promise<
+  typeof import("./directive-handling.persist.runtime.js")
+> | null = null;
 
 function loadCommandsStatus() {
-  return commandsStatusLoader.load();
+  commandsStatusPromise ??= import("./commands-status.runtime.js");
+  return commandsStatusPromise;
 }
 
 function loadDirectiveLevels() {
-  return directiveLevelsLoader.load();
+  directiveLevelsPromise ??= import("./directive-handling.levels.js");
+  return directiveLevelsPromise;
 }
 
 function loadDirectiveImpl() {
-  return directiveImplLoader.load();
+  directiveImplPromise ??= import("./directive-handling.impl.js");
+  return directiveImplPromise;
 }
 
 function loadDirectiveFastLane() {
-  return directiveFastLaneLoader.load();
+  directiveFastLanePromise ??= import("./directive-handling.fast-lane.js");
+  return directiveFastLanePromise;
 }
 
 function loadDirectivePersist() {
-  return directivePersistLoader.load();
+  directivePersistPromise ??= import("./directive-handling.persist.runtime.js");
+  return directivePersistPromise;
 }
 
 function hasOnlyModelDirective(directives: InlineDirectives): boolean {
@@ -62,16 +63,6 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
     !directives.hasQueueDirective &&
     !directives.hasStatusDirective
   );
-}
-
-export function formatModelOverrideResetEvent(params: {
-  rejectedRef?: string;
-  initialModelLabel: string;
-}): string {
-  if (params.rejectedRef) {
-    return `Model override ${params.rejectedRef} is not allowed for this agent; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to agents.defaults.models or pick an allowed model with /model list.`;
-  }
-  return `Model override not allowed for this agent; reverted to ${params.initialModelLabel}.`;
 }
 
 export type ApplyDirectiveResult =
@@ -96,7 +87,6 @@ export async function applyInlineDirectiveOverrides(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
-  workspaceDir: string;
   agentCfg: AgentDefaults;
   agentEntry?: AgentEntry;
   sessionEntry: SessionEntry;
@@ -131,7 +121,6 @@ export async function applyInlineDirectiveOverrides(params: {
     cfg,
     agentId,
     agentDir,
-    workspaceDir,
     agentCfg,
     agentEntry,
     sessionEntry,
@@ -190,10 +179,7 @@ export async function applyInlineDirectiveOverrides(params: {
 
   if (modelState.resetModelOverride) {
     enqueueSystemEvent(
-      formatModelOverrideResetEvent({
-        rejectedRef: modelState.resetModelOverrideRef,
-        initialModelLabel,
-      }),
+      `Model override not allowed for this agent; reverted to ${initialModelLabel}.`,
       {
         sessionKey,
         contextKey: `model:reset:${initialModelLabel}`,
@@ -242,7 +228,6 @@ export async function applyInlineDirectiveOverrides(params: {
     defaultModel,
     aliasIndex,
     allowedModelKeys: modelState.allowedModelKeys,
-    thinkingCatalog: modelState.allowedModelCatalog,
     initialModelLabel,
     formatModelSwitchEvent,
     agentCfg,
@@ -303,7 +288,7 @@ export async function applyInlineDirectiveOverrides(params: {
             : undefined,
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
-            : `Model set to ${labelWithAlias} for this session.`,
+            : `Model set to ${labelWithAlias}.`,
           modelResolution.profileOverride
             ? `Auth profile set to ${modelResolution.profileOverride}.`
             : undefined,
@@ -327,12 +312,10 @@ export async function applyInlineDirectiveOverrides(params: {
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
     const currentThinkLevel = resolvedDefaultThinkLevel;
-    const thinkingCatalog = await modelState.resolveThinkingCatalog();
     const directiveReply = await (
       await loadDirectiveImpl()
     ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
-      thinkingCatalog,
       currentThinkLevel,
       currentFastMode,
       currentVerboseLevel,
@@ -343,7 +326,6 @@ export async function applyInlineDirectiveOverrides(params: {
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
       senderIsOwner: command.senderIsOwner,
-      workspaceDir,
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
@@ -360,7 +342,6 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         model,
         contextTokens,
-        workspaceDir,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",
         resolvedReasoningLevel: currentReasoningLevel ?? "off",
@@ -389,7 +370,6 @@ export async function applyInlineDirectiveOverrides(params: {
       commandAuthorized: command.isAuthorizedSender,
       senderIsOwner: command.senderIsOwner,
       ctx,
-      workspaceDir,
       cfg,
       agentId,
       isGroup,
@@ -412,7 +392,6 @@ export async function applyInlineDirectiveOverrides(params: {
       agentCfg,
       modelState: {
         resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
-        resolveThinkingCatalog: modelState.resolveThinkingCatalog,
         ...directiveModelState,
       },
     });

@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
-import { resolveAgentRuntimePolicy } from "./agent-runtime-policy.js";
 
 export function collectConfiguredAgentHarnessRuntimes(
   config: OpenClawConfig,
@@ -19,13 +18,13 @@ export function collectConfiguredAgentHarnessRuntimes(
     runtimes.add(normalized);
   };
 
-  pushRuntime(resolveAgentRuntimePolicy(config.agents?.defaults)?.id);
+  pushRuntime(config.agents?.defaults?.embeddedHarness?.runtime);
   if (Array.isArray(config.agents?.list)) {
     for (const agent of config.agents.list) {
       if (!isRecord(agent)) {
         continue;
       }
-      pushRuntime(resolveAgentRuntimePolicy(agent)?.id);
+      pushRuntime((agent.embeddedHarness as Record<string, unknown> | undefined)?.runtime);
     }
   }
   pushRuntime(env.OPENCLAW_AGENT_RUNTIME);

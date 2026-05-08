@@ -4,7 +4,8 @@ import Foundation
 public enum LocationCurrentRequest {
     public typealias TimeoutRunner = @Sendable (
         _ timeoutMs: Int,
-        _ operation: @escaping @Sendable () async throws -> CLLocation) async throws -> CLLocation
+        _ operation: @escaping @Sendable () async throws -> CLLocation
+    ) async throws -> CLLocation
 
     @MainActor
     public static func resolve(

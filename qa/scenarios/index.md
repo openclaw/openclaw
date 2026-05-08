@@ -25,7 +25,7 @@ Coverage tracking:
 
 Theme directories:
 
-- `agents/` - agent behavior, instructions, subagent flows, and persisted child-link regressions
+- `agents/` - agent behavior, instructions, and subagent flows
 - `channels/` - DM, shared channel, thread, and message-action behavior
 - `character/` - persona and style eval scenarios
 - `config/` - config patch, apply, and restart behavior

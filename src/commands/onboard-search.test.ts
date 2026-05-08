@@ -28,17 +28,6 @@ const SEARCH_PROVIDER_PLUGINS: Record<
     label: "Kimi",
     credentialLabel: "Moonshot / Kimi API key",
   },
-  minimax: {
-    pluginId: "minimax",
-    envVars: [
-      "MINIMAX_CODE_PLAN_KEY",
-      "MINIMAX_CODING_API_KEY",
-      "MINIMAX_OAUTH_TOKEN",
-      "MINIMAX_API_KEY",
-    ],
-    label: "MiniMax Search",
-    credentialLabel: "MiniMax Token Plan key or OAuth token",
-  },
   perplexity: {
     pluginId: "perplexity",
     envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
@@ -121,7 +110,7 @@ function createSearchProviderEntry(id: string): PluginWebSearchProviderEntry {
 
 const searchProviderFixture = vi.hoisted(() => ({
   resolvePluginWebSearchProviders: vi.fn(() =>
-    ["brave", "firecrawl", "gemini", "grok", "kimi", "minimax", "perplexity", "tavily"].map((id) =>
+    ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity", "tavily"].map((id) =>
       createSearchProviderEntry(id),
     ),
   ),
@@ -146,10 +135,6 @@ const SEARCH_PROVIDER_ENV_VARS = [
   "GOOGLE_API_KEY",
   "KIMI_API_KEY",
   "MOONSHOT_API_KEY",
-  "MINIMAX_API_KEY",
-  "MINIMAX_CODE_PLAN_KEY",
-  "MINIMAX_CODING_API_KEY",
-  "MINIMAX_OAUTH_TOKEN",
   "OPENROUTER_API_KEY",
   "PERPLEXITY_API_KEY",
   "TAVILY_API_KEY",
@@ -338,7 +323,7 @@ describe("setupSearch", () => {
       expect(result.plugins?.entries?.[entry.pluginId]?.enabled).toBe(true);
       if (entry.textMessage) {
         expect(prompter.text).toHaveBeenCalledWith(
-          expect.objectContaining({ message: entry.textMessage, sensitive: true }),
+          expect.objectContaining({ message: entry.textMessage }),
         );
       }
     }
@@ -667,7 +652,6 @@ describe("setupSearch", () => {
         "gemini",
         "grok",
         "kimi",
-        "minimax",
         "perplexity",
         "tavily",
       ]),

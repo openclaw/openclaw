@@ -16,9 +16,7 @@ export type ImageGenerationQuality = "low" | "medium" | "high" | "auto";
 
 export type ImageGenerationOutputFormat = "png" | "jpeg" | "webp";
 
-export type ImageGenerationBackground = "transparent" | "opaque" | "auto";
-
-export type ImageGenerationOpenAIBackground = ImageGenerationBackground;
+export type ImageGenerationOpenAIBackground = "transparent" | "opaque" | "auto";
 
 export type ImageGenerationOpenAIModeration = "low" | "auto";
 
@@ -33,13 +31,12 @@ export type ImageGenerationProviderOptions = {
   openai?: ImageGenerationOpenAIOptions;
 };
 
-type ImageGenerationIgnoredOverrideKey =
+export type ImageGenerationIgnoredOverrideKey =
   | "size"
   | "aspectRatio"
   | "resolution"
   | "quality"
-  | "outputFormat"
-  | "background";
+  | "outputFormat";
 
 export type ImageGenerationIgnoredOverride = {
   key: ImageGenerationIgnoredOverrideKey;
@@ -72,7 +69,6 @@ export type ImageGenerationRequest = {
   resolution?: ImageGenerationResolution;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
-  background?: ImageGenerationBackground;
   inputImages?: ImageGenerationSourceImage[];
   providerOptions?: ImageGenerationProviderOptions;
 };
@@ -83,28 +79,27 @@ export type ImageGenerationResult = {
   metadata?: Record<string, unknown>;
 };
 
-type ImageGenerationModeCapabilities = {
+export type ImageGenerationModeCapabilities = {
   maxCount?: number;
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;
 };
 
-type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
+export type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
   enabled: boolean;
   maxInputImages?: number;
 };
 
-type ImageGenerationGeometryCapabilities = {
+export type ImageGenerationGeometryCapabilities = {
   sizes?: string[];
   aspectRatios?: string[];
   resolutions?: ImageGenerationResolution[];
 };
 
-type ImageGenerationOutputCapabilities = {
+export type ImageGenerationOutputCapabilities = {
   qualities?: ImageGenerationQuality[];
   formats?: ImageGenerationOutputFormat[];
-  backgrounds?: ImageGenerationBackground[];
 };
 
 export type ImageGenerationNormalization = {

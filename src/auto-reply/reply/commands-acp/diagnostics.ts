@@ -22,23 +22,6 @@ import {
 } from "./shared.js";
 import { resolveBoundAcpThreadSessionKey } from "./targets.js";
 
-function isBackendPluginBlockedByAllowlist(params: {
-  cfg: HandleCommandsParams["cfg"];
-  backendId: string;
-}): boolean {
-  const allow = params.cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return false;
-  }
-  const normalizedBackendId = normalizeLowercaseStringOrEmpty(params.backendId);
-  if (!normalizedBackendId) {
-    return false;
-  }
-  return !allow.some(
-    (pluginId) => normalizeLowercaseStringOrEmpty(pluginId) === normalizedBackendId,
-  );
-}
-
 export async function handleAcpDoctorAction(
   params: HandleCommandsParams,
   restTokens: string[],
@@ -72,13 +55,6 @@ export async function handleAcpDoctorAction(
     lines.push(`registeredBackend: ${registeredBackend.id}`);
   } else {
     lines.push("registeredBackend: (none)");
-  }
-  const backendBlockedByAllowlist = isBackendPluginBlockedByAllowlist({
-    cfg: params.cfg,
-    backendId,
-  });
-  if (backendBlockedByAllowlist) {
-    lines.push(`pluginActivation: blocked (${backendId} is missing from plugins.allow)`);
   }
 
   if (registeredBackend?.runtime.doctor) {
@@ -126,9 +102,6 @@ export async function handleAcpDoctorAction(
     });
     lines.push("healthy: no");
     lines.push(formatAcpRuntimeErrorText(acpError));
-    if (backendBlockedByAllowlist) {
-      lines.push(`next: add "${backendId}" to plugins.allow or unset plugins.allow.`);
-    }
     lines.push(`next: ${installHint}`);
     lines.push(`next: openclaw config set plugins.entries.${backendId}.enabled true`);
     if (normalizeLowercaseStringOrEmpty(backendId) === "acpx") {

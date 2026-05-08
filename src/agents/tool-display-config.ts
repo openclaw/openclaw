@@ -1,10 +1,10 @@
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
 
-type ToolDisplaySpec = ToolDisplaySpecBase & {
+export type ToolDisplaySpec = ToolDisplaySpecBase & {
   emoji?: string;
 };
 
-type ToolDisplayConfig = {
+export type ToolDisplayConfig = {
   version: number;
   fallback: ToolDisplaySpec;
   tools: Record<string, ToolDisplaySpec>;
@@ -569,3 +569,9 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     },
   },
 };
+
+export function serializeToolDisplayConfig(
+  config: ToolDisplayConfig = TOOL_DISPLAY_CONFIG,
+): string {
+  return `${JSON.stringify(config, null, 2)}\n`;
+}

@@ -35,7 +35,7 @@ function threadStartResult() {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/openclaw-agent",
-      cliVersion: "0.125.0",
+      cliVersion: "0.118.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -48,7 +48,7 @@ function threadStartResult() {
     serviceTier: null,
     cwd: "/tmp/openclaw-agent",
     instructionSources: [],
-    approvalPolicy: "on-request",
+    approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: { type: "dangerFullAccess" },
     permissionProfile: null,
@@ -74,12 +74,9 @@ function createFakeClient(options?: {
   inputModalities?: string[];
   completeWithItems?: boolean;
   notifyError?: string;
-  approvalRequestMethod?: string;
 }) {
   const notifications = new Set<(notification: CodexServerNotification) => void>();
-  const requestHandlers = new Set<(request: { method: string }) => JsonValue | undefined>();
   const requests: Array<{ method: string; params?: JsonValue }> = [];
-  const approvalResponses: JsonValue[] = [];
   const request = vi.fn(async (method: string, params?: JsonValue) => {
     requests.push({ method, params });
     if (method === "model/list") {
@@ -92,14 +89,6 @@ function createFakeClient(options?: {
       return threadStartResult();
     }
     if (method === "turn/start") {
-      if (options?.approvalRequestMethod) {
-        for (const handler of requestHandlers) {
-          const response = handler({ method: options.approvalRequestMethod });
-          if (response !== undefined) {
-            approvalResponses.push(response);
-          }
-        }
-      }
       if (options?.notifyError) {
         for (const notify of notifications) {
           notify({
@@ -161,13 +150,9 @@ function createFakeClient(options?: {
       notifications.add(handler);
       return () => notifications.delete(handler);
     },
-    addRequestHandler(handler: (request: { method: string }) => JsonValue | undefined) {
-      requestHandlers.add(handler);
-      return () => requestHandlers.delete(handler);
-    },
   } as unknown as CodexAppServerClient;
 
-  return { client, requests, approvalResponses };
+  return { client, requests };
 }
 
 describe("codex media understanding provider", () => {
@@ -198,7 +183,7 @@ describe("codex media understanding provider", () => {
     expect(requests[1]?.params).toMatchObject({
       model: "gpt-5.4",
       modelProvider: "openai",
-      approvalPolicy: "on-request",
+      approvalPolicy: "never",
       sandbox: "read-only",
       dynamicTools: [],
       ephemeral: true,
@@ -206,36 +191,13 @@ describe("codex media understanding provider", () => {
     });
     expect(requests[2]?.params).toMatchObject({
       threadId: "thread-1",
-      approvalPolicy: "on-request",
+      approvalPolicy: "never",
       model: "gpt-5.4",
       input: [
         { type: "text", text: "Describe briefly.", text_elements: [] },
         { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
       ],
     });
-  });
-
-  it("declines approval requests during image understanding", async () => {
-    const { client, approvalResponses } = createFakeClient({
-      approvalRequestMethod: "item/permissions/requestApproval",
-    });
-    const provider = buildCodexMediaUnderstandingProvider({
-      clientFactory: async () => client,
-    });
-
-    await provider.describeImage?.({
-      buffer: Buffer.from("image-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      provider: "codex",
-      model: "gpt-5.4",
-      prompt: "Describe briefly.",
-      timeoutMs: 30_000,
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
-    });
-
-    expect(approvalResponses).toEqual([{ permissions: {}, scope: "turn" }]);
   });
 
   it("extracts text from terminal turn items", async () => {

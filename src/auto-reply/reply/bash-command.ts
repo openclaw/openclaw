@@ -407,3 +407,7 @@ export async function handleBashChatCommand(params: {
     };
   }
 }
+
+export function resetBashChatCommandForTests() {
+  activeJob = null;
+}

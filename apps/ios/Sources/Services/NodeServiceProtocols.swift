@@ -69,7 +69,7 @@ protocol MotionServicing: Sendable {
     func pedometer(params: OpenClawPedometerParams) async throws -> OpenClawPedometerPayload
 }
 
-struct WatchMessagingStatus: Equatable {
+struct WatchMessagingStatus: Sendable, Equatable {
     var supported: Bool
     var paired: Bool
     var appInstalled: Bool
@@ -77,7 +77,7 @@ struct WatchMessagingStatus: Equatable {
     var activationState: String
 }
 
-struct WatchQuickReplyEvent: Equatable {
+struct WatchQuickReplyEvent: Sendable, Equatable {
     var replyId: String
     var promptId: String
     var actionId: String
@@ -88,7 +88,7 @@ struct WatchQuickReplyEvent: Equatable {
     var transport: String
 }
 
-struct WatchExecApprovalResolveEvent: Equatable {
+struct WatchExecApprovalResolveEvent: Sendable, Equatable {
     var replyId: String
     var approvalId: String
     var decision: OpenClawWatchExecApprovalDecision
@@ -96,13 +96,13 @@ struct WatchExecApprovalResolveEvent: Equatable {
     var transport: String
 }
 
-struct WatchExecApprovalSnapshotRequestEvent: Equatable {
+struct WatchExecApprovalSnapshotRequestEvent: Sendable, Equatable {
     var requestId: String
     var sentAtMs: Int?
     var transport: String
 }
 
-struct WatchNotificationSendResult: Equatable {
+struct WatchNotificationSendResult: Sendable, Equatable {
     var deliveredImmediately: Bool
     var queuedForDelivery: Bool
     var transport: String

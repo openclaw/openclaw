@@ -23,11 +23,10 @@ import {
   projectOutboundPayloadPlanForOutbound,
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isNestedAgentLane } from "../lanes.js";
-import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
-import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
+import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
 
@@ -68,19 +67,6 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
-}
-
-function mergeResultMetaOverrides(
-  meta: EmbeddedPiRunMeta,
-  overrides: AgentCommandResultMetaOverrides | undefined,
-): EmbeddedPiRunMeta & AgentCommandResultMetaOverrides {
-  if (!overrides) {
-    return meta;
-  }
-  return {
-    ...meta,
-    ...overrides,
-  };
 }
 
 async function normalizeReplyMediaPathsForDelivery(params: {
@@ -335,27 +321,28 @@ export async function deliverAgentCommandResult(params: {
       : normalizedReplyPayloads;
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
-  const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
   if (opts.json) {
-    writeRuntimeJson(
-      runtime,
-      buildOutboundResultEnvelope({
-        payloads: normalizedPayloads,
-        meta: resultMeta,
-      }),
+    runtime.log(
+      JSON.stringify(
+        buildOutboundResultEnvelope({
+          payloads: normalizedPayloads,
+          meta: result.meta,
+        }),
+        null,
+        2,
+      ),
     );
     if (!deliver) {
-      return { payloads: normalizedPayloads, meta: resultMeta };
+      return { payloads: normalizedPayloads, meta: result.meta };
     }
   }
 
   if (!payloads || payloads.length === 0) {
-    return { payloads: [], meta: resultMeta };
+    runtime.log("No reply from agent.");
+    return { payloads: [], meta: result.meta };
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
-  let deliverySucceeded = false;
-  let deliveryHadError = false;
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
@@ -369,10 +356,6 @@ export async function deliverAgentCommandResult(params: {
       return;
     }
     runtime.log(output);
-  };
-  const markDeliveryError = (err: unknown) => {
-    deliveryHadError = true;
-    logDeliveryError(err);
   };
   if (!deliver) {
     for (const payload of deliveryPayloads) {
@@ -391,13 +374,12 @@ export async function deliverAgentCommandResult(params: {
         replyToId: resolvedReplyToId ?? null,
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
-        onError: markDeliveryError,
+        onError: (err) => logDeliveryError(err),
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
       });
-      deliverySucceeded = !deliveryHadError;
     }
   }
 
-  return { payloads: normalizedPayloads, meta: resultMeta, deliverySucceeded };
+  return { payloads: normalizedPayloads, meta: result.meta };
 }

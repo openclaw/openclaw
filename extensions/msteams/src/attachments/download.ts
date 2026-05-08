@@ -309,3 +309,8 @@ function safeHostForLog(url: string): string {
     return "invalid-url";
   }
 }
+
+/**
+ * @deprecated Use `downloadMSTeamsAttachments` instead (supports all file types).
+ */
+export const downloadMSTeamsImageAttachments = downloadMSTeamsAttachments;

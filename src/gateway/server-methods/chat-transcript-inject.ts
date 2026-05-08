@@ -1,6 +1,4 @@
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
-import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -43,7 +41,7 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
-export async function appendInjectedAssistantMessageToTranscript(params: {
+export function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
   message: string;
   label?: string;
@@ -52,8 +50,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
-  config?: SessionWriteLockAcquireTimeoutConfig;
-}): Promise<GatewayInjectedTranscriptAppendResult> {
+}): GatewayInjectedTranscriptAppendResult {
   const now = params.now ?? Date.now();
   const usage = {
     input: 0,
@@ -103,13 +100,10 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId } = await appendSessionTranscriptMessage({
-      transcriptPath: params.transcriptPath,
-      message: messageBody,
-      now,
-      useRawWhenLinear: true,
-      config: params.config,
-    });
+    // IMPORTANT: Use SessionManager so the entry is attached to the current leaf via parentId.
+    // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
+    const sessionManager = SessionManager.open(params.transcriptPath);
+    const messageId = sessionManager.appendMessage(messageBody);
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,
       message: messageBody,

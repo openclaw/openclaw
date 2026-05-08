@@ -1,7 +1,4 @@
-import {
-  createConnectedChannelStatusPatch,
-  createTransportActivityStatusPatch,
-} from "openclaw/plugin-sdk/gateway-runtime";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import type { WebChannelHealthState, WebChannelStatus } from "./types.js";
 
 function cloneStatus(status: WebChannelStatus): WebChannelStatus {
@@ -38,7 +35,6 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     snapshot: () => status,
     noteConnected(at = Date.now()) {
       Object.assign(status, createConnectedChannelStatusPatch(at));
-      Object.assign(status, createTransportActivityStatusPatch(at));
       status.lastError = null;
       status.healthState = "healthy";
       emit();
@@ -47,17 +43,9 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       status.lastInboundAt = at;
       status.lastMessageAt = at;
       status.lastEventAt = at;
-      Object.assign(status, createTransportActivityStatusPatch(at));
       if (status.connected) {
         status.healthState = "healthy";
       }
-      emit();
-    },
-    noteTransportActivity(at = Date.now()) {
-      if (status.lastTransportActivityAt === at) {
-        return;
-      }
-      Object.assign(status, createTransportActivityStatusPatch(at));
       emit();
     },
     noteWatchdogStale(at = Date.now()) {

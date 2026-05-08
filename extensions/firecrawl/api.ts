@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { runFirecrawlScrape } from "./src/firecrawl-client.js";
 

@@ -31,6 +31,7 @@ describe("TelegramPollingLivenessTracker", () => {
     expect(
       tracker.detectStall({
         thresholdMs: POLL_STALL_THRESHOLD_MS,
+        runnerIsRunning: true,
       }),
     ).toBeNull();
 
@@ -44,6 +45,7 @@ describe("TelegramPollingLivenessTracker", () => {
     now = 120_001;
     const stall = tracker.detectStall({
       thresholdMs: POLL_STALL_THRESHOLD_MS,
+      runnerIsRunning: true,
     });
     expect(stall?.message).toContain("Polling stall detected (no completed getUpdates");
     expect(stall?.message).toContain("inFlight=0 outcome=not-started");
@@ -52,6 +54,7 @@ describe("TelegramPollingLivenessTracker", () => {
     expect(
       tracker.detectStall({
         thresholdMs: POLL_STALL_THRESHOLD_MS,
+        runnerIsRunning: true,
       }),
     ).toBeNull();
   });
@@ -66,6 +69,7 @@ describe("TelegramPollingLivenessTracker", () => {
     now = 120_001;
     const stall = tracker.detectStall({
       thresholdMs: POLL_STALL_THRESHOLD_MS,
+      runnerIsRunning: true,
     });
 
     expect(stall?.message).toContain("active getUpdates stuck");

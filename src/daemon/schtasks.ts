@@ -150,13 +150,6 @@ export async function readScheduledTaskCommand(
       programArguments: parseCmdScriptCommandLine(commandLine),
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      ...(Object.keys(environment).length > 0
-        ? {
-            environmentValueSources: Object.fromEntries(
-              Object.keys(environment).map((key) => [key, "inline"]),
-            ),
-          }
-        : {}),
       sourcePath: scriptPath,
     };
   } catch {

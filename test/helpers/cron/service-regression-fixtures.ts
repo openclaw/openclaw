@@ -85,7 +85,7 @@ export function createRunningCronServiceState(params: {
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
   });
   state.running = true;
@@ -133,10 +133,9 @@ export function createDefaultIsolatedRunner(): CronServiceDeps["runIsolatedAgent
 export function createAbortAwareIsolatedRunner(summary = "late") {
   let observedAbortSignal: AbortSignal | undefined;
   const started = createDeferred<void>();
-  const runIsolatedAgentJob = vi.fn(async ({ abortSignal, onExecutionStarted }) => {
+  const runIsolatedAgentJob = vi.fn(async ({ abortSignal }) => {
     observedAbortSignal = abortSignal;
     started.resolve();
-    onExecutionStarted?.();
     await new Promise<void>((resolve) => {
       if (!abortSignal) {
         return;

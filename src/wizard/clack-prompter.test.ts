@@ -1,9 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+import { describe, expect, it } from "vitest";
+import { tokenizedOptionFilter } from "./clack-prompter.js";
 
 describe("tokenizedOptionFilter", () => {
   it("matches tokens regardless of order", () => {
@@ -35,16 +31,5 @@ describe("tokenizedOptionFilter", () => {
 
     expect(tokenizedOptionFilter("provider openai", option)).toBe(true);
     expect(tokenizedOptionFilter("openai gpt-5.4", option)).toBe(true);
-  });
-});
-
-describe("createClackPrompter", () => {
-  it("prints plain output without note framing", async () => {
-    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const prompter = createClackPrompter();
-
-    await prompter.plain?.('{"ok":true}');
-
-    expect(write).toHaveBeenCalledWith('{"ok":true}\n');
   });
 });

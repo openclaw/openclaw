@@ -78,13 +78,6 @@ describe("unit vitest config", () => {
   it("keeps acp and ui tests out of the generic unit lane", () => {
     const unitConfig = createUnitVitestConfig({});
     expect(unitConfig.test?.exclude).toEqual(expect.arrayContaining(["extensions/**", "test/**"]));
-    expect(unitConfig.test?.include).not.toEqual(
-      expect.arrayContaining([
-        "ui/src/ui/app-chat.test.ts",
-        "ui/src/ui/chat/**/*.test.ts",
-        "ui/src/ui/views/chat.test.ts",
-      ]),
-    );
   });
 
   it("narrows the active include list to CLI file filters when present", () => {

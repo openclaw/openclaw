@@ -74,7 +74,7 @@ const readConnectChallengeNonce = async (ws: WebSocket) => {
   return String(nonce);
 };
 
-const openTailscaleWs = async (port: number, headers?: Record<string, string>) => {
+const openTailscaleWs = async (port: number) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
     headers: {
       "x-forwarded-for": "100.64.0.1",
@@ -82,7 +82,6 @@ const openTailscaleWs = async (port: number, headers?: Record<string, string>) =
       "x-forwarded-host": "gateway.tailnet.ts.net",
       "tailscale-user-login": "peter",
       "tailscale-user-name": "Peter",
-      ...headers,
     },
   });
   trackConnectChallengeNonce(ws);
@@ -221,35 +220,32 @@ async function approvePendingPairingIfNeeded() {
 }
 
 async function configureTrustedProxyControlUiAuth() {
-  const { replaceConfigFile } = await import("../config/config.js");
+  const { writeConfigFile } = await import("../config/config.js");
   testState.gatewayAuth = undefined;
   testState.gatewayControlUi = {
     ...testState.gatewayControlUi,
     allowedOrigins: ["https://localhost"],
   };
-  await replaceConfigFile({
-    nextConfig: {
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-          },
-        },
-        trustedProxies: ["127.0.0.1"],
-        controlUi: {
-          allowedOrigins: ["https://localhost"],
+  await writeConfigFile({
+    gateway: {
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
         },
       },
+      trustedProxies: ["127.0.0.1"],
+      controlUi: {
+        allowedOrigins: ["https://localhost"],
+      },
     },
-    afterWrite: { mode: "auto" },
   });
 }
 
 async function writeTrustedProxyControlUiConfig(params?: { allowInsecureAuth?: boolean }) {
-  const { replaceConfigFile } = await import("../config/config.js");
-  const nextConfig = {
+  const { writeConfigFile } = await import("../config/config.js");
+  const nextConfig: Parameters<typeof writeConfigFile>[0] = {
     gateway: {
       trustedProxies: ["127.0.0.1"],
       controlUi: {
@@ -258,10 +254,7 @@ async function writeTrustedProxyControlUiConfig(params?: { allowInsecureAuth?: b
       },
     },
   };
-  await replaceConfigFile({
-    nextConfig,
-    afterWrite: { mode: "auto" },
-  });
+  await writeConfigFile(nextConfig);
 }
 
 function isConnectResMessage(id: string) {

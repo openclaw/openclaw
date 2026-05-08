@@ -1,23 +1,30 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../../../../src/infra/retry.js", () => ({
+  retryAsync: vi.fn(async (run: () => Promise<unknown>) => await run()),
+}));
+
 vi.mock("./post-json.js", () => ({
   postJson: vi.fn(),
 }));
 
 describe("postJsonWithRetry", () => {
+  let retryAsyncMock: ReturnType<
+    typeof vi.mocked<typeof import("../../../../src/infra/retry.js").retryAsync>
+  >;
   let postJsonMock: ReturnType<typeof vi.mocked<typeof import("./post-json.js").postJson>>;
   let postJsonWithRetry: typeof import("./batch-http.js").postJsonWithRetry;
-  let retryAsyncMock: ReturnType<typeof vi.fn>;
 
   beforeAll(async () => {
     ({ postJsonWithRetry } = await import("./batch-http.js"));
+    const retryModule = await import("../../../../src/infra/retry.js");
     const postJsonModule = await import("./post-json.js");
+    retryAsyncMock = vi.mocked(retryModule.retryAsync);
     postJsonMock = vi.mocked(postJsonModule.postJson);
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    retryAsyncMock = vi.fn(async (run: () => Promise<unknown>) => await run());
   });
 
   it("posts JSON and returns parsed response payload", async () => {
@@ -30,7 +37,6 @@ describe("postJsonWithRetry", () => {
       headers: { Authorization: "Bearer test" },
       body: { chunks: ["a", "b"] },
       errorPrefix: "memory batch failed",
-      retryImpl: retryAsyncMock as typeof import("./retry-utils.js").retryAsync,
     });
 
     expect(result).toEqual({ ok: true, ids: [1, 2] });
@@ -71,7 +77,6 @@ describe("postJsonWithRetry", () => {
         headers: {},
         body: { chunks: [] },
         errorPrefix: "memory batch failed",
-        retryImpl: retryAsyncMock as typeof import("./retry-utils.js").retryAsync,
       }),
     ).rejects.toMatchObject({
       message: expect.stringContaining("memory batch failed: 503 backend down"),

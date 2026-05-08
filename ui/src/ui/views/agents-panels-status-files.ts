@@ -19,73 +19,9 @@ import type {
   CronJob,
   CronStatus,
 } from "../types.ts";
-import { formatBytes, type AgentContext } from "./agents-utils.ts";
+import { type AgentContext } from "./agents-utils.ts";
 import type { AgentsPanel } from "./agents.types.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "./channel-config-extras.ts";
-
-function countWords(text: string) {
-  const normalized = text.trim();
-  return normalized ? normalized.split(/\s+/).length : 0;
-}
-
-function countLines(text: string) {
-  return text.length === 0 ? 0 : text.split(/\r?\n/).length;
-}
-
-function estimateReadingTimeLabel(wordCount: number) {
-  if (wordCount <= 0) {
-    return t("agents.files.emptyDraft");
-  }
-  return t("agents.files.minRead", { count: String(Math.max(1, Math.round(wordCount / 220))) });
-}
-
-function getExtensionLabel(fileName: string) {
-  const ext = fileName.split(".").pop()?.trim().toLowerCase();
-  if (ext === "md" || ext === "markdown") {
-    return t("agents.files.markdownPreview");
-  }
-  return ext
-    ? t("agents.files.extensionPreview", { ext: ext.toUpperCase() })
-    : t("agents.files.preview");
-}
-
-function formatWorkspaceRelativePath(filePath: string, workspace: string | null | undefined) {
-  const normalizedPath = filePath.trim();
-  const normalizedWorkspace = workspace?.trim();
-  if (!normalizedPath) {
-    return "";
-  }
-  if (normalizedWorkspace && normalizedPath === normalizedWorkspace) {
-    return ".";
-  }
-  if (normalizedWorkspace && normalizedPath.startsWith(`${normalizedWorkspace}/`)) {
-    return normalizedPath.slice(normalizedWorkspace.length + 1) || ".";
-  }
-  const pathParts = normalizedPath.split(/[\\/]+/);
-  for (let index = pathParts.length - 1; index >= 0; index -= 1) {
-    const pathPart = pathParts[index];
-    if (pathPart) {
-      return pathPart;
-    }
-  }
-  return normalizedPath;
-}
-
-function toDomId(value: string) {
-  const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-  return normalized.replace(/^-+|-+$/g, "") || "preview";
-}
-
-function setPreviewExpandButtonState(button: Element | null | undefined, isFullscreen: boolean) {
-  if (!(button instanceof HTMLElement)) {
-    return;
-  }
-  const label = isFullscreen ? t("agents.files.collapsePreview") : t("agents.files.expandPreview");
-  button.classList.toggle("is-fullscreen", isFullscreen);
-  button.setAttribute("aria-pressed", String(isFullscreen));
-  button.setAttribute("aria-label", label);
-  button.setAttribute("title", label);
-}
 
 function renderAgentContextCard(
   context: AgentContext,
@@ -94,45 +30,41 @@ function renderAgentContextCard(
 ) {
   return html`
     <section class="card">
-      <div class="card-title">${t("agents.context.title")}</div>
+      <div class="card-title">Agent Context</div>
       <div class="card-sub">${subtitle}</div>
       <div class="agents-overview-grid" style="margin-top: 16px;">
         <div class="agent-kv">
-          <div class="label">${t("agents.context.workspace")}</div>
+          <div class="label">Workspace</div>
           <div>
             <button
               type="button"
               class="workspace-link mono"
               @click=${() => onSelectPanel("files")}
-              title=${t("agents.context.openFilesTab")}
+              title="Open Files tab"
             >
               ${context.workspace}
             </button>
           </div>
         </div>
         <div class="agent-kv">
-          <div class="label">${t("agents.context.primaryModel")}</div>
+          <div class="label">Primary Model</div>
           <div class="mono">${context.model}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">${t("agents.context.runtime")}</div>
-          <div class="mono">${context.runtime}</div>
-        </div>
-        <div class="agent-kv">
-          <div class="label">${t("agents.context.identityName")}</div>
+          <div class="label">Identity Name</div>
           <div>${context.identityName}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">${t("agents.context.identityAvatar")}</div>
+          <div class="label">Identity Avatar</div>
           <div>${context.identityAvatar}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">${t("agents.context.skillsFilter")}</div>
+          <div class="label">Skills Filter</div>
           <div>${context.skillsLabel}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">${t("agents.context.default")}</div>
-          <div>${context.isDefault ? t("common.yes") : t("common.no")}</div>
+          <div class="label">Default</div>
+          <div>${context.isDefault ? "yes" : "no"}</div>
         </div>
       </div>
     </section>
@@ -229,55 +161,48 @@ export function renderAgentChannels(params: {
   const entries = resolveChannelEntries(params.snapshot);
   const lastSuccessLabel = params.lastSuccess
     ? formatRelativeTimestamp(params.lastSuccess)
-    : t("common.never");
+    : "never";
   return html`
     <section class="grid grid-cols-2">
       ${renderAgentContextCard(
         params.context,
-        t("agents.context.configurationSubtitle"),
+        "Workspace, identity, and model configuration.",
         params.onSelectPanel,
       )}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">${t("agents.channels.title")}</div>
-            <div class="card-sub">${t("agents.channels.subtitle")}</div>
+            <div class="card-title">Channels</div>
+            <div class="card-sub">Gateway-wide channel status snapshot.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
             ${params.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
-        <div class="muted" style="margin-top: 8px;">
-          ${t("agents.channels.lastRefresh", { time: lastSuccessLabel })}
-        </div>
+        <div class="muted" style="margin-top: 8px;">Last refresh: ${lastSuccessLabel}</div>
         ${params.error
           ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
           : nothing}
         ${!params.snapshot
           ? html`
               <div class="callout info" style="margin-top: 12px">
-                ${t("agents.channels.loadHint")}
+                Load channels to see live status.
               </div>
             `
           : nothing}
         ${entries.length === 0
-          ? html` <div class="muted" style="margin-top: 16px">${t("agents.channels.empty")}</div>`
+          ? html` <div class="muted" style="margin-top: 16px">No channels found.</div> `
           : html`
               <div class="list" style="margin-top: 16px;">
                 ${entries.map((entry) => {
                   const summary = summarizeChannelAccounts(entry.accounts);
                   const status = summary.total
-                    ? t("agents.channels.connectedCount", {
-                        connected: String(summary.connected),
-                        total: String(summary.total),
-                      })
-                    : t("agents.channels.noAccounts");
+                    ? `${summary.connected}/${summary.total} connected`
+                    : "no accounts";
                   const configLabel = summary.configured
-                    ? t("agents.channels.configuredCount", { count: String(summary.configured) })
-                    : t("agents.channels.notConfigured");
-                  const enabled = summary.total
-                    ? t("agents.channels.enabledCount", { count: String(summary.enabled) })
-                    : t("common.disabled");
+                    ? `${summary.configured} configured`
+                    : "not configured";
+                  const enabled = summary.total ? `${summary.enabled} enabled` : "disabled";
                   const extras = resolveChannelExtrasFromConfig({
                     configForm: params.configForm,
                     channelId: entry.id,
@@ -301,7 +226,7 @@ export function renderAgentChannels(params: {
                                   target="_blank"
                                   rel="noopener"
                                   style="color: var(--accent); font-size: 12px"
-                                  >${t("agents.channels.setupGuide")}</a
+                                  >Setup guide</a
                                 >
                               </div>
                             `
@@ -336,14 +261,14 @@ export function renderAgentCron(params: {
     <section class="grid grid-cols-2">
       ${renderAgentContextCard(
         params.context,
-        t("agents.context.schedulingSubtitle"),
+        "Workspace and scheduling targets.",
         params.onSelectPanel,
       )}
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">${t("agents.cronPanel.schedulerTitle")}</div>
-            <div class="card-sub">${t("agents.cronPanel.schedulerSubtitle")}</div>
+            <div class="card-title">Scheduler</div>
+            <div class="card-sub">Gateway cron status.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
             ${params.loading ? t("common.refreshing") : t("common.refresh")}
@@ -361,11 +286,11 @@ export function renderAgentCron(params: {
             </div>
           </div>
           <div class="stat">
-            <div class="stat-label">${t("agents.cronPanel.jobs")}</div>
+            <div class="stat-label">Jobs</div>
             <div class="stat-value">${params.status?.jobs ?? t("common.na")}</div>
           </div>
           <div class="stat">
-            <div class="stat-label">${t("agents.cronPanel.nextWake")}</div>
+            <div class="stat-label">Next wake</div>
             <div class="stat-value">${formatNextRun(params.status?.nextWakeAtMs ?? null)}</div>
           </div>
         </div>
@@ -375,10 +300,10 @@ export function renderAgentCron(params: {
       </section>
     </section>
     <section class="card">
-      <div class="card-title">${t("agents.cronPanel.agentJobsTitle")}</div>
-      <div class="card-sub">${t("agents.cronPanel.agentJobsSubtitle")}</div>
+      <div class="card-title">Agent Cron Jobs</div>
+      <div class="card-sub">Scheduled jobs targeting this agent.</div>
       ${jobs.length === 0
-        ? html` <div class="muted" style="margin-top: 16px">${t("agents.cronPanel.noJobs")}</div>`
+        ? html` <div class="muted" style="margin-top: 16px">No jobs assigned.</div> `
         : html`
             <div class="list" style="margin-top: 16px;">
               ${jobs.map(
@@ -392,7 +317,7 @@ export function renderAgentCron(params: {
                       <div class="chip-row" style="margin-top: 6px;">
                         <span class="chip">${formatCronSchedule(job)}</span>
                         <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
-                          ${job.enabled ? t("common.enabled") : t("common.disabled")}
+                          ${job.enabled ? "enabled" : "disabled"}
                         </span>
                         <span class="chip">${job.sessionTarget}</span>
                       </div>
@@ -406,7 +331,7 @@ export function renderAgentCron(params: {
                         ?disabled=${!job.enabled}
                         @click=${() => params.onRunNow(job.id)}
                       >
-                        ${t("agents.cronPanel.runNow")}
+                        Run Now
                       </button>
                     </div>
                   </div>
@@ -440,40 +365,13 @@ export function renderAgentFiles(params: {
   const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = active ? draft !== baseContent : false;
-  const previewHtml = activeEntry
-    ? applyPreviewTheme(marked.parse(draft, { gfm: true, breaks: true }) as string, {
-        sanitize: (h: string) => DOMPurify.sanitize(h),
-      })
-    : "";
-  const draftByteSize = formatBytes(new TextEncoder().encode(draft).length);
-  const draftWordCount = countWords(draft);
-  const draftLineCount = countLines(draft);
-  const activePathLabel = activeEntry
-    ? formatWorkspaceRelativePath(activeEntry.path, list?.workspace)
-    : "";
-  const previewTitleId = activeEntry ? `agent-file-preview-title-${toDomId(activeEntry.name)}` : "";
-  const previewStatusLabel = activeEntry?.missing
-    ? t("agents.files.willCreateOnSave")
-    : isDirty
-      ? t("agents.files.liveDraftPreview")
-      : t("agents.files.savedPreview");
-  const previewStatusClass = activeEntry?.missing
-    ? "is-missing"
-    : isDirty
-      ? "is-dirty"
-      : "is-synced";
-  const previewUpdatedLabel = activeEntry?.updatedAtMs
-    ? t("agents.files.updated", { time: formatRelativeTimestamp(activeEntry.updatedAtMs) })
-    : activeEntry?.missing
-      ? t("agents.files.notCreatedYet")
-      : t("agents.files.updatedUnknown");
 
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">${t("agents.files.coreFilesTitle")}</div>
-          <div class="card-sub">${t("agents.files.coreFilesSubtitle")}</div>
+          <div class="card-title">Core Files</div>
+          <div class="card-sub">Bootstrap persona, identity, and tool guidance.</div>
         </div>
         <button
           class="btn btn--sm"
@@ -485,7 +383,7 @@ export function renderAgentFiles(params: {
       </div>
       ${list
         ? html`<div class="muted mono" style="margin-top: 8px;">
-            ${t("agents.files.workspace")}: <span>${list.workspace}</span>
+            Workspace: <span>${list.workspace}</span>
           </div>`
         : nothing}
       ${params.agentFilesError
@@ -495,10 +393,12 @@ export function renderAgentFiles(params: {
         : nothing}
       ${!list
         ? html`
-            <div class="callout info" style="margin-top: 12px">${t("agents.files.loadHint")}</div>
+            <div class="callout info" style="margin-top: 12px">
+              Load the agent workspace files to edit core instructions.
+            </div>
           `
         : files.length === 0
-          ? html` <div class="muted" style="margin-top: 16px">${t("agents.files.empty")}</div> `
+          ? html` <div class="muted" style="margin-top: 16px">No files found.</div> `
           : html`
               <div class="agent-tabs" style="margin-top: 14px;">
                 ${files.map((file) => {
@@ -512,16 +412,14 @@ export function renderAgentFiles(params: {
                       @click=${() => params.onSelectFile(file.name)}
                     >
                       ${label}${file.missing
-                        ? html` <span class="agent-tab-badge">${t("agents.files.missing")}</span> `
+                        ? html` <span class="agent-tab-badge">missing</span> `
                         : nothing}
                     </button>
                   `;
                 })}
               </div>
               ${!activeEntry
-                ? html` <div class="muted" style="margin-top: 16px">
-                    ${t("agents.files.selectFile")}
-                  </div>`
+                ? html` <div class="muted" style="margin-top: 16px">Select a file to edit.</div> `
                 : html`
                     <div class="agent-file-header" style="margin-top: 14px;">
                       <div>
@@ -530,7 +428,7 @@ export function renderAgentFiles(params: {
                       <div class="agent-file-actions">
                         <button
                           class="btn btn--sm"
-                          title=${t("agents.files.previewMarkdownTitle")}
+                          title="Preview rendered markdown"
                           @click=${(e: Event) => {
                             const btn = e.currentTarget as HTMLElement;
                             const dialog = btn.closest(".card")?.querySelector("dialog");
@@ -539,33 +437,33 @@ export function renderAgentFiles(params: {
                             }
                           }}
                         >
-                          ${icons.eye} ${t("agents.files.preview")}
+                          ${icons.eye} Preview
                         </button>
                         <button
                           class="btn btn--sm"
                           ?disabled=${!isDirty}
                           @click=${() => params.onFileReset(activeEntry.name)}
                         >
-                          ${t("common.reset")}
+                          Reset
                         </button>
                         <button
                           class="btn btn--sm primary"
                           ?disabled=${params.agentFileSaving || !isDirty}
                           @click=${() => params.onFileSave(activeEntry.name)}
                         >
-                          ${params.agentFileSaving ? t("common.saving") : t("common.save")}
+                          ${params.agentFileSaving ? "Saving…" : "Save"}
                         </button>
                       </div>
                     </div>
                     ${activeEntry.missing
                       ? html`
                           <div class="callout info" style="margin-top: 10px">
-                            ${t("agents.files.missingHint")}
+                            This file is missing. Saving will create it in the agent workspace.
                           </div>
                         `
                       : nothing}
                     <label class="field agent-file-field" style="margin-top: 12px;">
-                      <span>${t("agents.files.content")}</span>
+                      <span>Content</span>
                       <textarea
                         class="agent-file-textarea"
                         .value=${draft}
@@ -578,7 +476,6 @@ export function renderAgentFiles(params: {
                     </label>
                     <dialog
                       class="md-preview-dialog"
-                      aria-labelledby=${previewTitleId}
                       @click=${(e: Event) => {
                         const dialog = e.currentTarget as HTMLDialogElement;
                         if (e.target === dialog) {
@@ -590,39 +487,15 @@ export function renderAgentFiles(params: {
                         dialog
                           .querySelector(".md-preview-dialog__panel")
                           ?.classList.remove("fullscreen");
-                        setPreviewExpandButtonState(
-                          dialog.querySelector(".md-preview-expand-btn"),
-                          false,
-                        );
                       }}
                     >
                       <div class="md-preview-dialog__panel">
                         <div class="md-preview-dialog__header">
-                          <div class="md-preview-dialog__header-main">
-                            <div class="md-preview-dialog__eyebrow">
-                              ${icons.scrollText}
-                              <span>${getExtensionLabel(activeEntry.name)}</span>
-                            </div>
-                            <div class="md-preview-dialog__title-wrap">
-                              <div
-                                id=${previewTitleId}
-                                class="md-preview-dialog__title"
-                                translate="no"
-                              >
-                                ${activeEntry.name}
-                              </div>
-                              <div class="md-preview-dialog__path mono" translate="no">
-                                ${activePathLabel}
-                              </div>
-                            </div>
-                          </div>
+                          <div class="md-preview-dialog__title mono">${activeEntry.name}</div>
                           <div class="md-preview-dialog__actions">
                             <button
-                              type="button"
-                              class="btn btn--sm md-preview-icon-btn md-preview-expand-btn"
-                              title=${t("agents.files.expandPreview")}
-                              aria-label=${t("agents.files.expandPreview")}
-                              aria-pressed="false"
+                              class="btn btn--sm md-preview-expand-btn"
+                              title="Toggle fullscreen"
                               @click=${(e: Event) => {
                                 const btn = e.currentTarget as HTMLElement;
                                 const panel = btn.closest(".md-preview-dialog__panel");
@@ -630,19 +503,15 @@ export function renderAgentFiles(params: {
                                   return;
                                 }
                                 const isFullscreen = panel.classList.toggle("fullscreen");
-                                setPreviewExpandButtonState(btn, isFullscreen);
+                                btn.classList.toggle("is-fullscreen", isFullscreen);
                               }}
                             >
-                              <span class="when-normal" aria-hidden="true">${icons.maximize}</span
-                              ><span class="when-fullscreen" aria-hidden="true"
-                                >${icons.minimize}</span
-                              >
+                              <span class="when-normal">${icons.maximize} Expand</span
+                              ><span class="when-fullscreen">${icons.minimize} Collapse</span>
                             </button>
                             <button
-                              type="button"
-                              class="btn btn--sm md-preview-icon-btn"
-                              title=${t("agents.files.editFile")}
-                              aria-label=${t("agents.files.editFile")}
+                              class="btn btn--sm"
+                              title="Edit file"
                               @click=${(e: Event) => {
                                 (e.currentTarget as HTMLElement).closest("dialog")?.close();
                                 const textarea =
@@ -650,44 +519,25 @@ export function renderAgentFiles(params: {
                                 textarea?.focus();
                               }}
                             >
-                              <span aria-hidden="true">${icons.edit}</span>
+                              ${icons.edit} Editor
                             </button>
                             <button
-                              type="button"
-                              class="btn btn--sm md-preview-icon-btn"
-                              title=${t("agents.files.closePreview")}
-                              aria-label=${t("agents.files.closePreview")}
+                              class="btn btn--sm"
                               @click=${(e: Event) => {
                                 (e.currentTarget as HTMLElement).closest("dialog")?.close();
                               }}
                             >
-                              <span aria-hidden="true">${icons.x}</span>
+                              ${icons.x} Close
                             </button>
                           </div>
                         </div>
-                        <div class="md-preview-dialog__meta">
-                          <div class="md-preview-dialog__chip ${previewStatusClass}">
-                            <strong>${previewStatusLabel}</strong>
-                          </div>
-                          <div class="md-preview-dialog__chip">
-                            <strong>${estimateReadingTimeLabel(draftWordCount)}</strong>
-                            <span
-                              >${t("agents.files.words", { count: String(draftWordCount) })}</span
-                            >
-                          </div>
-                          <div class="md-preview-dialog__chip">
-                            <strong>${draftLineCount}</strong>
-                            <span>${t("agents.files.lines")}</span>
-                          </div>
-                          <div class="md-preview-dialog__chip">
-                            <strong>${draftByteSize}</strong>
-                            <span>${previewUpdatedLabel}</span>
-                          </div>
-                        </div>
                         <div class="md-preview-dialog__body">
-                          <article class="md-preview-dialog__reader sidebar-markdown">
-                            ${unsafeHTML(previewHtml)}
-                          </article>
+                          ${unsafeHTML(
+                            applyPreviewTheme(
+                              marked.parse(draft, { gfm: true, breaks: true }) as string,
+                              { sanitize: (h: string) => DOMPurify.sanitize(h) },
+                            ),
+                          )}
                         </div>
                       </div>
                     </dialog>

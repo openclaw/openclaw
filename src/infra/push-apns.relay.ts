@@ -12,14 +12,14 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import { normalizeHostname } from "./net/hostname.js";
 
-type ApnsRelayPushType = "alert" | "background";
+export type ApnsRelayPushType = "alert" | "background";
 
 export type ApnsRelayConfig = {
   baseUrl: string;
   timeoutMs: number;
 };
 
-type ApnsRelayConfigResolution =
+export type ApnsRelayConfigResolution =
   | { ok: true; value: ApnsRelayConfig }
   | { ok: false; error: string };
 

@@ -63,16 +63,16 @@ const REM_SUMMARY_FACT_LIMIT = 4;
 const REM_SUMMARY_REFLECTION_LIMIT = 4;
 const REM_SUMMARY_MEMORY_LIMIT = 3;
 
-type GroundedRemPreviewItem = {
+export type GroundedRemPreviewItem = {
   text: string;
   refs: string[];
 };
 
-type GroundedRemCandidate = GroundedRemPreviewItem & {
+export type GroundedRemCandidate = GroundedRemPreviewItem & {
   lean: "likely_durable" | "unclear" | "likely_situational";
 };
 
-type GroundedRemFilePreview = {
+export type GroundedRemFilePreview = {
   path: string;
   facts: GroundedRemPreviewItem[];
   reflections: GroundedRemPreviewItem[];

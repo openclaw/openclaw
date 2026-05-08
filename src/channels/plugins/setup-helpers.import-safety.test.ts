@@ -1,8 +1,10 @@
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
+import { clearSetupPromotionRuntimeModuleCache } from "./setup-helpers.js";
 
 afterEach(() => {
   vi.doUnmock("../../plugins/discovery.js");
+  clearSetupPromotionRuntimeModuleCache();
 });
 
 describe("setup helper import safety", () => {

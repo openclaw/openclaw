@@ -220,7 +220,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
   });
-  it("drops empty assistant error messages", async () => {
+  it("keeps empty assistant error messages", async () => {
     const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
       {
@@ -233,68 +233,10 @@ describe("sanitizeSessionMessagesImages", () => {
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(3);
     expect(out[0]?.role).toBe("user");
-  });
-  it("removes empty text blocks from user and tool result messages", async () => {
-    const input = [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "" },
-          { type: "text", text: "hello" },
-        ],
-        timestamp: nextTimestamp(),
-      } satisfies UserMessage,
-      {
-        role: "toolResult",
-        toolCallId: "tool-1",
-        toolName: "read",
-        isError: false,
-        content: [
-          { type: "text", text: "   " },
-          { type: "text", text: "result" },
-        ],
-        timestamp: nextTimestamp(),
-      } satisfies ToolResultMessage,
-    ];
-
-    const out = await sanitizeSessionMessagesImages(input, "test");
-
-    expect(out[0]?.role).toBe("user");
-    expect((out[0] as { content?: Array<{ text?: string }> }).content).toEqual([
-      { type: "text", text: "hello" },
-    ]);
-    expect(out[1]?.role).toBe("toolResult");
-    expect((out[1] as { content?: Array<{ text?: string }> }).content).toEqual([
-      { type: "text", text: "result" },
-    ]);
-  });
-  it("uses a non-empty placeholder when user or tool result content becomes empty", async () => {
-    const input = [
-      {
-        role: "user",
-        content: [{ type: "text", text: "" }],
-        timestamp: nextTimestamp(),
-      } satisfies UserMessage,
-      {
-        role: "toolResult",
-        toolCallId: "tool-1",
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text", text: "   " }],
-        timestamp: nextTimestamp(),
-      } satisfies ToolResultMessage,
-    ];
-
-    const out = await sanitizeSessionMessagesImages(input, "test");
-
-    expect((out[0] as { content?: Array<{ text?: string }> }).content).toEqual([
-      { type: "text", text: "[empty content omitted]" },
-    ]);
-    expect((out[1] as { content?: Array<{ text?: string }> }).content).toEqual([
-      { type: "text", text: "[empty content omitted]" },
-    ]);
+    expect(out[1]?.role).toBe("assistant");
+    expect(out[2]?.role).toBe("assistant");
   });
   it("leaves non-assistant messages unchanged", async () => {
     const input = [
@@ -396,6 +338,7 @@ describe("sanitizeSessionMessagesImages", () => {
       expect(content?.map((block) => block.type)).toEqual([
         "thinking",
         "text",
+        "text",
         "redacted_thinking",
         "text",
       ]);
@@ -404,30 +347,10 @@ describe("sanitizeSessionMessagesImages", () => {
         thinking: "first",
         thought_signature: "sig-1",
       });
-      expect(content?.[1]).toMatchObject({ type: "text", text: "visible" });
-      expect(content?.[2]).toMatchObject({
+      expect(content?.[1]).toMatchObject({ type: "text", text: "" });
+      expect(content?.[3]).toMatchObject({
         type: "redacted_thinking",
         thought_signature: "sig-2",
-      });
-    });
-
-    it("drops empty assistant text blocks in images-only mode", async () => {
-      const input = castAgentMessages([
-        makeOpenAiResponsesAssistantMessage(
-          [
-            { type: "text", text: " " },
-            { type: "text", text: "visible" },
-          ],
-          "stop",
-        ),
-      ]);
-
-      const out = await sanitizeSessionMessagesImages(input, "test", {
-        sanitizeMode: "images-only",
-      });
-
-      expectSingleAssistantContentEntry(out, (entry) => {
-        expect(entry.text).toBe("visible");
       });
     });
   });

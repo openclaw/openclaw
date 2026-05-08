@@ -1,8 +1,5 @@
 {
   "id": "openshell",
-  "activation": {
-    "onStartup": true
-  },
   "name": "OpenShell Sandbox",
   "description": "Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution.",
   "configSchema": {

@@ -15,7 +15,7 @@ export type DiffImageQualityPreset = (typeof DIFF_IMAGE_QUALITY_PRESETS)[number]
 export type DiffOutputFormat = (typeof DIFF_OUTPUT_FORMATS)[number];
 export type DiffRenderTarget = "viewer" | "image" | "both";
 
-type DiffPresentationDefaults = {
+export type DiffPresentationDefaults = {
   fontFamily: string;
   fontSize: number;
   lineSpacing: number;
@@ -39,7 +39,7 @@ export type DiffToolDefaults = DiffPresentationDefaults &
     mode: DiffMode;
   };
 
-type BeforeAfterDiffInput = {
+export type BeforeAfterDiffInput = {
   kind: "before_after";
   before: string;
   after: string;
@@ -48,7 +48,7 @@ type BeforeAfterDiffInput = {
   title?: string;
 };
 
-type PatchDiffInput = {
+export type PatchDiffInput = {
   kind: "patch";
   patch: string;
   title?: string;

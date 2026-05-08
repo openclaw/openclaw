@@ -1,6 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -17,7 +17,6 @@ export function normalizeReplyPayloadDirectives(params: {
   silentToken?: string;
   trimLeadingWhitespace?: boolean;
   parseMode?: ReplyDirectiveParseMode;
-  extractMarkdownImages?: boolean;
 }): { payload: ReplyPayload; isSilent: boolean } {
   const parseMode = params.parseMode ?? "always";
   const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
@@ -28,14 +27,12 @@ export function normalizeReplyPayloadDirectives(params: {
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
         /media:/i.test(sourceText) ||
-        (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText)) ||
         sourceText.includes(silentToken)));
 
   const parsed = shouldParse
     ? parseReplyDirectives(sourceText, {
         currentMessageId: params.currentMessageId,
         silentToken,
-        extractMarkdownImages: params.extractMarkdownImages,
       })
     : undefined;
 
@@ -48,7 +45,7 @@ export function normalizeReplyPayloadDirectives(params: {
   const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrl ?? mediaUrls?.[0];
 
   return {
-    payload: copyReplyPayloadMetadata(params.payload, {
+    payload: {
       ...params.payload,
       text,
       mediaUrls,
@@ -57,9 +54,14 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
       audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
-    }),
+    },
     isSilent: parsed?.isSilent ?? false,
   };
+}
+
+function carryReplyPayloadMetadata(source: ReplyPayload, target: ReplyPayload): ReplyPayload {
+  const metadata = getReplyPayloadMetadata(source);
+  return metadata ? setReplyPayloadMetadata(target, metadata) : target;
 }
 
 async function sendDirectBlockReply(params: {
@@ -125,7 +127,7 @@ export function createBlockReplyDeliveryHandler(params: {
     const mediaNormalizedPayload = params.normalizeMediaPaths
       ? await params.normalizeMediaPaths(normalized.payload)
       : normalized.payload;
-    const blockPayload = copyReplyPayloadMetadata(
+    const blockPayload = carryReplyPayloadMetadata(
       payload,
       params.applyReplyToMode(mediaNormalizedPayload),
     );

@@ -3,7 +3,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
-const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
+export const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
 const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
 

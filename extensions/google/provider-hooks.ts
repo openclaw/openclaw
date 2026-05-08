@@ -12,15 +12,8 @@ export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
   resolveThinkingProfile: ({ modelId }: ProviderDefaultThinkingPolicyContext) =>
     ({
       levels: isGoogleGemini3ProModel(modelId)
-        ? [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }]
-        : [
-            { id: "off" },
-            { id: "minimal" },
-            { id: "low" },
-            { id: "medium" },
-            { id: "adaptive" },
-            { id: "high" },
-          ],
+        ? [{ id: "off" }, { id: "low" }, { id: "high" }]
+        : [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }],
     }) satisfies ProviderThinkingProfile,
   wrapStreamFn: createGoogleThinkingStreamWrapper,
 };

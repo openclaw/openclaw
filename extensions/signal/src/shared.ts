@@ -19,7 +19,7 @@ import {
 import { SignalChannelConfigSchema } from "./config-schema.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
-const SIGNAL_CHANNEL = "signal" as const;
+export const SIGNAL_CHANNEL = "signal" as const;
 
 async function loadSignalChannelRuntime() {
   return await import("./channel.runtime.js");

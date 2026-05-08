@@ -1,4 +1,3 @@
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildSearchCacheKey,
@@ -73,12 +72,6 @@ type KimiSearchResponse = {
     url?: string;
     content?: string;
   }>;
-};
-
-type KimiSearchResult = {
-  content: string;
-  citations: string[];
-  grounded: boolean;
 };
 
 function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
@@ -161,15 +154,6 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
   return [...new Set(citations)];
 }
 
-function hasKimiSearchResults(data: KimiSearchResponse): boolean {
-  return (data.search_results ?? []).some(
-    (entry) =>
-      Boolean(normalizeOptionalString(entry.url)) ||
-      Boolean(normalizeOptionalString(entry.title)) ||
-      Boolean(normalizeOptionalString(entry.content)),
-  );
-}
-
 function extractKimiToolResultContent(toolCall: KimiToolCall): string | undefined {
   const rawArguments = toolCall.function?.arguments;
   if (typeof rawArguments !== "string" || rawArguments.trim().length === 0) {
@@ -184,11 +168,10 @@ async function runKimiSearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
-}): Promise<KimiSearchResult> {
+}): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
   const messages: Array<Record<string, unknown>> = [{ role: "user", content: params.query }];
   const collectedCitations = new Set<string>();
-  let hasGroundingEvidence = false;
 
   for (let round = 0; round < 3; round += 1) {
     const next = await withTrustedWebSearchEndpoint(
@@ -213,18 +196,13 @@ async function runKimiSearch(params: {
         res,
       ): Promise<{ done: true; content: string; citations: string[] } | { done: false }> => {
         if (!res.ok) {
-          throw await createProviderHttpError(res, "Kimi API error");
+          const detail = await res.text();
+          throw new Error(`Kimi API error (${res.status}): ${detail || res.statusText}`);
         }
 
         const data = (await res.json()) as KimiSearchResponse;
-        if (hasKimiSearchResults(data)) {
-          hasGroundingEvidence = true;
-        }
         for (const citation of extractKimiCitations(data)) {
           collectedCitations.add(citation);
-        }
-        if (collectedCitations.size > 0) {
-          hasGroundingEvidence = true;
         }
         const choice = data.choices?.[0];
         const message = choice?.message;
@@ -232,11 +210,7 @@ async function runKimiSearch(params: {
         const toolCalls = message?.tool_calls ?? [];
 
         if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
-          return {
-            done: true,
-            content: text ?? "No response",
-            citations: [...collectedCitations],
-          };
+          return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
         }
 
         messages.push({
@@ -254,9 +228,6 @@ async function runKimiSearch(params: {
           if (!toolCallId || !toolCallName || !toolContent) {
             continue;
           }
-          if (toolCallName === KIMI_WEB_SEARCH_TOOL.function.name) {
-            hasGroundingEvidence = true;
-          }
           pushed = true;
           messages.push({
             role: "tool",
@@ -266,25 +237,20 @@ async function runKimiSearch(params: {
           });
         }
         if (!pushed) {
-          return {
-            done: true,
-            content: text ?? "No response",
-            citations: [...collectedCitations],
-          };
+          return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
         }
         return { done: false };
       },
     );
 
     if (next.done) {
-      return { content: next.content, citations: next.citations, grounded: hasGroundingEvidence };
+      return { content: next.content, citations: next.citations };
     }
   }
 
   return {
     content: "Search completed but no final answer was produced.",
     citations: [...collectedCitations],
-    grounded: hasGroundingEvidence,
   };
 }
 
@@ -308,7 +274,7 @@ export async function executeKimiWebSearchProviderTool(
     return {
       error: "missing_kimi_api_key",
       message:
-        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -338,18 +304,6 @@ export async function executeKimiWebSearchProviderTool(
     model,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
   });
-  if (!result.grounded) {
-    return {
-      error: "kimi_web_search_ungrounded",
-      message:
-        "Kimi returned a chat completion without native web-search grounding. Retry the query, switch to a structured provider such as Brave, or use web_fetch/browser for a specific URL.",
-      query,
-      provider: "kimi",
-      model,
-      docs: "https://docs.openclaw.ai/tools/kimi-search",
-      tookMs: Date.now() - start,
-    };
-  }
   const payload = {
     query,
     provider: "kimi",
@@ -456,6 +410,5 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
-  hasKimiSearchResults,
   extractKimiToolResultContent,
 } as const;

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   formatThreadBindingDurationLabel,
   registerSessionBindingAdapter,
@@ -35,7 +35,7 @@ async function loadTelegramSendModule() {
 
 type TelegramBindingTargetKind = "subagent" | "acp";
 
-type TelegramThreadBindingRecord = {
+export type TelegramThreadBindingRecord = {
   accountId: string;
   conversationId: string;
   targetKind: TelegramBindingTargetKind;
@@ -55,7 +55,7 @@ type StoredTelegramBindingState = {
   bindings: TelegramThreadBindingRecord[];
 };
 
-type TelegramThreadBindingManager = {
+export type TelegramThreadBindingManager = {
   accountId: string;
   shouldPersistMutations: () => boolean;
   getIdleTimeoutMs: () => number;

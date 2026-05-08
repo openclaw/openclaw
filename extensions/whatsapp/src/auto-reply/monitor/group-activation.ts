@@ -1,12 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { updateSessionStore } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppLegacyGroupSessionKey } from "../../group-session-key.js";
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
 import { loadSessionStore, resolveStorePath } from "../config.runtime.js";
 import { normalizeGroupActivation } from "./group-activation.runtime.js";
 
-function hasNamedWhatsAppAccounts(cfg: OpenClawConfig) {
+type LoadConfigFn = typeof import("../config.runtime.js").loadConfig;
+
+function hasNamedWhatsAppAccounts(cfg: ReturnType<LoadConfigFn>) {
   const accountIds = Object.keys(cfg.channels?.whatsapp?.accounts ?? {});
   return accountIds.some((accountId) => normalizeAccountId(accountId) !== DEFAULT_ACCOUNT_ID);
 }
@@ -28,7 +29,7 @@ function isActivationOnlyEntry(
 }
 
 export async function resolveGroupActivationFor(params: {
-  cfg: OpenClawConfig;
+  cfg: ReturnType<LoadConfigFn>;
   accountId?: string | null;
   agentId: string;
   sessionKey: string;

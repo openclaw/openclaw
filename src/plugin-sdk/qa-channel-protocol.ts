@@ -1,4 +1,4 @@
-export type QaBusConversationKind = "direct" | "channel" | "group";
+export type QaBusConversationKind = "direct" | "channel";
 
 export type QaBusConversation = {
   id: string;

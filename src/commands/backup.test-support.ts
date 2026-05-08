@@ -5,19 +5,15 @@ import type { RuntimeEnv } from "../runtime.js";
 import * as backupShared from "./backup-shared.js";
 import { resolveBackupPlanFromPaths } from "./backup-shared.js";
 
-const backupTestMocks = vi.hoisted(() => ({
-  backupVerifyCommandMock: vi.fn(),
-  tarCreateMock: vi.fn(),
-}));
-
-export const { backupVerifyCommandMock, tarCreateMock } = backupTestMocks;
+export const tarCreateMock = vi.fn();
+export const backupVerifyCommandMock = vi.fn();
 
 vi.mock("tar", () => ({
-  c: backupTestMocks.tarCreateMock,
+  c: tarCreateMock,
 }));
 
 vi.mock("./backup-verify.js", () => ({
-  backupVerifyCommand: backupTestMocks.backupVerifyCommandMock,
+  backupVerifyCommand: backupVerifyCommandMock,
 }));
 
 export function createBackupTestRuntime(): RuntimeEnv {

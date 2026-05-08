@@ -233,9 +233,7 @@
     "NODE_AUTH_TOKEN",
     "NPM_TOKEN",
     "REDIS_URL",
-    "SSH_AUTH_SOCK",
-    "SYSTEMROOT",
-    "WINDIR"
+    "SSH_AUTH_SOCK"
   ],
   "allowedInheritedOverrideOnlyKeys": [
     "ALL_PROXY",
@@ -265,8 +263,6 @@
     "SSH_AUTH_SOCK",
     "SSL_CERT_DIR",
     "SSL_CERT_FILE",
-    "SYSTEMROOT",
-    "WINDIR",
     "ZDOTDIR"
   ],
   "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_", "CARGO_REGISTRIES_", "TF_VAR_"],

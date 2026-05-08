@@ -1,5 +1,4 @@
 export {
-  abortAndDrainEmbeddedPiRun,
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,

@@ -1,16 +1,13 @@
+import type { messagingApi, webhook } from "@line/bot-sdk";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
-interface LineThreadBindingsConfig {
+export interface LineThreadBindingsConfig {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
-  spawnSessions?: boolean;
-  defaultSpawnContext?: "isolated" | "fork";
-  /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
-  /** @deprecated Use spawnSessions instead. */
   spawnAcpSessions?: boolean;
 }
 
@@ -57,6 +54,22 @@ export interface ResolvedLineAccount {
   config: LineConfig & LineAccountConfig;
 }
 
+export type LineMessageType =
+  | messagingApi.TextMessage
+  | messagingApi.ImageMessage
+  | messagingApi.VideoMessage
+  | messagingApi.AudioMessage
+  | messagingApi.StickerMessage
+  | messagingApi.LocationMessage;
+
+export interface LineWebhookContext {
+  event: webhook.Event;
+  replyToken?: string;
+  userId?: string;
+  groupId?: string;
+  roomId?: string;
+}
+
 export interface LineSendResult {
   messageId: string;
   chatId: string;
@@ -71,7 +84,7 @@ export type LineProbeResult = BaseProbeResult<string> & {
   };
 };
 
-type LineFlexMessagePayload = {
+export type LineFlexMessagePayload = {
   altText: string;
   contents: unknown;
 };

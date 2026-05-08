@@ -78,8 +78,7 @@ export type OutputItem =
   | {
       type: "reasoning" | `reasoning.${string}`;
       id: string;
-      content?: unknown;
-      encrypted_content?: string;
+      content?: string;
       summary?: unknown;
     };
 

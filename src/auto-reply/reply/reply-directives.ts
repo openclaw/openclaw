@@ -13,19 +13,11 @@ export type ReplyDirectiveParseResult = {
   isSilent: boolean;
 };
 
-export type ReplyDirectiveParseOptions = {
-  currentMessageId?: string;
-  silentToken?: string;
-  extractMarkdownImages?: boolean;
-};
-
 export function parseReplyDirectives(
   raw: string,
-  options: ReplyDirectiveParseOptions = {},
+  options: { currentMessageId?: string; silentToken?: string } = {},
 ): ReplyDirectiveParseResult {
-  const split = splitMediaFromOutput(raw, {
-    extractMarkdownImages: options.extractMarkdownImages,
-  });
+  const split = splitMediaFromOutput(raw);
   let text = split.text ?? "";
 
   const replyParsed = parseInlineDirectives(text, {

@@ -22,7 +22,6 @@ export function collectConfigAssignments(params: {
     config: params.config,
     defaults,
     context: params.context,
-    loadablePluginOrigins: params.loadablePluginOrigins,
   });
 
   collectPluginConfigAssignments({

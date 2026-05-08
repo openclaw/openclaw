@@ -1,4 +1,4 @@
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-types";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   FILE_REF_EXTENSIONS_WITH_TLD,
   isAutoLinkedFileRef,
@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
 
-type TelegramFormattedChunk = {
+export type TelegramFormattedChunk = {
   html: string;
   text: string;
 };

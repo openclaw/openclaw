@@ -96,7 +96,6 @@ export const tlonPlugin = createChatChannelPlugin({
     },
     doctor: tlonDoctor,
     messaging: {
-      targetPrefixes: ["tlon"],
       normalizeTarget: (target) => {
         const parsed = parseTlonTarget(target);
         if (!parsed) {

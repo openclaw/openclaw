@@ -14,11 +14,6 @@ const mocks = vi.hoisted(() => ({
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
 
-const READ_ONLY_CHANNEL_DOCTOR_OPTIONS = {
-  includePersistedAuthState: false,
-  includeSetupFallbackPlugins: true,
-} as const;
-
 vi.mock("../../../channels/plugins/registry.js", () => ({
   getLoadedChannelPlugin: (...args: Parameters<typeof mocks.getLoadedChannelPlugin>) =>
     mocks.getLoadedChannelPlugin(...args),
@@ -89,10 +84,9 @@ function mockBundledMatrixRuntimePlugin(doctor?: Record<string, unknown>) {
 
 function expectMatrixDoctorLookupCalls(cfg?: unknown) {
   if (cfg) {
-    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
-      cfg,
-      READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
-    );
+    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
+      includePersistedAuthState: false,
+    });
   }
   expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("matrix");
   expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("matrix");
@@ -244,7 +238,7 @@ describe("channel doctor compatibility mutations", () => {
 
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
       env,
-      ...READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
+      includePersistedAuthState: false,
     });
   });
 
@@ -301,10 +295,9 @@ describe("channel doctor compatibility mutations", () => {
     });
 
     expect(result).toEqual(["channels.matrix extra"]);
-    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
-      cfg,
-      READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
-    );
+    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
+      includePersistedAuthState: false,
+    });
     expect(collectEmptyAllowlistExtraWarnings.mock.calls[0]?.[0]).not.toHaveProperty("cfg");
   });
 
@@ -381,7 +374,7 @@ describe("channel doctor compatibility mutations", () => {
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
       env,
-      ...READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
+      includePersistedAuthState: false,
     });
     expect(collectEmptyAllowlistExtraWarnings).toHaveBeenCalledTimes(3);
     expect(shouldSkipDefaultEmptyGroupAllowlistWarning).toHaveBeenCalledTimes(1);

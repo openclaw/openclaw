@@ -5,22 +5,17 @@ import { setPluginEnabledInConfig } from "./toggle-config.js";
 export type PluginEnableResult = {
   config: OpenClawConfig;
   enabled: boolean;
-  pluginId: string;
   reason?: string;
 };
 
-export function enablePluginInConfig(
-  cfg: OpenClawConfig,
-  pluginId: string,
-  options: { updateChannelConfig?: boolean } = {},
-): PluginEnableResult {
+export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): PluginEnableResult {
   const builtInChannelId = normalizeChatChannelId(pluginId);
   const resolvedId = builtInChannelId ?? pluginId;
   if (cfg.plugins?.enabled === false) {
-    return { config: cfg, enabled: false, pluginId: resolvedId, reason: "plugins disabled" };
+    return { config: cfg, enabled: false, reason: "plugins disabled" };
   }
   if (cfg.plugins?.deny?.includes(pluginId) || cfg.plugins?.deny?.includes(resolvedId)) {
-    return { config: cfg, enabled: false, pluginId: resolvedId, reason: "blocked by denylist" };
+    return { config: cfg, enabled: false, reason: "blocked by denylist" };
   }
   const allow = cfg.plugins?.allow;
   if (
@@ -29,11 +24,7 @@ export function enablePluginInConfig(
     !allow.includes(pluginId) &&
     !allow.includes(resolvedId)
   ) {
-    return { config: cfg, enabled: false, pluginId: resolvedId, reason: "blocked by allowlist" };
+    return { config: cfg, enabled: false, reason: "blocked by allowlist" };
   }
-  return {
-    config: setPluginEnabledInConfig(cfg, resolvedId, true, options),
-    enabled: true,
-    pluginId: resolvedId,
-  };
+  return { config: setPluginEnabledInConfig(cfg, resolvedId, true), enabled: true };
 }

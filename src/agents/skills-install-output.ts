@@ -1,4 +1,4 @@
-type InstallCommandResult = {
+export type InstallCommandResult = {
   code: number | null;
   stdout: string;
   stderr: string;

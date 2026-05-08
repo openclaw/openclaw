@@ -88,7 +88,7 @@ function buildSignalSetupPatch(input: {
   };
 }
 
-async function promptSignalAllowFrom(params: {
+export async function promptSignalAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;

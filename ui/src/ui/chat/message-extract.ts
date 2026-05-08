@@ -1,22 +1,20 @@
-import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
+import { stripThinkingTags } from "../format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
 function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
-  const withoutInternalContext = stripInternalRuntimeContext(text);
   if (role === "assistant") {
-    return stripThinkingTags(withoutInternalContext);
+    return stripThinkingTags(text);
   }
   return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(withoutInternalContext))
-    : stripEnvelope(withoutInternalContext);
+    ? stripInboundMetadata(stripEnvelope(text))
+    : stripEnvelope(text);
 }
 
 export function extractText(message: unknown): string | null {

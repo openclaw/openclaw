@@ -5,7 +5,6 @@ import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.j
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveStateDir } from "../paths.js";
-import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
 function resolveAgentSessionsDir(
   agentId?: string,
@@ -63,10 +62,7 @@ export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
-  if (
-    !SAFE_SESSION_ID_RE.test(trimmed) ||
-    isCompactionCheckpointTranscriptFileName(`${trimmed}.jsonl`)
-  ) {
+  if (!SAFE_SESSION_ID_RE.test(trimmed)) {
     throw new Error(`Invalid session ID: ${sessionId}`);
   }
   return trimmed;

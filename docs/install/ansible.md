@@ -24,7 +24,7 @@ The [openclaw-ansible](https://github.com/openclaw/openclaw-ansible) repo is the
 | **Network** | Internet connection for package installation              |
 | **Ansible** | 2.14+ (installed automatically by the quick-start script) |
 
-## What you get
+## What You Get
 
 - **Firewall-first security** -- UFW + Docker isolation (only SSH + Tailscale accessible)
 - **Tailscale VPN** -- secure remote access without exposing services publicly
@@ -33,7 +33,7 @@ The [openclaw-ansible](https://github.com/openclaw/openclaw-ansible) repo is the
 - **Systemd integration** -- auto-start on boot with hardening
 - **One-command setup** -- complete deployment in minutes
 
-## Quick start
+## Quick Start
 
 One-command install:
 
@@ -41,7 +41,7 @@ One-command install:
 curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/install.sh | bash
 ```
 
-## What gets installed
+## What Gets Installed
 
 The Ansible playbook installs and configures:
 
@@ -86,7 +86,7 @@ backend. See [Sandboxing](/gateway/sandboxing) for details and other backends.
   </Step>
 </Steps>
 
-### Quick commands
+### Quick Commands
 
 ```bash
 # Check service status
@@ -103,7 +103,7 @@ sudo -i -u openclaw
 openclaw channels login
 ```
 
-## Security architecture
+## Security Architecture
 
 The deployment uses a 4-layer defense model:
 
@@ -122,7 +122,7 @@ Only port 22 (SSH) should be open. All other services (gateway, Docker) are lock
 
 Docker is installed for agent sandboxes (isolated tool execution), not for running the gateway itself. See [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) for sandbox configuration.
 
-## Manual installation
+## Manual Installation
 
 If you prefer manual control over the automation:
 
@@ -177,7 +177,6 @@ This is idempotent and safe to run multiple times.
     - Ensure you can access via Tailscale VPN first
     - SSH access (port 22) is always allowed
     - The gateway is only accessible via Tailscale by design
-
   </Accordion>
   <Accordion title="Service will not start">
     ```bash
@@ -202,11 +201,9 @@ This is idempotent and safe to run multiple times.
     # Check sandbox image
     sudo docker images | grep openclaw-sandbox
 
-    # Build sandbox image if missing (requires source checkout)
+    # Build sandbox image if missing
     cd /opt/openclaw/openclaw
     sudo -u openclaw ./scripts/sandbox-setup.sh
-    # For npm installs without a source checkout, see
-    # https://docs.openclaw.ai/gateway/sandboxing#images-and-setup
     ```
 
   </Accordion>
@@ -219,7 +216,7 @@ This is idempotent and safe to run multiple times.
   </Accordion>
 </AccordionGroup>
 
-## Advanced configuration
+## Advanced Configuration
 
 For detailed security architecture and troubleshooting, see the openclaw-ansible repo:
 

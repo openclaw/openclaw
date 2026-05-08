@@ -21,9 +21,9 @@ describe("diagnostic support bundle helpers", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("writes directory bundles with restrictive file permissions and byte inventory", async () => {
+  it("writes directory bundles with restrictive file permissions and byte inventory", () => {
     const outputDir = path.join(tempDir, "bundle");
-    const contents = await writeSupportBundleDirectory({
+    const contents = writeSupportBundleDirectory({
       outputDir,
       files: [
         jsonSupportBundleFile("manifest.json", { ok: true }),

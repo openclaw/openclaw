@@ -51,7 +51,7 @@ type ConvexCredentialBrokerConfig = {
   role: QaCredentialRole;
 };
 
-type QaCredentialLeaseHeartbeat = {
+export type QaCredentialLeaseHeartbeat = {
   getFailure(): Error | null;
   stop(): Promise<void>;
   throwIfFailed(): void;
@@ -59,9 +59,9 @@ type QaCredentialLeaseHeartbeat = {
 
 export type QaCredentialRole = "ci" | "maintainer";
 
-type QaCredentialLeaseSource = "convex" | "env";
+export type QaCredentialLeaseSource = "convex" | "env";
 
-type QaCredentialLease<TPayload> = {
+export type QaCredentialLease<TPayload> = {
   credentialId?: string;
   heartbeat(): Promise<void>;
   heartbeatIntervalMs: number;
@@ -75,7 +75,7 @@ type QaCredentialLease<TPayload> = {
   source: QaCredentialLeaseSource;
 };
 
-type AcquireQaCredentialLeaseOptions<TPayload> = {
+export type AcquireQaCredentialLeaseOptions<TPayload> = {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   kind: string;
@@ -518,3 +518,15 @@ export function startQaCredentialLeaseHeartbeat(
     },
   };
 }
+
+export const __testing = {
+  DEFAULT_ACQUIRE_TIMEOUT_MS,
+  DEFAULT_ENDPOINT_PREFIX,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  DEFAULT_LEASE_TTL_MS,
+  computeAcquireBackoffMs,
+  normalizeQaCredentialRole,
+  normalizeQaCredentialSource,
+  parsePositiveIntegerEnv,
+  resolveConvexCredentialBrokerConfig,
+};

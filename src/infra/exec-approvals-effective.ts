@@ -26,12 +26,12 @@ type ExecPolicyConfig = {
   ask?: ExecAsk;
 };
 
-type ExecPolicyHostSummary = {
+export type ExecPolicyHostSummary = {
   requested: ExecTarget;
   requestedSource: string;
 };
 
-type ExecPolicyFieldSummary<TValue extends ExecSecurity | ExecAsk> = {
+export type ExecPolicyFieldSummary<TValue extends ExecSecurity | ExecAsk> = {
   requested: TValue;
   requestedSource: string;
   host: TValue;
@@ -54,7 +54,7 @@ export type ExecPolicyScopeSnapshot = {
   allowedDecisions: readonly ExecApprovalDecision[];
 };
 
-type ExecPolicyScopeSummary = Omit<ExecPolicyScopeSnapshot, "allowedDecisions">;
+export type ExecPolicyScopeSummary = Omit<ExecPolicyScopeSnapshot, "allowedDecisions">;
 
 type ExecPolicyRequestedField = "security" | "ask";
 

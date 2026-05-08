@@ -8,11 +8,11 @@ export function formatBytesAsMb(valueBytes) {
     : `${(valueBytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
-function formatSignedMs(value, digits = 1) {
+export function formatSignedMs(value, digits = 1) {
   return `${value > 0 ? "+" : ""}${formatMs(value, digits)}`;
 }
 
-function formatSignedBytesAsMb(valueBytes) {
+export function formatSignedBytesAsMb(valueBytes) {
   return valueBytes === null || valueBytes === undefined
     ? "n/a"
     : `${valueBytes > 0 ? "+" : ""}${formatBytesAsMb(valueBytes)}`;
@@ -46,7 +46,7 @@ export function resolveTestArea(file) {
   return parts[0] || normalized;
 }
 
-function resolveTestFolder(file, depth = 2) {
+export function resolveTestFolder(file, depth = 2) {
   const normalized = normalizeTrackedRepoPath(file);
   const dir = path.posix.dirname(normalized);
   if (dir === ".") {

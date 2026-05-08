@@ -1,4 +1,6 @@
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
 
@@ -6,13 +8,22 @@ export type ListRowModel = {
   id: string;
   name: string;
   provider: string;
-  input: Array<"text" | "image" | "document">;
+  input: Array<"text" | "image">;
   baseUrl?: string;
   contextWindow?: number | null;
-  contextTokens?: number | null;
 };
 
-export type ModelAuthAvailabilityResolver = (provider: string) => boolean;
+export type ModelAuthAvailabilityResolver = (params: {
+  provider: string;
+  cfg: OpenClawConfig;
+  authStore: AuthProfileStore;
+}) => boolean;
+
+function authStoreHasProviderProfile(authStore: AuthProfileStore, provider: string): boolean {
+  return Object.values(authStore.profiles ?? {}).some(
+    (credential) => credential.provider === provider,
+  );
+}
 
 export function toModelRow(params: {
   model?: ListRowModel;
@@ -20,6 +31,8 @@ export function toModelRow(params: {
   tags: string[];
   aliases?: string[];
   availableKeys?: Set<string>;
+  cfg?: OpenClawConfig;
+  authStore?: AuthProfileStore;
   allowProviderAvailabilityFallback?: boolean;
   hasAuthForProvider?: ModelAuthAvailabilityResolver;
 }): ModelRow {
@@ -29,6 +42,8 @@ export function toModelRow(params: {
     tags,
     aliases = [],
     availableKeys,
+    cfg,
+    authStore,
     allowProviderAvailabilityFallback = false,
   } = params;
   if (!model) {
@@ -53,7 +68,17 @@ export function toModelRow(params: {
   const available =
     availableKeys !== undefined && !allowProviderAvailabilityFallback
       ? modelIsAvailable
-      : modelIsAvailable || (params.hasAuthForProvider?.(model.provider) ?? false);
+      : modelIsAvailable ||
+        (cfg && authStore
+          ? (
+              params.hasAuthForProvider ??
+              ((input) => authStoreHasProviderProfile(input.authStore, input.provider))
+            )({
+              provider: model.provider,
+              cfg,
+              authStore,
+            })
+          : false);
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {
@@ -72,7 +97,6 @@ export function toModelRow(params: {
     name: model.name || model.id,
     input,
     contextWindow: model.contextWindow ?? null,
-    ...(typeof model.contextTokens === "number" ? { contextTokens: model.contextTokens } : {}),
     local,
     available,
     tags: Array.from(mergedTags),

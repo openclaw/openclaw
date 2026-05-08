@@ -1,11 +1,7 @@
 import os from "node:os";
 import path from "node:path";
-import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
-const log = createSubsystemLogger("security/windows-acl");
 
 export type ExecFn = typeof runExec;
 
@@ -24,14 +20,6 @@ export type WindowsAclSummary = {
   untrustedGroup: WindowsAclEntry[];
   trusted: WindowsAclEntry[];
   error?: string;
-};
-
-export type WindowsUserInfoProvider = () => { username?: string | null };
-
-export type IcaclsResetCommandOptions = {
-  isDir: boolean;
-  env?: NodeJS.ProcessEnv;
-  userInfo?: WindowsUserInfoProvider;
 };
 
 const INHERIT_FLAGS = new Set(["I", "OI", "CI", "IO", "NP"]);
@@ -78,18 +66,14 @@ const STATUS_PREFIXES = [
 ];
 
 const normalize = (value: string) => normalizeLowercaseStringOrEmpty(value);
-const defaultWindowsUserInfo: WindowsUserInfoProvider = () => os.userInfo();
 
 function normalizeSid(value: string): string {
   const normalized = normalize(value);
   return normalized.startsWith("*") ? normalized.slice(1) : normalized;
 }
 
-export function resolveWindowsUserPrincipal(
-  env?: NodeJS.ProcessEnv,
-  userInfo: WindowsUserInfoProvider = defaultWindowsUserInfo,
-): string | null {
-  const username = env?.USERNAME?.trim() || userInfo().username?.trim();
+export function resolveWindowsUserPrincipal(env?: NodeJS.ProcessEnv): string | null {
+  const username = env?.USERNAME?.trim() || os.userInfo().username?.trim();
   if (!username) {
     return null;
   }
@@ -118,10 +102,12 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
 }
 
 function resolveWindowsSystemCommand(command: string, env?: NodeJS.ProcessEnv): string {
-  // Never fall back to a bare helper name here; Windows command search can
-  // consult the current directory and PATH before the real System32 helper.
-  const root = getWindowsInstallRoots(env ?? process.env).systemRoot;
-  return path.win32.join(root, "System32", command);
+  const root =
+    env?.SystemRoot?.trim() ||
+    env?.SYSTEMROOT?.trim() ||
+    env?.windir?.trim() ||
+    env?.WINDIR?.trim();
+  return root ? path.win32.join(root, "System32", command) : command;
 }
 
 function classifyPrincipal(
@@ -310,7 +296,10 @@ async function resolveCurrentUserSid(
   } catch (err) {
     // Log but do not propagate — SID resolution is best-effort.
     // Callers fall back to env-based resolution when this returns null.
-    log.warn("resolveCurrentUserSid failed", { error: String(err) });
+    console.warn("[windows-acl] resolveCurrentUserSid failed:", String(err));
+    // TODO: replace with a structured logger call once a lightweight per-module
+    // logger is available; console.warn can be noisy on constrained Windows hosts
+    // (e.g. strict output-capture environments or CI runners with limited stdio).
     return null;
   }
 }
@@ -372,29 +361,18 @@ export function formatWindowsAclSummary(summary: WindowsAclSummary): string {
 
 export function formatIcaclsResetCommand(
   targetPath: string,
-  opts: IcaclsResetCommandOptions,
+  opts: { isDir: boolean; env?: NodeJS.ProcessEnv },
 ): string {
-  const command = resolveWindowsSystemCommand("icacls.exe", opts.env);
-  const user = resolveWindowsUserPrincipal(opts.env, opts.userInfo) ?? "%USERNAME%";
+  const user = resolveWindowsUserPrincipal(opts.env) ?? "%USERNAME%";
   const grant = opts.isDir ? "(OI)(CI)F" : "F";
-  // Quoted executable paths need shell-specific handling in PowerShell; keep
-  // the resolved System32 helper as the command token and quote only arguments.
-  return [
-    command,
-    `"${targetPath}"`,
-    "/inheritance:r",
-    "/grant:r",
-    `"${user}:${grant}"`,
-    "/grant:r",
-    `"*S-1-5-18:${grant}"`,
-  ].join(" ");
+  return `icacls "${targetPath}" /inheritance:r /grant:r "${user}:${grant}" /grant:r "*S-1-5-18:${grant}"`;
 }
 
 export function createIcaclsResetCommand(
   targetPath: string,
-  opts: IcaclsResetCommandOptions,
+  opts: { isDir: boolean; env?: NodeJS.ProcessEnv },
 ): { command: string; args: string[]; display: string } | null {
-  const user = resolveWindowsUserPrincipal(opts.env, opts.userInfo);
+  const user = resolveWindowsUserPrincipal(opts.env);
   if (!user) {
     return null;
   }
@@ -408,7 +386,7 @@ export function createIcaclsResetCommand(
     `*S-1-5-18:${grant}`,
   ];
   return {
-    command: resolveWindowsSystemCommand("icacls.exe", opts.env),
+    command: "icacls",
     args,
     display: formatIcaclsResetCommand(targetPath, opts),
   };

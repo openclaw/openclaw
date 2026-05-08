@@ -233,3 +233,10 @@ export async function stopGmailWatcher(): Promise<void> {
   currentConfig = null;
   log.info("gmail watcher stopped");
 }
+
+/**
+ * Check if the Gmail watcher is running.
+ */
+export function isGmailWatcherRunning(): boolean {
+  return watcherProcess !== null && !shuttingDown;
+}

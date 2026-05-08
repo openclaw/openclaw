@@ -18,7 +18,6 @@ import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 export type {
   ChannelOutboundAdapter,
-  ChannelOutboundChunkContext,
   ChannelOutboundContext,
   ChannelOutboundFormattedContext,
   ChannelOutboundPayloadContext,
@@ -301,10 +300,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    * - Bundled channels typically don't use this field
    *   because they can directly import internal modules
    * - External plugins should check for undefined before using
-   * - `runtimeContexts` is the stable startup-safe subset. Bundled channels
-   *   may receive only that subset during provider boot.
-   * - External channel plugins that need reply/routing/session helpers receive
-   *   a full `createPluginRuntime().channel` surface from the Gateway.
+   * - When provided, this must be a full `createPluginRuntime().channel` surface;
+   *   partial stubs are not supported
    *
    * @since Plugin SDK 2026.2.19
    * @see {@link https://docs.openclaw.ai/plugins/building-plugins | Plugin SDK documentation}
@@ -327,7 +324,6 @@ export type ChannelLoginWithQrStartResult = {
 export type ChannelLoginWithQrWaitResult = {
   connected: boolean;
   message: string;
-  qrDataUrl?: string;
 };
 
 export type ChannelLogoutContext<ResolvedAccount = unknown> = {
@@ -352,7 +348,6 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   loginWithQrWait?: (params: {
     accountId?: string;
     timeoutMs?: number;
-    currentQrDataUrl?: string;
   }) => Promise<ChannelLoginWithQrWaitResult>;
   logoutAccount?: (ctx: ChannelLogoutContext<ResolvedAccount>) => Promise<ChannelLogoutResult>;
 };
@@ -387,6 +382,13 @@ export type ChannelHeartbeatAdapter = {
     threadId?: string | number | null;
     deps?: ChannelHeartbeatDeps;
   }) => Promise<void> | void;
+  resolveRecipients?: (params: {
+    cfg: OpenClawConfig;
+    opts?: { to?: string; all?: boolean; accountId?: string };
+  }) => {
+    recipients: string[];
+    source: string;
+  };
 };
 
 type ChannelDirectorySelfParams = {
@@ -517,7 +519,6 @@ export type ChannelDoctorAdapter = {
   collectPreviewWarnings?: (params: {
     cfg: OpenClawConfig;
     doctorFixCommand: string;
-    env?: NodeJS.ProcessEnv;
   }) => string[] | Promise<string[]>;
   collectMutableAllowlistWarnings?: (params: {
     cfg: OpenClawConfig;

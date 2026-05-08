@@ -177,7 +177,6 @@ export async function applyNonInteractiveAuthChoice(params: {
         compatibility: opts.customCompatibility,
         apiKey: opts.customApiKey,
         providerId: opts.customProviderId,
-        supportsImageInput: opts.customImageInput,
       });
       const resolvedProviderId = resolveCustomProviderId({
         config: nextConfig,
@@ -214,7 +213,6 @@ export async function applyNonInteractiveAuthChoice(params: {
         compatibility: customAuth.compatibility,
         apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
-        supportsImageInput: customAuth.supportsImageInput,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -6,6 +7,7 @@ import {
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
   validateConfigObjectWithPlugins,
+  writeConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -16,13 +18,22 @@ import {
 } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
+import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  prepareSecretsRuntimeSnapshot,
-  type PreparedSecretsRuntimeSnapshot,
-} from "../../secrets/runtime.js";
-import { diffConfigPaths } from "../config-diff.js";
+  formatDoctorNonInteractiveHint,
+  type RestartSentinelPayload,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
+import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { resolveEffectiveSharedGatewayAuth } from "../auth.js";
+import {
+  buildGatewayReloadPlan,
+  diffConfigPaths,
+  resolveGatewayReloadSettings,
+} from "../config-reload.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
@@ -41,14 +52,8 @@ import {
   validateConfigSetParams,
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
-import {
-  commitGatewayConfigWrite,
-  didActiveSharedGatewayAuthChange,
-  didSharedGatewayAuthChange,
-  resolveGatewayConfigPath,
-  resolveGatewayConfigRestartWriteResult,
-} from "./config-write-flow.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { parseRestartRequestParams } from "./restart-request.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
@@ -221,6 +226,48 @@ function parseValidateConfigFromRawOrRespond(
   return { config: validated.config, schema };
 }
 
+function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
+  const prevAuth = resolveEffectiveSharedGatewayAuth({
+    authConfig: prev.gateway?.auth,
+    env: process.env,
+    tailscaleMode: prev.gateway?.tailscale?.mode,
+  });
+  const nextAuth = resolveEffectiveSharedGatewayAuth({
+    authConfig: next.gateway?.auth,
+    env: process.env,
+    tailscaleMode: next.gateway?.tailscale?.mode,
+  });
+  if (prevAuth === null || nextAuth === null) {
+    return prevAuth !== nextAuth;
+  }
+  return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
+}
+
+function queueSharedGatewayAuthDisconnect(
+  shouldDisconnect: boolean,
+  context?: GatewayRequestContext,
+): void {
+  if (!shouldDisconnect) {
+    return;
+  }
+  queueMicrotask(() => {
+    context?.disconnectClientsUsingSharedGatewayAuth?.();
+  });
+}
+
+function queueSharedGatewayAuthGenerationRefresh(
+  shouldRefresh: boolean,
+  nextConfig: OpenClawConfig,
+  context?: GatewayRequestContext,
+): void {
+  if (!shouldRefresh) {
+    return;
+  }
+  queueMicrotask(() => {
+    context?.enforceSharedGatewayAuthGenerationForConfigWrite?.(nextConfig);
+  });
+}
+
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
   const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
   const lines = formatConfigIssueLines(trimmed, "", { normalizeRoot: true })
@@ -235,15 +282,31 @@ function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationI
   }`;
 }
 
+function shouldScheduleDirectConfigRestart(params: {
+  changedPaths: string[];
+  nextConfig: OpenClawConfig;
+}): boolean {
+  const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
+  if (reloadSettings.mode === "off") {
+    return true;
+  }
+  const plan = buildGatewayReloadPlan(params.changedPaths);
+  if (reloadSettings.mode === "hot" && plan.restartGateway) {
+    return true;
+  }
+  return false;
+}
+
 async function ensureResolvableSecretRefsOrRespond(params: {
   config: OpenClawConfig;
   respond: RespondFn;
-}): Promise<PreparedSecretsRuntimeSnapshot | null> {
+}): Promise<boolean> {
   try {
-    return await prepareSecretsRuntimeSnapshot({
+    await prepareSecretsRuntimeSnapshot({
       config: params.config,
       includeAuthStoreRefs: false,
     });
+    return true;
   } catch (error) {
     const details = formatErrorMessage(error);
     params.respond(
@@ -254,13 +317,77 @@ async function ensureResolvableSecretRefsOrRespond(params: {
         `invalid config: active SecretRef resolution failed (${details})`,
       ),
     );
+    return false;
+  }
+}
+
+function resolveConfigRestartRequest(params: unknown): {
+  sessionKey: string | undefined;
+  note: string | undefined;
+  restartDelayMs: number | undefined;
+  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
+  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
+} {
+  const {
+    sessionKey,
+    deliveryContext: requestedDeliveryContext,
+    threadId: requestedThreadId,
+    note,
+    restartDelayMs,
+  } = parseRestartRequestParams(params);
+
+  // Extract deliveryContext + threadId for routing after restart.
+  // Uses generic :thread: parsing plus plugin-owned session grammars.
+  const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
+    extractDeliveryInfo(sessionKey);
+
+  return {
+    sessionKey,
+    note,
+    restartDelayMs,
+    deliveryContext: requestedDeliveryContext ?? sessionDeliveryContext,
+    threadId: requestedThreadId ?? sessionThreadId,
+  };
+}
+
+function buildConfigRestartSentinelPayload(params: {
+  kind: RestartSentinelPayload["kind"];
+  mode: string;
+  sessionKey: string | undefined;
+  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
+  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
+  note: string | undefined;
+}): RestartSentinelPayload {
+  const configPath = createConfigIO().configPath;
+  return {
+    kind: params.kind,
+    status: "ok",
+    ts: Date.now(),
+    sessionKey: params.sessionKey,
+    deliveryContext: params.deliveryContext,
+    threadId: params.threadId,
+    message: params.note ?? null,
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: params.mode,
+      root: configPath,
+    },
+  };
+}
+
+async function tryWriteRestartSentinelPayload(
+  payload: RestartSentinelPayload,
+): Promise<string | null> {
+  try {
+    return await writeRestartSentinel(payload);
+  } catch {
     return null;
   }
 }
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
   // Note: We can't easily cache this, as there are no callback that can invalidate
-  // our cache. However, getRuntimeConfig() and loadOpenClawPlugins() (called inside
+  // our cache. However, loadConfig() and loadOpenClawPlugins() (called inside
   // loadGatewayRuntimeConfigSchema) already cache their results, and buildConfigSchema()
   // is just a cheap transformation.
   return loadGatewayRuntimeConfigSchema();
@@ -329,22 +456,17 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
       return;
     }
-    const writeResult = await commitGatewayConfigWrite({
-      snapshot,
-      writeOptions,
-      nextConfig: parsed.config,
-      context,
-    });
+    await writeConfigFile(parsed.config, writeOptions);
     respond(
       true,
       {
         ok: true,
-        path: writeResult.path,
+        path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
       },
       undefined,
     );
-    writeResult.queueFollowUp();
+    queueSharedGatewayAuthGenerationRefresh(true, parsed.config, context);
   },
   "config.patch": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
@@ -418,11 +540,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
-      config: validated.config,
-      respond,
-    });
-    if (!preparedSecretsSnapshot) {
+    if (!(await ensureResolvableSecretRefsOrRespond({ config: validated.config, respond }))) {
       return;
     }
     const changedPaths = diffConfigPaths(snapshot.config, validated.config);
@@ -441,7 +559,7 @@ export const configHandlers: GatewayRequestHandlers = {
         {
           ok: true,
           noop: true,
-          path: resolveGatewayConfigPath(snapshot),
+          path: createConfigIO().configPath,
           config: redactConfigObject(validated.config, schemaPatch.uiHints),
         },
         undefined,
@@ -454,35 +572,48 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     // Compare before the write so we invalidate clients authenticated against the
     // previous shared secret immediately after the config update succeeds.
-    const disconnectSharedAuthClients =
-      didSharedGatewayAuthChange(snapshot.config, validated.config) ||
-      didActiveSharedGatewayAuthChange({
-        fallbackPrev: snapshot.config,
-        next: preparedSecretsSnapshot.config,
-      });
-    const writeResult = await commitGatewayConfigWrite({
-      snapshot,
-      writeOptions,
-      nextConfig: validated.config,
-      context,
-      disconnectSharedAuthClients,
-    });
+    const disconnectSharedAuthClients = didSharedGatewayAuthChange(
+      snapshot.config,
+      validated.config,
+    );
+    await writeConfigFile(validated.config, writeOptions);
 
-    const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
-      requestParams: params,
+    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+      resolveConfigRestartRequest(params);
+    const payload = buildConfigRestartSentinelPayload({
       kind: "config-patch",
       mode: "config.patch",
-      configPath: writeResult.path,
+      sessionKey,
+      deliveryContext,
+      threadId,
+      note,
+    });
+    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
+    const restart = shouldScheduleDirectConfigRestart({
       changedPaths,
       nextConfig: validated.config,
-      actor,
-      context,
-    });
+    })
+      ? scheduleGatewaySigusr1Restart({
+          delayMs: restartDelayMs,
+          reason: "config.patch",
+          audit: {
+            actor: actor.actor,
+            deviceId: actor.deviceId,
+            clientIp: actor.clientIp,
+            changedPaths,
+          },
+        })
+      : undefined;
+    if (restart?.coalesced) {
+      context?.logGateway?.warn(
+        `config.patch restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
+      );
+    }
     respond(
       true,
       {
         ok: true,
-        path: writeResult.path,
+        path: createConfigIO().configPath,
         config: redactConfigObject(validated.config, schemaPatch.uiHints),
         restart,
         sentinel: {
@@ -492,7 +623,8 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    writeResult.queueFollowUp();
+    queueSharedGatewayAuthGenerationRefresh(true, validated.config, context);
+    queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.apply": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
@@ -506,11 +638,7 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
-    const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
-      config: parsed.config,
-      respond,
-    });
-    if (!preparedSecretsSnapshot) {
+    if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
       return;
     }
     const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
@@ -520,35 +648,45 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     // Compare before the write so we invalidate clients authenticated against the
     // previous shared secret immediately after the config update succeeds.
-    const disconnectSharedAuthClients =
-      didSharedGatewayAuthChange(snapshot.config, parsed.config) ||
-      didActiveSharedGatewayAuthChange({
-        fallbackPrev: snapshot.config,
-        next: preparedSecretsSnapshot.config,
-      });
-    const writeResult = await commitGatewayConfigWrite({
-      snapshot,
-      writeOptions,
-      nextConfig: parsed.config,
-      context,
-      disconnectSharedAuthClients,
-    });
+    const disconnectSharedAuthClients = didSharedGatewayAuthChange(snapshot.config, parsed.config);
+    await writeConfigFile(parsed.config, writeOptions);
 
-    const { payload, sentinelPath, restart } = await resolveGatewayConfigRestartWriteResult({
-      requestParams: params,
+    const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
+      resolveConfigRestartRequest(params);
+    const payload = buildConfigRestartSentinelPayload({
       kind: "config-apply",
       mode: "config.apply",
-      configPath: writeResult.path,
+      sessionKey,
+      deliveryContext,
+      threadId,
+      note,
+    });
+    const sentinelPath = await tryWriteRestartSentinelPayload(payload);
+    const restart = shouldScheduleDirectConfigRestart({
       changedPaths,
       nextConfig: parsed.config,
-      actor,
-      context,
-    });
+    })
+      ? scheduleGatewaySigusr1Restart({
+          delayMs: restartDelayMs,
+          reason: "config.apply",
+          audit: {
+            actor: actor.actor,
+            deviceId: actor.deviceId,
+            clientIp: actor.clientIp,
+            changedPaths,
+          },
+        })
+      : undefined;
+    if (restart?.coalesced) {
+      context?.logGateway?.warn(
+        `config.apply restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
+      );
+    }
     respond(
       true,
       {
         ok: true,
-        path: writeResult.path,
+        path: createConfigIO().configPath,
         config: redactConfigObject(parsed.config, parsed.schema.uiHints),
         restart,
         sentinel: {
@@ -558,7 +696,8 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    writeResult.queueFollowUp();
+    queueSharedGatewayAuthGenerationRefresh(true, parsed.config, context);
+    queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.openFile": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.openFile", respond)) {

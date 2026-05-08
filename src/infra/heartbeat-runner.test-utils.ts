@@ -9,22 +9,18 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
-type HeartbeatSessionSeed = {
+export type HeartbeatSessionSeed = {
   sessionId?: string;
   updatedAt?: number;
   lastChannel: string;
   lastProvider: string;
   lastTo: string;
-  agentHarnessId?: string;
-  agentRuntimeOverride?: string;
-  model?: string;
-  modelProvider?: string;
 };
 
-type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
+export type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
 export type HeartbeatReplySpy = ReturnType<typeof vi.fn<HeartbeatReplyFn>>;
 
-function createHeartbeatReplySpy(): HeartbeatReplySpy {
+export function createHeartbeatReplySpy(): HeartbeatReplySpy {
   const replySpy: HeartbeatReplySpy = vi.fn<HeartbeatReplyFn>();
   replySpy.mockResolvedValue({ text: "ok" });
   return replySpy;

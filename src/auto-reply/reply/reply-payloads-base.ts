@@ -1,7 +1,6 @@
 import type { ReplyToMode } from "../../config/types.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
@@ -43,30 +42,27 @@ function resolveReplyThreadingForPayload(params: {
     !implicitReplyToId ||
     !allowImplicitReplyToCurrentMessage
       ? params.payload
-      : copyReplyPayloadMetadata(params.payload, {
-          ...params.payload,
-          replyToId: implicitReplyToId,
-        });
+      : { ...params.payload, replyToId: implicitReplyToId };
 
   if (typeof resolved.text === "string" && resolved.text.includes("[[")) {
     const { cleaned, replyToId, replyToCurrent, hasTag } = extractReplyToTag(
       resolved.text,
       currentMessageId,
     );
-    resolved = copyReplyPayloadMetadata(resolved, {
+    resolved = {
       ...resolved,
       text: cleaned ? cleaned : undefined,
       replyToId: replyToId ?? resolved.replyToId,
       replyToTag: hasTag || resolved.replyToTag,
       replyToCurrent: replyToCurrent || resolved.replyToCurrent,
-    });
+    };
   }
 
   if (resolved.replyToCurrent && !resolved.replyToId && currentMessageId) {
-    resolved = copyReplyPayloadMetadata(resolved, {
+    resolved = {
       ...resolved,
       replyToId: currentMessageId,
-    });
+    };
   }
 
   return resolved;

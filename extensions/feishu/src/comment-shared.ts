@@ -1,4 +1,6 @@
 import {
+  asOptionalRecord,
+  hasNonEmptyString as sharedHasNonEmptyString,
   isRecord as sharedIsRecord,
   normalizeOptionalString,
   readStringValue,
@@ -23,6 +25,10 @@ export const normalizeString = normalizeOptionalString;
 
 export const isRecord = sharedIsRecord;
 
+export const asRecord = asOptionalRecord;
+
+export const hasNonEmptyString = sharedHasNonEmptyString;
+
 export function formatFeishuApiError(
   error: unknown,
   options: {
@@ -41,7 +47,6 @@ export function formatFeishuApiError(
     (options.includeNestedErrorLogId
       ? readString(isRecord(responseData?.error) ? responseData.error.log_id : undefined)
       : undefined);
-  const nestedError = isRecord(responseData?.error) ? responseData.error : undefined;
 
   return JSON.stringify({
     message:
@@ -59,61 +64,21 @@ export function formatFeishuApiError(
       typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
     feishu_msg: readString(responseData?.msg),
     feishu_log_id: feishuLogId,
-    feishu_troubleshooter:
-      readString(responseData?.troubleshooter) || readString(nestedError?.troubleshooter),
   });
 }
 
-function formatFeishuApiFailure(
-  error: unknown,
-  errorPrefix: string,
-  options: {
-    includeConfigParams?: boolean;
-    includeNestedErrorLogId?: boolean;
-  } = {},
-): string {
-  const details = formatFeishuApiError(error, options);
-  return `${errorPrefix}: ${details || "unknown error"}`;
-}
-
-export function createFeishuApiError(
-  error: unknown,
-  errorPrefix: string,
-  options: {
-    includeConfigParams?: boolean;
-    includeNestedErrorLogId?: boolean;
-  } = {},
-): Error {
-  return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
-}
-
-export async function requestFeishuApi<T>(
-  request: () => Promise<T>,
-  errorPrefix: string,
-  options: {
-    includeConfigParams?: boolean;
-    includeNestedErrorLogId?: boolean;
-  } = {},
-): Promise<T> {
-  try {
-    return await request();
-  } catch (error) {
-    throw createFeishuApiError(error, errorPrefix, options);
-  }
-}
-
-type ParsedCommentDocumentRef = {
+export type ParsedCommentDocumentRef = {
   fileType?: CommentFileType;
   fileToken?: string;
 };
 
-type ParsedCommentMention = {
+export type ParsedCommentMention = {
   userId: string;
   displayText: string;
   isBotMention: boolean;
 };
 
-type ParsedCommentLinkedDocumentKind =
+export type ParsedCommentLinkedDocumentKind =
   | CommentFileType
   | "wiki"
   | "mindnote"
@@ -121,7 +86,7 @@ type ParsedCommentLinkedDocumentKind =
   | "base"
   | "unknown";
 
-type ParsedCommentResolvedDocumentType = Exclude<
+export type ParsedCommentResolvedDocumentType = Exclude<
   ParsedCommentLinkedDocumentKind,
   "wiki" | "unknown"
 >;
@@ -392,6 +357,10 @@ export function parseCommentContentElements(params: {
     linkedDocuments,
     botMentioned,
   };
+}
+
+export function extractCommentElementText(element: unknown): string | undefined {
+  return parseCommentContentElements({ elements: [element] }).plainText;
 }
 
 export function extractReplyText(

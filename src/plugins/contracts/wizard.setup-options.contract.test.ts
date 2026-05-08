@@ -1,3 +1,3 @@
-import { describeProviderWizardSetupOptionsContract } from "openclaw/plugin-sdk/provider-test-contracts";
+import { describeProviderWizardSetupOptionsContract } from "../../../test/helpers/plugins/provider-wizard-contract-suites.js";
 
 describeProviderWizardSetupOptionsContract();

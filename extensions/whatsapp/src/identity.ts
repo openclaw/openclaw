@@ -50,7 +50,7 @@ type LegacyMentionsLike = {
   mentionedJids?: string[];
 };
 
-function normalizeDeviceScopedJid(jid: string | null | undefined): string | null {
+export function normalizeDeviceScopedJid(jid: string | null | undefined): string | null {
   return jid ? jid.replace(/:\d+/, "") : null;
 }
 
@@ -148,7 +148,7 @@ export function getReplyContext(
   };
 }
 
-function getMentionJids(msg: LegacyMentionsLike): string[] {
+export function getMentionJids(msg: LegacyMentionsLike): string[] {
   return msg.mentions ?? msg.mentionedJids ?? [];
 }
 

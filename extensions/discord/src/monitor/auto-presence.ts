@@ -1,3 +1,4 @@
+import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
 import {
   clearExpiredCooldowns,
   ensureAuthProfileStore,
@@ -9,9 +10,8 @@ import {
 import type {
   DiscordAccountConfig,
   DiscordAutoPresenceConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-runtime";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
-import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
 const DEFAULT_CUSTOM_ACTIVITY_TYPE = 4;
@@ -21,7 +21,7 @@ const DEFAULT_MIN_UPDATE_INTERVAL_MS = 15_000;
 const MIN_INTERVAL_MS = 5_000;
 const MIN_UPDATE_INTERVAL_MS = 1_000;
 
-type DiscordAutoPresenceState = "healthy" | "degraded" | "exhausted";
+export type DiscordAutoPresenceState = "healthy" | "degraded" | "exhausted";
 
 type ResolvedDiscordAutoPresenceConfig = {
   enabled: boolean;
@@ -32,7 +32,7 @@ type ResolvedDiscordAutoPresenceConfig = {
   exhaustedText?: string;
 };
 
-type DiscordAutoPresenceDecision = {
+export type DiscordAutoPresenceDecision = {
   state: DiscordAutoPresenceState;
   unavailableReason?: AuthProfileFailureReason | null;
   presence: UpdatePresenceData;
@@ -256,7 +256,7 @@ function stablePresenceSignature(payload: UpdatePresenceData): string {
   });
 }
 
-type DiscordAutoPresenceController = {
+export type DiscordAutoPresenceController = {
   start: () => void;
   stop: () => void;
   refresh: () => void;
@@ -354,3 +354,9 @@ export function createDiscordAutoPresenceController(params: {
     },
   };
 }
+
+export const __testing = {
+  resolveAutoPresenceConfig,
+  resolveAuthAvailability,
+  stablePresenceSignature,
+};

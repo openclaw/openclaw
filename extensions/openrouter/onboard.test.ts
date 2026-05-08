@@ -1,8 +1,8 @@
+import { describe, it } from "vitest";
 import {
   expectProviderOnboardAllowlistAlias,
   expectProviderOnboardPrimaryAndFallbacks,
-} from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, it } from "vitest";
+} from "../../test/helpers/plugins/provider-onboard.js";
 import {
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,

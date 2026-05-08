@@ -125,17 +125,13 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
     }
 
     if (task.status === "lost") {
-      const retainedUntilCleanup = typeof task.cleanupAfter === "number" && task.cleanupAfter > now;
       findings.push(
         createFinding({
-          severity: retainedUntilCleanup ? "warn" : "error",
+          severity: "error",
           code: "lost",
           task,
           ageMs,
-          detail: retainedUntilCleanup
-            ? task.error?.trim() ||
-              "task lost its backing session and is retained until cleanupAfter"
-            : task.error?.trim() || "task lost its backing session",
+          detail: task.error?.trim() || "task lost its backing session",
         }),
       );
     }

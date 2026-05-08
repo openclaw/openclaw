@@ -5,10 +5,7 @@ import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js
 
 type Delivery = { kind: string; text?: string };
 
-function createProjectorHarness(
-  cfgOverrides?: Parameters<typeof createCfg>[0],
-  opts?: { onProgress?: () => void },
-) {
+function createProjectorHarness(cfgOverrides?: Parameters<typeof createCfg>[0]) {
   const deliveries: Delivery[] = [];
   const projector = createAcpReplyProjector({
     cfg: createCfg(cfgOverrides),
@@ -17,7 +14,6 @@ function createProjectorHarness(
       deliveries.push({ kind, text: payload.text });
       return true;
     },
-    onProgress: opts?.onProgress,
   });
   return { deliveries, projector };
 }
@@ -179,28 +175,6 @@ async function runHiddenBoundaryCase(params: {
 }
 
 describe("createAcpReplyProjector", () => {
-  it("reports progress for ACP runtime events before delivery filtering", async () => {
-    const onProgress = vi.fn();
-    const { projector } = createProjectorHarness(undefined, { onProgress });
-
-    await projector.onEvent({
-      type: "text_delta",
-      stream: "thought",
-      text: "hidden reasoning",
-      tag: "agent_message_chunk",
-    });
-    await projector.onEvent({
-      type: "tool_call",
-      tag: "tool_call",
-      toolCallId: "tool-1",
-      status: "in_progress",
-      title: "Run command",
-      text: "Run command",
-    });
-
-    expect(onProgress).toHaveBeenCalledTimes(2);
-  });
-
   it("coalesces text deltas into bounded block chunks", async () => {
     const { deliveries, projector } = createProjectorHarness();
 

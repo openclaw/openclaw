@@ -3,27 +3,27 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ResolverContext } from "./runtime-shared.js";
 
 const getBootstrapChannelSecrets = vi.fn();
-const loadChannelSecretContractApi = vi.fn();
+const loadBundledChannelSecretContractApi = vi.fn();
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelSecrets,
 }));
 
 vi.mock("./channel-contract-api.js", () => ({
-  loadChannelSecretContractApi,
+  loadBundledChannelSecretContractApi,
 }));
 
 describe("runtime channel config collectors", () => {
   beforeEach(() => {
     getBootstrapChannelSecrets.mockReset();
-    loadChannelSecretContractApi.mockReset();
+    loadBundledChannelSecretContractApi.mockReset();
   });
 
   it("uses the bundled channel contract-api collector when bootstrap secrets are unavailable", async () => {
     const { collectChannelConfigAssignments } =
       await import("./runtime-config-collectors-channels.js");
     const collectRuntimeConfigAssignments = vi.fn();
-    loadChannelSecretContractApi.mockReturnValue({
+    loadBundledChannelSecretContractApi.mockReturnValue({
       collectRuntimeConfigAssignments,
     });
     getBootstrapChannelSecrets.mockReturnValue(undefined);
@@ -42,12 +42,7 @@ describe("runtime channel config collectors", () => {
       context: {} as ResolverContext,
     });
 
-    expect(loadChannelSecretContractApi).toHaveBeenCalledWith({
-      channelId: "bluebubbles",
-      config: expect.any(Object),
-      env: undefined,
-      loadablePluginOrigins: undefined,
-    });
+    expect(loadBundledChannelSecretContractApi).toHaveBeenCalledWith("bluebubbles");
     expect(collectRuntimeConfigAssignments).toHaveBeenCalledOnce();
     expect(getBootstrapChannelSecrets).not.toHaveBeenCalled();
   });
@@ -56,7 +51,7 @@ describe("runtime channel config collectors", () => {
     const { collectChannelConfigAssignments } =
       await import("./runtime-config-collectors-channels.js");
     const collectRuntimeConfigAssignments = vi.fn();
-    loadChannelSecretContractApi.mockReturnValue(undefined);
+    loadBundledChannelSecretContractApi.mockReturnValue(undefined);
     getBootstrapChannelSecrets.mockReturnValue({
       collectRuntimeConfigAssignments,
     });
@@ -71,12 +66,7 @@ describe("runtime channel config collectors", () => {
       context: {} as ResolverContext,
     });
 
-    expect(loadChannelSecretContractApi).toHaveBeenCalledWith({
-      channelId: "legacy",
-      config: expect.any(Object),
-      env: undefined,
-      loadablePluginOrigins: undefined,
-    });
+    expect(loadBundledChannelSecretContractApi).toHaveBeenCalledWith("legacy");
     expect(getBootstrapChannelSecrets).toHaveBeenCalledWith("legacy");
     expect(collectRuntimeConfigAssignments).toHaveBeenCalledOnce();
   });

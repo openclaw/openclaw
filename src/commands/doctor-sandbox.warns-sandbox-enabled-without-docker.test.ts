@@ -6,8 +6,6 @@ import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
 const note = vi.fn();
-const inspectLegacySandboxRegistryFiles = vi.fn();
-const migrateLegacySandboxRegistryFiles = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runExec,
@@ -21,17 +19,11 @@ vi.mock("../agents/sandbox.js", () => ({
   resolveSandboxScope: vi.fn(() => "shared"),
 }));
 
-vi.mock("../agents/sandbox/registry.js", () => ({
-  inspectLegacySandboxRegistryFiles,
-  migrateLegacySandboxRegistryFiles,
-}));
-
 vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
-const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles } =
-  await import("./doctor-sandbox.js");
+const { maybeRepairSandboxImages } = await import("./doctor-sandbox.js");
 
 describe("maybeRepairSandboxImages", () => {
   const mockRuntime: RuntimeEnv = {
@@ -53,8 +45,6 @@ describe("maybeRepairSandboxImages", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
-    migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
   });
 
   function createSandboxConfig(mode: "off" | "all" | "non-main"): OpenClawConfig {
@@ -122,68 +112,5 @@ describe("maybeRepairSandboxImages", () => {
         typeof call[0] === "string" && call[0].toLowerCase().includes("docker not available"),
     );
     expect(dockerUnavailableWarning).toBeUndefined();
-  });
-});
-
-describe("maybeRepairSandboxRegistryFiles", () => {
-  const mockPrompter = {
-    shouldRepair: false,
-  } as DoctorPrompter;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
-    migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
-  });
-
-  it("warns about legacy registry files without migrating outside doctor --fix", async () => {
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([
-      {
-        kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
-        exists: true,
-        valid: true,
-        entries: 2,
-      },
-    ]);
-
-    await maybeRepairSandboxRegistryFiles(mockPrompter);
-
-    expect(migrateLegacySandboxRegistryFiles).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"), "Sandbox");
-  });
-
-  it("migrates legacy registry files during doctor --fix", async () => {
-    inspectLegacySandboxRegistryFiles.mockResolvedValue([
-      {
-        kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
-        exists: true,
-        valid: true,
-        entries: 2,
-      },
-    ]);
-    migrateLegacySandboxRegistryFiles.mockResolvedValue([
-      {
-        kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
-        status: "migrated",
-        entries: 2,
-      },
-    ]);
-
-    await maybeRepairSandboxRegistryFiles({
-      ...mockPrompter,
-      shouldRepair: true,
-    } as DoctorPrompter);
-
-    expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Migrated containers"),
-      "Doctor changes",
-    );
   });
 });

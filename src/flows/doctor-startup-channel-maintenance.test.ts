@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeRunDoctorStartupChannelMaintenance } from "./doctor-startup-channel-maintenance.js";
 
+const runChannelPluginStartupMaintenance = vi.hoisted(() => vi.fn());
+
+vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
+  runChannelPluginStartupMaintenance,
+}));
+
 describe("doctor startup channel maintenance", () => {
+  beforeEach(() => {
+    runChannelPluginStartupMaintenance.mockClear();
+  });
+
   it("runs Matrix startup migration during repair flows", async () => {
     const cfg = {
       channels: {
@@ -12,21 +22,17 @@ describe("doctor startup channel maintenance", () => {
         },
       },
     };
-    const calls: unknown[] = [];
-    const runtime = { log() {}, error() {} };
+    const runtime = { log: vi.fn(), error: vi.fn() };
 
     await maybeRunDoctorStartupChannelMaintenance({
       cfg,
       env: { OPENCLAW_TEST: "1" },
-      runChannelPluginStartupMaintenance: async (input) => {
-        calls.push(input);
-      },
       runtime,
       shouldRepair: true,
     });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual(
+    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledTimes(1);
+    expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,
         env: { OPENCLAW_TEST: "1" },
@@ -41,17 +47,12 @@ describe("doctor startup channel maintenance", () => {
   });
 
   it("skips startup migration outside repair flows", async () => {
-    const calls: unknown[] = [];
-
     await maybeRunDoctorStartupChannelMaintenance({
       cfg: { channels: { matrix: {} } },
-      runChannelPluginStartupMaintenance: async (input) => {
-        calls.push(input);
-      },
-      runtime: { log() {}, error() {} },
+      runtime: { log: vi.fn(), error: vi.fn() },
       shouldRepair: false,
     });
 
-    expect(calls).toEqual([]);
+    expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
   });
 });

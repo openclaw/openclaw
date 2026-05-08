@@ -3,6 +3,7 @@ import {
   adaptScopedAccountAccessor,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -32,7 +33,7 @@ import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
 import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
 import { DEFAULT_ACCOUNT_ID, matrixConfigAdapter } from "./config-adapter.js";
-import { MatrixChannelConfigSchema } from "./config-schema.js";
+import { MatrixConfigSchema } from "./config-schema.js";
 import {
   legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
@@ -333,14 +334,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         reactions: true,
         threads: true,
         media: true,
-        tts: {
-          voice: {
-            synthesisTarget: "voice-note",
-          },
-        },
       },
       reload: { configPrefixes: ["channels.matrix"] },
-      configSchema: MatrixChannelConfigSchema,
+      configSchema: buildChannelConfigSchema(MatrixConfigSchema),
       config: {
         ...matrixConfigAdapter,
         isConfigured: (account) => account.configured,
@@ -375,7 +371,6 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }).map(projectMatrixConversationBinding),
       },
       messaging: {
-        targetPrefixes: ["matrix"],
         normalizeTarget: normalizeMatrixMessagingTarget,
         resolveInboundConversation: ({ to, conversationId, threadId }) =>
           resolveMatrixInboundConversation({ to, conversationId, threadId }),

@@ -131,7 +131,6 @@ The bundled fallback catalog includes current Chutes refs:
     - API-key and OAuth discovery both use the same `chutes` provider id.
     - Chutes models are registered as `chutes/<model-id>`.
     - If discovery fails at startup, the bundled static catalog is used automatically.
-
   </Accordion>
 </AccordionGroup>
 

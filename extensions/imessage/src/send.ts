@@ -1,15 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
 
-type IMessageSendOpts = {
+export type IMessageSendOpts = {
   cliPath?: string;
   dbPath?: string;
   service?: IMessageService;
@@ -36,7 +35,7 @@ type IMessageSendOpts = {
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
 
-type IMessageSendResult = {
+export type IMessageSendResult = {
   messageId: string;
   sentText: string;
 };

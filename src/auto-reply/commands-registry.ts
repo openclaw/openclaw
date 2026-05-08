@@ -1,19 +1,19 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  buildConfiguredModelCatalog,
-  resolveConfiguredModelRef,
-} from "../agents/model-selection.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import {
   isCommandEnabled,
   listChatCommands,
   listChatCommandsForConfig,
 } from "./commands-registry-list.js";
 import { normalizeCommandBody, resolveTextCommand } from "./commands-registry-normalize.js";
-import { getChatCommands } from "./commands-registry.data.js";
+import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -24,8 +24,8 @@ import type {
   CommandDetection,
   CommandNormalizeOptions,
   NativeCommandSpec,
+  ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
-import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
 export {
   isCommandEnabled,
@@ -40,8 +40,6 @@ export {
   resolveTextCommand,
 } from "./commands-registry-normalize.js";
 
-export { isNativeCommandSurface, shouldHandleTextCommands } from "./commands-text-routing.js";
-
 export type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -52,6 +50,7 @@ export type {
   CommandDetection,
   CommandNormalizeOptions,
   CommandScope,
+  CommandTier,
   NativeCommandSpec,
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
@@ -84,23 +83,12 @@ function resolveNativeName(
 }
 
 function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string): NativeCommandSpec {
-  const spec: NativeCommandSpec = {
+  return {
     name: resolveNativeName(command, provider) ?? command.key,
     description: command.description,
     acceptsArgs: Boolean(command.acceptsArgs),
     args: command.args,
   };
-  if (command.descriptionLocalizations) {
-    spec.descriptionLocalizations = command.descriptionLocalizations;
-  }
-  return spec;
-}
-
-function resolveNativeNames(command: ChatCommandDefinition, provider?: string): string[] {
-  const primary = resolveNativeName(command, provider);
-  return [primary, ...(command.nativeAliases ?? [])].filter((name): name is string =>
-    Boolean(name),
-  );
 }
 
 function listNativeSpecsFromCommands(
@@ -109,23 +97,7 @@ function listNativeSpecsFromCommands(
 ): NativeCommandSpec[] {
   return commands
     .filter((command) => command.scope !== "text" && command.nativeName)
-    .flatMap((command) => {
-      const spec = toNativeCommandSpec(command, provider);
-      return resolveNativeNames(command, provider).map((name) => {
-        const nativeSpec: NativeCommandSpec = {
-          name,
-          description: spec.description,
-          acceptsArgs: spec.acceptsArgs,
-        };
-        if (spec.args) {
-          nativeSpec.args = spec.args;
-        }
-        if (spec.descriptionLocalizations) {
-          nativeSpec.descriptionLocalizations = spec.descriptionLocalizations;
-        }
-        return nativeSpec;
-      });
-    });
+    .map((command) => toNativeCommandSpec(command, provider));
 }
 
 export function listNativeCommandSpecs(params?: {
@@ -157,9 +129,8 @@ export function findCommandByNativeName(
   return getChatCommands().find(
     (command) =>
       command.scope !== "text" &&
-      [resolveNativeName(command, provider, options), ...(command.nativeAliases ?? [])].some(
-        (name) => normalizeOptionalLowercaseString(name) === normalized,
-      ),
+      normalizeOptionalLowercaseString(resolveNativeName(command, provider, options)) ===
+        normalized,
   );
 }
 
@@ -286,7 +257,6 @@ export function resolveCommandArgChoices(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
-  catalog?: ThinkingCatalogEntry[];
 }): ResolvedCommandArgChoice[] {
   const { command, arg, cfg } = params;
   if (!arg.choices) {
@@ -301,7 +271,6 @@ export function resolveCommandArgChoices(params: {
           cfg,
           provider: params.provider ?? defaults.provider,
           model: params.model ?? defaults.model,
-          catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
           command,
           arg,
         };
@@ -316,32 +285,18 @@ export function resolveCommandArgMenu(params: {
   command: ChatCommandDefinition;
   args?: CommandArgs;
   cfg?: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  catalog?: ThinkingCatalogEntry[];
 }): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
-  const { command, args, cfg, provider, model, catalog } = params;
+  const { command, args, cfg } = params;
   if (!command.args || !command.argsMenu) {
     return null;
   }
   if (command.argsParsing === "none") {
     return null;
   }
-  const resolvedCatalog = catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
   const argSpec = command.argsMenu;
   const argName =
     argSpec === "auto"
-      ? command.args.find(
-          (arg) =>
-            resolveCommandArgChoices({
-              command,
-              arg,
-              cfg,
-              provider,
-              model,
-              catalog: resolvedCatalog,
-            }).length > 0,
-        )?.name
+      ? command.args.find((arg) => resolveCommandArgChoices({ command, arg, cfg }).length > 0)?.name
       : argSpec.arg;
   if (!argName) {
     return null;
@@ -356,14 +311,7 @@ export function resolveCommandArgMenu(params: {
   if (!arg) {
     return null;
   }
-  const choices = resolveCommandArgChoices({
-    command,
-    arg,
-    cfg,
-    provider,
-    model,
-    catalog: resolvedCatalog,
-  });
+  const choices = resolveCommandArgChoices({ command, arg, cfg });
   if (choices.length === 0) {
     return null;
   }
@@ -371,29 +319,24 @@ export function resolveCommandArgMenu(params: {
   return { arg, choices, title };
 }
 
-export function formatCommandArgMenuTitle(params: {
-  command: ChatCommandDefinition;
-  menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
-}): string {
-  const { command, menu } = params;
-  if (menu.title) {
-    return menu.title;
-  }
-  const commandLabel = command.nativeName ?? command.key;
-  if (typeof menu.arg.choices === "function") {
-    const options = menu.choices
-      .map((choice) => choice.label.trim())
-      .filter(Boolean)
-      .join(", ");
-    if (options.length > 0 && options.length <= 160) {
-      return `Choose ${menu.arg.name} for /${commandLabel}.\nOptions: ${options}.`;
-    }
-    return `Choose ${menu.arg.name} for /${commandLabel}.`;
-  }
-  return `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
-}
-
 export function isCommandMessage(raw: string): boolean {
   const trimmed = normalizeCommandBody(raw);
   return trimmed.startsWith("/");
+}
+
+export function isNativeCommandSurface(surface?: string): boolean {
+  if (!surface) {
+    return false;
+  }
+  return getNativeCommandSurfaces().has(normalizeLowercaseStringOrEmpty(surface));
+}
+
+export function shouldHandleTextCommands(params: ShouldHandleTextCommandsParams): boolean {
+  if (params.commandSource === "native") {
+    return true;
+  }
+  if (params.cfg.commands?.text !== false) {
+    return true;
+  }
+  return !isNativeCommandSurface(params.surface);
 }

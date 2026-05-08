@@ -5,12 +5,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir, resolveUserPath, shortenHomeInString } from "../utils.js";
 
-type RemovalResult = {
+export type RemovalResult = {
   ok: boolean;
   skipped?: boolean;
 };
 
-type CleanupResolvedPaths = {
+export type CleanupResolvedPaths = {
   stateDir: string;
   configPath: string;
   oauthDir: string;
@@ -18,7 +18,7 @@ type CleanupResolvedPaths = {
   oauthInsideState: boolean;
 };
 
-function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
+export function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
   const dirs = new Set<string>();
   const defaults = cfg?.agents?.defaults;
   if (typeof defaults?.workspace === "string" && defaults.workspace.trim()) {

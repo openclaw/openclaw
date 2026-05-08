@@ -13,36 +13,11 @@ function asText(text: string): TextContent {
   return { type: "text", text };
 }
 
-function serializeMalformedTextBlock(block: unknown): string {
-  try {
-    const serialized = JSON.stringify(block);
-    return typeof serialized === "string" ? serialized : "[malformed text block]";
-  } catch {
-    return "[malformed text block]";
-  }
-}
-
-function coerceTextBlock(block: unknown): string | null {
-  if (!block || typeof block !== "object") {
-    return null;
-  }
-  if ((block as { type?: unknown }).type !== "text") {
-    return null;
-  }
-  const text = (block as { text?: unknown }).text;
-  return typeof text === "string" ? text : serializeMalformedTextBlock(block);
-}
-
-function isImageBlock(block: unknown): boolean {
-  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "image";
-}
-
 function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>): string[] {
   const parts: string[] = [];
   for (const block of content) {
-    const text = coerceTextBlock(block);
-    if (text !== null) {
-      parts.push(text);
+    if (block.type === "text") {
+      parts.push(block.text);
     }
   }
   return parts;
@@ -53,12 +28,11 @@ function collectPrunableToolResultSegments(
 ): string[] {
   const parts: string[] = [];
   for (const block of content) {
-    const text = coerceTextBlock(block);
-    if (text !== null) {
-      parts.push(text);
+    if (block.type === "text") {
+      parts.push(block.text);
       continue;
     }
-    if (isImageBlock(block)) {
+    if (block.type === "image") {
       parts.push(PRUNED_CONTEXT_IMAGE_MARKER);
     }
   }
@@ -131,7 +105,7 @@ function takeTailFromJoinedText(parts: string[], maxChars: number): string {
 
 function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boolean {
   for (const block of content) {
-    if (isImageBlock(block)) {
+    if (block.type === "image") {
       return true;
     }
   }
@@ -145,12 +119,10 @@ function estimateWeightedTextChars(text: string): number {
 function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageContent>): number {
   let chars = 0;
   for (const block of content) {
-    const text = coerceTextBlock(block);
-    if (text !== null) {
-      chars += estimateWeightedTextChars(text);
-      continue;
+    if (block.type === "text") {
+      chars += estimateWeightedTextChars(block.text);
     }
-    if (isImageBlock(block)) {
+    if (block.type === "image") {
       chars += IMAGE_CHAR_ESTIMATE;
     }
   }

@@ -6,8 +6,6 @@ const mocks = vi.hoisted(() => ({
   listChannelPairingRequests: vi.fn(),
   approveChannelPairingCode: vi.fn(),
   notifyPairingApproved: vi.fn(),
-  readConfigFileSnapshotForWrite: vi.fn(),
-  replaceConfigFile: vi.fn(),
   normalizeChannelId: vi.fn((raw: string) => {
     if (!raw) {
       return null;
@@ -30,8 +28,6 @@ const {
   listChannelPairingRequests,
   approveChannelPairingCode,
   notifyPairingApproved,
-  readConfigFileSnapshotForWrite,
-  replaceConfigFile,
   normalizeChannelId,
   getPairingAdapter,
   listPairingChannels,
@@ -58,10 +54,7 @@ vi.mock("../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: vi.fn().mockReturnValue({}),
   loadConfig: vi.fn().mockReturnValue({}),
-  readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
-  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
 describe("pairing cli", () => {
@@ -79,23 +72,6 @@ describe("pairing cli", () => {
       },
     });
     notifyPairingApproved.mockClear();
-    readConfigFileSnapshotForWrite.mockClear();
-    readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: {
-        path: "/tmp/openclaw.json",
-        exists: true,
-        raw: "{}",
-        parsed: {},
-        valid: true,
-        issues: [],
-        legacyIssues: [],
-        sourceConfig: {},
-        runtimeConfig: {},
-      },
-      writeOptions: {},
-    });
-    replaceConfigFile.mockClear();
-    replaceConfigFile.mockResolvedValue(undefined);
     normalizeChannelId.mockClear();
     getPairingAdapter.mockClear();
     listPairingChannels.mockClear();
@@ -225,42 +201,10 @@ describe("pairing cli", () => {
         channel: "telegram",
         code: "ABCDEFGH",
       });
-      expect(replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nextConfig: {
-            commands: {
-              ownerAllowFrom: ["telegram:123"],
-            },
-          },
-        }),
-      );
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Command owner configured"));
     } finally {
       log.mockRestore();
     }
-  });
-
-  it("does not overwrite an existing command owner when approving pairing", async () => {
-    readConfigFileSnapshotForWrite.mockResolvedValueOnce({
-      snapshot: {
-        path: "/tmp/openclaw.json",
-        exists: true,
-        raw: "{}",
-        parsed: {},
-        valid: true,
-        issues: [],
-        legacyIssues: [],
-        sourceConfig: { commands: { ownerAllowFrom: ["discord:999"] } },
-        runtimeConfig: { commands: { ownerAllowFrom: ["discord:999"] } },
-      },
-      writeOptions: {},
-    });
-    mockApprovedPairing();
-
-    await runPairing(["pairing", "approve", "telegram", "ABCDEFGH"]);
-
-    expect(replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("forwards --account for approve", async () => {

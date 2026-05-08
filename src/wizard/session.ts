@@ -12,7 +12,6 @@ export type WizardStep = {
   type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
   title?: string;
   message?: string;
-  format?: "plain";
   options?: WizardStepOption[];
   initialValue?: unknown;
   placeholder?: string;
@@ -70,10 +69,6 @@ class WizardSessionPrompter implements WizardPrompter {
     await this.prompt({ type: "note", title, message, executor: "client" });
   }
 
-  async plain(message: string): Promise<void> {
-    await this.prompt({ type: "note", message, format: "plain", executor: "client" });
-  }
-
   async select<T>(params: {
     message: string;
     options: Array<{ value: T; label: string; hint?: string }>;
@@ -117,14 +112,12 @@ class WizardSessionPrompter implements WizardPrompter {
     initialValue?: string;
     placeholder?: string;
     validate?: (value: string) => string | undefined;
-    sensitive?: boolean;
   }): Promise<string> {
     const res = await this.prompt({
       type: "text",
       message: params.message,
       initialValue: params.initialValue,
       placeholder: params.placeholder,
-      sensitive: params.sensitive,
       executor: "client",
     });
     const value =

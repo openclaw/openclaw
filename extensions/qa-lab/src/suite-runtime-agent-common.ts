@@ -12,3 +12,4 @@ function liveTurnTimeoutMs(env: QaLiveTimeoutEnv, fallbackMs: number) {
 }
 
 export { liveTurnTimeoutMs };
+export type { QaLiveTimeoutEnv };

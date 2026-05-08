@@ -24,3 +24,10 @@ export function isDeliverableMessageChannel(value: string): boolean {
     normalized !== undefined && normalized !== INTERNAL_MESSAGE_CHANNEL && normalized === value
   );
 }
+
+export function resolveMessageChannel(
+  primary?: string | null,
+  fallback?: string | null,
+): string | undefined {
+  return normalizeMessageChannel(primary) ?? normalizeMessageChannel(fallback);
+}

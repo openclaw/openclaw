@@ -1,8 +1,5 @@
 {
   "id": "copilot-proxy",
-  "activation": {
-    "onStartup": false
-  },
   "enabledByDefault": true,
   "providers": ["copilot-proxy"],
   "autoEnableWhenConfiguredProviders": ["copilot-proxy"],

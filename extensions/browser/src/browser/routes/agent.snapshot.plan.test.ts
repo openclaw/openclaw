@@ -11,7 +11,6 @@ function profile(driver: "existing-session" | "openclaw"): ResolvedBrowserProfil
     cdpHost: "127.0.0.1",
     cdpIsLoopback: true,
     color: "#00AA00",
-    headless: false,
     attachOnly: driver === "existing-session",
   };
 }
@@ -35,16 +34,5 @@ describe("resolveSnapshotPlan", () => {
     });
 
     expect(plan.format).toBe("ai");
-  });
-
-  it("treats urls as a role snapshot feature", () => {
-    const plan = resolveSnapshotPlan({
-      profile: profile("openclaw"),
-      query: { urls: "1" },
-      hasPlaywright: true,
-    });
-
-    expect(plan.urls).toBe(true);
-    expect(plan.wantsRoleSnapshot).toBe(true);
   });
 });

@@ -89,7 +89,7 @@ function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknow
   return null;
 }
 
-type AnthropicPayloadLogger = {
+export type AnthropicPayloadLogger = {
   enabled: true;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
   recordUsage: (messages: AgentMessage[], error?: unknown) => void;

@@ -1,5 +1,4 @@
 import { isTruthyEnvValue } from "../infra/env.js";
-import type { CliCommandPluginLoadPolicy } from "./command-catalog.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 
 export function shouldBypassConfigGuardForCommandPath(commandPath: string[]): boolean {
@@ -18,32 +17,10 @@ export function shouldSkipRouteConfigGuardForCommandPath(params: {
 }
 
 export function shouldLoadPluginsForCommandPath(params: {
-  argv?: string[];
   commandPath: string[];
   jsonOutputMode: boolean;
 }): boolean {
-  return shouldLoadPlugins({
-    loadPlugins: resolveCliCommandPathPolicy(params.commandPath).loadPlugins,
-    argv: params.argv,
-    commandPath: params.commandPath,
-    jsonOutputMode: params.jsonOutputMode,
-  });
-}
-
-function shouldLoadPlugins(params: {
-  argv?: string[];
-  commandPath: string[];
-  jsonOutputMode: boolean;
-  loadPlugins: CliCommandPluginLoadPolicy;
-}): boolean {
-  const loadPlugins = params.loadPlugins;
-  if (typeof loadPlugins === "function") {
-    return loadPlugins({
-      argv: params.argv ?? [],
-      commandPath: params.commandPath,
-      jsonOutputMode: params.jsonOutputMode,
-    });
-  }
+  const loadPlugins = resolveCliCommandPathPolicy(params.commandPath).loadPlugins;
   return loadPlugins === "always" || (loadPlugins === "text-only" && !params.jsonOutputMode);
 }
 
@@ -62,28 +39,24 @@ export function shouldEnsureCliPathForCommandPath(commandPath: string[]): boolea
 }
 
 export function resolveCliStartupPolicy(params: {
-  argv?: string[];
   commandPath: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
   const suppressDoctorStdout = params.jsonOutputMode;
-  const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
-  const env = params.env ?? process.env;
   return {
     suppressDoctorStdout,
-    hideBanner: isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) || commandPolicy.hideBanner,
+    hideBanner: shouldHideCliBannerForCommandPath(params.commandPath, params.env),
     skipConfigGuard: params.routeMode
-      ? commandPolicy.routeConfigGuard === "always" ||
-        (commandPolicy.routeConfigGuard === "when-suppressed" && suppressDoctorStdout)
+      ? shouldSkipRouteConfigGuardForCommandPath({
+          commandPath: params.commandPath,
+          suppressDoctorStdout,
+        })
       : false,
-    loadPlugins: shouldLoadPlugins({
-      argv: params.argv,
+    loadPlugins: shouldLoadPluginsForCommandPath({
       commandPath: params.commandPath,
       jsonOutputMode: params.jsonOutputMode,
-      loadPlugins: commandPolicy.loadPlugins,
     }),
-    pluginRegistry: commandPolicy.pluginRegistry,
   };
 }

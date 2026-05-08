@@ -187,34 +187,17 @@ describe("exec approvals store helpers", () => {
     expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
   });
 
-  it("accepts a symlinked OPENCLAW_HOME as the trusted approvals root", () => {
+  it("refuses to traverse a symlinked parent component in the approvals path", () => {
     const realHome = makeTempDir();
     const linkedHome = `${realHome}-link`;
-    tempDirs.push(realHome, linkedHome);
-    fs.symlinkSync(realHome, linkedHome, "dir");
-    process.env.OPENCLAW_HOME = linkedHome;
-
-    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
-
-    expect(
-      fs.readFileSync(path.join(realHome, ".openclaw", "exec-approvals.json"), "utf8"),
-    ).toContain('"security": "full"');
-  });
-
-  it("refuses to traverse symlinked approvals components below a symlinked home", () => {
-    const realHome = makeTempDir();
-    const linkedHome = `${realHome}-link`;
-    const linkedStateTarget = path.join(realHome, "state-target");
-    tempDirs.push(realHome, linkedHome);
-    fs.mkdirSync(linkedStateTarget, { recursive: true });
-    fs.symlinkSync(realHome, linkedHome, "dir");
-    fs.symlinkSync(linkedStateTarget, path.join(realHome, ".openclaw"), "dir");
+    tempDirs.push(realHome);
+    fs.symlinkSync(realHome, linkedHome);
     process.env.OPENCLAW_HOME = linkedHome;
 
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/Refusing to traverse symlink in exec approvals path/);
-    expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+    expect(fs.existsSync(path.join(realHome, ".openclaw"))).toBe(false);
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {

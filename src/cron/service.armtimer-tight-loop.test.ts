@@ -57,7 +57,7 @@ describe("CronService - armTimer tight loop prevention", () => {
       log: noopLogger,
       nowMs: () => params.now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
       runIsolatedAgentJob:
         params.runIsolatedAgentJob ?? vi.fn().mockResolvedValue({ status: "ok" }),
     });

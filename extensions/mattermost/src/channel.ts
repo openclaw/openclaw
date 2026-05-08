@@ -306,7 +306,6 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         (await loadMattermostChannelRuntime()).listMattermostDirectoryPeers(params),
     }),
     messaging: {
-      targetPrefixes: ["mattermost"],
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {

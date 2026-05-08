@@ -3,17 +3,17 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  normalizePluginsConfigWithResolver,
+  normalizePluginsConfig,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
-} from "../plugins/config-policy.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+} from "../plugins/config-state.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { hasKind } from "../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 
 const log = createSubsystemLogger("hooks");
 
-type PluginHookDirEntry = {
+export type PluginHookDirEntry = {
   dir: string;
   pluginId: string;
 };
@@ -26,20 +26,17 @@ export function resolvePluginHookDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const registry = loadPluginManifestRegistry({
     workspaceDir,
-    config: params.config ?? {},
-    env: process.env,
+    config: params.config,
+    // Hook discovery should reflect freshly written bundle manifests immediately.
+    cache: false,
   });
-  const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return [];
   }
 
-  const normalizedPlugins = normalizePluginsConfigWithResolver(
-    params.config?.plugins,
-    metadataSnapshot.normalizePluginId,
-  );
+  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
   const memorySlot = normalizedPlugins.slots.memory;
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();

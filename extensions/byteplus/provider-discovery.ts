@@ -1,7 +1,7 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildBytePlusCodingProvider, buildBytePlusProvider } from "./provider-catalog.js";
 
-const bytePlusProviderDiscovery: ProviderPlugin[] = [
+export const bytePlusProviderDiscovery: ProviderPlugin[] = [
   {
     id: "byteplus",
     label: "BytePlus",

@@ -1,8 +1,6 @@
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
-import { isBetaTag } from "../infra/update-channels.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import { VERSION } from "../version.js";
 import type { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import type { AgentLocalStatus } from "./status.agent-local.js";
@@ -32,20 +30,6 @@ export const baseStatusUpdate = {
   registry: { latestVersion: "2026.4.10" },
 } as never;
 
-export const baseStatusExpectedUpdateChannelInfo = isBetaTag(VERSION)
-  ? {
-      channel: "beta",
-      source: "installed-version",
-      label: "beta (installed version)",
-    }
-  : {
-      channel: "stable",
-      source: "config",
-      label: "stable (config)",
-    };
-
-export const baseStatusExpectedUpdateChannelLabel = baseStatusExpectedUpdateChannelInfo.label;
-
 export const baseStatusGatewaySnapshot = {
   gatewayMode: "remote",
   remoteUrlMissing: false,
@@ -70,7 +54,7 @@ export const baseStatusOverviewScanFields = {
   ...baseStatusGatewaySnapshot,
 };
 
-const baseStatusGatewayService = {
+export const baseStatusGatewayService = {
   label: "LaunchAgent",
   installed: true,
   managedByOpenClaw: true,
@@ -78,7 +62,7 @@ const baseStatusGatewayService = {
   runtimeShort: "running",
 };
 
-const baseStatusNodeService = {
+export const baseStatusNodeService = {
   label: "node",
   installed: true,
   loadedText: "loaded",
@@ -96,7 +80,7 @@ export const baseStatusOverviewSurface = {
   ...baseStatusServices,
 } as unknown as StatusOverviewSurface;
 
-const baseStatusSummary = {
+export const baseStatusSummary = {
   tasks: { total: 3, active: 1, failures: 0, byStatus: { queued: 1, running: 1 } },
   taskAudit: { errors: 1, warnings: 0 },
   heartbeat: {
@@ -128,14 +112,14 @@ const baseStatusSummary = {
   },
 } as unknown as StatusSummary;
 
-const baseStatusAgentStatus = {
+export const baseStatusAgentStatus = {
   defaultId: "main",
   bootstrapPendingCount: 1,
   totalSessions: 2,
   agents: [{ id: "main", lastActiveAgeMs: 60_000 }] as AgentLocalStatus[],
 };
 
-const baseStatusMemory = {
+export const baseStatusMemory = {
   agentId: "main",
   files: 1,
   chunks: 2,
@@ -144,16 +128,16 @@ const baseStatusMemory = {
   cache: {},
 } as unknown as MemoryStatusSnapshot;
 
-const baseStatusMemoryPlugin = {
+export const baseStatusMemoryPlugin = {
   enabled: true,
   slot: "memory",
 } as const satisfies MemoryPluginStatus;
 
-const baseStatusPluginCompatibility = [
+export const baseStatusPluginCompatibility = [
   { pluginId: "a", severity: "warn", message: "legacy" },
 ] as PluginCompatibilityNotice[];
 
-function createStatusLastHeartbeat(): HeartbeatEventPayload {
+export function createStatusLastHeartbeat(): HeartbeatEventPayload {
   return {
     ts: Date.now() - 30_000,
     status: "ok-token",
@@ -162,7 +146,7 @@ function createStatusLastHeartbeat(): HeartbeatEventPayload {
   };
 }
 
-function createStatusHealth() {
+export function createStatusHealth() {
   return {
     ok: true as const,
     ts: Date.now(),
@@ -181,14 +165,14 @@ function createStatusHealth() {
   };
 }
 
-const statusTestDecorators = {
+export const statusTestDecorators = {
   ok: (value: string) => `ok(${value})`,
   warn: (value: string) => `warn(${value})`,
   muted: (value: string) => `muted(${value})`,
   accentDim: (value: string) => `accent(${value})`,
 };
 
-const statusTestFormatting = {
+export const statusTestFormatting = {
   shortenText: (value: string) => value,
   formatCliCommand: (value: string) => `cmd:${value}`,
   formatTimeAgo: (value: number) => `${value}ms`,
@@ -200,13 +184,13 @@ const statusTestFormatting = {
   formatUpdateAvailableHint: () => "update available",
 };
 
-const statusTestMemoryResolvers = {
+export const statusTestMemoryResolvers = {
   resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" as Tone }),
   resolveMemoryFtsState: () => ({ state: "ready", tone: "warn" as Tone }),
   resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" as Tone }),
 };
 
-const statusTestTheme = {
+export const statusTestTheme = {
   heading: (value: string) => `# ${value}`,
   muted: (value: string) => `muted(${value})`,
   warn: (value: string) => `warn(${value})`,

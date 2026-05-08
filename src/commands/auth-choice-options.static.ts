@@ -1,6 +1,8 @@
 import { resolveLegacyAuthChoiceAliasesForCli } from "./auth-choice-legacy.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
+export type { AuthChoiceGroupId };
+
 export type AuthChoiceOption = {
   value: AuthChoice;
   label: string;

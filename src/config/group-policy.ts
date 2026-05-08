@@ -13,9 +13,9 @@ import {
   type ToolsBySenderKeyType,
 } from "./types.tools.js";
 
-type GroupPolicyChannel = ChannelId;
+export type GroupPolicyChannel = ChannelId;
 
-type ChannelGroupConfig = {
+export type ChannelGroupConfig = {
   requireMention?: boolean;
   ingest?: boolean;
   tools?: GroupToolPolicyConfig;
@@ -56,7 +56,7 @@ function resolveChannelGroupConfig(
   return groups[matchedKey];
 }
 
-type GroupToolPolicySender = {
+export type GroupToolPolicySender = {
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -372,7 +372,6 @@ export function resolveChannelGroupRequireMention(params: {
   accountId?: string | null;
   groupIdCaseInsensitive?: boolean;
   requireMentionOverride?: boolean;
-  configuredGroupDefaultsToNoMention?: boolean;
   overrideOrder?: "before-config" | "after-config";
 }): boolean {
   const { requireMentionOverride, overrideOrder = "after-config" } = params;
@@ -392,9 +391,6 @@ export function resolveChannelGroupRequireMention(params: {
   }
   if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
-  }
-  if (params.configuredGroupDefaultsToNoMention && groupConfig) {
-    return false;
   }
   return true;
 }

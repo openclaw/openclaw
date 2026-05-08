@@ -1,17 +1,19 @@
-import { promises as fs } from "node:fs";
+import ts from "typescript";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./bundled-plugin-paths.mjs";
 import {
-  collectModuleReferencesFromSource,
+  collectTypeScriptInventory,
   createCachedAsync,
   formatGroupedInventoryHuman,
   normalizeRepoPath,
   resolveRepoSpecifier,
+  visitModuleSpecifiers,
   writeLine,
 } from "./guard-inventory-utils.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveRepoRoot,
   resolveSourceRoots,
+  toLine,
 } from "./ts-guard-utils.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -36,29 +38,27 @@ function classifyResolvedExtensionReason(kind, boundaryLabel) {
   return `${verb} bundled plugin file from ${boundaryLabel} boundary`;
 }
 
-function scanImportBoundaryViolations(source, filePath, boundaryLabel, allowResolvedPath) {
+function scanImportBoundaryViolations(sourceFile, filePath, boundaryLabel, allowResolvedPath) {
   const entries = [];
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
 
-  for (const reference of collectModuleReferencesFromSource(source)) {
-    const kind = reference.kind;
-    const specifier = reference.specifier;
+  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
     if (!resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-      continue;
+      return;
     }
     if (allowResolvedPath?.(resolvedPath, { kind, specifier, file: relativeFile })) {
-      continue;
+      return;
     }
     entries.push({
       file: relativeFile,
-      line: reference.line,
+      line: toLine(sourceFile, specifierNode),
       kind,
       specifier,
       resolvedPath,
       reason: classifyResolvedExtensionReason(kind, boundaryLabel),
     });
-  }
+  });
 
   return entries;
 }
@@ -72,25 +72,22 @@ export function createExtensionImportBoundaryChecker(params) {
       .toSorted((left, right) =>
         normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
       );
-    const entriesByFile = await Promise.all(
-      files.map(async (filePath) => {
-        const source = await fs.readFile(filePath, "utf8");
-        if (
-          params.skipSourcesWithoutBundledPluginPrefix &&
-          !source.includes(BUNDLED_PLUGIN_PATH_PREFIX)
-        ) {
-          return [];
-        }
+    return await collectTypeScriptInventory({
+      ts,
+      files,
+      compareEntries,
+      collectEntries(sourceFile, filePath) {
         return scanImportBoundaryViolations(
-          source,
+          sourceFile,
           filePath,
           params.boundaryLabel,
           params.allowResolvedPath,
         );
-      }),
-    );
-    const inventory = entriesByFile.flat();
-    return inventory.toSorted(compareEntries);
+      },
+      shouldParseSource: params.skipSourcesWithoutBundledPluginPrefix
+        ? (source) => source.includes(BUNDLED_PLUGIN_PATH_PREFIX)
+        : undefined,
+    });
   });
 
   async function main(argv = process.argv.slice(2), io) {

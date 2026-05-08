@@ -1,8 +1,8 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+} from "../../../test/helpers/plugins/directory.ts";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   googlechatDirectoryAdapter,

@@ -4,15 +4,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 
 let mockStore: AuthProfileStore;
 let mockOrder: string[];
-const resolveEnvApiKeyMock = vi.hoisted(() =>
-  vi.fn(
-    (
-      _provider?: string,
-      _env?: NodeJS.ProcessEnv,
-      _options?: { config?: OpenClawConfig; workspaceDir?: string },
-    ) => null as { apiKey: string; source: string } | null,
-  ),
-);
 const githubCopilotTokenRefProfile: AuthProfileStore["profiles"][string] = {
   type: "token",
   provider: "github-copilot",
@@ -48,11 +39,7 @@ vi.mock("../../agents/model-auth.js", () => ({
   ensureAuthProfileStore: () => mockStore,
   resolveUsableCustomProviderApiKey: () => null,
   resolveAuthProfileOrder: () => mockOrder,
-  resolveEnvApiKey: (
-    provider?: string,
-    env?: NodeJS.ProcessEnv,
-    options?: { config?: OpenClawConfig; workspaceDir?: string },
-  ) => resolveEnvApiKeyMock(provider, env, options),
+  resolveEnvApiKey: () => null,
 }));
 
 const { resolveAuthLabel } = await import("./directive-handling.auth.js");
@@ -86,8 +73,6 @@ describe("resolveAuthLabel ref-aware labels", () => {
       profiles: {},
     };
     mockOrder = [];
-    resolveEnvApiKeyMock.mockReset();
-    resolveEnvApiKeyMock.mockReturnValue(null);
   });
 
   it("shows api-key (ref) for keyRef-only profiles in compact mode", async () => {
@@ -126,28 +111,5 @@ describe("resolveAuthLabel ref-aware labels", () => {
 
     expect(result.label).toContain("github-copilot:default=token:ref");
     expect(result.label).not.toContain("token:missing");
-  });
-
-  it("passes workspace scope to env auth labels", async () => {
-    const cfg = { plugins: { allow: ["workspace-auth-label"] } } as OpenClawConfig;
-    resolveEnvApiKeyMock.mockReturnValue({
-      apiKey: "workspace-local-credentials",
-      source: "workspace credentials",
-    });
-
-    const result = await resolveAuthLabel(
-      "anthropic",
-      cfg,
-      "/tmp/models.json",
-      "/tmp/agent",
-      "verbose",
-      "/tmp/workspace",
-    );
-
-    expect(resolveEnvApiKeyMock).toHaveBeenCalledWith("anthropic", process.env, {
-      config: cfg,
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(result.source).toBe("workspace credentials");
   });
 });

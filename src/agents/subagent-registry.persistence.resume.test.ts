@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import "./subagent-registry.mocks.shared.js";
 import {
   clearSessionStoreCacheForTest,
-  drainSessionStoreWriterQueuesForTest,
+  drainSessionStoreLockQueuesForTest,
 } from "../config/sessions/store.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -79,7 +79,6 @@ describe("subagent registry persistence resume", () => {
     sessionKey: string;
     sessionId?: string;
     updatedAt?: number;
-    abortedLastRun?: boolean;
   }) => {
     if (!tempStateDir) {
       throw new Error("tempStateDir not initialized");
@@ -90,7 +89,6 @@ describe("subagent registry persistence resume", () => {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       updatedAt: params.updatedAt,
-      abortedLastRun: params.abortedLastRun,
       defaultSessionId: `sess-${Date.now()}`,
     });
   };
@@ -131,7 +129,7 @@ describe("subagent registry persistence resume", () => {
     announceSpy.mockClear();
     mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
-    await drainSessionStoreWriterQueuesForTest();
+    await drainSessionStoreLockQueuesForTest();
     clearSessionStoreCacheForTest();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });

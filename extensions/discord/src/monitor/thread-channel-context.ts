@@ -1,18 +1,14 @@
-import { ChannelType } from "../internal/discord.js";
+import { ChannelType, type Client } from "@buape/carbon";
 import { normalizeDiscordSlug } from "./allow-list.js";
 import {
   resolveDiscordChannelIdSafe,
   resolveDiscordChannelInfoSafe,
   resolveDiscordChannelParentIdSafe,
 } from "./channel-access.js";
-import {
-  resolveDiscordChannelInfo,
-  type DiscordChannelInfo,
-  type DiscordChannelInfoClient,
-} from "./message-utils.js";
+import { resolveDiscordChannelInfo, type DiscordChannelInfo } from "./message-utils.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
-type DiscordThreadLikeChannelContext = {
+export type DiscordThreadLikeChannelContext = {
   channelType?: ChannelType;
   isThreadChannel: boolean;
   channelId: string;
@@ -25,7 +21,7 @@ type DiscordThreadLikeChannelContext = {
   channelInfo: DiscordChannelInfo | null;
 };
 
-function isDiscordThreadChannelType(type: ChannelType | number | undefined): boolean {
+export function isDiscordThreadChannelType(type: ChannelType | number | undefined): boolean {
   return (
     type === ChannelType.PublicThread ||
     type === ChannelType.PrivateThread ||
@@ -48,7 +44,7 @@ function buildFetchedChannelInfo(channel: unknown): DiscordChannelInfo | null {
 }
 
 export async function resolveDiscordThreadLikeChannelContext(params: {
-  client: DiscordChannelInfoClient;
+  client: Client;
   channel: unknown;
   channelIdFallback?: string;
   channelInfo?: DiscordChannelInfo | null;
@@ -101,7 +97,7 @@ export async function resolveDiscordThreadLikeChannelContext(params: {
 }
 
 export async function resolveFetchedDiscordThreadLikeChannelContext(params: {
-  client: DiscordChannelInfoClient;
+  client: Client;
   channel: unknown;
   channelIdFallback?: string;
 }): Promise<DiscordThreadLikeChannelContext> {

@@ -1,11 +1,11 @@
+import { describe, expect, it, vi } from "vitest";
 import {
   promptSetupWizardAllowFrom,
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedFinalize,

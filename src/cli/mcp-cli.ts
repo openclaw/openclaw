@@ -12,7 +12,6 @@ import {
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
-import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 function fail(message: string): never {
   defaultRuntime.error(message);
@@ -148,6 +147,4 @@ export function registerMcpCli(program: Command) {
       }
       defaultRuntime.log(`Removed MCP server "${name}" from ${result.path}.`);
     });
-
-  applyParentDefaultHelpAction(mcp);
 }

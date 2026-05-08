@@ -13,23 +13,23 @@ export {
 
 export type AttemptContextEngine = ContextEngine;
 
-export type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
-  bootstrapFiles: TBootstrapFile[];
-  contextFiles: TContextFile[];
+export type AttemptBootstrapContext = {
+  bootstrapFiles: unknown[];
+  contextFiles: unknown[];
 };
 
-export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
-  contextInjectionMode: "always" | "continuation-skip" | "never";
+export async function resolveAttemptBootstrapContext<
+  TContext extends AttemptBootstrapContext,
+>(params: {
+  contextInjectionMode: "always" | "continuation-skip";
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
   bootstrapMode?: BootstrapMode;
   sessionFile: string;
   hasCompletedBootstrapTurn: (sessionFile: string) => Promise<boolean>;
-  resolveBootstrapContextForRun: () => Promise<
-    AttemptBootstrapContext<TBootstrapFile, TContextFile>
-  >;
+  resolveBootstrapContextForRun: () => Promise<TContext>;
 }): Promise<
-  AttemptBootstrapContext<TBootstrapFile, TContextFile> & {
+  TContext & {
     isContinuationTurn: boolean;
     shouldRecordCompletedBootstrapTurn: boolean;
   }
@@ -39,16 +39,14 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat" &&
     (await params.hasCompletedBootstrapTurn(params.sessionFile));
-  const shouldSkipBootstrapInjection =
-    params.contextInjectionMode === "never" || isContinuationTurn;
   const shouldRecordCompletedBootstrapTurn =
-    !shouldSkipBootstrapInjection &&
+    !isContinuationTurn &&
     params.bootstrapContextMode !== "lightweight" &&
     params.bootstrapContextRunKind !== "heartbeat" &&
     params.bootstrapMode === "full";
 
-  const context = shouldSkipBootstrapInjection
-    ? { bootstrapFiles: [], contextFiles: [] }
+  const context = isContinuationTurn
+    ? ({ bootstrapFiles: [], contextFiles: [] } as unknown as TContext)
     : await params.resolveBootstrapContextForRun();
 
   return {

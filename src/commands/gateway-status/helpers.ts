@@ -276,12 +276,8 @@ export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
   return MISSING_SCOPE_PATTERN.test(probe.error ?? "");
 }
 
-export function isPostConnectProbeFailure(probe: GatewayProbeResult): boolean {
-  return !probe.ok && probe.connectLatencyMs != null;
-}
-
 export function isProbeReachable(probe: GatewayProbeResult): boolean {
-  return probe.ok || probe.connectLatencyMs != null;
+  return probe.ok || isScopeLimitedProbeFailure(probe);
 }
 
 function getGatewayProbeCapability(probe: GatewayProbeResult): GatewayProbeCapability {
@@ -338,7 +334,7 @@ function colorForGatewayProbeCapability(capability: GatewayProbeCapability) {
   }
 }
 
-function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
+export function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
   const capability = getGatewayProbeCapability(probe);
   return colorize(
     rich,

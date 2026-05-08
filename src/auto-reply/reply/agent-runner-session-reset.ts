@@ -10,7 +10,6 @@ import {
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
-import { replayRecentUserAssistantMessages } from "./session-transcript-replay.js";
 
 type ResetSessionOptions = {
   failureLabel: string;
@@ -56,13 +55,10 @@ export async function resetReplyRunSession(params: {
   }
   const prevSessionId = params.options.cleanupTranscripts ? prevEntry.sessionId : undefined;
   const nextSessionId = deps.generateSecureUuid();
-  const now = Date.now();
   const nextEntry: SessionEntry = {
     ...prevEntry,
     sessionId: nextSessionId,
-    updatedAt: now,
-    sessionStartedAt: now,
-    lastInteractionAt: now,
+    updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,
     modelProvider: undefined,
@@ -97,13 +93,6 @@ export async function resetReplyRunSession(params: {
       `Failed to persist session reset after ${params.options.failureLabel} (${params.sessionKey}): ${String(err)}`,
     );
   }
-  // Silent rotations (compaction/role-ordering) fire without user intent, so
-  // preserve recent user/assistant turns for direct-chat continuity.
-  await replayRecentUserAssistantMessages({
-    sourceTranscript: prevEntry.sessionFile,
-    targetTranscript: nextSessionFile,
-    newSessionId: nextSessionId,
-  });
   params.followupRun.run.sessionId = nextSessionId;
   params.followupRun.run.sessionFile = nextSessionFile;
   deps.refreshQueuedFollowupSession({

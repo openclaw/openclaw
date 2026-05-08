@@ -23,7 +23,7 @@ import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./sen
 import { createChatForHandle, resolveChatGuidForTarget } from "./send.js";
 import { type BlueBubblesAttachment } from "./types.js";
 
-type BlueBubblesAttachmentOpts = {
+export type BlueBubblesAttachmentOpts = {
   serverUrl?: string;
   password?: string;
   accountId?: string;
@@ -111,7 +111,7 @@ export async function downloadBlueBubblesAttachment(
   });
 }
 
-type SendBlueBubblesAttachmentResult = {
+export type SendBlueBubblesAttachmentResult = {
   messageId: string;
 };
 

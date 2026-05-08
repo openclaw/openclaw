@@ -1,12 +1,9 @@
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
-import type { CurrentTurnPromptContext } from "../../../agents/pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
-import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
-import type { SourceReplyDeliveryMode } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
@@ -25,10 +22,6 @@ export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
 export type FollowupRun = {
   prompt: string;
-  /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
-  transcriptPrompt?: string;
-  /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
-  currentTurnContext?: CurrentTurnPromptContext;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -75,8 +68,6 @@ export type FollowupRun = {
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
-    hasSessionModelOverride?: boolean;
-    modelOverrideSource?: "auto" | "user";
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;
@@ -94,13 +85,10 @@ export type FollowupRun = {
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
-    sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-    silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
     enforceFinalTag?: boolean;
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
-    allowEmptyAssistantReplyAsSilent?: boolean;
   };
 };
 

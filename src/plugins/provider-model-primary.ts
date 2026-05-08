@@ -1,7 +1,7 @@
 import type { AgentModelListConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
+export function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
   if (typeof model === "string") {
     return model;
   }

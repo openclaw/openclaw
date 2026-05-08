@@ -34,7 +34,7 @@ vi.mock("../infra/agent-events.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({
+  loadConfig: vi.fn(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
   })),
 }));

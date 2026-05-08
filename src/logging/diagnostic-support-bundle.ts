@@ -1,5 +1,6 @@
-import fsp from "node:fs/promises";
+import fs from "node:fs";
 import path from "node:path";
+import JSZip from "jszip";
 
 export type DiagnosticSupportBundleFile = {
   path: string;
@@ -13,7 +14,7 @@ export type DiagnosticSupportBundleContent = {
   bytes: number;
 };
 
-function supportBundleByteLength(content: string): number {
+export function supportBundleByteLength(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
 
@@ -60,7 +61,7 @@ export function supportBundleContents(
   }));
 }
 
-function assertSafeBundleRelativePath(pathName: string): string {
+export function assertSafeBundleRelativePath(pathName: string): string {
   const normalized = pathName.replaceAll("\\", "/");
   if (
     !normalized ||
@@ -72,12 +73,12 @@ function assertSafeBundleRelativePath(pathName: string): string {
   return normalized;
 }
 
-async function prepareSupportBundleDirectory(outputDir: string): Promise<void> {
-  await fsp.mkdir(path.dirname(outputDir), { recursive: true, mode: 0o700 });
-  await fsp.mkdir(outputDir, { mode: 0o700 });
+export function prepareSupportBundleDirectory(outputDir: string): void {
+  fs.mkdirSync(path.dirname(outputDir), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(outputDir, { mode: 0o700 });
 }
 
-function resolveSupportBundleFilePath(outputDir: string, pathName: string): string {
+export function resolveSupportBundleFilePath(outputDir: string, pathName: string): string {
   const safePath = assertSafeBundleRelativePath(pathName);
   const resolvedBase = path.resolve(outputDir);
   const resolvedFile = path.resolve(resolvedBase, safePath);
@@ -88,26 +89,40 @@ function resolveSupportBundleFilePath(outputDir: string, pathName: string): stri
   return resolvedFile;
 }
 
-async function writeSupportBundleFile(
-  outputDir: string,
-  file: DiagnosticSupportBundleFile,
-): Promise<void> {
+export function writeSupportBundleFile(outputDir: string, file: DiagnosticSupportBundleFile): void {
   const filePath = resolveSupportBundleFilePath(outputDir, file.path);
-  await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await fsp.writeFile(filePath, file.content, {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(filePath, file.content, {
     encoding: "utf8",
     flag: "wx",
     mode: 0o600,
   });
 }
 
-export async function writeSupportBundleDirectory(params: {
+export function copySupportBundleFile(params: {
+  outputDir: string;
+  sourceFile: string;
+  path: string;
+}): DiagnosticSupportBundleContent {
+  const outputPath = resolveSupportBundleFilePath(params.outputDir, params.path);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+  fs.copyFileSync(params.sourceFile, outputPath, fs.constants.COPYFILE_EXCL);
+  fs.chmodSync(outputPath, 0o600);
+  const stat = fs.statSync(outputPath);
+  return {
+    path: assertSafeBundleRelativePath(params.path),
+    mediaType: "application/x-ndjson",
+    bytes: stat.size,
+  };
+}
+
+export function writeSupportBundleDirectory(params: {
   outputDir: string;
   files: readonly DiagnosticSupportBundleFile[];
-}): Promise<DiagnosticSupportBundleContent[]> {
-  await prepareSupportBundleDirectory(params.outputDir);
+}): DiagnosticSupportBundleContent[] {
+  prepareSupportBundleDirectory(params.outputDir);
   for (const file of params.files) {
-    await writeSupportBundleFile(params.outputDir, file);
+    writeSupportBundleFile(params.outputDir, file);
   }
   return supportBundleContents(params.files);
 }
@@ -117,7 +132,6 @@ export async function writeSupportBundleZip(params: {
   files: readonly DiagnosticSupportBundleFile[];
   compressionLevel?: number;
 }): Promise<number> {
-  const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
   for (const file of params.files) {
     zip.file(assertSafeBundleRelativePath(file.path), file.content);
@@ -127,7 +141,7 @@ export async function writeSupportBundleZip(params: {
     compression: "DEFLATE",
     compressionOptions: { level: params.compressionLevel ?? 6 },
   });
-  await fsp.mkdir(path.dirname(params.outputPath), { recursive: true, mode: 0o700 });
-  await fsp.writeFile(params.outputPath, buffer, { mode: 0o600 });
+  fs.mkdirSync(path.dirname(params.outputPath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(params.outputPath, buffer, { mode: 0o600 });
   return buffer.length;
 }

@@ -1,8 +1,8 @@
 import { parseFenceSpans } from "../markdown/fences.js";
 
-type CanvasSurface = "assistant_message";
+export type CanvasSurface = "assistant_message";
 
-type CanvasPreview = {
+export type CanvasPreview = {
   kind: "canvas";
   surface: CanvasSurface;
   render: "url";

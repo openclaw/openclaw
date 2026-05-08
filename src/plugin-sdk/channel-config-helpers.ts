@@ -18,20 +18,6 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
-export {
-  ensureOpenDmPolicyAllowFromWildcard,
-  normalizeChannelDmPolicy,
-  normalizeLegacyDmAliases,
-  resolveChannelDmAccess,
-  resolveChannelDmAllowFrom,
-  resolveChannelDmPolicy,
-  setCanonicalDmAllowFrom,
-  type ChannelDmAccess,
-  type ChannelDmAllowFromMode,
-  type ChannelDmPolicy,
-  type DmAccessRecord,
-} from "../channels/plugins/dm-access.js";
-
 const INTERNAL_MESSAGE_CHANNEL = "webchat";
 
 export type ConfigWriteScope = ConfigWriteScopeLike;
@@ -608,14 +594,6 @@ export function createScopedDmSecurityResolver<
   channelKey: string;
   resolvePolicy: (account: ResolvedAccount) => string | null | undefined;
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
-  resolveAccess?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    account: ResolvedAccount;
-  }) => {
-    dmPolicy?: string | null;
-    allowFrom?: Array<string | number> | null;
-  };
   resolveFallbackAccountId?: (account: ResolvedAccount) => string | null | undefined;
   defaultPolicy?: string;
   allowFromPathSuffix?: string;
@@ -633,15 +611,14 @@ export function createScopedDmSecurityResolver<
     cfg: OpenClawConfig;
     accountId?: string | null;
     account: ResolvedAccount;
-  }) => {
-    const access = params.resolveAccess?.({ cfg, accountId, account });
-    return buildAccountScopedDmSecurityPolicy({
+  }) =>
+    buildAccountScopedDmSecurityPolicy({
       cfg,
       channelKey: params.channelKey,
       accountId,
       fallbackAccountId: params.resolveFallbackAccountId?.(account) ?? account.accountId,
-      policy: access?.dmPolicy ?? params.resolvePolicy(account),
-      allowFrom: access?.allowFrom ?? params.resolveAllowFrom(account) ?? [],
+      policy: params.resolvePolicy(account),
+      allowFrom: params.resolveAllowFrom(account) ?? [],
       defaultPolicy: params.defaultPolicy,
       allowFromPathSuffix: params.allowFromPathSuffix,
       policyPathSuffix: params.policyPathSuffix,
@@ -650,7 +627,6 @@ export function createScopedDmSecurityResolver<
       normalizeEntry: params.normalizeEntry,
       inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     });
-  };
 }
 
 export { buildAccountScopedDmSecurityPolicy };

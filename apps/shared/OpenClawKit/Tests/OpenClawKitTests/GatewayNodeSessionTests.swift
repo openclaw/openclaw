@@ -141,7 +141,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                 "maxBufferedBytes": 1,
                 "tickIntervalMs": 30_000,
             ],
-            "auth": [:],
         ]
         if let auth {
             payload["auth"] = auth

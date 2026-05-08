@@ -1,4 +1,3 @@
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -13,7 +12,7 @@ import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./types.js";
 
-type ConfigMaterializationMode = "load" | "missing" | "snapshot";
+export type ConfigMaterializationMode = "load" | "missing" | "snapshot";
 
 type MaterializationProfile = {
   includeCompactionDefaults: boolean;
@@ -54,7 +53,6 @@ export function asRuntimeConfig(config: OpenClawConfig): RuntimeConfig {
 export function materializeRuntimeConfig(
   config: OpenClawConfig,
   mode: ConfigMaterializationMode,
-  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
 ): RuntimeConfig {
   const profile = MATERIALIZATION_PROFILES[mode];
   let next = applyMessageDefaults(config);
@@ -64,12 +62,12 @@ export function materializeRuntimeConfig(
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
   if (profile.includeContextPruningDefaults) {
-    next = applyContextPruningDefaults(next, { manifestRegistry: options.manifestRegistry });
+    next = applyContextPruningDefaults(next);
   }
   if (profile.includeCompactionDefaults) {
     next = applyCompactionDefaults(next);
   }
-  next = applyModelDefaults(next, { manifestRegistry: options.manifestRegistry });
+  next = applyModelDefaults(next);
   next = applyTalkConfigNormalization(next);
   if (profile.normalizePaths) {
     normalizeConfigPaths(next);

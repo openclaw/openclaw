@@ -21,7 +21,6 @@ export async function resolveGatewayClientBootstrap(params: {
 }): Promise<{
   url: string;
   urlSource: string;
-  preauthHandshakeTimeoutMs?: number;
   auth: {
     token?: string;
     password?: string;
@@ -42,7 +41,6 @@ export async function resolveGatewayClientBootstrap(params: {
   return {
     url: connection.url,
     urlSource: connection.urlSource,
-    preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs,
     auth,
   };
 }

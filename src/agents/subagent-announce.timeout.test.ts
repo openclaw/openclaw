@@ -16,7 +16,7 @@ let callGatewayImpl: (request: GatewayCall) => Promise<unknown> = async (request
   return {};
 };
 let sessionStore: Record<string, Record<string, unknown>> = {};
-let configOverride: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
+let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -82,7 +82,7 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
       }
       return await callGatewayImpl(typed);
     },
-    getRuntimeConfig: () => configOverride,
+    loadConfig: () => configOverride,
     loadSessionStore: () => sessionStore,
     resolveAgentIdFromSessionKey: () => "main",
     resolveMainSessionKey: () => "agent:main:main",
@@ -170,7 +170,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: createGatewayCallModuleMock().callGateway,
-  getRuntimeConfig: () => configOverride,
+  loadConfig: () => configOverride,
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: () => "main",
   resolveStorePath: () => "/tmp/sessions-main.json",

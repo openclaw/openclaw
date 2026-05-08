@@ -3,14 +3,21 @@ import { resolveSilentReplyPolicy, resolveSilentReplyRewriteEnabled } from "./si
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 describe("silent reply config resolution", () => {
-  it("uses the default direct/group/internal policy", () => {
+  it("uses the default direct/group/internal policy and rewrite flags", () => {
     expect(resolveSilentReplyPolicy({ surface: "webchat" })).toBe("disallow");
+    expect(resolveSilentReplyRewriteEnabled({ surface: "webchat" })).toBe(true);
     expect(
       resolveSilentReplyPolicy({
         sessionKey: "agent:main:telegram:group:123",
         surface: "telegram",
       }),
     ).toBe("allow");
+    expect(
+      resolveSilentReplyRewriteEnabled({
+        sessionKey: "agent:main:telegram:group:123",
+        surface: "telegram",
+      }),
+    ).toBe(false);
     expect(
       resolveSilentReplyPolicy({
         sessionKey: "agent:main:subagent:abc",
@@ -27,11 +34,17 @@ describe("silent reply config resolution", () => {
             group: "disallow",
             internal: "allow",
           },
+          silentReplyRewrite: {
+            direct: false,
+            group: true,
+            internal: false,
+          },
         },
       },
     };
 
     expect(resolveSilentReplyPolicy({ cfg, surface: "webchat" })).toBe("disallow");
+    expect(resolveSilentReplyRewriteEnabled({ cfg, surface: "webchat" })).toBe(false);
     expect(
       resolveSilentReplyPolicy({
         cfg,
@@ -39,9 +52,16 @@ describe("silent reply config resolution", () => {
         surface: "discord",
       }),
     ).toBe("disallow");
+    expect(
+      resolveSilentReplyRewriteEnabled({
+        cfg,
+        sessionKey: "agent:main:discord:group:123",
+        surface: "discord",
+      }),
+    ).toBe(true);
   });
 
-  it("lets surface overrides beat the default policy", () => {
+  it("lets surface overrides beat the default policy and rewrite flags", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -50,12 +70,20 @@ describe("silent reply config resolution", () => {
             group: "allow",
             internal: "allow",
           },
+          silentReplyRewrite: {
+            direct: true,
+            group: false,
+            internal: false,
+          },
         },
       },
       surfaces: {
         telegram: {
           silentReply: {
             direct: "allow",
+          },
+          silentReplyRewrite: {
+            direct: false,
           },
         },
       },
@@ -68,34 +96,6 @@ describe("silent reply config resolution", () => {
         surface: "telegram",
       }),
     ).toBe("allow");
-  });
-
-  it("resolves rewrite defaults and surface overrides by conversation type", () => {
-    expect(resolveSilentReplyRewriteEnabled({ surface: "webchat" })).toBe(true);
-    expect(
-      resolveSilentReplyRewriteEnabled({
-        sessionKey: "agent:main:telegram:group:123",
-        surface: "telegram",
-      }),
-    ).toBe(false);
-
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          silentReplyRewrite: {
-            direct: true,
-          },
-        },
-      },
-      surfaces: {
-        telegram: {
-          silentReplyRewrite: {
-            direct: false,
-          },
-        },
-      },
-    };
-
     expect(
       resolveSilentReplyRewriteEnabled({
         cfg,

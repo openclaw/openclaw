@@ -7,14 +7,15 @@ import {
 
 export const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 export const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
+export const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
 
-const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
 const PERPLEXITY_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"];
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 export type PerplexityTransport = "search_api" | "chat_completions";
-type PerplexityRuntimeTransportContext = {
+export type PerplexityBaseUrlHint = "direct" | "openrouter";
+export type PerplexityRuntimeTransportContext = {
   searchConfig?: Record<string, unknown>;
   resolvedKey?: string;
   keySource: "config" | "secretRef" | "env" | "missing";
@@ -69,7 +70,7 @@ function normalizeLowercaseStringOrEmpty(value: unknown): string {
 
 export function inferPerplexityBaseUrlFromApiKey(
   apiKey?: string,
-): "direct" | "openrouter" | undefined {
+): PerplexityBaseUrlHint | undefined {
   if (!apiKey) {
     return undefined;
   }
@@ -93,7 +94,7 @@ export function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
   }
 }
 
-function resolvePerplexityRuntimeTransport(
+export function resolvePerplexityRuntimeTransport(
   params: PerplexityRuntimeTransportContext,
 ): PerplexityTransport | undefined {
   const perplexity = params.searchConfig?.perplexity;

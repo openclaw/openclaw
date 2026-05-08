@@ -110,9 +110,6 @@ describe("cron protocol conformance", () => {
       "billing",
       "timeout",
       "model_not_found",
-      "empty_response",
-      "no_error_details",
-      "unclassified",
       "unknown",
     ]);
   });

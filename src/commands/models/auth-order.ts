@@ -1,7 +1,6 @@
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   type AuthProfileStore,
-  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   resolveAuthStatePathForDisplay,
   setAuthProfileOrder,
@@ -49,9 +48,9 @@ export async function modelsAuthOrderGetCommand(
   opts: { provider: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
 ) {
-  const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
+  const { agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
   const store = ensureAuthProfileStore(agentDir, {
-    externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
+    allowKeychainPrompt: false,
   });
   const order = describeOrder(store, provider);
 
@@ -95,10 +94,10 @@ export async function modelsAuthOrderSetCommand(
   opts: { provider: string; agent?: string; order: string[] },
   runtime: RuntimeEnv,
 ) {
-  const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
+  const { agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
 
   const store = ensureAuthProfileStore(agentDir, {
-    externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
+    allowKeychainPrompt: false,
   });
   const providerKey = provider;
   const requested = normalizeStringEntries(opts.order ?? []);

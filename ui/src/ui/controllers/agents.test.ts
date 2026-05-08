@@ -73,8 +73,6 @@ function createSaveState(): {
       configSearchQuery: "",
       configActiveSection: null,
       configActiveSubsection: null,
-      pendingUpdateExpectedVersion: null,
-      updateStatusBanner: null,
       lastError: null,
     },
     request,

@@ -1,26 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { twilioApiRequest } from "./api.js";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
-}));
-
-vi.mock("../../../api.js", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
-}));
-
-import { TwilioApiError, twilioApiRequest } from "./api.js";
+const originalFetch = globalThis.fetch;
 
 describe("twilioApiRequest", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockReset();
+    globalThis.fetch = originalFetch;
   });
 
   it("posts form bodies with basic auth and parses json", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ sid: "CA123" }), { status: 200 }),
-      release,
-    });
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ sid: "CA123" }), { status: 200 });
+    }) as unknown as typeof fetch;
 
     await expect(
       twilioApiRequest({
@@ -35,12 +26,8 @@ describe("twilioApiRequest", () => {
       }),
     ).resolves.toEqual({ sid: "CA123" });
 
-    const [{ url, init, auditContext, policy, timeoutMs }] =
-      fetchWithSsrFGuardMock.mock.calls[0] ?? [];
+    const [url, init] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
     expect(url).toBe("https://api.twilio.com/Calls.json");
-    expect(auditContext).toBe("voice-call.twilio.api");
-    expect(policy).toEqual({ allowedHostnames: ["api.twilio.com"] });
-    expect(timeoutMs).toBe(30_000);
     expect(init).toEqual(
       expect.objectContaining({
         method: "POST",
@@ -57,7 +44,6 @@ describe("twilioApiRequest", () => {
     expect(requestBody.toString()).toBe(
       "To=%2B14155550123&StatusCallbackEvent=initiated&StatusCallbackEvent=completed",
     );
-    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("passes through URLSearchParams, allows 404s, and returns undefined for empty bodies", async () => {
@@ -65,11 +51,7 @@ describe("twilioApiRequest", () => {
       new Response(null, { status: 204 }),
       new Response("missing", { status: 404 }),
     ];
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockImplementation(async () => ({
-      response: responses.shift()!,
-      release,
-    }));
+    globalThis.fetch = vi.fn(async () => responses.shift()!) as unknown as typeof fetch;
 
     await expect(
       twilioApiRequest({
@@ -91,15 +73,12 @@ describe("twilioApiRequest", () => {
         allowNotFound: true,
       }),
     ).resolves.toBeUndefined();
-    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("throws twilio api errors for non-ok responses", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("bad request", { status: 400 }),
-      release,
-    });
+    globalThis.fetch = vi.fn(
+      async () => new Response("bad request", { status: 400 }),
+    ) as unknown as typeof fetch;
 
     await expect(
       twilioApiRequest({
@@ -110,36 +89,5 @@ describe("twilioApiRequest", () => {
         body: {},
       }),
     ).rejects.toThrow("Twilio API error: 400 bad request");
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("exposes structured Twilio error codes from json error bodies", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          code: 21220,
-          message: "Call is not in-progress. Cannot redirect.",
-        }),
-        { status: 400 },
-      ),
-      release,
-    });
-
-    await expect(
-      twilioApiRequest({
-        baseUrl: "https://api.twilio.com",
-        accountSid: "AC123",
-        authToken: "secret",
-        endpoint: "/Calls/CA123.json",
-        body: {},
-      }),
-    ).rejects.toMatchObject({
-      name: "TwilioApiError",
-      httpStatus: 400,
-      twilioCode: 21220,
-      message: "Twilio API error: 400 Call is not in-progress. Cannot redirect.",
-    } satisfies Partial<TwilioApiError>);
-    expect(release).toHaveBeenCalledTimes(1);
   });
 });

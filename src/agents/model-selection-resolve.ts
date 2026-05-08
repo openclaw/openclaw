@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelRef } from "./model-selection-normalize.js";
 import {
+  buildAllowedModelSetWithFallbacks,
   buildModelAliasIndex,
   getModelRefStatusWithFallbackModels,
   resolveAllowedModelRefFromAliasIndex,
@@ -11,16 +12,38 @@ import {
 
 export {
   buildConfiguredAllowlistKeys,
+  buildConfiguredModelCatalog,
   buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
-export type { ModelRefStatus } from "./model-selection-shared.js";
+export type { ModelAliasIndex, ModelRefStatus } from "./model-selection-shared.js";
 
 function resolveDefaultFallbackModels(cfg: OpenClawConfig): string[] {
   return resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+}
+
+export function buildAllowedModelSet(params: {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  defaultProvider: string;
+  defaultModel?: string;
+}): {
+  allowAny: boolean;
+  allowedCatalog: ModelCatalogEntry[];
+  allowedKeys: Set<string>;
+} {
+  const { cfg, catalog, defaultProvider, defaultModel } = params;
+  return buildAllowedModelSetWithFallbacks({
+    cfg,
+    catalog,
+    defaultProvider,
+    defaultModel,
+    fallbackModels: resolveDefaultFallbackModels(cfg),
+  });
 }
 
 export function getModelRefStatus(params: {

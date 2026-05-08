@@ -21,7 +21,7 @@ export function createActiveRun(
   };
 }
 
-type ChatAbortTestContext = Record<string, unknown> & {
+export type ChatAbortTestContext = Record<string, unknown> & {
   chatAbortControllers: Map<string, ReturnType<typeof createActiveRun>>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
@@ -34,7 +34,7 @@ type ChatAbortTestContext = Record<string, unknown> & {
   logGateway: { warn: (...args: unknown[]) => void };
 };
 
-type ChatAbortRespondMock = Mock<RespondFn>;
+export type ChatAbortRespondMock = Mock<RespondFn>;
 
 export function createChatAbortContext(
   overrides: Record<string, unknown> = {},

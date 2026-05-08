@@ -2,7 +2,7 @@
 summary: "Gemini web search with Google Search grounding"
 read_when:
   - You want to use Gemini for web_search
-  - You need a GEMINI_API_KEY or models.providers.google.apiKey
+  - You need a GEMINI_API_KEY
   - You want Google Search grounding
 title: "Gemini search"
 ---
@@ -20,8 +20,7 @@ citations.
     API key.
   </Step>
   <Step title="Store the key">
-    Set `GEMINI_API_KEY` in the Gateway environment, reuse
-    `models.providers.google.apiKey`, or configure a dedicated web-search key via:
+    Set `GEMINI_API_KEY` in the Gateway environment, or configure via:
 
     ```bash
     openclaw configure --section web
@@ -39,8 +38,7 @@ citations.
       google: {
         config: {
           webSearch: {
-            apiKey: "AIza...", // optional if GEMINI_API_KEY or models.providers.google.apiKey is set
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta", // optional; falls back to models.providers.google.baseUrl
+            apiKey: "AIza...", // optional if GEMINI_API_KEY is set
             model: "gemini-2.5-flash", // default
           },
         },
@@ -57,13 +55,8 @@ citations.
 }
 ```
 
-**Credential precedence:** Gemini web search uses
-`plugins.entries.google.config.webSearch.apiKey` first, then `GEMINI_API_KEY`,
-then `models.providers.google.apiKey`. For base URLs, the dedicated
-`plugins.entries.google.config.webSearch.baseUrl` wins before
-`models.providers.google.baseUrl`.
-
-For a gateway install, put env keys in `~/.openclaw/.env`.
+**Environment alternative:** set `GEMINI_API_KEY` in the Gateway environment.
+For a gateway install, put it in `~/.openclaw/.env`.
 
 ## How it works
 
@@ -81,31 +74,20 @@ URLs.
 
 ## Supported parameters
 
-Gemini search supports `query`, `freshness`, `date_after`, and `date_before`.
+Gemini search supports `query`.
 
 `count` is accepted for shared `web_search` compatibility, but Gemini grounding
 still returns one synthesized answer with citations rather than an N-result
 list.
 
-`freshness` accepts `day`, `week`, `month`, `year`, and the shared shortcuts
-`pd`, `pw`, `pm`, and `py`. OpenClaw converts these values, or an explicit
-`date_after`/`date_before` range, into Gemini Google Search grounding's
-`timeRangeFilter`. `country`, `language`, and `domain_filter` are not supported.
+Provider-specific filters like `country`, `language`, `freshness`, and
+`domain_filter` are not supported.
 
 ## Model selection
 
 The default model is `gemini-2.5-flash` (fast and cost-effective). Any Gemini
 model that supports grounding can be used via
 `plugins.entries.google.config.webSearch.model`.
-
-## Base URL overrides
-
-Set `plugins.entries.google.config.webSearch.baseUrl` when Gemini web search
-must route through an operator proxy or custom Gemini-compatible endpoint. If
-that is unset, Gemini web search reuses `models.providers.google.baseUrl`. A plain
-`https://generativelanguage.googleapis.com` value is normalized to
-`https://generativelanguage.googleapis.com/v1beta`; custom proxy paths are kept
-as provided after trimming trailing slashes.
 
 ## Related
 

@@ -20,7 +20,6 @@ function createJsonResponse(body: unknown, init?: { status?: number }) {
 describe("loginOpenAICodexDeviceCode", () => {
   it("requests a device code, polls for authorization, and exchanges OAuth tokens", async () => {
     vi.useFakeTimers();
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     try {
       const fetchMock = vi
         .fn()
@@ -79,38 +78,6 @@ describe("loginOpenAICodexDeviceCode", () => {
         "https://auth.openai.com/api/accounts/deviceauth/usercode",
         expect.objectContaining({
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            originator: "openclaw",
-            version: "2026.3.22",
-            "User-Agent": "openclaw/2026.3.22",
-          },
-        }),
-      );
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        2,
-        "https://auth.openai.com/api/accounts/deviceauth/token",
-        expect.objectContaining({
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            originator: "openclaw",
-            version: "2026.3.22",
-            "User-Agent": "openclaw/2026.3.22",
-          },
-        }),
-      );
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        4,
-        "https://auth.openai.com/oauth/token",
-        expect.objectContaining({
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            originator: "openclaw",
-            version: "2026.3.22",
-            "User-Agent": "openclaw/2026.3.22",
-          },
         }),
       );
       expect(onVerification).toHaveBeenCalledWith({
@@ -129,7 +96,6 @@ describe("loginOpenAICodexDeviceCode", () => {
       expect(credentials.expires).toBeGreaterThan(Date.now());
     } finally {
       vi.useRealTimers();
-      vi.unstubAllEnvs();
     }
   });
 

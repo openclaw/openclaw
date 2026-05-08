@@ -22,7 +22,7 @@ function buildReplayKey(params: { roomToken: string; messageId: string }): strin
   return `${roomToken}:${messageId}`;
 }
 
-type NextcloudTalkReplayGuardOptions = {
+export type NextcloudTalkReplayGuardOptions = {
   stateDir?: string;
   ttlMs?: number;
   memoryMaxSize?: number;

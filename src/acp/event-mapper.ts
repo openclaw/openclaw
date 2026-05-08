@@ -13,7 +13,7 @@ import {
 } from "../shared/string-coerce.js";
 import { asRecord } from "./record-shared.js";
 
-type GatewayAttachment = {
+export type GatewayAttachment = {
   type: string;
   mimeType: string;
   content: string;

@@ -10,7 +10,7 @@ import {
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { OPENAI_API_KEY_LABEL, OPENAI_API_KEY_WIZARD_GROUP } from "./auth-choice-copy.js";
+import { OPENAI_API_KEY_LABEL, OPENAI_WIZARD_GROUP } from "./auth-choice-copy.js";
 import { isOpenAIApiBaseUrl } from "./base-url.js";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import {
@@ -20,7 +20,6 @@ import {
   findCatalogTemplate,
   matchesExactOrPrefix,
 } from "./shared.js";
-import { resolveOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_GPT_55_MODEL_ID = "gpt-5.5";
@@ -60,6 +59,15 @@ const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
 const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5-mini"] as const;
 const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = ["gpt-5-nano", "gpt-5-mini"] as const;
+const OPENAI_XHIGH_MODEL_IDS = [
+  OPENAI_GPT_55_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+  OPENAI_GPT_54_MODEL_ID,
+  OPENAI_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_54_MINI_MODEL_ID,
+  OPENAI_GPT_54_NANO_MODEL_ID,
+  "gpt-5.2",
+] as const;
 const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
@@ -69,6 +77,8 @@ const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_GPT_54_NANO_MODEL_ID,
   "gpt-5.2",
 ] as const;
+const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 function shouldUseOpenAIResponsesTransport(params: {
   provider: string;
   api?: string | null;
@@ -212,7 +222,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         wizard: {
           choiceId: "openai-api-key",
           choiceLabel: OPENAI_API_KEY_LABEL,
-          ...OPENAI_API_KEY_WIZARD_GROUP,
+          ...OPENAI_WIZARD_GROUP,
         },
       }),
     ],
@@ -227,17 +237,40 @@ export function buildOpenAIProvider(): ProviderPlugin {
       shouldUseOpenAIResponsesTransport({ provider, api, baseUrl })
         ? { api: "openai-responses", baseUrl }
         : undefined,
-    ...buildOpenAIResponsesProviderHooks({ transport: "sse" }),
+    ...buildOpenAIResponsesProviderHooks({ openaiWsWarmup: true }),
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     resolveReasoningOutputMode: () => "native",
-    resolveThinkingProfile: ({ modelId }) => resolveOpenAIThinkingProfile(modelId),
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS)
+          ? [{ id: "xhigh" as const }]
+          : []),
+      ],
+    }),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     buildMissingAuthMessage: (ctx) => {
       if (ctx.provider !== PROVIDER_ID || ctx.listProfileIds("openai-codex").length === 0) {
         return undefined;
       }
       return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.5, or set OPENAI_API_KEY for direct OpenAI API access.';
+    },
+    suppressBuiltInModel: (ctx) => {
+      if (
+        !SUPPRESSED_SPARK_PROVIDERS.has(normalizeProviderId(ctx.provider)) ||
+        normalizeLowercaseStringOrEmpty(ctx.modelId) !== OPENAI_DIRECT_SPARK_MODEL_ID
+      ) {
+        return undefined;
+      }
+      return {
+        suppress: true,
+        errorMessage: `Unknown model: ${ctx.provider}/${OPENAI_DIRECT_SPARK_MODEL_ID}. ${OPENAI_DIRECT_SPARK_MODEL_ID} is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`,
+      };
     },
     augmentModelCatalog: (ctx) => {
       const openAiGpt55ProTemplate = findCatalogTemplate({

@@ -16,7 +16,6 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ThinkLevel } from "./directives.js";
 export {
   resolveModelDirectiveSelection,
@@ -32,8 +31,6 @@ type ModelSelectionState = {
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
-  resetModelOverrideRef?: string;
-  resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
@@ -51,8 +48,6 @@ export function createFastTestModelSelectionState(params: {
     allowedModelKeys: new Set<string>(),
     allowedModelCatalog: [],
     resetModelOverride: false,
-    resetModelOverrideRef: undefined,
-    resolveThinkingCatalog: async () => [],
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
     needsModelCatalog: false,
@@ -63,19 +58,21 @@ function shouldLogModelSelectionTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
 
-const modelCatalogRuntimeLoader = createLazyImportLoader(
-  () => import("../../agents/model-catalog.runtime.js"),
-);
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
-);
+let modelCatalogRuntimePromise:
+  | Promise<typeof import("../../agents/model-catalog.runtime.js")>
+  | undefined;
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
 
 function loadModelCatalogRuntime() {
-  return modelCatalogRuntimeLoader.load();
+  modelCatalogRuntimePromise ??= import("../../agents/model-catalog.runtime.js");
+  return modelCatalogRuntimePromise;
 }
 
 function loadSessionStoreRuntime() {
-  return sessionStoreRuntimeLoader.load();
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
 }
 
 export async function createModelSelectionState(params: {
@@ -130,13 +127,14 @@ export async function createModelSelectionState(params: {
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
-  let resetModelOverrideRef: string | undefined;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
   const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
     overrideProvider: sessionEntry?.providerOverride,
     overrideModel: sessionEntry?.modelOverride,
   });
+  const hadDirectAutoSessionOverride =
+    sessionEntry?.modelOverrideSource === "auto" && Boolean(directStoredOverride);
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -172,7 +170,42 @@ export async function createModelSelectionState(params: {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
 
-  if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
+  // Auto-failover overrides are transient: on this turn, retry the configured
+  // primary so the session self-heals when the primary recovers. The fallback loop
+  // in runWithModelFallback will re-set the override if the primary is still down.
+  // User-selected overrides (/model command) are preserved across turns.
+  //
+  // Clear this before allowlist validation so an old fallback outside the current
+  // agent allowlist does not emit the unrelated "Model override not allowed" event.
+  if (hadDirectAutoSessionOverride && sessionEntry && sessionStore && sessionKey) {
+    const { updated } = applyModelOverrideToSessionEntry({
+      entry: sessionEntry,
+      selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+    });
+    if (updated) {
+      sessionStore[sessionKey] = sessionEntry;
+      if (storePath) {
+        await (
+          await loadSessionStoreRuntime()
+        ).updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
+      }
+      // Reset in-memory selection to the configured primary. The caller-provided
+      // provider/model may already be set to the fallback by stored-override preload
+      // in get-reply.ts; updating them here ensures this turn retries the primary.
+      provider = defaultProvider;
+      model = defaultModel;
+    }
+  }
+
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    directStoredOverride &&
+    !hadDirectAutoSessionOverride
+  ) {
     const normalizedOverride = normalizeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
@@ -194,19 +227,18 @@ export async function createModelSelectionState(params: {
         }
       }
       resetModelOverride = updated;
-      if (updated) {
-        resetModelOverrideRef = key;
-      }
     }
   }
 
-  const storedOverride = resolveStoredModelOverride({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey,
-    defaultProvider,
-  });
+  const storedOverride = hadDirectAutoSessionOverride
+    ? undefined
+    : resolveStoredModelOverride({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        parentSessionKey,
+        defaultProvider,
+      });
   // Skip stored session model override only when an explicit heartbeat.model
   // was resolved. Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
@@ -242,10 +274,17 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  let thinkingCatalog: ModelCatalog | undefined;
-  const resolveThinkingCatalog = async () => {
-    if (thinkingCatalog) {
-      return thinkingCatalog;
+  let defaultThinkingLevel: ThinkLevel | undefined;
+  const resolveDefaultThinkingLevel = async () => {
+    if (defaultThinkingLevel) {
+      return defaultThinkingLevel;
+    }
+    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
+    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
+    if (explicitThinkingDefault) {
+      defaultThinkingLevel = explicitThinkingDefault;
+      return defaultThinkingLevel;
     }
     let catalogForThinking =
       modelCatalog && modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
@@ -267,23 +306,6 @@ export async function createModelSelectionState(params: {
             : allowedModelCatalog
           : allowedModelCatalog;
     }
-    thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
-    return thinkingCatalog;
-  };
-
-  let defaultThinkingLevel: ThinkLevel | undefined;
-  const resolveDefaultThinkingLevel = async () => {
-    if (defaultThinkingLevel) {
-      return defaultThinkingLevel;
-    }
-    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
-    const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
-    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
-    if (explicitThinkingDefault) {
-      defaultThinkingLevel = explicitThinkingDefault;
-      return defaultThinkingLevel;
-    }
-    const catalogForThinking = await resolveThinkingCatalog();
     const resolved = resolveThinkingDefault({
       cfg,
       provider,
@@ -314,8 +336,6 @@ export async function createModelSelectionState(params: {
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
-    resetModelOverrideRef,
-    resolveThinkingCatalog,
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,
     needsModelCatalog,

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import {
   DEFAULT_RECENT_MINUTES,
@@ -40,7 +40,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = (readStringParam(params, "action") ?? "list") as SubagentAction;
-      const cfg = getRuntimeConfig();
+      const cfg = loadConfig();
       const controller = resolveSubagentController({
         cfg,
         agentSessionKey: opts?.agentSessionKey,

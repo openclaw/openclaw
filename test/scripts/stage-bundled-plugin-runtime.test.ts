@@ -20,9 +20,17 @@ describe("stageBundledPluginRuntime", () => {
 
   it("copies files when Windows rejects runtime overlay symlinks", async () => {
     await withTempDir(async (repoRoot) => {
-      const sourceFile = path.join(repoRoot, "dist", "extensions", "acpx", "assets", "fixture.txt");
+      const sourceFile = path.join(
+        repoRoot,
+        "dist",
+        "extensions",
+        "acpx",
+        "skills",
+        "acp-router",
+        "fixture.txt",
+      );
       await fs.promises.mkdir(path.dirname(sourceFile), { recursive: true });
-      await fs.promises.writeFile(sourceFile, "asset-body\n", "utf8");
+      await fs.promises.writeFile(sourceFile, "skill-body\n", "utf8");
 
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const symlinkSpy = vi
@@ -46,10 +54,11 @@ describe("stageBundledPluginRuntime", () => {
         "dist-runtime",
         "extensions",
         "acpx",
-        "assets",
+        "skills",
+        "acp-router",
         "fixture.txt",
       );
-      expect(await fs.promises.readFile(runtimeFile, "utf8")).toBe("asset-body\n");
+      expect(await fs.promises.readFile(runtimeFile, "utf8")).toBe("skill-body\n");
       expect(fs.lstatSync(runtimeFile).isSymbolicLink()).toBe(false);
       expect(symlinkSpy).toHaveBeenCalled();
     });

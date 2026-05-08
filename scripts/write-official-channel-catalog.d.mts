@@ -8,13 +8,9 @@ export function buildOfficialChannelCatalog(params?: { repoRoot?: string; cwd?: 
     openclaw: {
       channel: Record<string, unknown>;
       install: {
-        clawhubSpec?: string;
-        npmSpec?: string;
+        npmSpec: string;
         localPath?: string;
-        defaultChoice?: "clawhub" | "npm" | "local";
-        minHostVersion?: string;
-        expectedIntegrity?: string;
-        allowInvalidConfigRecovery?: boolean;
+        defaultChoice?: "npm" | "local";
       };
     };
   }>;

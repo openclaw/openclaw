@@ -9,11 +9,6 @@ import {
 } from "./agents.bind.test-support.js";
 import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
 
-const pluginRegistryMocks = vi.hoisted(() => ({
-  loadPluginRegistrySnapshot: vi.fn(() => ({})),
-  listPluginContributionIds: vi.fn(() => ["external-chat"]),
-}));
-
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentEntries: (
     cfg: {
@@ -31,12 +26,6 @@ vi.mock("../config/bindings.js", () => ({
   isRouteBinding: (binding: { match?: unknown }) => Boolean(binding.match),
   listRouteBindings: (cfg: { bindings?: Array<{ match?: unknown }> }) =>
     (cfg.bindings ?? []).filter((binding) => Boolean(binding.match)),
-}));
-
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
-  listPluginContributionIds: pluginRegistryMocks.listPluginContributionIds,
 }));
 
 type BindingResolverTestPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> & {
@@ -70,12 +59,6 @@ function createBindingResolverTestPlugin(params: {
 }
 
 vi.mock("../channels/plugins/index.js", () => {
-  return {
-    getLoadedChannelPlugin: () => undefined,
-  };
-});
-
-vi.mock("../channels/plugins/bundled.js", () => {
   const knownChannels = new Map([
     [
       "discord",
@@ -95,9 +78,16 @@ vi.mock("../channels/plugins/bundled.js", () => {
     ],
   ]);
   return {
-    getBundledChannelSetupPlugin: (channel: string) => {
+    getChannelPlugin: (channel: string) => {
       const normalized = channel.trim().toLowerCase();
       return knownChannels.get(normalized);
+    },
+    normalizeChannelId: (channel: string) => {
+      const normalized = channel.trim().toLowerCase();
+      if (knownChannels.has(normalized)) {
+        return normalized;
+      }
+      return undefined;
     },
   };
 });
@@ -114,8 +104,6 @@ describe("agents bind/unbind commands", () => {
 
   beforeEach(() => {
     resetAgentsBindTestHarness();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockClear();
-    pluginRegistryMocks.listPluginContributionIds.mockClear();
   });
 
   it("lists all bindings by default", async () => {
@@ -150,29 +138,6 @@ describe("agents bind/unbind commands", () => {
         bindings: [{ type: "route", agentId: "main", match: { channel: "telegram" } }],
       }),
     );
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("binds manifest-known external channels without loading plugin runtime", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {},
-    });
-
-    await agentsBindCommand({ bind: ["external-chat:work"] }, runtime);
-
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindings: [
-          {
-            type: "route",
-            agentId: "main",
-            match: { channel: "external-chat", accountId: "work" },
-          },
-        ],
-      }),
-    );
-    expect(pluginRegistryMocks.loadPluginRegistrySnapshot).toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

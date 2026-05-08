@@ -1,9 +1,4 @@
-import type { ChannelRouteTargetInput } from "../plugin-sdk/channel-route.js";
-
-export type DeliveryContext = Pick<
-  ChannelRouteTargetInput,
-  "accountId" | "channel" | "threadId" | "to"
-> & {
+export type DeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;

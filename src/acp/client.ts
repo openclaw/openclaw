@@ -21,7 +21,15 @@ import {
   shouldStripProviderAuthEnvVarsForAcpServer,
 } from "./client-helpers.js";
 
-type AcpClientOptions = {
+export {
+  buildAcpClientStripKeys,
+  resolveAcpClientSpawnEnv,
+  resolveAcpClientSpawnInvocation,
+  resolvePermissionRequest,
+  shouldStripProviderAuthEnvVarsForAcpServer,
+} from "./client-helpers.js";
+
+export type AcpClientOptions = {
   cwd?: string;
   serverCommand?: string;
   serverArgs?: string[];
@@ -29,7 +37,7 @@ type AcpClientOptions = {
   verbose?: boolean;
 };
 
-type AcpClientHandle = {
+export type AcpClientHandle = {
   client: ClientSideConnection;
   agent: ChildProcess;
   sessionId: string;
@@ -104,7 +112,7 @@ function printSessionUpdate(notification: SessionNotification): void {
   }
 }
 
-async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
+export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};

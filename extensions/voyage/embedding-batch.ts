@@ -26,17 +26,17 @@ import type { VoyageEmbeddingClient } from "./embedding-provider.js";
  * Voyage Batch API Input Line format.
  * See: https://docs.voyageai.com/docs/batch-inference
  */
-type VoyageBatchRequest = {
+export type VoyageBatchRequest = {
   custom_id: string;
   body: {
     input: string | string[];
   };
 };
 
-type VoyageBatchStatus = EmbeddingBatchStatus;
-type VoyageBatchOutputLine = ProviderBatchOutputLine;
+export type VoyageBatchStatus = EmbeddingBatchStatus;
+export type VoyageBatchOutputLine = ProviderBatchOutputLine;
 
-const VOYAGE_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
+export const VOYAGE_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const VOYAGE_BATCH_COMPLETION_WINDOW = "12h";
 const VOYAGE_BATCH_MAX_REQUESTS = 50000;
 

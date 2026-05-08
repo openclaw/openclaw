@@ -7,6 +7,8 @@ import {
 } from "../../shared/string-coerce.js";
 import { extractSimpleExplicitGroupId } from "./group-id-simple.js";
 
+export { extractSimpleExplicitGroupId };
+
 export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {

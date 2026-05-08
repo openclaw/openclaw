@@ -159,7 +159,7 @@ export async function validateConsentUploadUrl(
   }
 }
 
-interface FileConsentCardParams {
+export interface FileConsentCardParams {
   filename: string;
   description?: string;
   sizeInBytes: number;
@@ -167,7 +167,7 @@ interface FileConsentCardParams {
   context?: Record<string, unknown>;
 }
 
-interface FileInfoCardParams {
+export interface FileInfoCardParams {
   filename: string;
   contentUrl: string;
   uniqueId: string;
@@ -207,7 +207,7 @@ export function buildFileInfoCard(params: FileInfoCardParams) {
   };
 }
 
-interface FileConsentUploadInfo {
+export interface FileConsentUploadInfo {
   name: string;
   uploadUrl: string;
   contentUrl: string;
@@ -215,7 +215,7 @@ interface FileConsentUploadInfo {
   fileType: string;
 }
 
-interface FileConsentResponse {
+export interface FileConsentResponse {
   action: "accept" | "decline";
   uploadInfo?: FileConsentUploadInfo;
   context?: Record<string, unknown>;

@@ -10,7 +10,7 @@ import {
   sanitizeSupportSnapshotValue,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
 import { VERSION } from "../version.js";
 
@@ -46,7 +46,6 @@ type BuildTrajectoryArtifactsParams = {
   timedOut: boolean;
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
-  timedOutDuringToolExecution: boolean;
   promptError?: string;
   promptErrorSource?: string | null;
   usage?: unknown;
@@ -137,14 +136,14 @@ function buildPluginsFromManifest(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }) {
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params.config ?? {},
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env ?? process.env,
+    env: params.env,
   });
   return {
     source: "manifest-registry",
-    entries: snapshot.plugins
+    entries: registry.plugins
       .map((plugin) => ({
         id: plugin.id,
         name: plugin.name,
@@ -304,7 +303,6 @@ export function buildTrajectoryArtifacts(
     timedOut: params.timedOut,
     idleTimedOut: params.idleTimedOut,
     timedOutDuringCompaction: params.timedOutDuringCompaction,
-    timedOutDuringToolExecution: params.timedOutDuringToolExecution,
     promptError: params.promptError,
     promptErrorSource: params.promptErrorSource,
     usage: params.usage,

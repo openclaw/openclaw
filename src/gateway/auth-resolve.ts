@@ -2,7 +2,7 @@ import type {
   GatewayAuthConfig,
   GatewayTailscaleMode,
   GatewayTrustedProxyConfig,
-} from "../config/types.gateway.js";
+} from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 

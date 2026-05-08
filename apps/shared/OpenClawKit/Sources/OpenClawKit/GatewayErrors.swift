@@ -1,5 +1,5 @@
-import Foundation
 import OpenClawProtocol
+import Foundation
 
 public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authRequired = "AUTH_REQUIRED"
@@ -129,13 +129,9 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    public var detailCode: String? {
-        self.detailCodeRaw
-    }
+    public var detailCode: String? { self.detailCodeRaw }
 
-    public var recommendedNextStepCode: String? {
-        self.recommendedNextStepRaw
-    }
+    public var recommendedNextStepCode: String? { self.recommendedNextStepRaw }
 
     public var detail: GatewayConnectAuthDetailCode? {
         guard let detailCodeRaw else { return nil }
@@ -147,25 +143,23 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         return GatewayConnectRecoveryNextStep(rawValue: recommendedNextStepRaw)
     }
 
-    public var errorDescription: String? {
-        self.message
-    }
+    public var errorDescription: String? { self.message }
 
     public var isNonRecoverable: Bool {
         switch self.detail {
         case .authTokenMissing,
-             .authBootstrapTokenInvalid,
-             .authTokenNotConfigured,
-             .authPasswordMissing,
-             .authPasswordMismatch,
-             .authPasswordNotConfigured,
-             .authRateLimited,
-             .pairingRequired,
-             .controlUiDeviceIdentityRequired,
-             .deviceIdentityRequired:
-            true
+            .authBootstrapTokenInvalid,
+            .authTokenNotConfigured,
+            .authPasswordMissing,
+            .authPasswordMismatch,
+            .authPasswordNotConfigured,
+            .authRateLimited,
+            .pairingRequired,
+            .controlUiDeviceIdentityRequired,
+            .deviceIdentityRequired:
+            return true
         default:
-            false
+            return false
         }
     }
 }
@@ -209,7 +203,5 @@ public struct GatewayDecodingError: LocalizedError, Sendable {
         self.message = message
     }
 
-    public var errorDescription: String? {
-        "\(self.method): \(self.message)"
-    }
+    public var errorDescription: String? { "\(self.method): \(self.message)" }
 }

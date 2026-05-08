@@ -233,7 +233,6 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       },
     },
     messaging: {
-      targetPrefixes: ["irc"],
       normalizeTarget: normalizeIrcMessagingTarget,
       targetResolver: {
         looksLikeId: looksLikeIrcTargetId,

@@ -14,7 +14,7 @@ export function normalizeDialInNumber(value: unknown): string | undefined {
   return compact;
 }
 
-function normalizeDtmfSequence(value: unknown): string | undefined {
+export function normalizeDtmfSequence(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return undefined;

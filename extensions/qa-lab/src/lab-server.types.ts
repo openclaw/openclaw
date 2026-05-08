@@ -7,9 +7,9 @@ export type QaLabLatestReport = {
   generatedAt: string;
 };
 
-type QaLabRunStatus = "idle" | "running" | "completed";
+export type QaLabRunStatus = "idle" | "running" | "completed";
 
-type QaLabScenarioStep = {
+export type QaLabScenarioStep = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;

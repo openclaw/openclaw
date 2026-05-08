@@ -33,7 +33,7 @@ export type QaCharacterModelOptions = {
   fastMode?: boolean;
 };
 
-type QaCharacterEvalRun = {
+export type QaCharacterEvalRun = {
   model: string;
   status: QaCharacterRunStatus;
   durationMs: number;
@@ -61,7 +61,7 @@ export type QaCharacterEvalJudgment = {
   weaknesses: string[];
 };
 
-type QaCharacterEvalResult = {
+export type QaCharacterEvalResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -69,7 +69,7 @@ type QaCharacterEvalResult = {
   judgments: QaCharacterEvalJudgeResult[];
 };
 
-type QaCharacterEvalJudgeResult = {
+export type QaCharacterEvalJudgeResult = {
   model: string;
   thinkingDefault: QaThinkingLevel;
   fastMode: boolean;

@@ -3,8 +3,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   filterMessagingToolMediaDuplicates,
-  resolveMessagingToolPayloadDedupe,
-  shouldDedupeMessagingToolRepliesForRoute,
+  shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 
 function targetsMatchTelegramReplySuppression(params: {
@@ -110,7 +109,7 @@ describe("filterMessagingToolMediaDuplicates", () => {
   });
 });
 
-describe("shouldDedupeMessagingToolRepliesForRoute", () => {
+describe("shouldSuppressMessagingToolReplies", () => {
   const installTelegramSuppressionRegistry = () => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(
@@ -130,9 +129,9 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     );
   };
 
-  it("matches when target provider is missing but target matches current provider route", () => {
+  it("suppresses when target provider is missing but target matches current provider route", () => {
     expect(
-      shouldDedupeMessagingToolRepliesForRoute({
+      shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "123",
         messagingToolSentTargets: [{ tool: "message", provider: "", to: "123" }],
@@ -140,9 +139,9 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(true);
   });
 
-  it('matches when target provider uses "message" placeholder and target matches', () => {
+  it('suppresses when target provider uses "message" placeholder and target matches', () => {
     expect(
-      shouldDedupeMessagingToolRepliesForRoute({
+      shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "123",
         messagingToolSentTargets: [{ tool: "message", provider: "message", to: "123" }],
@@ -150,9 +149,9 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(true);
   });
 
-  it("does not match when providerless target does not match origin route", () => {
+  it("does not suppress when providerless target does not match origin route", () => {
     expect(
-      shouldDedupeMessagingToolRepliesForRoute({
+      shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "123",
         messagingToolSentTargets: [{ tool: "message", provider: "", to: "456" }],
@@ -160,34 +159,10 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(false);
   });
 
-  it("matches when only one side carries the account id", () => {
-    expect(
-      shouldDedupeMessagingToolRepliesForRoute({
-        messageProvider: "telegram",
-        originatingTo: "123",
-        accountId: "work",
-        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
-      }),
-    ).toBe(true);
-  });
-
-  it("does not match when route accounts differ", () => {
-    expect(
-      shouldDedupeMessagingToolRepliesForRoute({
-        messageProvider: "telegram",
-        originatingTo: "123",
-        accountId: "work",
-        messagingToolSentTargets: [
-          { tool: "message", provider: "telegram", to: "123", accountId: "personal" },
-        ],
-      }),
-    ).toBe(false);
-  });
-
-  it("matches telegram topic-origin replies when explicit threadId matches", () => {
+  it("suppresses telegram topic-origin replies when explicit threadId matches", () => {
     installTelegramSuppressionRegistry();
     expect(
-      shouldDedupeMessagingToolRepliesForRoute({
+      shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [
@@ -197,24 +172,9 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(true);
   });
 
-  it("preserves string thread ids before plugin reply-suppression matching", () => {
-    installTelegramSuppressionRegistry();
-    const largeThreadId = "9007199254740993";
-
+  it("does not suppress telegram topic-origin replies when explicit threadId differs", () => {
     expect(
-      shouldDedupeMessagingToolRepliesForRoute({
-        messageProvider: "telegram",
-        originatingTo: `telegram:group:-100123:topic:${largeThreadId}`,
-        messagingToolSentTargets: [
-          { tool: "message", provider: "telegram", to: "-100123", threadId: largeThreadId },
-        ],
-      }),
-    ).toBe(true);
-  });
-
-  it("does not match telegram topic-origin replies when explicit threadId differs", () => {
-    expect(
-      shouldDedupeMessagingToolRepliesForRoute({
+      shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [
@@ -224,9 +184,9 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(false);
   });
 
-  it("does not match telegram topic-origin replies when target omits topic metadata", () => {
+  it("does not suppress telegram topic-origin replies when target omits topic metadata", () => {
     expect(
-      shouldDedupeMessagingToolRepliesForRoute({
+      shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "-100123" }],
@@ -234,10 +194,10 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(false);
   });
 
-  it("matches telegram replies when chatId matches but target forms differ", () => {
+  it("suppresses telegram replies when chatId matches but target forms differ", () => {
     installTelegramSuppressionRegistry();
     expect(
-      shouldDedupeMessagingToolRepliesForRoute({
+      shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123",
         messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "-100123" }],
@@ -245,12 +205,12 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(true);
   });
 
-  it("matches telegram replies even when the active plugin registry omits telegram", () => {
+  it("suppresses telegram replies even when the active plugin registry omits telegram", () => {
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createTestRegistry([]));
 
     expect(
-      shouldDedupeMessagingToolRepliesForRoute({
+      shouldSuppressMessagingToolReplies({
         messageProvider: "telegram",
         originatingTo: "telegram:group:-100123:topic:77",
         messagingToolSentTargets: [
@@ -258,111 +218,5 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
         ],
       }),
     ).toBe(true);
-  });
-});
-
-describe("resolveMessagingToolPayloadDedupe", () => {
-  it("dedupes by content when messaging tool target metadata is unavailable", () => {
-    expect(
-      resolveMessagingToolPayloadDedupe({
-        messageProvider: "telegram",
-        originatingTo: "123",
-      }),
-    ).toEqual({
-      shouldDedupePayloads: true,
-      matchingRoute: false,
-      routeSentTexts: [],
-      routeSentMediaUrls: [],
-      useGlobalSentTextEvidenceFallback: false,
-      useGlobalSentMediaUrlEvidenceFallback: false,
-    });
-  });
-
-  it("dedupes final replies by content when a messaging tool sent to the same route", () => {
-    expect(
-      resolveMessagingToolPayloadDedupe({
-        messageProvider: "telegram",
-        originatingTo: "123",
-        messagingToolSentTargets: [
-          {
-            tool: "message",
-            provider: "telegram",
-            to: "123",
-            text: "sent text",
-            mediaUrls: ["file:///tmp/sent.png"],
-          },
-        ],
-      }),
-    ).toEqual({
-      shouldDedupePayloads: true,
-      matchingRoute: true,
-      routeSentTexts: ["sent text"],
-      routeSentMediaUrls: ["file:///tmp/sent.png"],
-      useGlobalSentTextEvidenceFallback: false,
-      useGlobalSentMediaUrlEvidenceFallback: false,
-    });
-  });
-
-  it("preserves global evidence fallback for legacy multi-target records", () => {
-    expect(
-      resolveMessagingToolPayloadDedupe({
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        messagingToolSentTargets: [
-          { tool: "slack", provider: "slack", to: "channel:C1" },
-          { tool: "discord", provider: "discord", to: "channel:C2" },
-        ],
-      }),
-    ).toEqual({
-      shouldDedupePayloads: true,
-      matchingRoute: true,
-      routeSentTexts: [],
-      routeSentMediaUrls: [],
-      useGlobalSentTextEvidenceFallback: true,
-      useGlobalSentMediaUrlEvidenceFallback: true,
-    });
-  });
-
-  it("scopes matching-route evidence to the matched target", () => {
-    expect(
-      resolveMessagingToolPayloadDedupe({
-        messageProvider: "slack",
-        originatingTo: "channel:C1",
-        messagingToolSentTargets: [
-          { tool: "slack", provider: "slack", to: "channel:C1", text: "slack text" },
-          {
-            tool: "discord",
-            provider: "discord",
-            to: "channel:C2",
-            text: "discord text",
-            mediaUrls: ["file:///tmp/discord.png"],
-          },
-        ],
-      }),
-    ).toEqual({
-      shouldDedupePayloads: true,
-      matchingRoute: true,
-      routeSentTexts: ["slack text"],
-      routeSentMediaUrls: [],
-      useGlobalSentTextEvidenceFallback: false,
-      useGlobalSentMediaUrlEvidenceFallback: false,
-    });
-  });
-
-  it("keeps final payloads intact when a messaging tool sent to another route", () => {
-    expect(
-      resolveMessagingToolPayloadDedupe({
-        messageProvider: "telegram",
-        originatingTo: "123",
-        messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
-      }),
-    ).toEqual({
-      shouldDedupePayloads: false,
-      matchingRoute: false,
-      routeSentTexts: [],
-      routeSentMediaUrls: [],
-      useGlobalSentTextEvidenceFallback: false,
-      useGlobalSentMediaUrlEvidenceFallback: false,
-    });
   });
 });

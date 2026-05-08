@@ -5,10 +5,11 @@ import type {
   OpenClawConfig,
   SecretInput,
 } from "./runtime-api.js";
+export type { ContextVisibilityMode, DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all" | "batched";
 
-type MatrixDmConfig = {
+export type MatrixDmConfig = {
   /** If false, ignore all incoming Matrix DMs. Default: true. */
   enabled?: boolean;
   /** Direct message access policy (default: pairing). */
@@ -49,7 +50,7 @@ export type MatrixRoomConfig = {
   systemPrompt?: string;
 };
 
-type MatrixActionConfig = {
+export type MatrixActionConfig = {
   reactions?: boolean;
   messages?: boolean;
   pins?: boolean;
@@ -59,19 +60,15 @@ type MatrixActionConfig = {
   verification?: boolean;
 };
 
-type MatrixThreadBindingsConfig = {
+export type MatrixThreadBindingsConfig = {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
-  spawnSessions?: boolean;
-  defaultSpawnContext?: "isolated" | "fork";
-  /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
-  /** @deprecated Use spawnSessions instead. */
   spawnAcpSessions?: boolean;
 };
 
-type MatrixExecApprovalTarget = "dm" | "channel" | "both";
+export type MatrixExecApprovalTarget = "dm" | "channel" | "both";
 
 export type MatrixExecApprovalConfig = {
   /** If true, deliver exec approvals through Matrix-native prompts. */
@@ -86,19 +83,9 @@ export type MatrixExecApprovalConfig = {
   target?: MatrixExecApprovalTarget;
 };
 
-export type MatrixStreamingMode = "partial" | "quiet" | "progress" | "off";
+export type MatrixStreamingMode = "partial" | "quiet" | "off";
 
-export type MatrixStreamingConfig = {
-  /** Preview streaming mode for Matrix replies. Default: "off". */
-  mode?: MatrixStreamingMode;
-  progress?: import("openclaw/plugin-sdk/channel-streaming").ChannelStreamingProgressConfig;
-  preview?: {
-    /** Show tool/progress activity in the live draft preview. Default: true. */
-    toolProgress?: boolean;
-  };
-};
-
-type MatrixNetworkConfig = {
+export type MatrixNetworkConfig = {
   /** Dangerous opt-in for trusted private/internal Matrix homeservers. */
   dangerouslyAllowPrivateNetwork?: boolean;
 };
@@ -197,7 +184,7 @@ export type MatrixConfig = {
   execApprovals?: MatrixExecApprovalConfig;
   /** Room config allowlist keyed by room ID or alias (names resolved to IDs when possible). */
   groups?: Record<string, MatrixRoomConfig>;
-  /** @deprecated Use groups. */
+  /** Room config allowlist keyed by room ID or alias. Legacy; use groups. */
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
@@ -208,21 +195,16 @@ export type MatrixConfig = {
    *   messages. This preserves legacy preview-first notification behavior.
    * - `"quiet"`: edit a single quiet draft notice in place for the current
    *   assistant block as the model generates text.
-   * - `"progress"`: edit a single draft status message with shared progress
-   *   labels and optional tool/task lines until the final answer is ready.
    * - `"off"`: deliver the full reply once the model finishes.
    * - Use `blockStreaming: true` when you want completed assistant blocks to
    *   stay visible as separate progress messages. When combined with
    *   preview streaming, Matrix keeps a live draft for the current block and
    *   preserves completed blocks as separate messages.
-   * - `streaming.progress.toolProgress: false` hides interim tool/progress
-   *   lines in progress mode. `streaming.preview.toolProgress: false` keeps
-   *   legacy answer preview edits but hides interim tool/progress lines.
    * - `true` maps to `"partial"`, `false` maps to `"off"` for backward
-   *   compatibility. Object form uses `streaming.mode`.
+   *   compatibility.
    * Default: `"off"`.
    */
-  streaming?: MatrixStreamingMode | MatrixStreamingConfig | boolean;
+  streaming?: MatrixStreamingMode | boolean;
 };
 
 export type CoreConfig = {
@@ -238,7 +220,6 @@ export type CoreConfig = {
   };
   session?: {
     store?: string;
-    dmScope?: NonNullable<OpenClawConfig["session"]>["dmScope"];
   };
   messages?: {
     ackReaction?: string;

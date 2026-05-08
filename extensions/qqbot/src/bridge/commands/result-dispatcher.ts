@@ -19,11 +19,11 @@ import type { QQBotFromParseResult } from "./from-parser.js";
 
 const UNEXPECTED_RESULT_TEXT = "⚠️ 命令返回了意外结果。";
 
-interface FrameworkSlashReply {
+export interface FrameworkSlashReply {
   text: string;
 }
 
-interface DispatchFrameworkSlashResultInput {
+export interface DispatchFrameworkSlashResultInput {
   result: SlashCommandResult;
   account: ResolvedQQBotAccount;
   from: QQBotFromParseResult;

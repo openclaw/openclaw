@@ -1,14 +1,10 @@
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
-import {
-  canonicalizeConfiguredMcpServer,
-  normalizeConfiguredMcpServers,
-} from "./mcp-config-normalize.js";
 import { replaceConfigFile } from "./mutate.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-type ConfigMcpServers = ReturnType<typeof normalizeConfiguredMcpServers>;
+export type ConfigMcpServers = Record<string, Record<string, unknown>>;
 
 type ConfigMcpReadResult =
   | {
@@ -29,6 +25,17 @@ type ConfigMcpWriteResult =
       removed?: boolean;
     }
   | { ok: false; path: string; error: string };
+
+export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers {
+  if (!isRecord(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, server]) => isRecord(server))
+      .map(([name, server]) => [name, { ...(server as Record<string, unknown>) }]),
+  );
+}
 
 export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
   const snapshot = await readSourceConfigSnapshot();
@@ -68,7 +75,7 @@ export async function setConfiguredMcpServer(params: {
 
   const next = structuredClone(loaded.config);
   const servers = normalizeConfiguredMcpServers(next.mcp?.servers);
-  servers[name] = canonicalizeConfiguredMcpServer(params.server);
+  servers[name] = { ...params.server };
   next.mcp = {
     ...next.mcp,
     servers,

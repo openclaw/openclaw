@@ -1,53 +1,88 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
-const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
-}));
-
-function createMediaProvider(
-  params: Pick<MediaUnderstandingProvider, "id" | "capabilities"> &
-    Partial<MediaUnderstandingProvider>,
-): MediaUnderstandingProvider {
-  return params;
-}
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/capability-provider-runtime.js")>(
+    "../plugins/capability-provider-runtime.js",
+  );
+  const runtime =
+    await vi.importActual<typeof import("../plugins/runtime.js")>("../plugins/runtime.js");
+  return {
+    ...actual,
+    resolvePluginCapabilityProviders: ({ key }: { key: string }) =>
+      key !== "mediaUnderstandingProviders"
+        ? []
+        : (() => {
+            const activeProviders =
+              runtime
+                .getActivePluginRegistry()
+                ?.mediaUnderstandingProviders.map((entry) => entry.provider) ?? [];
+            return activeProviders.length > 0
+              ? activeProviders
+              : [
+                  { id: "groq", capabilities: ["image", "audio"] },
+                  { id: "deepgram", capabilities: ["audio"] },
+                ];
+          })(),
+  };
+});
 
 describe("media-understanding provider registry", () => {
-  beforeEach(() => {
-    resolvePluginCapabilityProvidersMock.mockReset();
-    resolvePluginCapabilityProvidersMock.mockReturnValue([]);
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("loads media providers from the capability runtime", () => {
-    resolvePluginCapabilityProvidersMock.mockReturnValue([
-      createMediaProvider({ id: "groq", capabilities: ["image", "audio"] }),
-      createMediaProvider({ id: "deepgram", capabilities: ["audio"] }),
-    ]);
-
+  it("loads bundled providers by default when no active registry is present", () => {
     const registry = buildMediaUnderstandingRegistry();
-
     expect(getMediaUnderstandingProvider("groq", registry)?.id).toBe("groq");
     expect(getMediaUnderstandingProvider("deepgram", registry)?.id).toBe("deepgram");
-    expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
-      key: "mediaUnderstandingProviders",
-      cfg: undefined,
-    });
   });
 
-  it("keeps provider id normalization behavior for capability providers", () => {
-    resolvePluginCapabilityProvidersMock.mockReturnValue([
-      createMediaProvider({ id: "google", capabilities: ["image", "audio", "video"] }),
-    ]);
+  it("merges plugin-registered media providers into the active registry", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "Google Plugin",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image", "audio", "video"],
+        describeImage: async () => ({ text: "plugin image" }),
+        transcribeAudio: async () => ({ text: "plugin audio" }),
+        describeVideo: async () => ({ text: "plugin video" }),
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
 
     const registry = buildMediaUnderstandingRegistry();
+    const provider = getMediaUnderstandingProvider("gemini", registry);
 
-    expect(getMediaUnderstandingProvider("gemini", registry)?.id).toBe("google");
+    expect(provider?.id).toBe("google");
+    expect(await provider?.describeVideo?.({} as never)).toEqual({ text: "plugin video" });
+  });
+
+  it("keeps provider id normalization behavior for plugin-owned providers", () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "Google Plugin",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image", "audio", "video"],
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = getMediaUnderstandingProvider("gemini", registry);
+
+    expect(provider?.id).toBe("google");
   });
 
   it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {
@@ -74,15 +109,21 @@ describe("media-understanding provider registry", () => {
     expect(textOnlyProvider).toBeUndefined();
   });
 
-  it("does not override capability providers when config also has image-capable models", async () => {
-    resolvePluginCapabilityProvidersMock.mockReturnValue([
-      createMediaProvider({
+  it("does not override plugin-registered providers when config also has image-capable models", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "Google Plugin",
+      source: "test",
+      provider: {
         id: "google",
         capabilities: ["image", "audio", "video"],
         describeImage: async () => ({ text: "plugin image" }),
         transcribeAudio: async () => ({ text: "plugin audio" }),
-      }),
-    ]);
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
     const cfg = {
       models: {
         providers: {
@@ -99,10 +140,6 @@ describe("media-understanding provider registry", () => {
     expect(provider?.capabilities).toEqual(["image", "audio", "video"]);
     expect(await provider?.describeImage?.({} as never)).toEqual({ text: "plugin image" });
     expect(await provider?.transcribeAudio?.({} as never)).toEqual({ text: "plugin audio" });
-    expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
-      key: "mediaUnderstandingProviders",
-      cfg,
-    });
   });
 
   it("does not auto-register providers with audio or video only inputs", () => {

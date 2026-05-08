@@ -18,7 +18,7 @@ type LmstudioLoadResponse = {
   status?: string;
 };
 
-type FetchLmstudioModelsResult = {
+export type FetchLmstudioModelsResult = {
   reachable: boolean;
   status?: number;
   models: LmstudioModelWire[];
@@ -163,7 +163,7 @@ export async function discoverLmstudioModels(
         reasoning: base.reasoning,
         input: base.input,
         cost: SELF_HOSTED_DEFAULT_COST,
-        compat: { ...base.compat, supportsUsageInStreaming: true },
+        compat: { supportsUsageInStreaming: true },
         contextWindow: base.contextWindow,
         contextTokens: base.contextTokens,
         maxTokens: base.maxTokens,

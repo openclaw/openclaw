@@ -2,7 +2,6 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "./delivery-plan.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
-import { resolveCronDeliverySessionKey } from "./session-target.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
 
 function formatTarget(channel?: string, to?: string | null): string {
@@ -40,7 +39,7 @@ export async function resolveCronDeliveryPreview(params: {
   job: CronJob;
 }): Promise<CronDeliveryPreview> {
   const plan = resolveCronDeliveryPlan(params.job);
-  if (plan.mode === "none") {
+  if (!plan.requested && plan.mode === "none" && !params.job.delivery) {
     return { label: "not requested", detail: "not requested" };
   }
   if (plan.mode === "webhook") {
@@ -51,7 +50,6 @@ export async function resolveCronDeliveryPreview(params: {
   const requestedChannel = plan.channel ?? "last";
   const agentId =
     params.job.agentId?.trim() || params.defaultAgentId || resolveDefaultAgentId(params.cfg);
-  const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
   const resolved = await resolveDeliveryTarget(
     params.cfg,
     agentId,
@@ -60,7 +58,7 @@ export async function resolveCronDeliveryPreview(params: {
       to: plan.to,
       threadId: plan.threadId,
       accountId: plan.accountId,
-      sessionKey: deliverySessionKey,
+      sessionKey: params.job.sessionKey,
     },
     { dryRun: true },
   );
@@ -70,7 +68,7 @@ export async function resolveCronDeliveryPreview(params: {
       detail: formatDeliveryDetail({
         requestedChannel,
         resolved: false,
-        sessionKey: deliverySessionKey,
+        sessionKey: params.job.sessionKey,
         error: resolved.error.message,
       }),
     };
@@ -80,7 +78,7 @@ export async function resolveCronDeliveryPreview(params: {
     detail: formatDeliveryDetail({
       requestedChannel,
       resolved: true,
-      sessionKey: deliverySessionKey,
+      sessionKey: params.job.sessionKey,
     }),
   };
 }

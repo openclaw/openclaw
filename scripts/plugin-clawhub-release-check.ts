@@ -10,10 +10,7 @@ import {
 
 export async function runPluginClawHubReleaseCheck(argv: string[]) {
   const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
-  const publishable = collectClawHubPublishablePluginPackages(".", {
-    packageNames:
-      selectionMode === "all-publishable" || selection.length === 0 ? undefined : selection,
-  });
+  const publishable = collectClawHubPublishablePluginPackages();
   const gitRange = baseRef && headRef ? { baseRef, headRef } : undefined;
   const selected = resolveSelectedClawHubPublishablePluginPackages({
     plugins: publishable,

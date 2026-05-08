@@ -10,9 +10,4 @@ import type { GuardianUserAuthorization } from "./GuardianUserAuthorization.js";
  * `item/autoApprovalReview/*` notifications. This shape is expected to change
  * soon.
  */
-export type GuardianApprovalReview = {
-  status: GuardianApprovalReviewStatus;
-  riskLevel: GuardianRiskLevel | null;
-  userAuthorization: GuardianUserAuthorization | null;
-  rationale: string | null;
-};
+export type GuardianApprovalReview = { status: GuardianApprovalReviewStatus, riskLevel: GuardianRiskLevel | null, userAuthorization: GuardianUserAuthorization | null, rationale: string | null, };

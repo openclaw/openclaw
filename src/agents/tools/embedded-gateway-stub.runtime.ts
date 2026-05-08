@@ -1,9 +1,6 @@
 export { resolveSessionAgentId } from "../../agents/agent-scope.js";
-export { getRuntimeConfig } from "../../config/config.js";
-export {
-  projectRecentChatDisplayMessages,
-  resolveEffectiveChatHistoryMaxChars,
-} from "../../gateway/chat-display-projection.js";
+export { loadConfig } from "../../config/config.js";
+export { stripEnvelopeFromMessages } from "../../gateway/chat-sanitize.js";
 export { augmentChatHistoryWithCliSessionImports } from "../../gateway/cli-session-history.js";
 export { getMaxChatHistoryMessagesBytes } from "../../gateway/server-constants.js";
 export {
@@ -11,13 +8,15 @@ export {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
+  resolveEffectiveChatHistoryMaxChars,
+  sanitizeChatHistoryMessages,
 } from "../../gateway/server-methods/chat.js";
 export { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 export {
-  listSessionsFromStoreAsync,
+  listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
-  readSessionMessagesAsync,
+  readSessionMessages,
   resolveSessionModelRef,
 } from "../../gateway/session-utils.js";
 export { resolveSessionKeyFromResolveParams } from "../../gateway/sessions-resolve.js";

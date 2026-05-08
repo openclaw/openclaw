@@ -4,11 +4,11 @@ import type { WizardSection } from "./configure.shared.js";
 import { CONFIGURE_WIZARD_SECTIONS, parseConfigureWizardSections } from "./configure.shared.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
-async function configureCommand(runtime: RuntimeEnv = defaultRuntime) {
+export async function configureCommand(runtime: RuntimeEnv = defaultRuntime) {
   await runConfigureWizard({ command: "configure" }, runtime);
 }
 
-async function configureCommandWithSections(
+export async function configureCommandWithSections(
   sections: WizardSection[],
   runtime: RuntimeEnv = defaultRuntime,
 ) {

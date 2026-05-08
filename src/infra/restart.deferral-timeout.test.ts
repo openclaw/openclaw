@@ -16,11 +16,10 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     process.removeAllListeners("SIGUSR1");
   });
 
-  it("waits indefinitely when maxWaitMs is not specified", () => {
+  it("uses default 5-minute timeout when maxWaitMs is not specified", () => {
     const hooks: RestartDeferralHooks = {
       onTimeout: vi.fn(),
       onReady: vi.fn(),
-      onStillPending: vi.fn(),
     };
 
     // Always return 1 pending item to prevent draining
@@ -29,12 +28,13 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       hooks,
     });
 
-    vi.advanceTimersByTime(300_000);
+    // Advance to just before 5 minutes — should NOT have timed out yet
+    vi.advanceTimersByTime(299_999);
     expect(hooks.onTimeout).not.toHaveBeenCalled();
-    expect(hooks.onStillPending).toHaveBeenCalled();
 
-    vi.advanceTimersByTime(300_000);
-    expect(hooks.onTimeout).not.toHaveBeenCalled();
+    // Advance past 5 minutes — should time out
+    vi.advanceTimersByTime(1);
+    expect(hooks.onTimeout).toHaveBeenCalledOnce();
     expect(hooks.onReady).not.toHaveBeenCalled();
   });
 

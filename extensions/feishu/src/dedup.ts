@@ -118,7 +118,7 @@ export async function tryRecordMessagePersistent(
   });
 }
 
-async function hasRecordedMessagePersistent(
+export async function hasRecordedMessagePersistent(
   messageId: string,
   namespace = "global",
   log?: (...args: unknown[]) => void,

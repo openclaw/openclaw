@@ -150,17 +150,4 @@ describe("resolveMcpTransportConfig", () => {
       url: "https://mcp.example.com/http",
     });
   });
-
-  it("treats CLI-native http type as streamable HTTP for compatibility", () => {
-    const resolved = resolveMcpTransportConfig("probe", {
-      url: "https://mcp.example.com/http",
-      type: "http",
-    });
-
-    expect(resolved).toMatchObject({
-      kind: "http",
-      transportType: "streamable-http",
-      url: "https://mcp.example.com/http",
-    });
-  });
 });

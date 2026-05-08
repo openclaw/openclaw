@@ -33,7 +33,7 @@ export function mockBlueBubblesPrivateApiStatusOnce(
   mock.mockReturnValueOnce(value);
 }
 
-function resolveBlueBubblesAccountFromConfig(params: {
+export function resolveBlueBubblesAccountFromConfig(params: {
   cfg?: { channels?: { bluebubbles?: Record<string, unknown> } };
   accountId?: string;
 }) {

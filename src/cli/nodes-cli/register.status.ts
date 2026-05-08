@@ -7,7 +7,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../../terminal/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -15,9 +14,7 @@ import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
-
-type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
+import type { NodesRpcOpts } from "./types.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -91,11 +88,6 @@ function formatClientLabel(node: { clientId?: string; clientMode?: string }): st
   return clientId || clientMode || null;
 }
 
-function formatNodeTerminalLabel(node: { nodeId: string; displayName?: string }): string {
-  const label = node.displayName?.trim() ? node.displayName.trim() : node.nodeId;
-  return sanitizeTerminalText(label);
-}
-
 function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -117,67 +109,6 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
     defaultRuntime.exit(1);
     return undefined;
   }
-}
-
-function mergePairedNodeWithEffectiveNode(
-  paired: PairedNode | undefined,
-  effective: NodeListNode,
-): PairedNodeListRow {
-  return {
-    ...paired,
-    ...effective,
-    token: paired?.token,
-    createdAtMs: paired?.createdAtMs,
-    lastConnectedAtMs: paired?.lastConnectedAtMs ?? effective.connectedAtMs,
-    displayName: effective.displayName ?? paired?.displayName,
-    platform: effective.platform ?? paired?.platform,
-    version: effective.version ?? paired?.version,
-    coreVersion: effective.coreVersion ?? paired?.coreVersion,
-    uiVersion: effective.uiVersion ?? paired?.uiVersion,
-    remoteIp: effective.remoteIp ?? paired?.remoteIp,
-    permissions: effective.permissions ?? paired?.permissions,
-    approvedAtMs: effective.approvedAtMs ?? paired?.approvedAtMs,
-  };
-}
-
-function mergePairedNodesWithEffectiveNodes(
-  paired: PairedNode[],
-  effectiveNodes: NodeListNode[] | null,
-): PairedNodeListRow[] {
-  if (effectiveNodes === null) {
-    return paired;
-  }
-  const pairedById = new Map(paired.map((node) => [node.nodeId, node]));
-  const seen = new Set<string>();
-  const rows: PairedNodeListRow[] = [];
-  for (const effective of effectiveNodes) {
-    const pairedNode = pairedById.get(effective.nodeId);
-    if (!pairedNode && effective.paired !== true) {
-      continue;
-    }
-    seen.add(effective.nodeId);
-    rows.push(mergePairedNodeWithEffectiveNode(pairedNode, effective));
-  }
-  for (const node of paired) {
-    if (!seen.has(node.nodeId)) {
-      rows.push(node);
-    }
-  }
-  return rows;
-}
-
-async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
-  try {
-    return parseNodeList(await callGatewayCli("node.list", opts, {}));
-  } catch {
-    return null;
-  }
-}
-
-function sanitizePairedNodeForListJson(node: PairedNodeListRow): Omit<PairedNodeListRow, "token"> {
-  const copy: Record<string, unknown> = { ...node };
-  delete copy.token;
-  return copy as Omit<PairedNodeListRow, "token">;
 }
 
 export function registerNodesStatusCommands(nodes: Command) {
@@ -245,6 +176,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
 
           const rows = filtered.map((n) => {
+            const name = n.displayName?.trim() ? n.displayName.trim() : n.nodeId;
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
             const pathEnv = formatPathEnv(n.pathEnv);
@@ -256,11 +188,9 @@ export function registerNodesStatusCommands(nodes: Command) {
               perms ? `perms: ${perms}` : null,
               versions,
               pathEnv ? `path: ${pathEnv}` : null,
-            ]
-              .filter(Boolean)
-              .map((part) => sanitizeTerminalText(String(part)));
+            ].filter(Boolean) as string[];
             const caps = Array.isArray(n.caps)
-              ? sanitizeTerminalText(n.caps.map(String).filter(Boolean).toSorted().join(", "))
+              ? n.caps.map(String).filter(Boolean).toSorted().join(", ")
               : "?";
             const paired = n.paired ? ok("paired") : warn("unpaired");
             const connected = n.connected ? ok("connected") : muted("disconnected");
@@ -270,9 +200,9 @@ export function registerNodesStatusCommands(nodes: Command) {
                 : "";
 
             return {
-              Node: formatNodeTerminalLabel(n),
-              ID: sanitizeTerminalText(n.nodeId),
-              IP: sanitizeTerminalText(n.remoteIp ?? ""),
+              Node: name,
+              ID: n.nodeId,
+              IP: n.remoteIp ?? "",
               Detail: detailParts.join(" · "),
               Status: `${paired} · ${connected}${since}`,
               Caps: caps,
@@ -345,17 +275,17 @@ export function registerNodesStatusCommands(nodes: Command) {
           }`;
           const tableWidth = getTerminalTableWidth();
           const rows = [
-            { Field: "ID", Value: sanitizeTerminalText(nodeId) },
-            displayName ? { Field: "Name", Value: sanitizeTerminalText(displayName) } : null,
-            client ? { Field: "Client", Value: sanitizeTerminalText(client) } : null,
-            ip ? { Field: "IP", Value: sanitizeTerminalText(ip) } : null,
-            family ? { Field: "Device", Value: sanitizeTerminalText(family) } : null,
-            model ? { Field: "Model", Value: sanitizeTerminalText(model) } : null,
-            perms ? { Field: "Perms", Value: sanitizeTerminalText(perms) } : null,
-            versions ? { Field: "Version", Value: sanitizeTerminalText(versions) } : null,
-            pathEnv ? { Field: "PATH", Value: sanitizeTerminalText(pathEnv) } : null,
+            { Field: "ID", Value: nodeId },
+            displayName ? { Field: "Name", Value: displayName } : null,
+            client ? { Field: "Client", Value: client } : null,
+            ip ? { Field: "IP", Value: ip } : null,
+            family ? { Field: "Device", Value: family } : null,
+            model ? { Field: "Model", Value: model } : null,
+            perms ? { Field: "Perms", Value: perms } : null,
+            versions ? { Field: "Version", Value: versions } : null,
+            pathEnv ? { Field: "PATH", Value: pathEnv } : null,
             { Field: "Status", Value: status },
-            { Field: "Caps", Value: caps ? sanitizeTerminalText(caps.join(", ")) : "?" },
+            { Field: "Caps", Value: caps ? caps.join(", ") : "?" },
           ].filter(Boolean) as Array<{ Field: string; Value: string }>;
 
           defaultRuntime.log(heading("Node"));
@@ -399,22 +329,28 @@ export function registerNodesStatusCommands(nodes: Command) {
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
-          const effectiveNodes = hasFilters
-            ? parseNodeList(await callGatewayCli("node.list", opts, {}))
-            : await tryReadNodeList(opts);
-          const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
-          const filteredPaired = effectivePairedRows.filter((node) => {
+          const connectedById = hasFilters
+            ? new Map(
+                parseNodeList(await callGatewayCli("node.list", opts, {})).map((node) => [
+                  node.nodeId,
+                  node,
+                ]),
+              )
+            : null;
+          const filteredPaired = paired.filter((node) => {
             if (connectedOnly) {
-              if (!node.connected) {
+              const live = connectedById?.get(node.nodeId);
+              if (!live?.connected) {
                 return false;
               }
             }
             if (sinceMs !== undefined) {
+              const live = connectedById?.get(node.nodeId);
               const lastConnectedAtMs =
                 typeof node.lastConnectedAtMs === "number"
                   ? node.lastConnectedAtMs
-                  : typeof node.connectedAtMs === "number"
-                    ? node.connectedAtMs
+                  : typeof live?.connectedAtMs === "number"
+                    ? live.connectedAtMs
                     : undefined;
               if (typeof lastConnectedAtMs !== "number") {
                 return false;
@@ -432,10 +368,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           );
 
           if (opts.json) {
-            defaultRuntime.writeJson({
-              pending: pendingRows,
-              paired: filteredPaired.map(sanitizePairedNodeForListJson),
-            });
+            defaultRuntime.writeJson({ pending: pendingRows, paired: filteredPaired });
             return;
           }
 
@@ -452,17 +385,18 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
 
           if (filteredPaired.length > 0) {
-            const pairedTableRows = filteredPaired.map((n) => {
+            const pairedRows = filteredPaired.map((n) => {
+              const live = connectedById?.get(n.nodeId);
               const lastConnectedAtMs =
                 typeof n.lastConnectedAtMs === "number"
                   ? n.lastConnectedAtMs
-                  : typeof n.connectedAtMs === "number"
-                    ? n.connectedAtMs
+                  : typeof live?.connectedAtMs === "number"
+                    ? live.connectedAtMs
                     : undefined;
               return {
-                Node: formatNodeTerminalLabel(n),
-                Id: sanitizeTerminalText(n.nodeId),
-                IP: sanitizeTerminalText(n.remoteIp ?? ""),
+                Node: n.displayName?.trim() ? n.displayName.trim() : n.nodeId,
+                Id: n.nodeId,
+                IP: n.remoteIp ?? "",
                 LastConnect:
                   typeof lastConnectedAtMs === "number"
                     ? formatTimeAgo(Math.max(0, now - lastConnectedAtMs))
@@ -480,7 +414,7 @@ export function registerNodesStatusCommands(nodes: Command) {
                   { key: "IP", header: "IP", minWidth: 10 },
                   { key: "LastConnect", header: "Last Connect", minWidth: 14 },
                 ],
-                rows: pairedTableRows,
+                rows: pairedRows,
               }).trimEnd(),
             );
           }

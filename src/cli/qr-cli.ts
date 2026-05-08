@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { getRuntimeConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined } from "../gateway/credentials.js";
@@ -119,7 +119,7 @@ export function registerQrCli(program: Command) {
         const password = trimToUndefined(opts.password) ?? "";
         const wantsRemote = opts.remote === true;
 
-        const loadedRaw = getRuntimeConfig();
+        const loadedRaw = loadConfig();
         if (wantsRemote && !opts.url && !opts.publicUrl) {
           const tailscaleMode = loadedRaw.gateway?.tailscale?.mode ?? "off";
           const remoteUrl = loadedRaw.gateway?.remote?.url;

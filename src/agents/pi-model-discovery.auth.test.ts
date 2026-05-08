@@ -9,37 +9,17 @@ import {
 } from "./pi-auth-discovery-core.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
-  listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
   resolveProviderEnvApiKeyCandidates: () => ({
     mistral: ["MISTRAL_API_KEY"],
-  }),
-  resolveProviderEnvAuthEvidence: () => ({
-    "workspace-cloud": [
-      {
-        type: "local-file-with-env",
-        credentialMarker: "workspace-cloud-local-credentials",
-        source: "workspace cloud credentials",
-      },
-    ],
   }),
 }));
 
 vi.mock("./model-auth-env.js", () => ({
-  resolveEnvApiKey: (
-    provider: string,
-    env: NodeJS.ProcessEnv,
-    options?: { workspaceDir?: string },
-  ) => {
-    if (provider === "mistral" && env.MISTRAL_API_KEY?.trim()) {
-      return { apiKey: env.MISTRAL_API_KEY, source: "env: MISTRAL_API_KEY" };
+  resolveEnvApiKey: (provider: string, env: NodeJS.ProcessEnv) => {
+    if (provider !== "mistral" || !env.MISTRAL_API_KEY?.trim()) {
+      return null;
     }
-    if (provider === "workspace-cloud" && options?.workspaceDir === "/tmp/workspace") {
-      return {
-        apiKey: "workspace-cloud-local-credentials",
-        source: "workspace cloud credentials",
-      };
-    }
-    return null;
+    return { apiKey: env.MISTRAL_API_KEY, source: "env: MISTRAL_API_KEY" };
   },
 }));
 
@@ -164,7 +144,7 @@ describe("discoverAuthStorage", () => {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     try {
-      const credentials = addEnvBackedPiCredentials({}, { env: process.env });
+      const credentials = addEnvBackedPiCredentials({}, process.env);
 
       expect(credentials.mistral).toEqual({
         type: "api_key",
@@ -187,20 +167,5 @@ describe("discoverAuthStorage", () => {
         process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
       }
     }
-  });
-
-  it("includes workspace-scoped auth evidence in pi discovery credentials", () => {
-    const credentials = addEnvBackedPiCredentials(
-      {},
-      {
-        env: {},
-        workspaceDir: "/tmp/workspace",
-      },
-    );
-
-    expect(credentials["workspace-cloud"]).toEqual({
-      type: "api_key",
-      key: "workspace-cloud-local-credentials",
-    });
   });
 });

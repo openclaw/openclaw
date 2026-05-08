@@ -64,7 +64,7 @@ export function makeMockCommandResolution(params: {
   });
 }
 
-type ShellParserParityFixtureCase = {
+export type ShellParserParityFixtureCase = {
   id: string;
   command: string;
   ok: boolean;
@@ -75,7 +75,7 @@ type ShellParserParityFixture = {
   cases: ShellParserParityFixtureCase[];
 };
 
-type WrapperResolutionParityFixtureCase = {
+export type WrapperResolutionParityFixtureCase = {
   id: string;
   argv: string[];
   expectedRawExecutable: string | null;

@@ -501,12 +501,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
-    if (
-      host.chatRunId &&
-      payload.runId === host.chatRunId &&
-      host.chatStream &&
-      host.chatStream.trim().length > 0
-    ) {
+    if (host.chatStream && host.chatStream.trim().length > 0) {
       host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
       host.chatStream = null;
       host.chatStreamStartedAt = null;

@@ -67,8 +67,6 @@ describe("matrix qa cli registration", () => {
         "--alt-model",
         "--scenario",
         "--fast",
-        "--profile",
-        "--fail-fast",
         "--sut-account",
       ]),
     );

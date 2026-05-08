@@ -13,7 +13,7 @@ export function resolveHomeDir(env: Record<string, string | undefined>): string 
   return home;
 }
 
-function resolveUserPathWithHome(input: string, home?: string): string {
+export function resolveUserPathWithHome(input: string, home?: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
     return trimmed;

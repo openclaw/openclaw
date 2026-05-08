@@ -1,14 +1,12 @@
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 
 type ChannelPluginRuntime = typeof import("../../channels/plugins/index.js");
 
-const channelPluginRuntimeLoader = createLazyImportLoader<ChannelPluginRuntime>(
-  () => import("../../channels/plugins/index.js"),
-);
+let channelPluginRuntimePromise: Promise<ChannelPluginRuntime> | undefined;
 
 async function loadChannelPluginRuntime() {
-  return await channelPluginRuntimeLoader.load();
+  channelPluginRuntimePromise ??= import("../../channels/plugins/index.js");
+  return await channelPluginRuntimePromise;
 }
 
 export async function resolveCronChannelOutputPolicy(channel: string | undefined): Promise<{

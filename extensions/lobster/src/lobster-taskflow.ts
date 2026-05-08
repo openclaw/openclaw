@@ -12,13 +12,13 @@ type JsonLike =
     };
 
 type BoundTaskFlow = ReturnType<
-  NonNullable<OpenClawPluginApi["runtime"]>["tasks"]["managedFlows"]["bindSession"]
+  NonNullable<OpenClawPluginApi["runtime"]>["taskFlow"]["bindSession"]
 >;
 
 type FlowRecord = ReturnType<BoundTaskFlow["createManaged"]>;
 type MutationResult = ReturnType<BoundTaskFlow["setWaiting"]>;
 
-type LobsterApprovalWaitState = {
+export type LobsterApprovalWaitState = {
   kind: "lobster_approval";
   prompt: string;
   items: JsonLike[];
@@ -26,7 +26,7 @@ type LobsterApprovalWaitState = {
   approvalId?: string;
 };
 
-type RunManagedLobsterFlowParams = {
+export type RunManagedLobsterFlowParams = {
   taskFlow: BoundTaskFlow;
   runner: LobsterRunner;
   runnerParams: LobsterRunnerParams;
@@ -37,7 +37,7 @@ type RunManagedLobsterFlowParams = {
   waitingStep?: string;
 };
 
-type ResumeManagedLobsterFlowParams = {
+export type ResumeManagedLobsterFlowParams = {
   taskFlow: BoundTaskFlow;
   runner: LobsterRunner;
   runnerParams: LobsterRunnerParams & {

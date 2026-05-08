@@ -126,7 +126,6 @@ export function createGetReplyContinueDirectivesResult(params: {
       model: "gpt-4o-mini",
       modelState: {
         resolveDefaultThinkingLevel: async () => undefined,
-        resolveThinkingCatalog: async () => [],
       },
       contextTokens: 0,
       inlineStatusRequested: false,

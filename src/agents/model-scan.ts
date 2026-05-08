@@ -52,7 +52,7 @@ type OpenRouterModelPricing = {
   internalReasoning: number;
 };
 
-type ProbeResult = {
+export type ProbeResult = {
   ok: boolean;
   latencyMs: number | null;
   error?: string;
@@ -77,7 +77,7 @@ export type ModelScanResult = {
   image: ProbeResult;
 };
 
-type OpenRouterScanOptions = {
+export type OpenRouterScanOptions = {
   apiKey?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -180,16 +180,10 @@ async function withTimeout<T>(
   }
 }
 
-async function fetchOpenRouterModels(
-  fetchImpl: typeof fetch,
-  timeoutMs: number,
-): Promise<OpenRouterModelMeta[]> {
-  const res = await withTimeout(timeoutMs, (signal) =>
-    fetchImpl(OPENROUTER_MODELS_URL, {
-      headers: { Accept: "application/json" },
-      signal,
-    }),
-  );
+async function fetchOpenRouterModels(fetchImpl: typeof fetch): Promise<OpenRouterModelMeta[]> {
+  const res = await fetchImpl(OPENROUTER_MODELS_URL, {
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) {
     throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
   }
@@ -413,9 +407,7 @@ export async function scanOpenRouterModels(
   const probe = options.probe ?? true;
   const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
   if (probe && !apiKey) {
-    throw new Error(
-      "Missing OpenRouter API key. Free OpenRouter models still require OPENROUTER_API_KEY for live probes and inference; call with probe:false to list public catalog metadata.",
-    );
+    throw new Error("Missing OpenRouter API key. Set OPENROUTER_API_KEY to run models scan.");
   }
 
   const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
@@ -424,7 +416,7 @@ export async function scanOpenRouterModels(
   const maxAgeDays = Math.max(0, Math.floor(options.maxAgeDays ?? 0));
   const providerFilter = normalizeProviderId(options.providerFilter ?? "");
 
-  const catalog = await fetchOpenRouterModels(fetchImpl, timeoutMs);
+  const catalog = await fetchOpenRouterModels(fetchImpl);
   const now = Date.now();
 
   const filtered = catalog.filter((entry) => {
@@ -507,3 +499,6 @@ export async function scanOpenRouterModels(
     },
   );
 }
+
+export { OPENROUTER_MODELS_URL };
+export type { OpenRouterModelMeta, OpenRouterModelPricing };

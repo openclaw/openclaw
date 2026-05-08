@@ -1,11 +1,9 @@
-export async function clearAllIndexedDbState(params?: { databasePrefix?: string }): Promise<void> {
+export async function clearAllIndexedDbState(): Promise<void> {
   const databases = await indexedDB.databases();
-  const expectedPrefix = params?.databasePrefix ? `${params.databasePrefix}::` : null;
   await Promise.all(
     databases
       .map((entry) => entry.name)
       .filter((name): name is string => Boolean(name))
-      .filter((name) => !expectedPrefix || name.startsWith(expectedPrefix))
       .map(
         (name) =>
           new Promise<void>((resolve, reject) => {

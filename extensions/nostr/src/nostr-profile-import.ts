@@ -14,7 +14,7 @@ import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
 // Types
 // ============================================================================
 
-interface ProfileImportResult {
+export interface ProfileImportResult {
   /** Whether the import was successful */
   ok: boolean;
   /** The imported profile (if found and valid) */
@@ -33,7 +33,7 @@ interface ProfileImportResult {
   sourceRelay?: string;
 }
 
-interface ProfileImportOptions {
+export interface ProfileImportOptions {
   /** The public key to fetch profile for */
   pubkey: string;
   /** Relay URLs to query */

@@ -25,16 +25,23 @@ type ThreadBindingApi = {
 
 const THREAD_BINDING_API_ARTIFACT_BASENAME = "thread-binding-api.js";
 const MISSING_PUBLIC_SURFACE_PREFIX = "Unable to resolve bundled plugin public surface ";
+const threadBindingApiCache = new Map<string, ThreadBindingApi | undefined>();
 
 function loadBundledChannelThreadBindingApi(channelId: string): ThreadBindingApi | undefined {
   const cacheKey = channelId.trim();
+  if (threadBindingApiCache.has(cacheKey)) {
+    return threadBindingApiCache.get(cacheKey);
+  }
   try {
-    return loadBundledPluginPublicArtifactModuleSync<ThreadBindingApi>({
+    const loaded = loadBundledPluginPublicArtifactModuleSync<ThreadBindingApi>({
       dirName: cacheKey,
       artifactBasename: THREAD_BINDING_API_ARTIFACT_BASENAME,
     });
+    threadBindingApiCache.set(cacheKey, loaded);
+    return loaded;
   } catch (error) {
     if (error instanceof Error && error.message.startsWith(MISSING_PUBLIC_SURFACE_PREFIX)) {
+      threadBindingApiCache.set(cacheKey, undefined);
       return undefined;
     }
     throw error;
@@ -69,3 +76,7 @@ export function resolveBundledChannelThreadBindingInboundConversation(
     isGroup: params.isGroup,
   });
 }
+
+export const __testing = {
+  clearThreadBindingApiCache: () => threadBindingApiCache.clear(),
+};

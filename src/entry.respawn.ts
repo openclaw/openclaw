@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
 import { isTruthyEnvValue } from "./infra/env.js";
@@ -7,29 +6,7 @@ export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning"
 export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 
-type CliRespawnPlan = {
-  command: string;
-  argv: string[];
-  env: NodeJS.ProcessEnv;
-};
-
-function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
-  return platform === "win32" ? path.win32 : path.posix;
-}
-
-export function resolveCliRespawnCommand(params: {
-  execPath: string;
-  platform?: NodeJS.Platform;
-}): string {
-  const platform = params.platform ?? process.platform;
-  const basename = pathModuleForPlatform(platform).basename(params.execPath).toLowerCase();
-  if (basename === "volta-shim" || basename === "volta-shim.exe") {
-    return "node";
-  }
-  return params.execPath;
-}
-
-function hasExperimentalWarningSuppressed(
+export function hasExperimentalWarningSuppressed(
   params: {
     env?: NodeJS.ProcessEnv;
     execArgv?: string[];
@@ -51,20 +28,14 @@ export function buildCliRespawnPlan(
     execArgv?: string[];
     execPath?: string;
     autoNodeExtraCaCerts?: string | undefined;
-    platform?: NodeJS.Platform;
   } = {},
-): CliRespawnPlan | null {
+): { argv: string[]; env: NodeJS.ProcessEnv } | null {
   const argv = params.argv ?? process.argv;
   const env = params.env ?? process.env;
   const execArgv = params.execArgv ?? process.execArgv;
   const execPath = params.execPath ?? process.execPath;
-  const platform = params.platform ?? process.platform;
 
   if (shouldSkipRespawnForArgv(argv) || isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)) {
-    return null;
-  }
-
-  if (platform === "win32") {
     return null;
   }
 
@@ -103,7 +74,6 @@ export function buildCliRespawnPlan(
   }
 
   return {
-    command: resolveCliRespawnCommand({ execPath, platform }),
     argv: [...childExecArgv, ...argv.slice(1)],
     env: childEnv,
   };

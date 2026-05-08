@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
@@ -17,19 +17,6 @@ type RegisterPluginCliOptions = {
   primary?: string | null;
 };
 
-type PluginCliRegistrationEntries = Awaited<
-  ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>
->;
-
-const PLUGIN_CLI_ENTRIES_CACHE_KEY = Symbol.for("openclaw.plugin-cli-registration-entries-cache");
-
-interface ProgramWithEntriesCache {
-  [PLUGIN_CLI_ENTRIES_CACHE_KEY]?: {
-    primary: string | undefined;
-    entries: PluginCliRegistrationEntries;
-  };
-}
-
 const logger = createPluginCliLogger();
 
 export const loadValidatedConfigForPluginRegistration =
@@ -38,7 +25,7 @@ export const loadValidatedConfigForPluginRegistration =
     if (!snapshot.valid) {
       return null;
     }
-    return getRuntimeConfig();
+    return loadConfig();
   };
 
 export async function getPluginCliCommandDescriptors(
@@ -59,27 +46,21 @@ export async function registerPluginCliCommands(
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? undefined;
 
-  const programWithCache = program as Command & ProgramWithEntriesCache;
-  const cached = programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY];
-  let entries: PluginCliRegistrationEntries;
-  if (cached && cached.primary === primary) {
-    entries = cached.entries;
-  } else {
-    entries = await loadPluginCliRegistrationEntriesWithDefaults({
+  await registerPluginCliCommandGroups(
+    program,
+    await loadPluginCliRegistrationEntriesWithDefaults({
       cfg,
       env,
       loaderOptions,
       primaryCommand: primary,
-    });
-    programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY] = { primary, entries };
-  }
-
-  await registerPluginCliCommandGroups(program, entries, {
-    mode,
-    primary,
-    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
-    logger,
-  });
+    }),
+    {
+      mode,
+      primary,
+      existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+      logger,
+    },
+  );
 }
 
 export async function registerPluginCliCommandsFromValidatedConfig(

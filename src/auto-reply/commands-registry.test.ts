@@ -5,7 +5,6 @@ import {
   buildCommandText,
   buildCommandTextFromArgs,
   findCommandByNativeName,
-  formatCommandArgMenuTitle,
   getCommandDetection,
   listChatCommands,
   listChatCommandsForConfig,
@@ -61,27 +60,6 @@ function installSlackNativeCommandOverrides() {
   });
 }
 
-function installOllamaThinkingProvider() {
-  const registry = createTestRegistry();
-  registry.providers.push({
-    pluginId: "ollama",
-    source: "test",
-    provider: {
-      id: "ollama",
-      label: "Ollama",
-      auth: [],
-      resolveThinkingProfile: ({ reasoning }: { reasoning?: boolean }) => ({
-        levels:
-          reasoning === true
-            ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
-            : [{ id: "off" }],
-        defaultLevel: "off",
-      }),
-    } as never,
-  });
-  setActivePluginRegistry(registry);
-}
-
 beforeEach(() => {
   vi.doUnmock("../channels/plugins/index.js");
   setActivePluginRegistry(createTestRegistry([]));
@@ -107,20 +85,6 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "tasks")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "whoami")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
-  });
-
-  it("exposes /side as a BTW text and native alias", () => {
-    const btw = listChatCommands().find((command) => command.key === "btw");
-    expect(btw).toMatchObject({
-      nativeName: "btw",
-      nativeAliases: ["side"],
-      textAliases: ["/btw", "/side"],
-    });
-    expect(normalizeCommandBody("/side what changed?")).toBe("/btw what changed?");
-    expect(findCommandByNativeName("side")?.key).toBe("btw");
-    expect(listNativeCommandSpecs().find((spec) => spec.name === "side")).toMatchObject({
-      acceptsArgs: true,
-    });
   });
 
   it("filters commands based on config flags", () => {
@@ -168,7 +132,6 @@ describe("commands registry", () => {
         name: "demo_skill",
         skillName: "demo-skill",
         description: "Demo skill",
-        descriptionLocalizations: { ko: "데모 스킬" },
       },
     ];
     const commands = listChatCommandsForConfig(
@@ -186,9 +149,7 @@ describe("commands registry", () => {
       { commands: { config: false, plugins: false, debug: false, native: true } },
       { skillCommands },
     );
-    expect(native.find((spec) => spec.name === "demo_skill")).toMatchObject({
-      descriptionLocalizations: { ko: "데모 스킬" },
-    });
+    expect(native.find((spec) => spec.name === "demo_skill")).toBeTruthy();
   });
 
   it("applies discord native command overrides", () => {
@@ -478,15 +439,6 @@ describe("commands registry args", () => {
     ]);
   });
 
-  it("keeps verbose full available while preserving no-arg status dispatch", () => {
-    const verbose = listChatCommands().find((command) => command.key === "verbose");
-
-    expect(verbose?.args?.[0]?.choices).toEqual(["on", "off", "full"]);
-    expect(
-      resolveCommandArgMenu({ command: verbose!, args: undefined, cfg: {} as never }),
-    ).toBeNull();
-  });
-
   it("does not show menus when arg already provided", () => {
     const command = createUsageModeCommand();
 
@@ -502,7 +454,6 @@ describe("commands registry args", () => {
     let seen: {
       provider?: string;
       model?: string;
-      catalogLength?: number;
       commandKey: string;
       argName: string;
     } | null = null;
@@ -519,14 +470,8 @@ describe("commands registry args", () => {
           name: "level",
           description: "level",
           type: "string",
-          choices: ({ provider, model, catalog, command, arg }) => {
-            seen = {
-              provider,
-              model,
-              catalogLength: catalog?.length,
-              commandKey: command.key,
-              argName: arg.name,
-            };
+          choices: ({ provider, model, command, arg }) => {
+            seen = { provider, model, commandKey: command.key, argName: arg.name };
             return ["low", "high"];
           },
         },
@@ -539,13 +484,9 @@ describe("commands registry args", () => {
       { label: "low", value: "low" },
       { label: "high", value: "high" },
     ]);
-    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
-      "Choose level for /think.\nOptions: low, high.",
-    );
     const seenChoice = seen as {
       provider?: string;
       model?: string;
-      catalogLength?: number;
       commandKey: string;
       argName: string;
     } | null;
@@ -553,78 +494,6 @@ describe("commands registry args", () => {
     expect(seenChoice?.argName).toBe("level");
     expect(seenChoice?.provider).toBeTruthy();
     expect(seenChoice?.model).toBeTruthy();
-    expect(seenChoice?.catalogLength).toBe(0);
-  });
-
-  it("uses configured model catalog reasoning for /think arg menus", () => {
-    installOllamaThinkingProvider();
-    const command = findCommandByNativeName("think");
-    expect(command).toBeTruthy();
-    if (!command) {
-      return;
-    }
-
-    const menu = resolveCommandArgMenu({
-      command,
-      args: undefined,
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              models: [{ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", reasoning: true }],
-            },
-          },
-        },
-      } as never,
-      provider: "ollama",
-      model: "glm-5.1:cloud",
-    });
-
-    expect(menu?.arg.name).toBe("level");
-    expect(menu?.choices.map((choice) => choice.value)).toEqual([
-      "off",
-      "low",
-      "medium",
-      "high",
-      "max",
-    ]);
-    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
-      "Choose level for /think.\nOptions: off, low, medium, high, max.",
-    );
-  });
-
-  it("uses configured model compat for /think arg menus", () => {
-    const command = findCommandByNativeName("think");
-    expect(command).toBeTruthy();
-    if (!command) {
-      return;
-    }
-
-    const menu = resolveCommandArgMenu({
-      command,
-      args: undefined,
-      cfg: {
-        models: {
-          providers: {
-            gmn: {
-              models: [
-                {
-                  id: "gpt-5.4",
-                  name: "GPT 5.4 via GMN",
-                  reasoning: true,
-                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-                },
-              ],
-            },
-          },
-        },
-      } as never,
-      provider: "gmn",
-      model: "gpt-5.4",
-    });
-
-    expect(menu?.choices.map((choice) => choice.value)).toContain("xhigh");
-    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toContain("xhigh");
   });
 
   it("does not show menus when args were provided as raw text only", () => {

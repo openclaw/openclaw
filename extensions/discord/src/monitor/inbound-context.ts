@@ -9,7 +9,7 @@ import {
   type DiscordGuildEntryResolved,
 } from "./allow-list.js";
 
-type DiscordSupplementalContextSender = {
+export type DiscordSupplementalContextSender = {
   id?: string;
   name?: string;
   tag?: string;

@@ -99,9 +99,6 @@ export function makeEmbeddedRunnerAttempt(
 ): EmbeddedRunAttemptResult {
   const toolMetas = overrides.toolMetas ?? [];
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
-  const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
-  const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
-  const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
@@ -109,7 +106,6 @@ export function makeEmbeddedRunnerAttempt(
     timedOut: false,
     idleTimedOut: false,
     timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
     promptError: null,
     promptErrorSource: null,
     sessionIdUsed: "session:test",
@@ -123,15 +119,12 @@ export function makeEmbeddedRunnerAttempt(
       buildAttemptReplayMetadata({
         toolMetas,
         didSendViaMessagingTool,
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
         successfulCronAdds,
       }),
     didSendViaMessagingTool,
-    messagingToolSentTexts,
-    messagingToolSentMediaUrls,
-    messagingToolSentTargets,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
     ...overrides,

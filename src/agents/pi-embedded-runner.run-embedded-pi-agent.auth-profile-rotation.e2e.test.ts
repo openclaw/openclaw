@@ -8,11 +8,6 @@ import { redactIdentifier } from "../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { buildAttemptReplayMetadata } from "./pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
-import {
-  installEmbeddedRunnerBackoffE2eMocks,
-  installEmbeddedRunnerBaseE2eMocks,
-  installEmbeddedRunnerFastRunE2eMocks,
-} from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
@@ -27,21 +22,20 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
 }));
 
 const installRunEmbeddedMocks = () => {
-  installEmbeddedRunnerBaseE2eMocks();
-  installEmbeddedRunnerFastRunE2eMocks({
-    runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
-    prepareProviderRuntimeAuth: async (params) => {
-      if (params.provider !== "github-copilot") {
-        return undefined;
-      }
-      const token = await resolveCopilotApiTokenMock(params.context.apiKey);
-      return {
-        apiKey: token.token,
-        baseUrl: token.baseUrl,
-        expiresAt: token.expiresAt,
-      };
-    },
-  });
+  vi.doMock("../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: vi.fn(() => undefined),
+  }));
+  vi.doMock("../context-engine/init.js", () => ({
+    ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../context-engine/registry.js", () => ({
+    resolveContextEngine: vi.fn(async () => ({
+      dispose: async () => undefined,
+    })),
+  }));
+  vi.doMock("./runtime-plugins.js", () => ({
+    ensureRuntimePluginsLoaded: vi.fn(),
+  }));
   vi.doMock("./pi-embedded-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) => ({
       model: {
@@ -64,10 +58,39 @@ const installRunEmbeddedMocks = () => {
       modelRegistry: {},
     }),
   }));
-  installEmbeddedRunnerBackoffE2eMocks({
-    computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
-    sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
+  vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
+    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+  }));
+  vi.doMock("../plugins/provider-runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+      "../plugins/provider-runtime.js",
+    );
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: async (params: {
+        provider: string;
+        context: { apiKey: string };
+      }) => {
+        if (params.provider !== "github-copilot") {
+          return undefined;
+        }
+        const token = await resolveCopilotApiTokenMock(params.context.apiKey);
+        return {
+          apiKey: token.token,
+          baseUrl: token.baseUrl,
+          expiresAt: token.expiresAt,
+        };
+      },
+      resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
+    };
   });
+  vi.doMock("../infra/backoff.js", () => ({
+    computeBackoff: (
+      policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+      attempt: number,
+    ) => computeBackoffMock(policy, attempt),
+    sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
+  }));
   vi.doMock("./pi-embedded-runner/compact.js", () => ({
     compactEmbeddedPiSessionDirect: vi.fn(async () => {
       throw new Error("compact should not run in auth profile rotation tests");
@@ -83,8 +106,8 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let createDiagnosticLogRecordCaptureFn: typeof import("../logging/test-helpers/diagnostic-log-capture.js").createDiagnosticLogRecordCapture;
-let cleanupLogCapture: (() => void) | undefined;
+let unregisterLogTransport: (() => void) | undefined;
+let registerLogTransportFn: typeof import("../logging/logger.js").registerLogTransport;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
 let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
 const originalFetch = globalThis.fetch;
@@ -93,10 +116,11 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
-  ({ createDiagnosticLogRecordCapture: createDiagnosticLogRecordCaptureFn } =
-    await import("../logging/test-helpers/diagnostic-log-capture.js"));
-  ({ resetLogger: resetLoggerFn, setLoggerOverride: setLoggerOverrideFn } =
-    await import("../logging/logger.js"));
+  ({
+    registerLogTransport: registerLogTransportFn,
+    resetLogger: resetLoggerFn,
+    setLoggerOverride: setLoggerOverrideFn,
+  } = await import("../logging/logger.js"));
 });
 
 async function runEmbeddedPiAgentInline(
@@ -128,8 +152,8 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
-  cleanupLogCapture?.();
-  cleanupLogCapture = undefined;
+  unregisterLogTransport?.();
+  unregisterLogTransport = undefined;
   setLoggerOverrideFn(null);
   resetLoggerFn();
 });
@@ -158,9 +182,6 @@ const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage 
 const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => {
   const toolMetas = overrides.toolMetas ?? [];
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
-  const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
-  const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
-  const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
@@ -168,7 +189,6 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
     timedOut: false,
     idleTimedOut: false,
     timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
     promptError: null,
     promptErrorSource: null,
     sessionIdUsed: "session:test",
@@ -182,15 +202,12 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
       buildAttemptReplayMetadata({
         toolMetas,
         didSendViaMessagingTool,
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
         successfulCronAdds,
       }),
     didSendViaMessagingTool,
-    messagingToolSentTexts,
-    messagingToolSentMediaUrls,
-    messagingToolSentTargets,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
     ...overrides,
@@ -843,12 +860,14 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
-    const logCapture = createDiagnosticLogRecordCaptureFn();
-    cleanupLogCapture = logCapture.cleanup;
+    const records: Array<Record<string, unknown>> = [];
     setLoggerOverrideFn({
       level: "trace",
       consoleLevel: "silent",
       file: path.join(os.tmpdir(), `openclaw-auth-rotation-${Date.now()}.log`),
+    });
+    unregisterLogTransport = registerLogTransportFn((record) => {
+      records.push(record);
     });
 
     await runAutoPinnedRotationCase({
@@ -857,17 +876,18 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       sessionKey: "agent:test:overloaded-logging",
       runId: "run:overloaded-logging",
     });
-    await logCapture.flush();
 
-    const decisionRecord = logCapture.records.find(
+    const decisionRecord = records.find(
       (record) =>
-        record.message === "embedded run failover decision" &&
-        record.attributes?.decision === "rotate_profile",
+        record["2"] === "embedded run failover decision" &&
+        record["1"] &&
+        typeof record["1"] === "object" &&
+        (record["1"] as Record<string, unknown>).decision === "rotate_profile",
     );
 
     expect(decisionRecord).toBeDefined();
     const safeProfileId = redactIdentifier("openai:p1", { len: 12 });
-    expect(decisionRecord?.attributes).toMatchObject({
+    expect((decisionRecord as Record<string, unknown>)["1"]).toMatchObject({
       event: "embedded_run_failover_decision",
       runId: "run:overloaded-logging",
       decision: "rotate_profile",
@@ -879,14 +899,16 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
     });
 
-    const stateRecord = logCapture.records.find(
+    const stateRecord = records.find(
       (record) =>
-        record.message === "auth profile failure state updated" &&
-        record.attributes?.profileId === safeProfileId,
+        record["2"] === "auth profile failure state updated" &&
+        record["1"] &&
+        typeof record["1"] === "object" &&
+        (record["1"] as Record<string, unknown>).profileId === safeProfileId,
     );
 
     expect(stateRecord).toBeDefined();
-    expect(stateRecord?.attributes).toMatchObject({
+    expect((stateRecord as Record<string, unknown>)["1"]).toMatchObject({
       event: "auth_profile_failure_state_updated",
       runId: "run:overloaded-logging",
       profileId: safeProfileId,

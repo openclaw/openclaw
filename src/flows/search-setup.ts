@@ -7,13 +7,8 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import {
-  resolveWebSearchInstallCatalogEntries,
-  type WebSearchInstallCatalogEntry,
-} from "../plugins/web-search-install-catalog.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -28,22 +23,16 @@ export type SearchProvider = NonNullable<
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
 type MutableSearchConfig = SearchConfig & Record<string, unknown>;
 
-type SearchProviderSetupOption = FlowOption & {
+export type SearchProviderSetupOption = FlowOption & {
   value: SearchProvider;
 };
 
-type SearchProviderSetupContribution = FlowContribution & {
+export type SearchProviderSetupContribution = FlowContribution & {
   kind: "search";
   surface: "setup";
   provider: PluginWebSearchProviderEntry;
   option: SearchProviderSetupOption;
-  source: "runtime" | "install-catalog";
-};
-
-const SEARCH_INSTALL_CATALOG_ENTRY = Symbol("search-install-catalog-entry");
-
-type SearchProviderEntryWithInstall = PluginWebSearchProviderEntry & {
-  [SEARCH_INSTALL_CATALOG_ENTRY]?: WebSearchInstallCatalogEntry;
+  source: "runtime";
 };
 
 function resolveSearchProviderCredentialLabel(
@@ -77,7 +66,7 @@ export function resolveSearchProviderOptions(
 
 function buildSearchProviderSetupContribution(params: {
   provider: PluginWebSearchProviderEntry;
-  source: "runtime" | "install-catalog";
+  source: "runtime";
 }): SearchProviderSetupContribution {
   return {
     id: `search:setup:${params.provider.id}`,
@@ -94,44 +83,20 @@ function buildSearchProviderSetupContribution(params: {
   };
 }
 
-function resolveSearchProviderSetupContributions(
+export function resolveSearchProviderSetupContributions(
   config?: OpenClawConfig,
 ): SearchProviderSetupContribution[] {
-  const runtimeProviders = sortWebSearchProviders(
+  const providers = sortWebSearchProviders(
     resolvePluginWebSearchProviders({
       config,
       env: process.env,
       mode: "setup",
     }),
   );
-  const seenProviderIds = new Set(runtimeProviders.map((provider) => provider.id));
-  const seenPluginIds = new Set(runtimeProviders.map((provider) => provider.pluginId));
-  const normalizedPluginsConfig = normalizePluginsConfig(config?.plugins);
-  const installCatalogProviders = resolveWebSearchInstallCatalogEntries()
-    .filter(
-      (entry) =>
-        !seenProviderIds.has(entry.provider.id) &&
-        !seenPluginIds.has(entry.pluginId) &&
-        resolveEffectiveEnableState({
-          id: entry.pluginId,
-          origin: "global",
-          config: normalizedPluginsConfig,
-          rootConfig: config,
-          enabledByDefault: true,
-        }).enabled,
-    )
-    .map(
-      (entry): SearchProviderEntryWithInstall =>
-        Object.assign({}, entry.provider, { [SEARCH_INSTALL_CATALOG_ENTRY]: entry }),
-    );
-  const providers = sortWebSearchProviders([...runtimeProviders, ...installCatalogProviders]);
   return sortFlowContributionsByLabel(
-    providers.filter(showsSearchProviderInSetup).map((provider) =>
-      buildSearchProviderSetupContribution({
-        provider,
-        source: SEARCH_INSTALL_CATALOG_ENTRY in provider ? "install-catalog" : "runtime",
-      }),
-    ),
+    providers
+      .filter(showsSearchProviderInSetup)
+      .map((provider) => buildSearchProviderSetupContribution({ provider, source: "runtime" })),
   );
 }
 
@@ -337,36 +302,12 @@ export type SetupSearchOptions = {
 async function finalizeSearchProviderSetup(params: {
   originalConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
-  entry: SearchProviderEntryWithInstall;
+  entry: PluginWebSearchProviderEntry;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   opts?: SetupSearchOptions;
 }): Promise<OpenClawConfig> {
-  let next = params.nextConfig;
-  const installEntry = params.entry[SEARCH_INSTALL_CATALOG_ENTRY];
-  if (installEntry && next.tools?.web?.search?.enabled !== false) {
-    const { ensureOnboardingPluginInstalled } =
-      await import("../commands/onboarding-plugin-install.js");
-    const installed = await ensureOnboardingPluginInstalled({
-      cfg: next,
-      entry: {
-        pluginId: installEntry.pluginId,
-        label: installEntry.label,
-        install: installEntry.install,
-        ...(installEntry.trustedSourceLinkedOfficialInstall
-          ? { trustedSourceLinkedOfficialInstall: true }
-          : {}),
-      },
-      prompter: params.prompter,
-      runtime: params.runtime,
-      autoConfirmSingleSource: true,
-    });
-    if (!installed.installed) {
-      return params.originalConfig;
-    }
-    next = installed.cfg;
-  }
-  next = preserveDisabledState(params.originalConfig, next);
+  let next = preserveDisabledState(params.originalConfig, params.nextConfig);
   if (!params.entry.runSetup) {
     return next;
   }
@@ -493,10 +434,6 @@ export async function runSearchSetupFlow(
     });
   }
 
-  if (entry.credentialNote) {
-    await prompter.note(entry.credentialNote, entry.label);
-  }
-
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret
   if (useSecretRefMode) {
     if (keyConfigured) {
@@ -536,7 +473,6 @@ export async function runSearchSetupFlow(
         ? `${credentialLabel} (leave blank to use env var)`
         : credentialLabel,
     placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
-    sensitive: true,
   });
 
   const key = normalizeOptionalString(keyInput) ?? "";

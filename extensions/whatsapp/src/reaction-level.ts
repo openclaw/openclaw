@@ -1,8 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { resolveReactionLevel, type ResolvedReactionLevel } from "openclaw/plugin-sdk/text-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveReactionLevel,
+  type ReactionLevel,
+  type ResolvedReactionLevel,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 
-type ResolvedWhatsAppReactionLevel = ResolvedReactionLevel;
+export type WhatsAppReactionLevel = ReactionLevel;
+export type ResolvedWhatsAppReactionLevel = ResolvedReactionLevel;
 
 /** Resolve the effective reaction level and its implications for WhatsApp. */
 export function resolveWhatsAppReactionLevel(params: {

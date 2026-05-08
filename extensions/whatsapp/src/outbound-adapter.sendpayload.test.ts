@@ -20,36 +20,6 @@ describe("whatsappOutbound sendPayload", () => {
     });
   });
 
-  it("uses the same final sanitizer stack for direct text sends", async () => {
-    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
-
-    await whatsappOutbound.sendText!({
-      cfg: {},
-      to: "5511999999999@c.us",
-      text: [
-        "Before",
-        "<function_calls>",
-        '  <invoke name="send_message">',
-        '    <parameter name="text"><b>hidden</b></parameter>',
-        "  </invoke>",
-        "</function_calls>",
-        "<div>After</div>",
-      ].join("\n"),
-      deps: { sendWhatsApp },
-    });
-
-    expect(sendWhatsApp).toHaveBeenCalledWith(
-      "5511999999999@c.us",
-      "Before\n\nAfter\n",
-      expect.objectContaining({
-        verbose: false,
-        cfg: {},
-        accountId: undefined,
-        gifPlayback: undefined,
-      }),
-    );
-  });
-
   it("trims leading whitespace for direct media captions", async () => {
     const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
 
@@ -105,28 +75,6 @@ describe("whatsappOutbound sendPayload", () => {
     });
   });
 
-  it("preserves audioAsVoice from payload media sends", async () => {
-    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
-
-    await whatsappOutbound.sendPayload!({
-      cfg: {},
-      to: "5511999999999@c.us",
-      text: "",
-      payload: { text: "voice", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true },
-      deps: { sendWhatsApp },
-    });
-
-    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "voice", {
-      verbose: false,
-      cfg: {},
-      mediaUrl: "/tmp/voice.ogg",
-      mediaLocalRoots: undefined,
-      audioAsVoice: true,
-      accountId: undefined,
-      gifPlayback: undefined,
-    });
-  });
-
   it("drops blank mediaUrls before sending payload media", async () => {
     const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
 
@@ -160,21 +108,6 @@ describe("whatsappOutbound sendPayload", () => {
       to: "5511999999999@c.us",
       text: "",
       payload: { text: "\n \t" },
-      deps: { sendWhatsApp },
-    });
-
-    expect(result).toEqual({ channel: "whatsapp", messageId: "" });
-    expect(sendWhatsApp).not.toHaveBeenCalled();
-  });
-
-  it("suppresses routed error payloads", async () => {
-    const sendWhatsApp = vi.fn();
-
-    const result = await whatsappOutbound.sendPayload!({
-      cfg: {},
-      to: "5511999999999@c.us",
-      text: "",
-      payload: { text: "provider exploded", isError: true },
       deps: { sendWhatsApp },
     });
 

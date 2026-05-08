@@ -16,7 +16,7 @@ const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
 
-interface OneDriveUploadResult {
+export interface OneDriveUploadResult {
   id: string;
   webUrl: string;
   name: string;
@@ -71,7 +71,7 @@ export async function uploadToOneDrive(params: {
   };
 }
 
-interface OneDriveSharingLink {
+export interface OneDriveSharingLink {
   webUrl: string;
 }
 
@@ -79,7 +79,7 @@ interface OneDriveSharingLink {
  * Create a sharing link for a OneDrive file.
  * The link allows organization members to view the file.
  */
-async function createSharingLink(params: {
+export async function createSharingLink(params: {
   itemId: string;
   tokenProvider: MSTeamsAccessTokenProvider;
   /** Sharing scope: "organization" (default) or "anonymous" */
@@ -219,7 +219,7 @@ export async function uploadToSharePoint(params: {
   };
 }
 
-interface ChatMember {
+export interface ChatMember {
   aadObjectId: string;
   displayName?: string;
 }
@@ -358,7 +358,7 @@ export async function resolveGraphChatId(params: {
  * Get members of a Teams chat for per-user sharing.
  * Used to create sharing links scoped to only the chat participants.
  */
-async function getChatMembers(params: {
+export async function getChatMembers(params: {
   chatId: string;
   tokenProvider: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
@@ -395,7 +395,7 @@ async function getChatMembers(params: {
  * For organization scope (default), uses v1.0 API.
  * For per-user scope, uses beta API with recipients.
  */
-async function createSharePointSharingLink(params: {
+export async function createSharePointSharingLink(params: {
   siteId: string;
   itemId: string;
   tokenProvider: MSTeamsAccessTokenProvider;

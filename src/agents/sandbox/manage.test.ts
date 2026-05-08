@@ -4,7 +4,7 @@ let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
 let removeSandboxBrowserContainer: typeof import("./manage.js").removeSandboxBrowserContainer;
 
 const configMocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(),
+  loadConfig: vi.fn(),
 }));
 
 const registryMocks = vi.hoisted(() => ({
@@ -20,7 +20,7 @@ const backendMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: configMocks.getRuntimeConfig,
+  loadConfig: configMocks.loadConfig,
 }));
 
 vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
@@ -52,7 +52,7 @@ beforeAll(async () => {
 
 describe("listSandboxBrowsers", () => {
   beforeEach(async () => {
-    configMocks.getRuntimeConfig.mockReset();
+    configMocks.loadConfig.mockReset();
     registryMocks.readBrowserRegistry.mockReset();
     registryMocks.readRegistry.mockReset();
     registryMocks.removeBrowserRegistryEntry.mockReset();
@@ -60,7 +60,7 @@ describe("listSandboxBrowsers", () => {
     backendMocks.describeRuntime.mockReset();
     backendMocks.removeRuntime.mockReset();
 
-    configMocks.getRuntimeConfig.mockReturnValue({
+    configMocks.loadConfig.mockReturnValue({
       agents: {
         defaults: {
           sandbox: {

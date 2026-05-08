@@ -25,7 +25,7 @@ export type MockBaileysSocket = {
   user?: { id?: string };
 };
 
-type MockBaileysModule = {
+export type MockBaileysModule = {
   BufferJSON: {
     replacer: (key: string, value: unknown) => unknown;
     reviver: (key: string, value: unknown) => unknown;

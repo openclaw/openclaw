@@ -5,7 +5,7 @@ import { resolveUserPath } from "../utils.js";
 import { type ArchiveLogger, extractArchive, fileExists, resolvePackedRootDir } from "./archive.js";
 import { withTempDir } from "./install-source-utils.js";
 
-type ExistingInstallPathResult =
+export type ExistingInstallPathResult =
   | {
       ok: true;
       resolvedPath: string;

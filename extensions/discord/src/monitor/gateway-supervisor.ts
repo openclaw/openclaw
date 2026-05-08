@@ -3,7 +3,11 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
-type DiscordGatewayEventType = "disallowed-intents" | "fatal" | "other" | "reconnect-exhausted";
+export type DiscordGatewayEventType =
+  | "disallowed-intents"
+  | "fatal"
+  | "other"
+  | "reconnect-exhausted";
 
 export type DiscordGatewayEvent = {
   type: DiscordGatewayEventType;

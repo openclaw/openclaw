@@ -83,7 +83,6 @@ describe("mixed inline directives", () => {
       agentCfg: cfg.agents?.defaults,
       modelState: {
         resolveDefaultThinkingLevel: async () => "off",
-        resolveThinkingCatalog: async () => [],
         allowedModelKeys: new Set(),
         allowedModelCatalog: [],
         resetModelOverride: false,
@@ -157,7 +156,6 @@ describe("mixed inline directives", () => {
       agentCfg: cfg.agents?.defaults,
       modelState: {
         resolveDefaultThinkingLevel: async () => "off",
-        resolveThinkingCatalog: async () => [],
         allowedModelKeys: new Set(),
         allowedModelCatalog: [],
         resetModelOverride: false,

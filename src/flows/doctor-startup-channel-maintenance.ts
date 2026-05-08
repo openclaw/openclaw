@@ -6,21 +6,16 @@ type DoctorStartupMaintenanceRuntime = {
   log: (message: string) => void;
 };
 
-type ChannelPluginStartupMaintenanceRunner = typeof runChannelPluginStartupMaintenance;
-
 export async function maybeRunDoctorStartupChannelMaintenance(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  runChannelPluginStartupMaintenance?: ChannelPluginStartupMaintenanceRunner;
   runtime: DoctorStartupMaintenanceRuntime;
   shouldRepair: boolean;
 }): Promise<void> {
   if (!params.shouldRepair) {
     return;
   }
-  const runStartupMaintenance =
-    params.runChannelPluginStartupMaintenance ?? runChannelPluginStartupMaintenance;
-  await runStartupMaintenance({
+  await runChannelPluginStartupMaintenance({
     cfg: params.cfg,
     env: params.env ?? process.env,
     log: {

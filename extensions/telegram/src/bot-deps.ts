@@ -1,13 +1,12 @@
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { loadConfig, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { loadSessionStore } from "openclaw/plugin-sdk/config-runtime";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
@@ -17,7 +16,7 @@ import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotDeps = {
-  getRuntimeConfig: typeof getRuntimeConfig;
+  loadConfig: typeof loadConfig;
   resolveStorePath: typeof resolveStorePath;
   loadSessionStore?: typeof loadSessionStore;
   readChannelAllowFromStore: typeof readChannelAllowFromStore;
@@ -38,8 +37,8 @@ export type TelegramBotDeps = {
 };
 
 export const defaultTelegramBotDeps: TelegramBotDeps = {
-  get getRuntimeConfig() {
-    return getRuntimeConfig;
+  get loadConfig() {
+    return loadConfig;
   },
   get resolveStorePath() {
     return resolveStorePath;

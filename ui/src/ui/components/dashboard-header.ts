@@ -1,6 +1,6 @@
-import { LitElement, html, nothing } from "lit";
+import { LitElement, html } from "lit";
 import { property } from "lit/decorators.js";
-import { pathForTab, titleForTab, type Tab } from "../navigation.js";
+import { titleForTab, type Tab } from "../navigation.js";
 
 export class DashboardHeader extends LitElement {
   override createRenderRoot() {
@@ -8,50 +8,22 @@ export class DashboardHeader extends LitElement {
   }
 
   @property() tab: Tab = "overview";
-  @property() basePath = "";
-  @property() agentLabel = "";
-
-  private readonly handleOverviewClick = (event: MouseEvent) => {
-    if (
-      event.defaultPrevented ||
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey
-    ) {
-      return;
-    }
-    event.preventDefault();
-    this.dispatchEvent(
-      new CustomEvent("navigate", { detail: "overview", bubbles: true, composed: true }),
-    );
-  };
 
   override render() {
     const label = titleForTab(this.tab);
-    const agentLabel = this.agentLabel.trim();
 
     return html`
       <div class="dashboard-header">
         <div class="dashboard-header__breadcrumb">
-          <a
+          <span
             class="dashboard-header__breadcrumb-link"
-            href=${pathForTab("overview", this.basePath)}
-            @click=${this.handleOverviewClick}
+            @click=${() =>
+              this.dispatchEvent(
+                new CustomEvent("navigate", { detail: "overview", bubbles: true, composed: true }),
+              )}
           >
             OpenClaw
-          </a>
-          ${agentLabel
-            ? html`
-                <span class="dashboard-header__breadcrumb-segment">
-                  <span class="dashboard-header__breadcrumb-sep">›</span>
-                  <span class="dashboard-header__breadcrumb-context" title=${agentLabel}>
-                    ${agentLabel}
-                  </span>
-                </span>
-              `
-            : nothing}
+          </span>
           <span class="dashboard-header__breadcrumb-sep">›</span>
           <span class="dashboard-header__breadcrumb-current">${label}</span>
         </div>

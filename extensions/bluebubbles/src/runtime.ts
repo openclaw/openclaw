@@ -12,6 +12,10 @@ export function clearBlueBubblesRuntime(): void {
   runtimeStore.clearRuntime();
 }
 
+export function tryGetBlueBubblesRuntime(): PluginRuntime | null {
+  return runtimeStore.tryGetRuntime();
+}
+
 export function getBlueBubblesRuntime(): PluginRuntime {
   return runtimeStore.getRuntime();
 }

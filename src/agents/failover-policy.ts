@@ -8,9 +8,6 @@ export function shouldAllowCooldownProbeForReason(
     reason === "overloaded" ||
     reason === "billing" ||
     reason === "unknown" ||
-    reason === "empty_response" ||
-    reason === "no_error_details" ||
-    reason === "unclassified" ||
     reason === "timeout"
   );
 }
@@ -22,9 +19,6 @@ export function shouldUseTransientCooldownProbeSlot(
     reason === "rate_limit" ||
     reason === "overloaded" ||
     reason === "unknown" ||
-    reason === "empty_response" ||
-    reason === "no_error_details" ||
-    reason === "unclassified" ||
     reason === "timeout"
   );
 }

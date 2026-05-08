@@ -6,7 +6,6 @@ import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 export { getTailnetHostname };
 
 type StatusMemoryManager = {
-  probeVectorStoreAvailability?(): Promise<boolean>;
   probeVectorAvailability(): Promise<boolean>;
   status(): MemoryProviderStatus;
   close?(): Promise<void>;
@@ -21,12 +20,8 @@ export async function getMemorySearchManager(params: {
   if (!manager) {
     return { manager: null };
   }
-  const probeVectorStoreAvailability = manager.probeVectorStoreAvailability
-    ? async () => await manager.probeVectorStoreAvailability!()
-    : undefined;
   return {
     manager: {
-      probeVectorStoreAvailability,
       async probeVectorAvailability() {
         return await manager.probeVectorAvailability();
       },

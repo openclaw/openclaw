@@ -2,15 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
-  const resolveEffectiveModelFallbacksMock = vi.fn();
+  const resolveRunModelFallbacksOverrideMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const isReasoningTagProviderMock = vi.fn();
-  return { resolveEffectiveModelFallbacksMock, getChannelPluginMock, isReasoningTagProviderMock };
+  return { resolveRunModelFallbacksOverrideMock, getChannelPluginMock, isReasoningTagProviderMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
-    hoisted.resolveEffectiveModelFallbacksMock(...args),
+  resolveRunModelFallbacksOverride: (...args: unknown[]) =>
+    hoisted.resolveRunModelFallbacksOverrideMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -56,23 +56,22 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 
 describe("agent-runner-utils", () => {
   beforeEach(() => {
-    hoisted.resolveEffectiveModelFallbacksMock.mockClear();
+    hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
   });
 
   it("resolves model fallback options from run context", () => {
-    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
-    const run = makeRun({ hasSessionModelOverride: true, modelOverrideSource: "user" });
+    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    const run = makeRun();
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
-      hasSessionModelOverride: true,
-      modelOverrideSource: "user",
+      sessionKey: run.sessionKey,
     });
     expect(resolved).toEqual({
       cfg: run.config,
@@ -84,16 +83,15 @@ describe("agent-runner-utils", () => {
   });
 
   it("passes through missing agentId for helper-based fallback resolution", () => {
-    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({ agentId: undefined });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: undefined,
-      hasSessionModelOverride: false,
-      modelOverrideSource: undefined,
+      sessionKey: run.sessionKey,
     });
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });

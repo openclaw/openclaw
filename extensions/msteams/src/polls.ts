@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
-type MSTeamsPollVote = {
+export type MSTeamsPollVote = {
   pollId: string;
   selections: string[];
 };
@@ -29,7 +29,7 @@ export type MSTeamsPollStore = {
   }) => Promise<MSTeamsPoll | null>;
 };
 
-type MSTeamsPollCard = {
+export type MSTeamsPollCard = {
   pollId: string;
   question: string;
   options: string[];
@@ -221,7 +221,7 @@ export function buildMSTeamsPollCard(params: {
   };
 }
 
-type MSTeamsPollStoreFsOptions = {
+export type MSTeamsPollStoreFsOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;

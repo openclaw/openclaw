@@ -1,7 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
-import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -135,7 +134,7 @@ export default definePluginEntry({
         const tokens = args.split(/\s+/).filter(Boolean);
         const action = normalizeLowercaseStringOrEmpty(tokens[0] ?? "status");
 
-        const cfg = api.runtime.config.current() as OpenClawConfig;
+        const cfg = api.runtime.config.loadConfig();
         const active = resolveActiveTalkProviderConfig(cfg.talk);
         if (!active) {
           return {
@@ -224,10 +223,7 @@ export default definePluginEntry({
               ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
             },
           };
-          await api.runtime.config.replaceConfigFile({
-            nextConfig,
-            afterWrite: { mode: "auto" },
-          });
+          await api.runtime.config.writeConfigFile(nextConfig);
 
           const name = (chosen.name ?? "").trim() || "(unnamed)";
           return { text: `✅ ${providerLabel} Talk voice set to ${name}\n${chosen.id}` };

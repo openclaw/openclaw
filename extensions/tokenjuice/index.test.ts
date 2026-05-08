@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 
 const { tokenjuiceFactory, createTokenjuiceOpenClawEmbeddedExtension } = vi.hoisted(() => {
   const tokenjuiceFactory = vi.fn();
@@ -31,8 +31,8 @@ describe("tokenjuice bundled plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers tokenjuice tool result middleware for Pi and Codex runtimes", () => {
-    const registerAgentToolResultMiddleware = vi.fn();
+  it("registers the tokenjuice embedded extension factory", () => {
+    const registerEmbeddedExtensionFactory = vi.fn();
 
     plugin.register(
       createTestPluginApi({
@@ -42,14 +42,11 @@ describe("tokenjuice bundled plugin", () => {
         config: {},
         pluginConfig: {},
         runtime: {} as never,
-        registerAgentToolResultMiddleware,
+        registerEmbeddedExtensionFactory,
       }),
     );
 
     expect(createTokenjuiceOpenClawEmbeddedExtension).toHaveBeenCalledTimes(1);
-    expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
-    expect(registerAgentToolResultMiddleware).toHaveBeenCalledWith(expect.any(Function), {
-      runtimes: ["pi", "codex"],
-    });
+    expect(registerEmbeddedExtensionFactory).toHaveBeenCalledWith(tokenjuiceFactory);
   });
 });

@@ -2,29 +2,21 @@ import crypto from "node:crypto";
 import {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
+  type EmbeddingBatchExecutionParams,
   buildBatchHeaders,
   debugEmbeddingsLog,
   normalizeBatchBaseUrl,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
 
-type EmbeddingBatchExecutionParams = {
-  wait: boolean;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  concurrency: number;
-  debug?: (message: string, data?: Record<string, unknown>) => void;
-};
-
-type GeminiBatchRequest = {
+export type GeminiBatchRequest = {
   custom_id: string;
   request: GeminiTextEmbeddingRequest;
 };
 
-type GeminiBatchStatus = {
+export type GeminiBatchStatus = {
   name?: string;
   state?: string;
   outputConfig?: { file?: string; fileId?: string };
@@ -36,7 +28,7 @@ type GeminiBatchStatus = {
   error?: { message?: string };
 };
 
-type GeminiBatchOutputLine = {
+export type GeminiBatchOutputLine = {
   key?: string;
   custom_id?: string;
   request_id?: string;
@@ -187,7 +179,8 @@ async function fetchGeminiBatchStatus(params: {
     },
     onResponse: async (res) => {
       if (!res.ok) {
-        throw await createProviderHttpError(res, "gemini batch status failed");
+        const text = await res.text();
+        throw new Error(`gemini batch status failed: ${res.status} ${text}`);
       }
       return (await res.json()) as GeminiBatchStatus;
     },
@@ -210,7 +203,8 @@ async function fetchGeminiFileContent(params: {
     },
     onResponse: async (res) => {
       if (!res.ok) {
-        throw await createProviderHttpError(res, "gemini batch file content failed");
+        const text = await res.text();
+        throw new Error(`gemini batch file content failed: ${res.status} ${text}`);
       }
       return await res.text();
     },

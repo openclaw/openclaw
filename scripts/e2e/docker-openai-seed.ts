@@ -1,19 +1,15 @@
-// Shared Docker E2E OpenAI provider config seed helper.
-// Uses packaged plugin-sdk runtime modules so seeded configs match the npm tarball.
 import {
   applyProviderConfigWithDefaultModelPreset,
   type ModelDefinitionConfig,
   type OpenClawConfig,
-} from "../../dist/plugin-sdk/provider-onboard.js";
+} from "../../src/plugin-sdk/provider-onboard.ts";
 
 export type { OpenClawConfig };
 
-const DOCKER_OPENAI_MODEL_REF = "openai/gpt-5.5";
-const DOCKER_OPENAI_BASE_URL =
-  process.env.OPENCLAW_DOCKER_OPENAI_BASE_URL?.trim() || "http://127.0.0.1:9/v1";
+const DOCKER_OPENAI_MODEL_REF = "openai/gpt-5.4";
 const DOCKER_OPENAI_MODEL: ModelDefinitionConfig = {
-  id: "gpt-5.5",
-  name: "gpt-5.5",
+  id: "gpt-5.4",
+  name: "gpt-5.4",
   api: "openai-responses",
   reasoning: true,
   input: ["text", "image"],
@@ -34,7 +30,7 @@ export function applyDockerOpenAiProviderConfig(
   const seededConfig = applyProviderConfigWithDefaultModelPreset(config, {
     providerId: "openai",
     api: "openai-responses",
-    baseUrl: DOCKER_OPENAI_BASE_URL,
+    baseUrl: "http://127.0.0.1:9/v1",
     defaultModel: DOCKER_OPENAI_MODEL,
     defaultModelId: DOCKER_OPENAI_MODEL.id,
     aliases: [{ modelRef: DOCKER_OPENAI_MODEL_REF, alias: "GPT" }],

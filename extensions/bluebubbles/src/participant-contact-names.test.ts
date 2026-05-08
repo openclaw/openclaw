@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   enrichBlueBubblesParticipantsWithContactNames,
@@ -112,17 +111,9 @@ describe("enrichBlueBubblesParticipantsWithContactNames", () => {
   });
 
   it("lists contacts databases from the current home directory", async () => {
-    const expectedSourcesDir = join(
-      "/Users/tester",
-      "Library",
-      "Application Support",
-      "AddressBook",
-      "Sources",
-    );
-    const expectedDatabasePath = join(expectedSourcesDir, "source-a", "AddressBook-v22.abcddb");
     const readdir = vi.fn(async () => ["source-a", "source-b"]);
     const access = vi.fn(async (path: string) => {
-      if (path !== expectedDatabasePath) {
+      if (!path.endsWith("source-a/AddressBook-v22.abcddb")) {
         throw new Error("missing");
       }
     });
@@ -133,8 +124,12 @@ describe("enrichBlueBubblesParticipantsWithContactNames", () => {
       access,
     });
 
-    expect(readdir).toHaveBeenCalledWith(expectedSourcesDir);
-    expect(databases).toEqual([expectedDatabasePath]);
+    expect(readdir).toHaveBeenCalledWith(
+      "/Users/tester/Library/Application Support/AddressBook/Sources",
+    );
+    expect(databases).toEqual([
+      "/Users/tester/Library/Application Support/AddressBook/Sources/source-a/AddressBook-v22.abcddb",
+    ]);
   });
 
   it("queries only the requested phone keys in sqlite", async () => {

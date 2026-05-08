@@ -2,12 +2,6 @@ export type AckReactionScope = "all" | "direct" | "group-all" | "group-mentions"
 
 export type WhatsAppAckReactionMode = "always" | "mentions" | "never";
 
-export type AckReactionHandle = {
-  ackReactionPromise: Promise<boolean>;
-  ackReactionValue: string;
-  remove: () => Promise<void>;
-};
-
 export type AckReactionGateParams = {
   scope: AckReactionScope | undefined;
   isDirect: boolean;
@@ -84,37 +78,6 @@ export function shouldAckReactionForWhatsApp(params: {
   });
 }
 
-export function createAckReactionHandle(params: {
-  ackReactionValue: string;
-  send: () => Promise<void>;
-  remove: () => Promise<void>;
-  onSendError?: (err: unknown) => void;
-}): AckReactionHandle | null {
-  const ackReactionValue = params.ackReactionValue.trim();
-  if (!ackReactionValue) {
-    return null;
-  }
-
-  let sendPromise: Promise<void>;
-  try {
-    sendPromise = params.send();
-  } catch (err) {
-    sendPromise = Promise.reject(err);
-  }
-
-  return {
-    ackReactionPromise: sendPromise.then(
-      () => true,
-      (err) => {
-        params.onSendError?.(err);
-        return false;
-      },
-    ),
-    ackReactionValue,
-    remove: params.remove,
-  };
-}
-
 export function removeAckReactionAfterReply(params: {
   removeAfterReply: boolean;
   ackReactionPromise: Promise<boolean> | null;
@@ -136,19 +99,5 @@ export function removeAckReactionAfterReply(params: {
       return;
     }
     params.remove().catch((err) => params.onError?.(err));
-  });
-}
-
-export function removeAckReactionHandleAfterReply(params: {
-  removeAfterReply: boolean;
-  ackReaction: AckReactionHandle | null | undefined;
-  onError?: (err: unknown) => void;
-}) {
-  removeAckReactionAfterReply({
-    removeAfterReply: params.removeAfterReply,
-    ackReactionPromise: params.ackReaction?.ackReactionPromise ?? null,
-    ackReactionValue: params.ackReaction?.ackReactionValue ?? null,
-    remove: params.ackReaction?.remove ?? (async () => {}),
-    onError: params.onError,
   });
 }

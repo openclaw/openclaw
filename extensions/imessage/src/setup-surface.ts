@@ -9,6 +9,7 @@ import {
   createIMessageCliPathTextInput,
   imessageCompletionNote,
   imessageDmPolicy,
+  imessageSetupAdapter,
   imessageSetupStatusBase,
   parseIMessageAllowFromEntries,
 } from "./setup-core.js";
@@ -42,4 +43,4 @@ export const imessageSetupWizard: ChannelSetupWizard = {
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
-export { parseIMessageAllowFromEntries };
+export { imessageSetupAdapter, parseIMessageAllowFromEntries };

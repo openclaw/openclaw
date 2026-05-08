@@ -5,38 +5,56 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../test/helpers/temp-dir.js";
 
 const tempRoots: string[] = [];
-const installerPath = path.join(process.cwd(), "scripts", "install.sh");
-const installerSource = fs.readFileSync(installerPath, "utf-8");
-const versionHelperStart = installerSource.indexOf("load_install_version_helpers() {");
-const versionHelperEnd = installerSource.indexOf("\nis_gateway_daemon_loaded() {");
 
-if (versionHelperStart < 0 || versionHelperEnd < 0) {
-  throw new Error("install.sh version helper block not found");
+function withFakeCli(versionOutput: string): { root: string; cliPath: string } {
+  const root = makeTempDir(tempRoots, "openclaw-install-sh-");
+  const cliPath = path.join(root, "openclaw");
+  const escapedOutput = versionOutput.replace(/'/g, "'\\''");
+  fs.writeFileSync(
+    cliPath,
+    `#!/bin/sh
+printf '%s\n' '${escapedOutput}'
+`,
+    "utf-8",
+  );
+  fs.chmodSync(cliPath, 0o755);
+  return { root, cliPath };
 }
 
-const versionHelperSource = installerSource.slice(versionHelperStart, versionHelperEnd);
-
-function resolveInstallerVersionCases(params: { stdinCwd: string }): string[] {
+function resolveInstallerVersionCases(params: {
+  cliPaths: string[];
+  stdinCliPath: string;
+  stdinCwd: string;
+}): string[] {
+  const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+  const installerSource = fs.readFileSync(installerPath, "utf-8");
+  const versionHelperStart = installerSource.indexOf("load_install_version_helpers() {");
+  const versionHelperEnd = installerSource.indexOf("\nis_gateway_daemon_loaded() {");
+  if (versionHelperStart < 0 || versionHelperEnd < 0) {
+    throw new Error("install.sh version helper block not found");
+  }
+  const versionHelperSource = installerSource.slice(versionHelperStart, versionHelperEnd);
   const output = execFileSync(
     "bash",
     [
       "-c",
       `${versionHelperSource}
-fake_openclaw_decorated() { printf '%s\\n' 'OpenClaw 2026.3.10 (abcdef0)'; }
-fake_openclaw_raw() { printf '%s\\n' "OpenClaw dev's build"; }
-OPENCLAW_BIN=fake_openclaw_decorated resolve_openclaw_version
-OPENCLAW_BIN=fake_openclaw_raw resolve_openclaw_version
+for openclaw_bin in "\${@:3}"; do
+  OPENCLAW_BIN="$openclaw_bin"
+  resolve_openclaw_version
+done
 (
-  cd "$1"
-  source /dev/stdin <<'OPENCLAW_STDIN_INSTALLER'
+  cd "$2"
+  FAKE_OPENCLAW_BIN="\${@:1:1}" bash -s <<'OPENCLAW_STDIN_INSTALLER'
 ${versionHelperSource}
-fake_openclaw_stdin() { printf '%s\\n' 'OpenClaw 2026.3.10 (abcdef0)'; }
-OPENCLAW_BIN=fake_openclaw_stdin
+OPENCLAW_BIN="$FAKE_OPENCLAW_BIN"
 resolve_openclaw_version
 OPENCLAW_STDIN_INSTALLER
 )`,
       "openclaw-version-test",
+      params.stdinCliPath,
       params.stdinCwd,
+      ...params.cliPaths,
     ],
     {
       cwd: process.cwd(),
@@ -58,6 +76,10 @@ describe("install.sh version resolution", () => {
   it.runIf(process.platform !== "win32")(
     "parses CLI versions and keeps stdin helpers isolated from cwd",
     () => {
+      const decorated = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
+      const raw = withFakeCli("OpenClaw dev's build");
+      const stdinFixture = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
+
       const hostileCwd = makeTempDir(tempRoots, "openclaw-install-stdin-");
       const hostileHelper = path.join(
         hostileCwd,
@@ -78,6 +100,8 @@ extract_openclaw_semver() {
 
       expect(
         resolveInstallerVersionCases({
+          cliPaths: [decorated.cliPath, raw.cliPath],
+          stdinCliPath: stdinFixture.cliPath,
           stdinCwd: hostileCwd,
         }),
       ).toEqual(["2026.3.10", "OpenClaw dev's build", "2026.3.10"]);

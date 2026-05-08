@@ -61,7 +61,10 @@ function createDescendantTable(
   };
 }
 
-function calculateAdaptiveColumnWidths(blocks: FeishuDocxBlock[], tableBlockId: string): number[] {
+export function calculateAdaptiveColumnWidths(
+  blocks: FeishuDocxBlock[],
+  tableBlockId: string,
+): number[] {
   // Find the table block
   const tableBlock = blocks.find((b) => b.block_id === tableBlockId && b.block_type === 31);
 

@@ -37,20 +37,13 @@ export async function handleWhatsAppLogout(host: ChannelsActionHost) {
 }
 
 export async function handleChannelConfigSave(host: ChannelsActionHost) {
-  const saved = await saveConfig(host as ConfigState);
-  const saveError = host.lastError;
-  if (!saved) {
-    await loadConfig(host as ConfigState);
-    if (saveError && !host.lastError) {
-      host.lastError = saveError;
-    }
-    return;
-  }
+  await saveConfig(host as ConfigState);
+  await loadConfig(host as ConfigState);
   await loadChannels(host as ChannelsState, true);
 }
 
 export async function handleChannelConfigReload(host: ChannelsActionHost) {
-  await loadConfig(host as ConfigState, { discardPendingChanges: true });
+  await loadConfig(host as ConfigState);
   await loadChannels(host as ChannelsState, true);
 }
 

@@ -1,25 +1,31 @@
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { resetLogger, setLoggerOverride } from "../logger.js";
-import { createDiagnosticLogRecordCapture } from "./diagnostic-log-capture.js";
+import {
+  registerLogTransport,
+  resetLogger,
+  setLoggerOverride,
+  type LogTransportRecord,
+} from "../logger.js";
 
 export function createWarnLogCapture(prefix: string) {
-  const capture = createDiagnosticLogRecordCapture();
+  const records: LogTransportRecord[] = [];
   setLoggerOverride({
     level: "warn",
     consoleLevel: "silent",
     file: path.join(resolvePreferredOpenClawTmpDir(), `${prefix}-${process.pid}-${Date.now()}.log`),
   });
+  const unregister = registerLogTransport((record) => {
+    records.push(record);
+  });
   return {
-    async findText(needle: string): Promise<string | undefined> {
-      await capture.flush();
-      return capture.records
-        .flatMap((record) => [record.message, ...Object.values(record.attributes ?? {})])
+    findText(needle: string): string | undefined {
+      return records
+        .flatMap((record) => Object.values(record))
         .filter((value): value is string => typeof value === "string")
         .find((value) => value.includes(needle));
     },
     cleanup() {
-      capture.cleanup();
+      unregister();
       setLoggerOverride(null);
       resetLogger();
     },

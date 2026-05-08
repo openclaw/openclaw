@@ -18,11 +18,6 @@ function formatSeconds(value) {
   return value === null ? "" : `${value}s`;
 }
 
-function parseRunList(raw) {
-  const parsed = JSON.parse(raw);
-  return Array.isArray(parsed) ? parsed : [];
-}
-
 function collectRunTimingContext(run) {
   const created = parseTime(run.createdAt);
   const updated = parseTime(run.updatedAt);
@@ -69,17 +64,6 @@ export function summarizeRunTimings(run, limit = 15) {
   };
 }
 
-export function selectLatestMainPushCiRun(runs, headSha = null) {
-  const pushRuns = runs.filter((run) => run.event === "push");
-  if (headSha) {
-    const matchingRun = pushRuns.find((run) => run.headSha === headSha);
-    if (matchingRun) {
-      return matchingRun;
-    }
-  }
-  return pushRuns[0] ?? null;
-}
-
 function getLatestCiRunId() {
   const raw = execFileSync(
     "gh",
@@ -92,40 +76,6 @@ function getLatestCiRunId() {
     throw new Error("No CI runs found on main");
   }
   return String(runId);
-}
-
-function getRemoteMainSha() {
-  const raw = execFileSync("git", ["ls-remote", "origin", "main"], { encoding: "utf8" }).trim();
-  const [sha] = raw.split(/\s+/u);
-  if (!sha) {
-    throw new Error("Could not resolve origin/main");
-  }
-  return sha;
-}
-
-function getLatestMainPushCiRunId() {
-  const headSha = getRemoteMainSha();
-  const raw = execFileSync(
-    "gh",
-    [
-      "run",
-      "list",
-      "--branch",
-      "main",
-      "--workflow",
-      "CI",
-      "--limit",
-      "20",
-      "--json",
-      "databaseId,headSha,event,status,conclusion",
-    ],
-    { encoding: "utf8" },
-  );
-  const run = selectLatestMainPushCiRun(parseRunList(raw), headSha);
-  if (!run?.databaseId) {
-    throw new Error(`No push CI run found for origin/main ${headSha.slice(0, 10)}`);
-  }
-  return String(run.databaseId);
 }
 
 function listRecentSuccessfulCiRuns(limit) {
@@ -211,15 +161,11 @@ function printSection(title, jobs, metric) {
   }
 }
 
-export function parseRunTimingArgs(args) {
+async function main() {
+  const args = process.argv.slice(2);
   const recentIndex = args.indexOf("--recent");
   const limitIndex = args.indexOf("--limit");
   const ignoredArgIndexes = new Set();
-  for (const [index, arg] of args.entries()) {
-    if (arg === "--" || arg === "--latest-main") {
-      ignoredArgIndexes.add(index);
-    }
-  }
   if (limitIndex !== -1) {
     ignoredArgIndexes.add(limitIndex);
     ignoredArgIndexes.add(limitIndex + 1);
@@ -230,21 +176,8 @@ export function parseRunTimingArgs(args) {
   }
   const limit =
     limitIndex === -1 ? 15 : Math.max(1, Number.parseInt(args[limitIndex + 1] ?? "", 10) || 15);
-  const recentLimit =
-    recentIndex === -1 ? null : Math.max(1, Number.parseInt(args[recentIndex + 1] ?? "", 10) || 10);
-  return {
-    explicitRunId: args.find((_arg, index) => !ignoredArgIndexes.has(index)),
-    limit,
-    recentLimit,
-    useLatestMain: args.includes("--latest-main"),
-  };
-}
-
-async function main() {
-  const { explicitRunId, limit, recentLimit, useLatestMain } = parseRunTimingArgs(
-    process.argv.slice(2),
-  );
-  if (recentLimit !== null) {
+  if (recentIndex !== -1) {
+    const recentLimit = Math.max(1, Number.parseInt(args[recentIndex + 1] ?? "", 10) || 10);
     for (const run of listRecentSuccessfulCiRuns(recentLimit)) {
       const summary = summarizeJobs(loadRun(run.databaseId));
       console.log(
@@ -264,7 +197,7 @@ async function main() {
     }
     return;
   }
-  const runId = explicitRunId ?? (useLatestMain ? getLatestMainPushCiRunId() : getLatestCiRunId());
+  const runId = args.find((_arg, index) => !ignoredArgIndexes.has(index)) ?? getLatestCiRunId();
   const summary = summarizeRunTimings(loadRun(runId), limit);
 
   console.log(

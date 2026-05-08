@@ -19,26 +19,28 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
-const SETUP_RPC_TIMEOUT_MS = 30_000;
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
   | undefined;
+let previousMinimalGateway: string | undefined;
 
 beforeAll(async () => {
+  previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+  delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   harness = await createGatewaySuiteHarness();
   subscribedOperatorWs = await harness.openWs();
-  await connectOk(subscribedOperatorWs, {
-    scopes: ["operator.read"],
-    timeoutMs: SETUP_RPC_TIMEOUT_MS,
-  });
-  await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
-}, 60_000);
+  await connectOk(subscribedOperatorWs, { scopes: ["operator.read"] });
+  await rpcReq(subscribedOperatorWs, "sessions.subscribe");
+});
 
 afterAll(async () => {
   subscribedOperatorWs?.close();
-  if (harness) {
-    await harness.close();
+  await harness.close();
+  if (previousMinimalGateway === undefined) {
+    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+  } else {
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
   }
 });
 
@@ -123,17 +125,18 @@ async function expectNoMessageWithin(params: {
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 300;
-  let received = false;
-  const watch = params
-    .watch()
-    .then(() => {
-      received = true;
-    })
-    .catch(() => undefined);
-  await params.action?.();
-  await new Promise((resolve) => setTimeout(resolve, timeoutMs));
-  expect(received).toBe(false);
-  await watch;
+  vi.useFakeTimers();
+  try {
+    const outcome = params
+      .watch()
+      .then(() => "received")
+      .catch(() => "timeout");
+    await params.action?.();
+    await vi.advanceTimersByTimeAsync(timeoutMs);
+    await expect(outcome).resolves.toBe("timeout");
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 describe("session.message websocket events", () => {

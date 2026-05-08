@@ -29,7 +29,6 @@ describe("manifest command aliases", () => {
         },
         {
           id: "memory",
-          enabledByDefault: true,
           commandAliases: [{ name: "legacy-memory" }],
         },
       ],
@@ -42,7 +41,6 @@ describe("manifest command aliases", () => {
       resolveManifestCommandAliasOwnerInRegistry({ command: "legacy-memory", registry }),
     ).toMatchObject({
       pluginId: "memory",
-      enabledByDefault: true,
       name: "legacy-memory",
     });
   });

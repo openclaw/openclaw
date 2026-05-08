@@ -1,7 +1,4 @@
 import { Type } from "typebox";
-import { optionalStringEnum } from "./schema/typebox.js";
-
-const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
@@ -29,9 +26,11 @@ export const execSchema = Type.Object({
       description: "Run on the host with elevated permissions (if allowed)",
     }),
   ),
-  host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
-    description: "Exec host/target (auto|sandbox|gateway|node).",
-  }),
+  host: Type.Optional(
+    Type.String({
+      description: "Exec host/target (auto|sandbox|gateway|node).",
+    }),
+  ),
   security: Type.Optional(
     Type.String({
       description: "Exec security mode (deny|allowlist|full).",
@@ -65,8 +64,7 @@ export const processSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
     Type.Number({
-      description:
-        "For poll: wait up to this many milliseconds before returning; max 30000 ms, higher values are clamped to 30000",
+      description: "For poll: wait up to this many milliseconds before returning",
       minimum: 0,
     }),
   ),

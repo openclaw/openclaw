@@ -11,7 +11,7 @@ import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
-const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
+export const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
 export type CacheTtlEntryData = {
   timestamp: number;
@@ -104,5 +104,19 @@ export function readLastCacheTtlTimestamp(
     return last;
   } catch {
     return null;
+  }
+}
+
+export function appendCacheTtlTimestamp(sessionManager: unknown, data: CacheTtlEntryData): void {
+  const sm = sessionManager as {
+    appendCustomEntry?: (customType: string, data: unknown) => void;
+  };
+  if (!sm?.appendCustomEntry) {
+    return;
+  }
+  try {
+    sm.appendCustomEntry(CACHE_TTL_CUSTOM_TYPE, data);
+  } catch {
+    // ignore persistence failures
   }
 }

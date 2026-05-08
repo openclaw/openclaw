@@ -2,57 +2,50 @@ import { describe, expect, it } from "vitest";
 import {
   isParentOwnedBackgroundAcpSession,
   isRequesterParentOfBackgroundAcpSession,
+  resolveAcpSessionInteractionMode,
 } from "./session-interaction-mode.js";
 
 const parentKey = "agent:main:main";
 const otherKey = "agent:peer:some-other";
 
-describe("isParentOwnedBackgroundAcpSession", () => {
+describe("resolveAcpSessionInteractionMode", () => {
   it("returns interactive when entry is undefined", () => {
-    expect(isParentOwnedBackgroundAcpSession(undefined)).toBe(false);
+    expect(resolveAcpSessionInteractionMode(undefined)).toBe("interactive");
   });
 
-  it("returns parent-owned-background for persistent sessions with spawnedBy set", () => {
+  it("returns interactive for non-oneshot ACP sessions", () => {
     expect(
-      isParentOwnedBackgroundAcpSession({
+      resolveAcpSessionInteractionMode({
         acp: { mode: "persistent" } as never,
         spawnedBy: parentKey,
       }),
-    ).toBe(true);
-  });
-
-  it("returns interactive for persistent ACP sessions without parent linkage", () => {
-    expect(
-      isParentOwnedBackgroundAcpSession({
-        acp: { mode: "persistent" } as never,
-      }),
-    ).toBe(false);
+    ).toBe("interactive");
   });
 
   it("returns parent-owned-background for oneshot sessions with spawnedBy set", () => {
     expect(
-      isParentOwnedBackgroundAcpSession({
+      resolveAcpSessionInteractionMode({
         acp: { mode: "oneshot" } as never,
         spawnedBy: parentKey,
       }),
-    ).toBe(true);
+    ).toBe("parent-owned-background");
   });
 
   it("returns parent-owned-background for oneshot sessions with parentSessionKey set", () => {
     expect(
-      isParentOwnedBackgroundAcpSession({
+      resolveAcpSessionInteractionMode({
         acp: { mode: "oneshot" } as never,
         parentSessionKey: parentKey,
       }),
-    ).toBe(true);
+    ).toBe("parent-owned-background");
   });
 
   it("returns interactive for a oneshot session without any parent linkage", () => {
     expect(
-      isParentOwnedBackgroundAcpSession({
+      resolveAcpSessionInteractionMode({
         acp: { mode: "oneshot" } as never,
       }),
-    ).toBe(false);
+    ).toBe("interactive");
   });
 });
 
@@ -90,13 +83,13 @@ describe("isRequesterParentOfBackgroundAcpSession", () => {
     expect(isRequesterParentOfBackgroundAcpSession(backgroundEntry, "")).toBe(false);
   });
 
-  it("returns true when target is parent-owned persistent ACP session", () => {
+  it("returns false when target is not a parent-owned background ACP session", () => {
     expect(
       isRequesterParentOfBackgroundAcpSession(
         { acp: { mode: "persistent" } as never, spawnedBy: parentKey },
         parentKey,
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("delegates to isParentOwnedBackgroundAcpSession for target-only checks", () => {

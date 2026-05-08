@@ -1,14 +1,10 @@
 {
   "name": "@openclaw/media-understanding-core",
-  "version": "2026.5.4",
+  "version": "2026.4.20",
   "private": true,
   "description": "OpenClaw media understanding runtime package",
   "type": "module",
-  "dependencies": {
-    "sharp": "^0.34.5"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
-  },
-  "openclaw": {}
+  }
 }

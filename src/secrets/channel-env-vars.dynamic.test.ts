@@ -9,52 +9,23 @@ type MockManifestRegistry = {
   diagnostics: unknown[];
 };
 
-const pluginRegistryMocks = vi.hoisted(() => {
-  const loadManifestRegistry = vi.fn<() => MockManifestRegistry>(() => ({
-    plugins: [],
-    diagnostics: [],
-  }));
-  return {
-    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
-    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
-    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-    loadPluginMetadataSnapshot: vi.fn(() => ({
-      plugins: loadManifestRegistry().plugins,
-      manifestRegistry: loadManifestRegistry(),
-    })),
-  };
-});
+const loadPluginManifestRegistry = vi.hoisted(() =>
+  vi.fn<() => MockManifestRegistry>(() => ({ plugins: [], diagnostics: [] })),
+);
 
-vi.mock("../plugins/manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex:
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
-}));
-
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry:
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
-}));
-
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry,
 }));
 
 describe("channel env vars dynamic manifest metadata", () => {
   beforeEach(() => {
     vi.resetModules();
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
-    pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
+    loadPluginManifestRegistry.mockReset();
+    loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
   });
 
   it("includes later-installed plugin env vars without a bundled generated map", async () => {
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
           id: "external-mattermost",

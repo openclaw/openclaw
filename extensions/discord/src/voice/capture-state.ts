@@ -1,11 +1,11 @@
 import type { Readable } from "node:stream";
 
-type VoiceCaptureEntry = {
+export type VoiceCaptureEntry = {
   generation: number;
   stream: Readable;
 };
 
-type VoiceCaptureFinalizeTimer = {
+export type VoiceCaptureFinalizeTimer = {
   generation: number;
   timer: ReturnType<typeof setTimeout>;
 };

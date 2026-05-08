@@ -1,26 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  buildChannelConfigSchema,
-  buildJsonChannelConfigSchema,
-} from "../channels/plugins/config-schema.js";
+import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import {
   normalizeBundledPluginStringList,
   trimBundledPluginString,
 } from "./bundled-plugin-scan.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
 const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
@@ -31,7 +24,7 @@ const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
   path.join("src", "config-schema.cts"),
   path.join("src", "config-schema.cjs"),
 ] as const;
-const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api"] as const;
+const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api", "runtime-api", "api"] as const;
 
 type ChannelConfigSurface = {
   schema: JsonSchemaObject;
@@ -39,7 +32,7 @@ type ChannelConfigSurface = {
   runtime?: ChannelConfigRuntimeSchema;
 };
 
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
@@ -47,24 +40,6 @@ function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurfa
   }
   const candidate = value as { schema?: unknown };
   return Boolean(candidate.schema && typeof candidate.schema === "object");
-}
-
-function isJsonSchemaConfigSurface(value: unknown): value is JsonSchemaObject {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  if (typeof candidate.safeParse === "function" || typeof candidate.toJSONSchema === "function") {
-    return false;
-  }
-  return (
-    typeof candidate.type === "string" ||
-    Array.isArray(candidate.anyOf) ||
-    Array.isArray(candidate.oneOf) ||
-    Array.isArray(candidate.allOf) ||
-    Array.isArray(candidate.enum) ||
-    Object.prototype.hasOwnProperty.call(candidate, "const")
-  );
 }
 
 function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelConfigSurface | null {
@@ -81,9 +56,6 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
     if (isBuiltChannelConfigSchema(value)) {
       return value;
     }
-    if (isJsonSchemaConfigSurface(value)) {
-      return buildJsonChannelConfigSchema(value);
-    }
     if (value && typeof value === "object") {
       return buildChannelConfigSchema(value as never);
     }
@@ -98,13 +70,13 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
   return null;
 }
 
-function getModuleLoader(modulePath: string) {
-  return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
+function getJiti(modulePath: string) {
+  return getCachedPluginJitiLoader({
+    cache: jitiLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    loaderFilename: import.meta.url,
+    jitiFilename: import.meta.url,
   });
 }
 
@@ -128,7 +100,7 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
 
 function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
   try {
-    const imported = getModuleLoader(modulePath)(modulePath) as Record<string, unknown>;
+    const imported = getJiti(modulePath)(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;
@@ -204,9 +176,6 @@ export function collectBundledChannelConfigs(params: {
         : preferOver.length > 0
           ? { preferOver }
           : {}),
-      ...((existing?.commands ?? channelMeta?.commands)
-        ? { commands: existing?.commands ?? channelMeta?.commands }
-        : {}),
     };
   }
 

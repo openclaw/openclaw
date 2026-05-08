@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -11,8 +10,6 @@ import type {
   QaSuiteRuntimeEnv,
   QaTransportActionName,
 } from "./suite-runtime-types.js";
-
-const requireFromHere = createRequire(import.meta.url);
 
 function findSkill(skills: QaSkillStatusEntry[], name: string) {
   return skills.find((skill) => skill.name === name);
@@ -31,7 +28,7 @@ async function writeWorkspaceSkill(params: {
 }
 
 async function callPluginToolsMcp(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "repoRoot">;
+  env: Pick<QaSuiteRuntimeEnv, "gateway">;
   toolName: string;
   args: Record<string, unknown>;
 }) {
@@ -43,13 +40,8 @@ async function callPluginToolsMcp(params: {
   const nodeExecPath = await resolveQaNodeExecPath();
   const transport = new StdioClientTransport({
     command: nodeExecPath,
-    args: [
-      "--import",
-      requireFromHere.resolve("tsx"),
-      path.join(params.env.repoRoot, "src/mcp/plugin-tools-serve.ts"),
-    ],
+    args: ["--import", "tsx", "src/mcp/plugin-tools-serve.ts"],
     stderr: "pipe",
-    cwd: params.env.gateway.tempRoot,
     env: transportEnv,
   });
   const client = new Client({ name: "openclaw-qa-suite", version: "0.0.0" }, {});
@@ -58,13 +50,7 @@ async function callPluginToolsMcp(params: {
     const listed = await client.listTools();
     const tool = listed.tools.find((entry) => entry.name === params.toolName);
     if (!tool) {
-      const availableTools = listed.tools
-        .map((entry) => entry.name)
-        .filter((name): name is string => typeof name === "string" && name.length > 0)
-        .toSorted();
-      throw new Error(
-        `MCP tool missing: ${params.toolName}; available tools: ${availableTools.join(", ") || "<none>"}`,
-      );
+      throw new Error(`MCP tool missing: ${params.toolName}`);
     }
     return await client.callTool({
       name: params.toolName,

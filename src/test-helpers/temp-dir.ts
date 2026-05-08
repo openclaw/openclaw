@@ -3,14 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-type PrefixRootState = {
-  path: string;
-  activeCount: number;
-};
-
-const asyncPrefixRoots = new Map<string, PrefixRootState>();
-const pendingAsyncPrefixRoots = new Map<string, Promise<PrefixRootState>>();
-const syncPrefixRoots = new Map<string, PrefixRootState>();
+const asyncPrefixRoots = new Map<string, string>();
+const pendingAsyncPrefixRoots = new Map<string, Promise<string>>();
+const syncPrefixRoots = new Map<string, string>();
 let nextAsyncDirIndex = 0;
 let nextSyncDirIndex = 0;
 
@@ -18,88 +13,39 @@ function getRootKey(options: { prefix: string; parentDir?: string }): string {
   return `${options.parentDir ?? os.tmpdir()}\u0000${options.prefix}`;
 }
 
-async function acquireAsyncPrefixRoot(options: {
+async function ensureAsyncPrefixRoot(options: {
   prefix: string;
   parentDir?: string;
-}): Promise<PrefixRootState> {
+}): Promise<string> {
   const key = getRootKey(options);
   const cached = asyncPrefixRoots.get(key);
   if (cached) {
-    cached.activeCount += 1;
     return cached;
   }
   const pending = pendingAsyncPrefixRoots.get(key);
   if (pending) {
-    const state = await pending;
-    state.activeCount += 1;
-    return state;
+    return await pending;
   }
-  const create = fs
-    .mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix))
-    .then((root) => ({ path: root, activeCount: 0 }));
+  const create = fs.mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix));
   pendingAsyncPrefixRoots.set(key, create);
   try {
-    const state = await create;
-    asyncPrefixRoots.set(key, state);
-    state.activeCount += 1;
-    return state;
+    const root = await create;
+    asyncPrefixRoots.set(key, root);
+    return root;
   } finally {
     pendingAsyncPrefixRoots.delete(key);
   }
 }
 
-function acquireSyncPrefixRoot(options: { prefix: string; parentDir?: string }): PrefixRootState {
+function ensureSyncPrefixRoot(options: { prefix: string; parentDir?: string }): string {
   const key = getRootKey(options);
   const cached = syncPrefixRoots.get(key);
   if (cached) {
-    cached.activeCount += 1;
     return cached;
   }
   const root = fsSync.mkdtempSync(path.join(options.parentDir ?? os.tmpdir(), options.prefix));
-  const state = { path: root, activeCount: 1 };
-  syncPrefixRoots.set(key, state);
-  return state;
-}
-
-async function releaseAsyncPrefixRoot(options: {
-  prefix: string;
-  parentDir?: string;
-}): Promise<void> {
-  const key = getRootKey(options);
-  const state = asyncPrefixRoots.get(key);
-  if (!state) {
-    return;
-  }
-  state.activeCount -= 1;
-  if (state.activeCount > 0) {
-    return;
-  }
-  asyncPrefixRoots.delete(key);
-  await fs.rm(state.path, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 25,
-  });
-}
-
-function releaseSyncPrefixRoot(options: { prefix: string; parentDir?: string }) {
-  const key = getRootKey(options);
-  const state = syncPrefixRoots.get(key);
-  if (!state) {
-    return;
-  }
-  state.activeCount -= 1;
-  if (state.activeCount > 0) {
-    return;
-  }
-  syncPrefixRoots.delete(key);
-  fsSync.rmSync(state.path, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 25,
-  });
+  syncPrefixRoots.set(key, root);
+  return root;
 }
 
 export async function withTempDir<T>(
@@ -110,15 +56,15 @@ export async function withTempDir<T>(
   },
   run: (dir: string) => Promise<T>,
 ): Promise<T> {
-  const root = await acquireAsyncPrefixRoot(options);
-  const base = path.join(root.path, `dir-${String(nextAsyncDirIndex)}`);
+  const root = await ensureAsyncPrefixRoot(options);
+  const base = path.join(root, `dir-${String(nextAsyncDirIndex)}`);
   nextAsyncDirIndex += 1;
+  await fs.mkdir(base, { recursive: true });
+  const dir = options.subdir ? path.join(base, options.subdir) : base;
+  if (options.subdir) {
+    await fs.mkdir(dir, { recursive: true });
+  }
   try {
-    await fs.mkdir(base, { recursive: true });
-    const dir = options.subdir ? path.join(base, options.subdir) : base;
-    if (options.subdir) {
-      await fs.mkdir(dir, { recursive: true });
-    }
     return await run(dir);
   } finally {
     await fs.rm(base, {
@@ -127,7 +73,6 @@ export async function withTempDir<T>(
       maxRetries: 20,
       retryDelay: 25,
     });
-    await releaseAsyncPrefixRoot(options);
   }
 }
 
@@ -171,15 +116,15 @@ export function withTempDirSync<T>(
   },
   run: (dir: string) => T,
 ): T {
-  const root = acquireSyncPrefixRoot(options);
-  const base = path.join(root.path, `dir-${String(nextSyncDirIndex)}`);
+  const root = ensureSyncPrefixRoot(options);
+  const base = path.join(root, `dir-${String(nextSyncDirIndex)}`);
   nextSyncDirIndex += 1;
+  fsSync.mkdirSync(base, { recursive: true });
+  const dir = options.subdir ? path.join(base, options.subdir) : base;
+  if (options.subdir) {
+    fsSync.mkdirSync(dir, { recursive: true });
+  }
   try {
-    fsSync.mkdirSync(base, { recursive: true });
-    const dir = options.subdir ? path.join(base, options.subdir) : base;
-    if (options.subdir) {
-      fsSync.mkdirSync(dir, { recursive: true });
-    }
     return run(dir);
   } finally {
     fsSync.rmSync(base, {
@@ -188,6 +133,5 @@ export function withTempDirSync<T>(
       maxRetries: 20,
       retryDelay: 25,
     });
-    releaseSyncPrefixRoot(options);
   }
 }

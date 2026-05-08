@@ -1,5 +1,5 @@
 import type { SecretRefSource } from "../config/types.secrets.js";
-import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
@@ -17,7 +17,6 @@ const AWS_SDK_ENV_MARKERS = new Set([
 ]);
 const CORE_NON_SECRET_API_KEY_MARKERS = [
   CUSTOM_LOCAL_AUTH_MARKER,
-  OLLAMA_LOCAL_AUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
 ] as const;
 let knownEnvApiKeyMarkersCache: Set<string> | undefined;
@@ -35,13 +34,6 @@ const LEGACY_ENV_API_KEY_MARKERS = [
   "MINIMAX_CODE_PLAN_KEY",
 ];
 
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
-}
-
 function listKnownEnvApiKeyMarkers(): Set<string> {
   knownEnvApiKeyMarkersCache ??= new Set([
     ...listKnownProviderEnvApiKeyNames(),
@@ -55,10 +47,8 @@ export function listKnownNonSecretApiKeyMarkers(): string[] {
   knownNonSecretApiKeyMarkersCache ??= [
     ...new Set([
       ...CORE_NON_SECRET_API_KEY_MARKERS,
-      ...listOpenClawPluginManifestMetadata().flatMap((plugin) =>
-        plugin.origin === "bundled"
-          ? normalizeStringList(plugin.manifest.nonSecretAuthMarkers)
-          : [],
+      ...loadPluginManifestRegistry({ cache: true }).plugins.flatMap((plugin) =>
+        plugin.origin === "bundled" ? (plugin.nonSecretAuthMarkers ?? []) : [],
       ),
     ]),
   ];

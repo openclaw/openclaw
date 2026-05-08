@@ -6,11 +6,14 @@ read_when:
   - You need the Perplexity API key or OpenRouter proxy setup
 ---
 
+# Perplexity (Web Search Provider)
+
 The Perplexity plugin provides web search capabilities through the Perplexity
 Search API or Perplexity Sonar via OpenRouter.
 
 <Note>
-This page is the Perplexity **provider** setup. For the Perplexity **tool** (how the agent uses it), see [Perplexity tool](/tools/perplexity-search).
+This page covers the Perplexity **provider** setup. For the Perplexity
+**tool** (how the agent uses it), see [Perplexity tool](/tools/perplexity-search).
 </Note>
 
 | Property    | Value                                                                  |

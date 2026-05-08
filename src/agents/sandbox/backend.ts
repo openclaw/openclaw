@@ -20,6 +20,7 @@ export type {
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,
   SandboxBackendHandle,
+  SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
 
 const SANDBOX_BACKEND_FACTORIES = new Map<SandboxBackendId, RegisteredSandboxBackend>();

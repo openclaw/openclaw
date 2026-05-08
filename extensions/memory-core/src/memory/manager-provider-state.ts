@@ -9,7 +9,7 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 
-type MemoryResolvedProviderState = {
+export type MemoryResolvedProviderState = {
   provider: EmbeddingProvider | null;
   fallbackFrom?: string;
   fallbackReason?: string;
@@ -23,9 +23,6 @@ export function resolveMemoryPrimaryProviderRequest(params: {
   provider: string;
   model: string;
   remote: ResolvedMemorySearchConfig["remote"];
-  inputType: ResolvedMemorySearchConfig["inputType"];
-  queryInputType: ResolvedMemorySearchConfig["queryInputType"];
-  documentInputType: ResolvedMemorySearchConfig["documentInputType"];
   outputDimensionality: ResolvedMemorySearchConfig["outputDimensionality"];
   fallback: ResolvedMemorySearchConfig["fallback"];
   local: ResolvedMemorySearchConfig["local"];
@@ -34,9 +31,6 @@ export function resolveMemoryPrimaryProviderRequest(params: {
     provider: params.settings.provider,
     model: params.settings.model,
     remote: params.settings.remote,
-    inputType: params.settings.inputType,
-    queryInputType: params.settings.queryInputType,
-    documentInputType: params.settings.documentInputType,
     outputDimensionality: params.settings.outputDimensionality,
     fallback: params.settings.fallback,
     local: params.settings.local,
@@ -81,9 +75,6 @@ export function resolveMemoryFallbackProviderRequest(params: {
   provider: string;
   model: string;
   remote: ResolvedMemorySearchConfig["remote"];
-  inputType: ResolvedMemorySearchConfig["inputType"];
-  queryInputType: ResolvedMemorySearchConfig["queryInputType"];
-  documentInputType: ResolvedMemorySearchConfig["documentInputType"];
   outputDimensionality: ResolvedMemorySearchConfig["outputDimensionality"];
   fallback: "none";
   local: ResolvedMemorySearchConfig["local"];
@@ -101,9 +92,6 @@ export function resolveMemoryFallbackProviderRequest(params: {
     provider: fallback,
     model: resolveEmbeddingProviderFallbackModel(fallback, params.settings.model, params.cfg),
     remote: params.settings.remote,
-    inputType: params.settings.inputType,
-    queryInputType: params.settings.queryInputType,
-    documentInputType: params.settings.documentInputType,
     outputDimensionality: params.settings.outputDimensionality,
     fallback: "none",
     local: params.settings.local,

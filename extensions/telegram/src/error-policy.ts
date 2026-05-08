@@ -3,9 +3,9 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-runtime";
 
-type TelegramErrorPolicy = "always" | "once" | "silent";
+export type TelegramErrorPolicy = "always" | "once" | "silent";
 
 type TelegramErrorConfig =
   | TelegramAccountConfig

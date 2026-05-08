@@ -199,11 +199,9 @@ merge_run() {
 
   local contrib_coauthor_email="${COAUTHOR_EMAIL:-}"
   if [ -z "$contrib_coauthor_email" ] || [ "$contrib_coauthor_email" = "null" ]; then
-    if contrib_coauthor_email=$(resolve_contributor_coauthor_email "$contrib"); then
-      :
-    else
-      contrib_coauthor_email=""
-    fi
+    local contrib_id
+    contrib_id=$(gh api "users/$contrib" --jq .id)
+    contrib_coauthor_email="${contrib_id}+${contrib}@users.noreply.github.com"
   fi
 
   local reviewer_email_candidates=()
@@ -220,16 +218,14 @@ merge_run() {
   local reviewer_email="${reviewer_email_candidates[0]}"
   local reviewer_coauthor_email="${reviewer_id}+${reviewer}@users.noreply.github.com"
 
-  {
-    echo "Merged via squash."
-    echo
-    echo "Prepared head SHA: $PREP_HEAD_SHA"
-    if [ -n "$contrib_coauthor_email" ]; then
-      echo "Co-authored-by: $contrib <$contrib_coauthor_email>"
-    fi
-    echo "Co-authored-by: $reviewer <$reviewer_coauthor_email>"
-    echo "Reviewed-by: @$reviewer"
-  } > .local/merge-body.txt
+  cat > .local/merge-body.txt <<EOF_BODY
+Merged via squash.
+
+Prepared head SHA: $PREP_HEAD_SHA
+Co-authored-by: $contrib <$contrib_coauthor_email>
+Co-authored-by: $reviewer <$reviewer_coauthor_email>
+Reviewed-by: @$reviewer
+EOF_BODY
 
   delete_remote_pr_head_branch_after_merge() {
     local head_json
@@ -351,29 +347,22 @@ merge_run() {
 
   local commit_body
   commit_body=$(gh api repos/:owner/:repo/commits/"$merge_sha" --jq .commit.message)
-  if [ -n "$contrib_coauthor_email" ]; then
-    printf '%s\n' "$commit_body" | rg -q "^Co-authored-by: $contrib <" || { echo "Missing PR author co-author trailer"; exit 1; }
-  else
-    echo "Skipping PR author co-author trailer check for bot/app author $contrib."
-  fi
+  printf '%s\n' "$commit_body" | rg -q "^Co-authored-by: $contrib <" || { echo "Missing PR author co-author trailer"; exit 1; }
   printf '%s\n' "$commit_body" | rg -q "^Co-authored-by: $reviewer <" || { echo "Missing reviewer co-author trailer"; exit 1; }
 
   local ok=0
   local comment_output=""
   local attempt
   for attempt in 1 2 3; do
-    if comment_output=$(
-      {
-        echo "Merged via squash."
-        echo
-        echo "- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)"
-        echo "- Merge commit: [$merge_sha]($merge_sha_url)"
-        if pr_contributor_allows_human_trailers "$contrib"; then
-          echo
-          echo "Thanks @$contrib!"
-        fi
-      } | gh pr comment "$pr" -F - 2>&1
-    ); then
+    if comment_output=$(gh pr comment "$pr" -F - 2>&1 <<EOF_COMMENT
+Merged via squash.
+
+- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)
+- Merge commit: [$merge_sha]($merge_sha_url)
+
+Thanks @$contrib!
+EOF_COMMENT
+); then
       ok=1
       break
     fi

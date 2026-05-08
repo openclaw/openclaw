@@ -14,7 +14,7 @@ import {
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { CronService } from "./service.js";
 
-type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
+export type CronServiceOptions = ConstructorParameters<typeof CronService>[0];
 
 export const setupCronIssueRegressionFixtures = () =>
   setupCronRegressionFixtures({ prefix: "cron-issues-" });
@@ -35,14 +35,14 @@ export async function startCronForStore(params: {
   storePath: string;
   cronEnabled?: boolean;
   enqueueSystemEvent?: CronServiceOptions["enqueueSystemEvent"];
-  requestHeartbeat?: CronServiceOptions["requestHeartbeat"];
+  requestHeartbeatNow?: CronServiceOptions["requestHeartbeatNow"];
   runIsolatedAgentJob?: CronServiceOptions["runIsolatedAgentJob"];
   onEvent?: CronServiceOptions["onEvent"];
 }) {
   const enqueueSystemEvent =
     params.enqueueSystemEvent ?? (vi.fn() as unknown as CronServiceOptions["enqueueSystemEvent"]);
-  const requestHeartbeat =
-    params.requestHeartbeat ?? (vi.fn() as unknown as CronServiceOptions["requestHeartbeat"]);
+  const requestHeartbeatNow =
+    params.requestHeartbeatNow ?? (vi.fn() as unknown as CronServiceOptions["requestHeartbeatNow"]);
   const runIsolatedAgentJob = params.runIsolatedAgentJob ?? createDefaultIsolatedRunner();
 
   const cron = new CronService({
@@ -50,7 +50,7 @@ export async function startCronForStore(params: {
     storePath: params.storePath,
     log: noopLogger,
     enqueueSystemEvent,
-    requestHeartbeat,
+    requestHeartbeatNow,
     runIsolatedAgentJob,
     ...(params.onEvent ? { onEvent: params.onEvent } : {}),
   });

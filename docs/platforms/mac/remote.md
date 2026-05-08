@@ -22,18 +22,6 @@ Remote mode supports two transports:
 - **SSH tunnel** (default): Uses `ssh -N -L ...` to forward the gateway port to localhost. The gateway will see the node’s IP as `127.0.0.1` because the tunnel is loopback.
 - **Direct (ws/wss)**: Connects straight to the gateway URL. The gateway sees the real client IP.
 
-In SSH tunnel mode, discovered LAN/tailnet hostnames are saved as
-`gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local
-tunnel endpoint, for example `ws://127.0.0.1:18789`, so CLI, Web Chat, and
-the local node-host service all use the same safe loopback transport.
-
-Browser automation in remote mode is owned by the CLI node host, not by the
-native macOS app node. The app starts the installed node host service when
-possible; if you need browser control from that Mac, install/start it with
-`openclaw node install ...` and `openclaw node start` (or run
-`openclaw node run ...` in the foreground), then target that browser-capable
-node.
-
 ## Prereqs on the remote host
 
 1. Install Node + pnpm and build/install the OpenClaw CLI (`pnpm install && pnpm build && pnpm link --global`).
@@ -83,7 +71,6 @@ node.
 - **Health probe failed**: check SSH reachability, PATH, and that Baileys is logged in (`openclaw status --json`).
 - **Web Chat stuck**: confirm the gateway is running on the remote host and the forwarded port matches the gateway WS port; the UI requires a healthy WS connection.
 - **Node IP shows 127.0.0.1**: expected with the SSH tunnel. Switch **Transport** to **Direct (ws/wss)** if you want the gateway to see the real client IP.
-- **Dashboard works but Mac capabilities are offline**: this means the app's operator/control connection is healthy, but the companion node connection is not connected or is missing its command surface. Open the menu bar device section and check whether the Mac is `paired · disconnected`. For `wss://*.ts.net` Tailscale Serve endpoints, the app detects stale legacy TLS leaf pins after certificate rotation, clears the stale pin when macOS trusts the new certificate, and retries automatically. If the certificate is not system-trusted or the host is not a Tailscale Serve name, review the certificate or switch to **Remote over SSH**.
 - **Voice Wake**: trigger phrases are forwarded automatically in remote mode; no separate forwarder is needed.
 
 ## Notification sounds

@@ -6,13 +6,13 @@ import { isMcpConfigRecord, toMcpStringRecord } from "./mcp-config-shared.js";
 
 export type HttpMcpTransportType = "sse" | "streamable-http";
 
-type HttpMcpServerLaunchConfig = {
+export type HttpMcpServerLaunchConfig = {
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
 };
 
-type HttpMcpServerLaunchResult =
+export type HttpMcpServerLaunchResult =
   | { ok: true; config: HttpMcpServerLaunchConfig }
   | { ok: false; reason: string };
 

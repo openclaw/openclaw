@@ -1,7 +1,7 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMatrixDirectUserId, resolveMatrixTargetIdentity } from "./target-ids.js";
 
-function trimMaybeString(value: unknown): string | undefined {
+export function trimMaybeString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -18,12 +18,12 @@ function resolveMatrixRoomTargetId(value: unknown): string | undefined {
   return target?.kind === "room" && target.id.startsWith("!") ? target.id : undefined;
 }
 
-function resolveMatrixSessionAccountId(value: unknown): string | undefined {
+export function resolveMatrixSessionAccountId(value: unknown): string | undefined {
   const trimmed = trimMaybeString(value);
   return trimmed ? normalizeAccountId(trimmed) : undefined;
 }
 
-function resolveMatrixStoredRoomId(params: {
+export function resolveMatrixStoredRoomId(params: {
   deliveryTo?: unknown;
   lastTo?: unknown;
   originNativeChannelId?: unknown;

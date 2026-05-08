@@ -184,9 +184,7 @@ final class CanvasManager {
 
     private func maybeAutoNavigateToA2UI(controller: CanvasWindowController, a2uiUrl: String?) {
         guard let a2uiUrl else { return }
-        let shouldNavigate = controller.shouldAutoNavigateToA2UI(
-            lastAutoTarget: self.lastAutoA2UIUrl,
-            candidateTarget: a2uiUrl)
+        let shouldNavigate = controller.shouldAutoNavigateToA2UI(lastAutoTarget: self.lastAutoA2UIUrl)
         guard shouldNavigate else {
             Self.logger.debug("canvas auto-nav skipped; target unchanged")
             return

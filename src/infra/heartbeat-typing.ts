@@ -8,7 +8,7 @@ type HeartbeatTypingLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
 };
 
-type HeartbeatTypingTarget = {
+export type HeartbeatTypingTarget = {
   channel: string;
   to?: string;
   accountId?: string | null;

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -20,17 +19,15 @@ import {
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
 } from "../../agents/workspace.js";
+import { purgeAgentSessionStoreEntries } from "../../commands/agents.command-shared.js";
 import {
   applyAgentConfig,
   findAgentEntryIndex,
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import { replaceConfigFile } from "../../config/config.js";
-import {
-  purgeAgentSessionStoreEntries,
-  resolveSessionTranscriptsDirForAgent,
-} from "../../config/sessions.js";
+import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
@@ -104,13 +101,13 @@ const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_F
 function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,
   respond: RespondFn,
-  cfg: OpenClawConfig,
 ): {
   cfg: OpenClawConfig;
   agentId: string;
   workspaceDir: string;
   name: string;
 } | null {
+  const cfg = loadConfig();
   const rawAgentId = params.agentId;
   const agentId = resolveAgentIdOrError(
     typeof rawAgentId === "string" || typeof rawAgentId === "number" ? String(rawAgentId) : "",
@@ -416,7 +413,7 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
-  "agents.list": ({ params, respond, context }) => {
+  "agents.list": ({ params, respond }) => {
     if (!validateAgentsListParams(params)) {
       respond(
         false,
@@ -429,11 +426,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const cfg = context.getRuntimeConfig();
+    const cfg = loadConfig();
     const result = listAgentsForGateway(cfg);
     respond(true, result, undefined);
   },
-  "agents.create": async ({ params, respond, context }) => {
+  "agents.create": async ({ params, respond }) => {
     if (!validateAgentsCreateParams(params)) {
       respond(
         false,
@@ -448,7 +445,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const cfg = context.getRuntimeConfig();
+    const cfg = loadConfig();
     const rawName = params.name.trim();
     const agentId = normalizeAgentId(rawName);
     if (agentId === DEFAULT_AGENT_ID) {
@@ -497,11 +494,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     // Ensure workspace & transcripts exist BEFORE writing config so a failure
     // here does not leave a broken config entry behind.
     const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
-    await ensureAgentWorkspace({
-      dir: workspaceDir,
-      ensureBootstrapFiles: !skipBootstrap,
-      skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-    });
+    await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
     await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
 
     const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
@@ -525,20 +518,17 @@ export const agentsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    await replaceConfigFile({
-      nextConfig,
-      afterWrite: { mode: "auto" },
-    });
+    await writeConfigFile(nextConfig);
 
     respond(true, { ok: true, agentId, name: safeName, workspace: workspaceDir, model }, undefined);
   },
-  "agents.update": async ({ params, respond, context }) => {
+  "agents.update": async ({ params, respond }) => {
     if (!validateAgentsUpdateParams(params)) {
       respondInvalidMethodParams(respond, "agents.update", validateAgentsUpdateParams.errors);
       return;
     }
 
-    const cfg = context.getRuntimeConfig();
+    const cfg = loadConfig();
     const agentId = normalizeAgentId(params.agentId);
     if (!isConfiguredAgent(cfg, agentId)) {
       respondAgentNotFound(respond, agentId);
@@ -582,7 +572,6 @@ export const agentsHandlers: GatewayRequestHandlers = {
       ensuredWorkspace = await ensureAgentWorkspace({
         dir: workspaceDir,
         ensureBootstrapFiles: !skipBootstrap,
-        skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
     }
 
@@ -617,20 +606,17 @@ export const agentsHandlers: GatewayRequestHandlers = {
       }
     }
 
-    await replaceConfigFile({
-      nextConfig,
-      afterWrite: { mode: "auto" },
-    });
+    await writeConfigFile(nextConfig);
 
     respond(true, { ok: true, agentId }, undefined);
   },
-  "agents.delete": async ({ params, respond, context }) => {
+  "agents.delete": async ({ params, respond }) => {
     if (!validateAgentsDeleteParams(params)) {
       respondInvalidMethodParams(respond, "agents.delete", validateAgentsDeleteParams.errors);
       return;
     }
 
-    const cfg = context.getRuntimeConfig();
+    const cfg = loadConfig();
     const agentId = normalizeAgentId(params.agentId);
     if (agentId === DEFAULT_AGENT_ID) {
       respond(
@@ -651,19 +637,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
 
     const result = pruneAgentConfig(cfg, agentId);
-    await replaceConfigFile({
-      nextConfig: result.config,
-      afterWrite: { mode: "auto" },
-    });
+    await writeConfigFile(result.config);
 
     // Purge session store entries so orphaned sessions cannot be targeted (#65524).
     await purgeAgentSessionStoreEntries(cfg, agentId);
 
     if (deleteFiles) {
-      const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-      const deleteWorkspace = workspaceSharedWith.length === 0;
       await Promise.all([
-        ...(deleteWorkspace ? [moveToTrashBestEffort(workspaceDir)] : []),
+        moveToTrashBestEffort(workspaceDir),
         moveToTrashBestEffort(agentDir),
         moveToTrashBestEffort(sessionsDir),
       ]);
@@ -671,7 +652,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, agentId, removedBindings: result.removedBindings }, undefined);
   },
-  "agents.files.list": async ({ params, respond, context }) => {
+  "agents.files.list": async ({ params, respond }) => {
     if (!validateAgentsFilesListParams(params)) {
       respond(
         false,
@@ -685,7 +666,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const cfg = context.getRuntimeConfig();
+    const cfg = loadConfig();
     const agentId = resolveAgentIdOrError(params.agentId, cfg);
     if (!agentId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
@@ -701,16 +682,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const files = await listAgentFiles(workspaceDir, { hideBootstrap });
     respond(true, { agentId, workspace: workspaceDir, files }, undefined);
   },
-  "agents.files.get": async ({ params, respond, context }) => {
+  "agents.files.get": async ({ params, respond }) => {
     if (!validateAgentsFilesGetParams(params)) {
       respondInvalidMethodParams(respond, "agents.files.get", validateAgentsFilesGetParams.errors);
       return;
     }
-    const resolved = resolveAgentWorkspaceFileOrRespondError(
-      params,
-      respond,
-      context.getRuntimeConfig(),
-    );
+    const resolved = resolveAgentWorkspaceFileOrRespondError(params, respond);
     if (!resolved) {
       return;
     }
@@ -752,16 +729,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "agents.files.set": async ({ params, respond, context }) => {
+  "agents.files.set": async ({ params, respond }) => {
     if (!validateAgentsFilesSetParams(params)) {
       respondInvalidMethodParams(respond, "agents.files.set", validateAgentsFilesSetParams.errors);
       return;
     }
-    const resolved = resolveAgentWorkspaceFileOrRespondError(
-      params,
-      respond,
-      context.getRuntimeConfig(),
-    );
+    const resolved = resolveAgentWorkspaceFileOrRespondError(params, respond);
     if (!resolved) {
       return;
     }

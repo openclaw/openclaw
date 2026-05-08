@@ -7,7 +7,6 @@ import {
 } from "./status-overview-surface.ts";
 import {
   baseStatusCfg,
-  baseStatusExpectedUpdateChannelLabel,
   baseStatusGatewaySnapshot,
   baseStatusOverviewScanFields,
   baseStatusOverviewSurface,
@@ -82,8 +81,8 @@ describe("status-overview-surface", () => {
     ).toEqual([
       { Item: "OS", Value: "macOS · node 22" },
       { Item: "Dashboard", Value: "http://127.0.0.1:18789/" },
-      { Item: "Tailscale exposure", Value: "muted(off · box.tail.ts.net)" },
-      { Item: "Channel", Value: baseStatusExpectedUpdateChannelLabel },
+      { Item: "Tailscale", Value: "muted(off · box.tail.ts.net)" },
+      { Item: "Channel", Value: "stable (config)" },
       { Item: "Git", Value: "main · tag v1.2.3" },
       { Item: "Update", Value: "available · custom update" },
       {

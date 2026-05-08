@@ -8,7 +8,7 @@ import {
   type VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
 import {
-  assertOkOrThrowProviderError,
+  assertOkOrThrowHttpError,
   postJsonRequest,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
@@ -96,7 +96,7 @@ async function generateGeminiInlineDataText(params: {
   });
 
   try {
-    await assertOkOrThrowProviderError(res, params.httpErrorLabel);
+    await assertOkOrThrowHttpError(res, params.httpErrorLabel);
 
     const payload = (await res.json()) as {
       candidates?: Array<{

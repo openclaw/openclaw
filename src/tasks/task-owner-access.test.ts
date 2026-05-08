@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   findLatestTaskForRelatedSessionKeyForOwner,
   findTaskByRunIdForOwner,
@@ -20,20 +20,21 @@ afterEach(() => {
 });
 
 async function withTaskRegistryTempDir<T>(run: () => Promise<T> | T): Promise<T> {
-  return await withOpenClawTestState(
-    {
-      layout: "state-only",
-      prefix: "openclaw-task-owner-access-",
-    },
-    async () => {
+  return await withTempDir({ prefix: "openclaw-task-owner-access-" }, async (root) => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+    resetTaskRegistryForTests({ persist: false });
+    try {
+      return await run();
+    } finally {
       resetTaskRegistryForTests({ persist: false });
-      try {
-        return await run();
-      } finally {
-        resetTaskRegistryForTests({ persist: false });
+      if (previousStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
       }
-    },
-  );
+    }
+  });
 }
 
 describe("task owner access", () => {

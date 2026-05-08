@@ -3,7 +3,6 @@ import type { ChannelPollResult } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 
 export type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
-export type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 export type ChannelSendRawResult = {
   ok: boolean;
   messageId?: string | null;

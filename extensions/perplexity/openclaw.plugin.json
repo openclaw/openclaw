@@ -1,8 +1,5 @@
 {
   "id": "perplexity",
-  "activation": {
-    "onStartup": false
-  },
   "providerAuthEnvVars": {
     "perplexity": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
   },

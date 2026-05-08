@@ -1,10 +1,7 @@
 import path from "node:path";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
@@ -37,27 +34,9 @@ export type DeviceBootstrapTokenRecord = {
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
 const withLock = createAsyncLock();
-const log = createSubsystemLogger("device-bootstrap");
 
 function resolveBootstrapPath(baseDir?: string): string {
   return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");
-}
-
-function resolveIssuedBootstrapProfileInput(params: {
-  profile?: DeviceBootstrapProfileInput;
-  roles?: readonly string[];
-  scopes?: readonly string[];
-}): DeviceBootstrapProfileInput | undefined {
-  if (params.profile) {
-    return params.profile;
-  }
-  if (params.roles || params.scopes) {
-    return {
-      roles: params.roles,
-      scopes: params.scopes,
-    };
-  }
-  return undefined;
 }
 
 function resolvePersistedBootstrapProfile(
@@ -77,37 +56,16 @@ function resolveIssuedBootstrapProfile(params: {
   roles?: readonly string[];
   scopes?: readonly string[];
 }): DeviceBootstrapProfile {
-  const input = resolveIssuedBootstrapProfileInput(params);
-  if (input) {
-    return normalizeDeviceBootstrapHandoffProfile(input);
+  if (params.profile) {
+    return normalizeDeviceBootstrapProfile(params.profile);
+  }
+  if (params.roles || params.scopes) {
+    return normalizeDeviceBootstrapProfile({
+      roles: params.roles,
+      scopes: params.scopes,
+    });
   }
   return PAIRING_SETUP_BOOTSTRAP_PROFILE;
-}
-
-function warnIfIssuedBootstrapScopesWereStripped(params: {
-  input: DeviceBootstrapProfileInput | undefined;
-  profile: DeviceBootstrapProfile;
-}): void {
-  if (!params.input) {
-    return;
-  }
-  const requestedProfile = normalizeDeviceBootstrapProfile(params.input);
-  const requestedScopes = requestedProfile.scopes;
-  if (requestedScopes.length === 0) {
-    return;
-  }
-  const retainedScopeSet = new Set(params.profile.scopes);
-  const strippedScopes = requestedScopes.filter((scope) => !retainedScopeSet.has(scope));
-  if (strippedScopes.length === 0) {
-    return;
-  }
-  log.warn("bootstrap_token_scopes_stripped", {
-    roles: requestedProfile.roles,
-    requestedScopes,
-    retainedScopes: params.profile.scopes,
-    strippedScopes,
-    consoleMessage: "bootstrap token scopes stripped to bootstrap handoff allowlist",
-  });
 }
 
 function bootstrapProfileAllowsRequest(params: {
@@ -125,6 +83,13 @@ function bootstrapProfileAllowsRequest(params: {
   );
 }
 
+function resolveBootstrapProfileScopes(role: string, scopes: readonly string[]): string[] {
+  if (role === "operator") {
+    return scopes.filter((scope) => scope.startsWith("operator."));
+  }
+  return scopes.filter((scope) => !scope.startsWith("operator."));
+}
+
 function bootstrapProfileSatisfiesProfile(params: {
   actualProfile: DeviceBootstrapProfile;
   requiredProfile: DeviceBootstrapProfile;
@@ -133,7 +98,7 @@ function bootstrapProfileSatisfiesProfile(params: {
     if (!params.actualProfile.roles.includes(requiredRole)) {
       return false;
     }
-    const requiredScopes = resolveBootstrapProfileScopesForRole(
+    const requiredScopes = resolveBootstrapProfileScopes(
       requiredRole,
       params.requiredProfile.scopes,
     );
@@ -210,9 +175,7 @@ export async function issueDeviceBootstrapToken(
     const state = await loadState(params.baseDir);
     const token = generatePairingToken();
     const issuedAtMs = Date.now();
-    const profileInput = resolveIssuedBootstrapProfileInput(params);
     const profile = resolveIssuedBootstrapProfile(params);
-    warnIfIssuedBootstrapScopesWereStripped({ input: profileInput, profile });
     state[token] = {
       token,
       ts: issuedAtMs,
@@ -313,7 +276,7 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
       roles: [...resolvePersistedRedeemedProfile(record).roles, params.role],
       scopes: [
         ...resolvePersistedRedeemedProfile(record).scopes,
-        ...resolveBootstrapProfileScopesForRole(params.role, params.scopes),
+        ...resolveBootstrapProfileScopes(params.role, params.scopes),
       ],
     });
     state[tokenKey] = {

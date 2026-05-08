@@ -5,7 +5,7 @@ import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared
 import {
   danger,
   defaultRuntime,
-  getRuntimeConfig,
+  loadConfig,
   shortenHomePath,
   type SnapshotResult,
 } from "./core-api.js";
@@ -21,7 +21,6 @@ export function registerBrowserInspectCommands(
     .option("--full-page", "Capture full scrollable page", false)
     .option("--ref <ref>", "ARIA ref from ai snapshot")
     .option("--element <selector>", "CSS selector for element screenshot")
-    .option("--labels", "Overlay role refs on the screenshot", false)
     .option("--type <png|jpeg>", "Output type (default: png)", "png")
     .action(async (targetId: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -38,7 +37,6 @@ export function registerBrowserInspectCommands(
               fullPage: Boolean(opts.fullPage),
               ref: normalizeOptionalString(opts.ref),
               element: normalizeOptionalString(opts.element),
-              labels: Boolean(opts.labels),
               type: opts.type === "jpeg" ? "jpeg" : "png",
             },
           },
@@ -69,19 +67,13 @@ export function registerBrowserInspectCommands(
     .option("--selector <sel>", "Role snapshot: scope to CSS selector")
     .option("--frame <sel>", "Role snapshot: scope to an iframe selector")
     .option("--labels", "Include viewport label overlay screenshot", false)
-    .option("--urls", "Append discovered link URLs to AI snapshots", false)
     .option("--out <path>", "Write snapshot to a file")
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
-      const formatWasExplicit =
-        typeof cmd.getOptionValueSource === "function" &&
-        cmd.getOptionValueSource("format") === "cli";
       const configMode =
-        !formatWasExplicit &&
-        format === "ai" &&
-        getRuntimeConfig().browser?.snapshotDefaults?.mode === "efficient"
+        format === "ai" && loadConfig().browser?.snapshotDefaults?.mode === "efficient"
           ? "efficient"
           : undefined;
       const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : configMode;
@@ -96,7 +88,6 @@ export function registerBrowserInspectCommands(
           selector: normalizeOptionalString(opts.selector),
           frame: normalizeOptionalString(opts.frame),
           labels: opts.labels ? true : undefined,
-          urls: opts.urls ? true : undefined,
           mode,
           profile,
         };

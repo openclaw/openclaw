@@ -21,8 +21,6 @@ const DEFAULT_LEGACY_CREDENTIALS = {
   createdAt: "2026-03-01T10:00:00.000Z",
 };
 
-const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
-
 describe("matrix credentials storage", () => {
   const tempDirs: string[] = [];
 
@@ -76,9 +74,7 @@ describe("matrix credentials storage", () => {
     expect(fs.existsSync(credPath)).toBe(true);
     expect(credPath).toBe(path.join(stateDir, "credentials", "matrix", "credentials-ops.json"));
     const mode = fs.statSync(credPath).mode & 0o777;
-    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
-      expect(mode).toBe(0o600);
-    }
+    expect(mode).toBe(0o600);
   });
 
   it("touch updates lastUsedAt while preserving createdAt", async () => {

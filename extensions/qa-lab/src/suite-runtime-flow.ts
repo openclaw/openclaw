@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
-import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-host-status";
+import {
+  formatMemoryDreamingDay,
+  resolveSessionTranscriptsDirForAgent,
+} from "openclaw/plugin-sdk/memory-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -31,7 +33,6 @@ import {
   extractMediaPathFromText,
   findSkill,
   forceMemoryIndex,
-  findManagedDreamingCronJob,
   handleQaAction,
   listCronJobs,
   readDoctorMemoryStatus,
@@ -169,7 +170,6 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     startAgentRun,
     waitForAgentRun,
     listCronJobs,
-    findManagedDreamingCronJob,
     waitForCronRunCompletion,
     readDoctorMemoryStatus,
     forceMemoryIndex,

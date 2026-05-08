@@ -11,7 +11,7 @@ import {
   resolveInlineCommandMatch,
 } from "./shell-inline-command.js";
 
-type SystemRunCommandValidation =
+export type SystemRunCommandValidation =
   | {
       ok: true;
       shellPayload: string | null;
@@ -24,7 +24,7 @@ type SystemRunCommandValidation =
       details?: Record<string, unknown>;
     };
 
-type ResolvedSystemRunCommand =
+export type ResolvedSystemRunCommand =
   | {
       ok: true;
       argv: string[];

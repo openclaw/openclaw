@@ -88,6 +88,10 @@ export function trackSessionManagerAccess(sessionFile: string): void {
   sessionManagerCache.trackSessionManagerAccess(sessionFile);
 }
 
+export function isSessionManagerCached(sessionFile: string): boolean {
+  return sessionManagerCache.isSessionManagerCached(sessionFile);
+}
+
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
   await sessionManagerCache.prewarmSessionFile(sessionFile);
 }

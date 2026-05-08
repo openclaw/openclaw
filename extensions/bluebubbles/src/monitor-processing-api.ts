@@ -10,7 +10,7 @@ export {
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/channel-policy";
 export { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
+export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
 export {
   evictOldHistoryKeys,
   recordPendingHistoryEntryIfEnabled,

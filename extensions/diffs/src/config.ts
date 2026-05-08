@@ -15,6 +15,7 @@ import {
   type DiffLayout,
   type DiffMode,
   type DiffOutputFormat,
+  type DiffPresentationDefaults,
   type DiffTheme,
   type DiffToolDefaults,
 } from "./types.js";
@@ -36,15 +37,11 @@ type DiffsPluginConfig = {
     fileQuality?: DiffImageQualityPreset;
     fileScale?: number;
     fileMaxWidth?: number;
-    /** @deprecated Use fileFormat. */
     format?: DiffOutputFormat;
-    /** @deprecated Use fileFormat. */
+    // Backward-compatible aliases retained for existing configs.
     imageFormat?: DiffOutputFormat;
-    /** @deprecated Use fileQuality. */
     imageQuality?: DiffImageQualityPreset;
-    /** @deprecated Use fileScale. */
     imageScale?: number;
-    /** @deprecated Use fileMaxWidth. */
     imageMaxWidth?: number;
     mode?: DiffMode;
   };
@@ -91,7 +88,7 @@ export const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
   mode: "both",
 };
 
-type DiffsPluginSecurityConfig = {
+export type DiffsPluginSecurityConfig = {
   allowRemoteViewer: boolean;
 };
 
@@ -145,28 +142,17 @@ const DiffsPluginJsonSchemaSource = z.strictObject({
         .enum(DIFF_OUTPUT_FORMATS)
         .default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileFormat)
         .optional(),
-      format: z.enum(DIFF_OUTPUT_FORMATS).optional().describe("Deprecated alias for fileFormat."),
+      format: z.enum(DIFF_OUTPUT_FORMATS).optional(),
       fileQuality: z
         .enum(DIFF_IMAGE_QUALITY_PRESETS)
         .default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileQuality)
         .optional(),
       fileScale: z.number().min(1).max(4).optional(),
       fileMaxWidth: z.number().min(640).max(2400).optional(),
-      imageFormat: z
-        .enum(DIFF_OUTPUT_FORMATS)
-        .optional()
-        .describe("Deprecated alias for fileFormat."),
-      imageQuality: z
-        .enum(DIFF_IMAGE_QUALITY_PRESETS)
-        .optional()
-        .describe("Deprecated alias for fileQuality."),
-      imageScale: z.number().min(1).max(4).optional().describe("Deprecated alias for fileScale."),
-      imageMaxWidth: z
-        .number()
-        .min(640)
-        .max(2400)
-        .optional()
-        .describe("Deprecated alias for fileMaxWidth."),
+      imageFormat: z.enum(DIFF_OUTPUT_FORMATS).optional(),
+      imageQuality: z.enum(DIFF_IMAGE_QUALITY_PRESETS).optional(),
+      imageScale: z.number().min(1).max(4).optional(),
+      imageMaxWidth: z.number().min(640).max(2400).optional(),
       mode: z.enum(DIFF_MODES).default(DEFAULT_DIFFS_TOOL_DEFAULTS.mode).optional(),
     })
     .optional(),
@@ -311,6 +297,31 @@ export function resolveDiffsPluginViewerBaseUrl(config: unknown): string | undef
 
   const normalized = viewerBaseUrl.trim();
   return normalized ? normalizeViewerBaseUrl(normalized) : undefined;
+}
+
+export function toPresentationDefaults(defaults: DiffToolDefaults): DiffPresentationDefaults {
+  const {
+    fontFamily,
+    fontSize,
+    lineSpacing,
+    layout,
+    showLineNumbers,
+    diffIndicators,
+    wordWrap,
+    background,
+    theme,
+  } = defaults;
+  return {
+    fontFamily,
+    fontSize,
+    lineSpacing,
+    layout,
+    showLineNumbers,
+    diffIndicators,
+    wordWrap,
+    background,
+    theme,
+  };
 }
 
 function normalizeFontFamily(fontFamily?: string): string {

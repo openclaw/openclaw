@@ -207,7 +207,7 @@ describe("telegram inbound media", () => {
           },
         },
         assert: (payload: Record<string, unknown>) => {
-          expect(payload.Body).toContain("48.858844");
+          expect(payload.Body).toContain("Eiffel Tower");
           expect(payload.LocationName).toBe("Eiffel Tower");
           expect(payload.LocationAddress).toBe("Champ de Mars, Paris");
           expect(payload.LocationSource).toBe("place");
@@ -237,13 +237,12 @@ describe("telegram media groups", () => {
 
   const MEDIA_GROUP_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
   const MEDIA_GROUP_FLUSH_MS = TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs + 40;
-  const MEDIA_GROUP_WAIT_TIMEOUT_MS = Math.max(2_000, MEDIA_GROUP_FLUSH_MS * 10);
 
   it(
     "uses custom apiRoot for buffered media-group downloads",
     async () => {
-      const originalLoadConfig = telegramBotDepsForTest.getRuntimeConfig;
-      telegramBotDepsForTest.getRuntimeConfig = (() => ({
+      const originalLoadConfig = telegramBotDepsForTest.loadConfig;
+      telegramBotDepsForTest.loadConfig = (() => ({
         channels: {
           telegram: {
             dmPolicy: "open",
@@ -251,7 +250,7 @@ describe("telegram media groups", () => {
             apiRoot: "http://127.0.0.1:8081/custom-bot-api",
           },
         },
-      })) as typeof telegramBotDepsForTest.getRuntimeConfig;
+      })) as typeof telegramBotDepsForTest.loadConfig;
 
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
@@ -290,7 +289,7 @@ describe("telegram media groups", () => {
           () => {
             expect(replySpy).toHaveBeenCalledTimes(1);
           },
-          { timeout: MEDIA_GROUP_WAIT_TIMEOUT_MS, interval: 2 },
+          { timeout: MEDIA_GROUP_FLUSH_MS * 4, interval: 2 },
         );
 
         expect(runtimeError).not.toHaveBeenCalled();
@@ -307,7 +306,7 @@ describe("telegram media groups", () => {
           }),
         );
       } finally {
-        telegramBotDepsForTest.getRuntimeConfig = originalLoadConfig;
+        telegramBotDepsForTest.loadConfig = originalLoadConfig;
         fetchSpy.mockRestore();
       }
     },
@@ -397,7 +396,7 @@ describe("telegram media groups", () => {
             () => {
               expect(replySpy).toHaveBeenCalledTimes(scenario.expectedReplyCount);
             },
-            { timeout: MEDIA_GROUP_WAIT_TIMEOUT_MS, interval: 2 },
+            { timeout: MEDIA_GROUP_FLUSH_MS * 4, interval: 2 },
           );
 
           expect(runtimeError).not.toHaveBeenCalled();

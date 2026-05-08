@@ -1,7 +1,6 @@
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileDisplayLabel,
@@ -16,7 +15,6 @@ export function resolveModelAuthLabel(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
-  workspaceDir?: string;
   includeExternalProfiles?: boolean;
 }): string | undefined {
   const resolvedProvider = params.provider?.trim();
@@ -29,11 +27,7 @@ export function resolveModelAuthLabel(params: {
     params.includeExternalProfiles === false
       ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir)
       : ensureAuthProfileStore(params.agentDir, {
-          externalCli: externalCliDiscoveryForProviderAuth({
-            cfg: params.cfg,
-            provider: providerKey,
-            preferredProfile: params.sessionEntry?.authProfileOverride,
-          }),
+          allowKeychainPrompt: false,
         });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const order = resolveAuthProfileOrder({
@@ -63,10 +57,7 @@ export function resolveModelAuthLabel(params: {
     return `api-key${label ? ` (${label})` : ""}`;
   }
 
-  const envKey = resolveEnvApiKey(providerKey, process.env, {
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
+  const envKey = resolveEnvApiKey(providerKey);
   if (envKey?.apiKey) {
     if (envKey.source.includes("OAUTH_TOKEN")) {
       return `oauth (${envKey.source})`;
@@ -74,10 +65,7 @@ export function resolveModelAuthLabel(params: {
     return `api-key (${envKey.source})`;
   }
 
-  if (
-    providerKey === "codex" &&
-    readCodexCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
-  ) {
+  if (providerKey === "codex" && readCodexCliCredentialsCached({ ttlMs: 5_000 })) {
     return "oauth (codex-cli)";
   }
 

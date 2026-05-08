@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
 
 /**
  * Query expansion for FTS-only search mode.

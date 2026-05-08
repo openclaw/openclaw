@@ -9,6 +9,7 @@ import {
   waitForMatrixQaRoomEvent,
   waitForOptionalMatrixQaRoomEvent,
   type MatrixQaRoomObserver,
+  type MatrixQaRoomEventWaitResult,
 } from "./sync.js";
 import {
   findMatrixQaProvisionedRoom,
@@ -18,7 +19,8 @@ import {
   type MatrixQaTopologySpec,
 } from "./topology.js";
 
-export type { MatrixQaRoomObserver } from "./sync.js";
+export type { MatrixQaObservedEvent } from "./events.js";
+export type { MatrixQaRoomEventWaitResult, MatrixQaRoomObserver } from "./sync.js";
 
 type MatrixQaAuthStage = "m.login.dummy" | "m.login.registration_token";
 
@@ -90,7 +92,7 @@ type MatrixQaUiaaResponse = {
   session?: string;
 };
 
-type MatrixQaRegisteredAccount = {
+export type MatrixQaRegisteredAccount = {
   accessToken: string;
   deviceId?: string;
   localpart: string;
@@ -351,7 +353,7 @@ async function uploadMatrixQaContent(params: {
   return contentUri;
 }
 
-function resolveNextRegistrationAuth(params: {
+export function resolveNextRegistrationAuth(params: {
   registrationToken: string;
   response: MatrixQaUiaaResponse;
 }) {

@@ -25,6 +25,7 @@ const checker = createExtensionImportBoundaryChecker({
   },
 });
 
+export const collectSrcExtensionImportBoundaryInventory = checker.collectInventory;
 export const main = checker.main;
 
 runAsScript(import.meta.url, main);

@@ -33,7 +33,7 @@ export function resolveSourceRoots(repoRoot, relativeRoots) {
   return relativeRoots.map((root) => path.join(repoRoot, ...root.split("/").filter(Boolean)));
 }
 
-function isTestLikeTypeScriptFile(filePath, options = {}) {
+export function isTestLikeTypeScriptFile(filePath, options = {}) {
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
   return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
 }
@@ -175,7 +175,7 @@ export function collectCallExpressionLines(ts, sourceFile, resolveLineNode) {
   return lines;
 }
 
-function isDirectExecution(importMetaUrl) {
+export function isDirectExecution(importMetaUrl) {
   const entry = process.argv[1];
   if (!entry) {
     return false;

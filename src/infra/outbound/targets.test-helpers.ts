@@ -75,7 +75,6 @@ function parseTelegramTargetForTest(raw: string): {
 }
 
 export const telegramMessagingForTest: ChannelMessagingAdapter = {
-  targetPrefixes: ["telegram", "tg"],
   parseExplicitTarget: ({ raw }) => {
     const target = parseTelegramTargetForTest(raw);
     return {
@@ -91,7 +90,6 @@ export const telegramMessagingForTest: ChannelMessagingAdapter = {
 };
 
 export const forumMessagingForTest: ChannelMessagingAdapter = {
-  targetPrefixes: ["forum"],
   parseExplicitTarget: ({ raw }) => {
     const target = parseForumTargetForTest(raw);
     return {
@@ -152,9 +150,6 @@ export function createGenericTargetTestPlugin(
       deliveryMode: "direct",
       sendText: async () => ({ channel: id, messageId: `${id}-msg` }),
       resolveTarget: createGenericResolveTarget(String(id), label),
-    },
-    messaging: {
-      targetPrefixes: [String(id)],
     },
     resolveDefaultTo: ({ cfg }) => readTestDefaultTo(cfg, String(id)),
   });

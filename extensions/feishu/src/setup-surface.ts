@@ -12,7 +12,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
+import { inspectFeishuCredentials, resolveDefaultFeishuAccountId } from "./accounts.js";
 import type { AppRegistrationResult } from "./app-registration.js";
 import type { FeishuConfig, FeishuDomain } from "./types.js";
 
@@ -498,6 +498,8 @@ export async function runFeishuLogin(params: {
 // Exported wizard
 // ---------------------------------------------------------------------------
 
+export { feishuSetupAdapter } from "./setup-core.js";
+
 export const feishuSetupWizard: ChannelSetupWizard = {
   channel,
   resolveAccountIdForConfigure: ({ accountOverride, defaultAccountId, cfg }) =>
@@ -515,13 +517,14 @@ export const feishuSetupWizard: ChannelSetupWizard = {
     configuredScore: 2,
     unconfiguredScore: 0,
     resolveConfigured: ({ cfg }) => isFeishuConfigured(cfg),
-    resolveStatusLines: async ({ cfg, accountId, configured }) => {
-      const account = resolveFeishuAccount({ cfg, accountId });
+    resolveStatusLines: async ({ cfg, configured }) => {
+      const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+      const resolvedCredentials = inspectFeishuCredentials(feishuCfg);
       let probeResult = null;
-      if (configured && account.configured) {
+      if (configured && resolvedCredentials) {
         try {
           const { probeFeishu } = await import("./probe.js");
-          probeResult = await probeFeishu(account);
+          probeResult = await probeFeishu(resolvedCredentials);
         } catch {}
       }
       if (!configured) {

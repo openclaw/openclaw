@@ -15,6 +15,13 @@ function sendError(respond: (ok: boolean, payload?: unknown) => void, err: unkno
   respond(false, { error: formatMatrixErrorMessage(err) });
 }
 
+export async function ensureMatrixCryptoRuntime(
+  ...args: Parameters<typeof import("./matrix/deps.js").ensureMatrixCryptoRuntime>
+): Promise<void> {
+  const { ensureMatrixCryptoRuntime: ensureRuntime } = await import("./matrix/deps.js");
+  await ensureRuntime(...args);
+}
+
 export async function handleVerifyRecoveryKey({
   params,
   respond,

@@ -1,6 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { loadQrCodeRuntime, normalizeQrText } from "./qr-runtime.ts";
+import { loadQrCodeTuiRuntime } from "./qr-runtime.ts";
 
 const DEFAULT_QR_PNG_SCALE = 6;
 const DEFAULT_QR_PNG_MARGIN_MODULES = 4;
@@ -10,18 +10,18 @@ const MIN_QR_PNG_MARGIN_MODULES = 0;
 const MAX_QR_PNG_MARGIN_MODULES = 16;
 const QR_PNG_DATA_URL_PREFIX = "data:image/png;base64,";
 
-type QrPngRenderOptions = {
+export type QrPngRenderOptions = {
   scale?: number;
   marginModules?: number;
 };
 
-type QrPngTempFileOptions = QrPngRenderOptions & {
+export type QrPngTempFileOptions = QrPngRenderOptions & {
   tmpRoot: string;
   dirPrefix: string;
   fileName?: string;
 };
 
-type QrPngTempFile = {
+export type QrPngTempFile = {
   filePath: string;
   dirPath: string;
   mediaLocalRoots: string[];
@@ -72,16 +72,11 @@ export async function renderQrPngBase64(
     min: MIN_QR_PNG_MARGIN_MODULES,
     max: MAX_QR_PNG_MARGIN_MODULES,
   });
-  const qrCode = await loadQrCodeRuntime();
-  const dataUrl = await qrCode.toDataURL(normalizeQrText(input), {
+  const { renderPngBase64 } = await loadQrCodeTuiRuntime();
+  return await renderPngBase64(input, {
     margin: marginModules,
     scale,
-    type: "image/png",
   });
-  if (!dataUrl.startsWith(QR_PNG_DATA_URL_PREFIX)) {
-    throw new Error("Expected qrcode to return a PNG data URL.");
-  }
-  return dataUrl.slice(QR_PNG_DATA_URL_PREFIX.length);
 }
 
 export function formatQrPngDataUrl(base64: string): string {

@@ -3,15 +3,14 @@ import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js"
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(() => ({})),
-  readConfigFileSnapshot: vi.fn(),
+  loadConfig: vi.fn(() => ({})),
   applyPluginAutoEnable: vi.fn(),
   getChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  loadConfig: mocks.loadConfig,
+  readConfigFileSnapshot: vi.fn(),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -37,10 +36,7 @@ function createOptions(
     isWebchatConnect: () => false,
     respond: vi.fn(),
     context: {
-      getRuntimeConfig: mocks.getRuntimeConfig,
       startChannel: vi.fn(),
-      stopChannel: vi.fn(),
-      markChannelLoggedOut: vi.fn(),
       getRuntimeSnapshot: vi.fn(
         (): ChannelRuntimeSnapshot => ({
           channels: {
@@ -67,7 +63,7 @@ function createOptions(
 describe("channelsHandlers channels.start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfig.mockReturnValue({});
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
@@ -90,7 +86,6 @@ describe("channelsHandlers channels.start", () => {
         {
           respond,
           context: {
-            getRuntimeConfig: mocks.getRuntimeConfig,
             startChannel,
             getRuntimeSnapshot: vi.fn(
               (): ChannelRuntimeSnapshot => ({
@@ -141,7 +136,6 @@ describe("channelsHandlers channels.start", () => {
         {
           respond,
           context: {
-            getRuntimeConfig: mocks.getRuntimeConfig,
             startChannel,
             getRuntimeSnapshot: vi.fn(
               (): ChannelRuntimeSnapshot => ({
@@ -173,135 +167,6 @@ describe("channelsHandlers channels.start", () => {
         channel: "whatsapp",
         accountId: "default-account",
         started: false,
-      },
-      undefined,
-    );
-  });
-});
-
-describe("channelsHandlers channels.stop", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.getChannelPlugin.mockReturnValue({
-      id: "whatsapp",
-      config: {
-        defaultAccountId: () => "default-account",
-        listAccountIds: () => ["default-account"],
-        resolveAccount: () => ({}),
-      },
-    });
-  });
-
-  it("stops a channel account without clearing auth state", async () => {
-    const stopChannel = vi.fn(async () => undefined);
-    const respond = vi.fn();
-
-    await channelsHandlers["channels.stop"](
-      createOptions(
-        { channel: "whatsapp" },
-        {
-          respond,
-          context: {
-            getRuntimeConfig: mocks.getRuntimeConfig,
-            stopChannel,
-            getRuntimeSnapshot: vi.fn(
-              (): ChannelRuntimeSnapshot => ({
-                channels: {},
-                channelAccounts: {
-                  whatsapp: {
-                    "default-account": {
-                      accountId: "default-account",
-                      running: false,
-                    },
-                  },
-                },
-              }),
-            ),
-          } as unknown as GatewayRequestHandlerOptions["context"],
-        },
-      ),
-    );
-
-    expect(stopChannel).toHaveBeenCalledWith("whatsapp", "default-account");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        channel: "whatsapp",
-        accountId: "default-account",
-        stopped: true,
-      },
-      undefined,
-    );
-  });
-});
-
-describe("channelsHandlers channels.logout", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      config: {
-        channels: {
-          whatsapp: {
-            token: { source: "env", provider: "default", id: "WHATSAPP_TOKEN" },
-          },
-        },
-      },
-    });
-  });
-
-  it("passes the active runtime config to channel plugins", async () => {
-    const runtimeConfig = {
-      channels: {
-        whatsapp: {
-          token: "runtime-token",
-        },
-      },
-    };
-    const stopChannel = vi.fn();
-    const markChannelLoggedOut = vi.fn();
-    const logoutAccount = vi.fn(async ({ cfg }: { cfg: typeof runtimeConfig }) => {
-      expect(cfg.channels.whatsapp.token).toBe("runtime-token");
-      return { cleared: true, envToken: false, loggedOut: true };
-    });
-    const respond = vi.fn();
-    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    mocks.getChannelPlugin.mockReturnValue({
-      id: "whatsapp",
-      gateway: { logoutAccount },
-      config: {
-        defaultAccountId: () => "default-account",
-        listAccountIds: () => ["default-account"],
-        resolveAccount: () => ({}),
-      },
-    });
-
-    await channelsHandlers["channels.logout"](
-      createOptions(
-        { channel: "whatsapp" },
-        {
-          respond,
-          context: {
-            getRuntimeConfig: mocks.getRuntimeConfig,
-            stopChannel,
-            markChannelLoggedOut,
-          } as unknown as GatewayRequestHandlerOptions["context"],
-        },
-      ),
-    );
-
-    expect(stopChannel).toHaveBeenCalledWith("whatsapp", "default-account");
-    expect(markChannelLoggedOut).toHaveBeenCalledWith("whatsapp", true, "default-account");
-    expect(logoutAccount).toHaveBeenCalledTimes(1);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        channel: "whatsapp",
-        accountId: "default-account",
-        cleared: true,
-        envToken: false,
-        loggedOut: true,
       },
       undefined,
     );

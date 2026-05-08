@@ -230,7 +230,6 @@ async function withSafeBinsExecTool(
     await withEnvAsync(
       {
         OPENCLAW_SHELL_ENV_TIMEOUT_MS: "1",
-        PATH: "/usr/bin:/bin",
         SHELL: "/bin/sh",
       },
       async () => {

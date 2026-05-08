@@ -2,7 +2,7 @@ import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
 type OnboardCoreAuthOptionKey = Extract<keyof OnboardOptions, string>;
 
-type OnboardCoreAuthFlag = {
+export type OnboardCoreAuthFlag = {
   optionKey: OnboardCoreAuthOptionKey;
   authChoice: AuthChoice;
   cliFlag: `--${string}`;

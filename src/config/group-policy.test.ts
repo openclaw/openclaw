@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import {
-  resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
-  resolveToolsBySender,
-} from "./group-policy.js";
+import { resolveChannelGroupPolicy, resolveToolsBySender } from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
@@ -132,34 +128,6 @@ describe("resolveChannelGroupPolicy", () => {
 
     expect(policy.allowlistEnabled).toBe(true);
     expect(policy.allowed).toBe(false);
-  });
-
-  it("can default explicitly configured groups to no mention for channels that opt in", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          groups: {
-            "123@g.us": {},
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolveChannelGroupRequireMention({
-        cfg,
-        channel: "whatsapp",
-        groupId: "123@g.us",
-      }),
-    ).toBe(true);
-    expect(
-      resolveChannelGroupRequireMention({
-        cfg,
-        channel: "whatsapp",
-        groupId: "123@g.us",
-        configuredGroupDefaultsToNoMention: true,
-      }),
-    ).toBe(false);
   });
 });
 

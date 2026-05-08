@@ -25,7 +25,7 @@ function extractTextBlock(block: unknown): string {
   return readTextValue((block as { text?: unknown }).text);
 }
 
-function extractMessageText(content: unknown): string {
+export function extractMessageText(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }

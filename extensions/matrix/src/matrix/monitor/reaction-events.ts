@@ -1,6 +1,6 @@
 import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
-  resolveMatrixApprovalReactionTargetWithPersistence,
+  resolveMatrixApprovalReactionTarget,
   unregisterMatrixApprovalReactionTarget,
 } from "../../approval-reactions.js";
 import type { CoreConfig } from "../../types.js";
@@ -47,7 +47,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
   cfg: CoreConfig;
   accountId: string;
   senderId: string;
-  target: Awaited<ReturnType<typeof resolveMatrixApprovalReactionTargetWithPersistence>>;
+  target: ReturnType<typeof resolveMatrixApprovalReactionTarget>;
   targetEventId: string;
   roomId: string;
   logVerboseMessage: (message: string) => void;
@@ -110,7 +110,7 @@ export async function handleInboundMatrixReaction(params: {
   if (params.senderId === params.selfUserId) {
     return;
   }
-  const approvalTarget = await resolveMatrixApprovalReactionTargetWithPersistence({
+  const approvalTarget = resolveMatrixApprovalReactionTarget({
     roomId: params.roomId,
     eventId: reaction.eventId,
     reactionKey: reaction.key,

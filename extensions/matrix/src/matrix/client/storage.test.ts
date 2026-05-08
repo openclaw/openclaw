@@ -34,6 +34,15 @@ const maybeCreateMatrixMigrationSnapshotMock = vi.hoisted(() =>
   })),
 );
 
+vi.mock("../../../../../src/infra/backup-create.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../../../src/infra/backup-create.js")>(
+    "../../../../../src/infra/backup-create.js",
+  );
+  return {
+    ...actual,
+    createBackupArchive: (params: unknown) => createBackupArchiveMock(params),
+  };
+});
 vi.mock("./migration-snapshot.runtime.js", () => ({
   maybeCreateMatrixMigrationSnapshot: (params: unknown) =>
     maybeCreateMatrixMigrationSnapshotMock(params),

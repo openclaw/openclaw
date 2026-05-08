@@ -1,4 +1,4 @@
-import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describePackageManifestContract } from "../../../test/helpers/plugins/package-manifest-contract.js";
 
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
 
@@ -6,16 +6,26 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "discord",
-    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "opusscript"],
+    pluginLocalRuntimeDeps: [
+      "@buape/carbon",
+      "@discordjs/voice",
+      "discord-api-types",
+      "opusscript",
+    ],
+    mirroredRootRuntimeDeps: ["https-proxy-agent"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
     pluginId: "feishu",
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
+    mirroredRootRuntimeDeps: ["typebox"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "google" },
-  { pluginId: "google-meet" },
+  { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
+  {
+    pluginId: "google-meet",
+    mirroredRootRuntimeDeps: ["commander", "typebox"],
+  },
   {
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["gaxios", "google-auth-library"],
@@ -23,13 +33,23 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "amazon-bedrock" },
-  { pluginId: "amazon-bedrock-mantle" },
+  {
+    pluginId: "amazon-bedrock",
+    pluginLocalRuntimeDeps: [
+      "@aws-sdk/client-bedrock",
+      "@aws-sdk/client-bedrock-runtime",
+      "@aws-sdk/credential-provider-node",
+    ],
+  },
+  {
+    pluginId: "amazon-bedrock-mantle",
+    pluginLocalRuntimeDeps: ["@aws/bedrock-token-generator"],
+  },
   {
     pluginId: "diffs",
-    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
+    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme", "playwright-core"],
+    mirroredRootRuntimeDeps: ["typebox"],
   },
-  { pluginId: "file-transfer" },
   {
     pluginId: "matrix",
     pluginLocalRuntimeDeps: [
@@ -39,12 +59,14 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "matrix-js-sdk",
       "music-metadata",
     ],
+    mirroredRootRuntimeDeps: ["markdown-it"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
-    pluginLocalRuntimeDeps: ["@lancedb/lancedb", "apache-arrow"],
+    pluginLocalRuntimeDeps: ["@lancedb/lancedb"],
+    mirroredRootRuntimeDeps: ["typebox", "openai"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -56,6 +78,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "jsonwebtoken",
       "jwks-rsa",
     ],
+    mirroredRootRuntimeDeps: ["typebox", "express"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
@@ -64,14 +87,22 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "openshell" },
+  { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
   {
     pluginId: "qqbot",
     pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
+    mirroredRootRuntimeDeps: ["ws"],
   },
-  { pluginId: "slack" },
+  {
+    pluginId: "slack",
+    pluginLocalRuntimeDeps: ["@slack/bolt", "@slack/web-api"],
+    mirroredRootRuntimeDeps: ["https-proxy-agent"],
+  },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "telegram" },
+  {
+    pluginId: "telegram",
+    pluginLocalRuntimeDeps: ["@grammyjs/runner", "@grammyjs/transformer-throttler", "grammy"],
+  },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },

@@ -8,12 +8,10 @@ import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/appr
 import {
   buildApprovalInteractiveReplyFromActionDescriptors,
   buildExecApprovalPendingReplyPayload,
-} from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { ExecApprovalPendingReplyParams } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
+  type ExecApprovalPendingReplyParams,
+  type ExecApprovalRequest,
+  type PluginApprovalRequest,
+} from "openclaw/plugin-sdk/infra-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramInlineButtons } from "./button-types.js";
@@ -75,10 +73,6 @@ function buildPendingPayload(params: {
           approvalId: params.request.id,
           approvalSlug: params.request.id.slice(0, 8),
           approvalCommandId: params.request.id,
-          warningText:
-            params.view.approvalKind === "exec"
-              ? (params.view.warningText ?? undefined)
-              : undefined,
           command: params.view.approvalKind === "exec" ? params.view.commandText : "",
           cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
           host:

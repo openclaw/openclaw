@@ -14,11 +14,9 @@ const resolveStorePathMock = vi.fn((_store: unknown, _options: unknown) => "/tmp
 const resolveMainSessionKeyMock = vi.fn((_cfg: unknown) => "agent:main:main");
 const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw subagent reply");
 const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
-const queueEmbeddedPiMessageMock = vi.fn(
-  (_sessionId: string, _text: string, _options?: unknown) => false,
-);
+const queueEmbeddedPiMessageMock = vi.fn((_sessionId: string, _text: string) => false);
 const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
-let mockConfig: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
+let mockConfig: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -41,10 +39,10 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: (request: unknown) => callGatewayMock(request),
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-  getRuntimeConfig: () => mockConfig,
+  loadConfig: () => mockConfig,
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-  queueEmbeddedPiMessage: (sessionId: string, text: string, options?: unknown) =>
-    queueEmbeddedPiMessageMock(sessionId, text, options),
+  queueEmbeddedPiMessage: (sessionId: string, text: string) =>
+    queueEmbeddedPiMessageMock(sessionId, text),
   resolveAgentIdFromSessionKey: (sessionKey: string) =>
     resolveAgentIdFromSessionKeyMock(sessionKey),
   resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
@@ -60,15 +58,15 @@ vi.mock("./tools/agent-step.js", () => ({
 vi.mock("./subagent-announce-delivery.runtime.js", () =>
   createSubagentAnnounceDeliveryRuntimeMock({
     callGateway: (request: unknown) => callGatewayMock(request),
-    getRuntimeConfig: () => mockConfig,
+    loadConfig: () => mockConfig,
     loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
     resolveAgentIdFromSessionKey: (sessionKey: string) =>
       resolveAgentIdFromSessionKeyMock(sessionKey),
     resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
     resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessage: (sessionId: string, text: string, options?: unknown) =>
-      queueEmbeddedPiMessageMock(sessionId, text, options),
+    queueEmbeddedPiMessage: (sessionId: string, text: string) =>
+      queueEmbeddedPiMessageMock(sessionId, text),
   }),
 );
 
@@ -103,7 +101,6 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       queueEmbeddedPiMessageMock(
         sessionId,
         `[Internal task completion event]\n${params.triggerMessage}`,
-        { steeringMode: "all" },
       );
       return { delivered: true, path: "queue" };
     }
@@ -358,7 +355,6 @@ describe("subagent announce seam flow", () => {
     expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith(
       "session-origin-provider-steer",
       expect.stringContaining("[Internal task completion event]"),
-      { steeringMode: "all" },
     );
     expect(agentSpy).not.toHaveBeenCalled();
   });
@@ -472,7 +468,7 @@ describe("subagent announce seam flow", () => {
       expect.objectContaining({
         deliver: true,
         channel: "telegram",
-        accountId: "bot-123",
+        accountId: "bot:123",
         to: "-1001234567890",
       }),
     );

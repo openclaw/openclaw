@@ -5,11 +5,6 @@ import type { QaProviderMode } from "../../run-config.js";
 import { normalizeQaProviderMode } from "../../run-config.js";
 import type { LiveTransportQaCommandOptions } from "./live-transport-cli.js";
 
-function normalizeLiveTransportModelRef(input: string | undefined) {
-  const model = input?.trim();
-  return model && model.length > 0 ? model : undefined;
-}
-
 export function resolveLiveTransportQaRunOptions(
   opts: LiveTransportQaCommandOptions,
 ): LiveTransportQaCommandOptions & {
@@ -26,8 +21,8 @@ export function resolveLiveTransportQaRunOptions(
       opts.providerMode === undefined
         ? DEFAULT_QA_LIVE_PROVIDER_MODE
         : normalizeQaProviderMode(opts.providerMode),
-    primaryModel: normalizeLiveTransportModelRef(opts.primaryModel),
-    alternateModel: normalizeLiveTransportModelRef(opts.alternateModel),
+    primaryModel: opts.primaryModel,
+    alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
     allowFailures: opts.allowFailures,
     scenarioIds: opts.scenarioIds,

@@ -14,7 +14,7 @@ import {
   parseRegistryNpmSpec,
 } from "./npm-registry-spec.js";
 
-type NpmSpecArchiveInstallFlowResult<TResult extends { ok: boolean }> =
+export type NpmSpecArchiveInstallFlowResult<TResult extends { ok: boolean }> =
   | {
       ok: false;
       error: string;

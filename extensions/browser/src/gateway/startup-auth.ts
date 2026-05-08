@@ -1,1 +1,1 @@
-export { ensureGatewayStartupAuth } from "../sdk-node-runtime.js";
+export { ensureGatewayStartupAuth } from "openclaw/plugin-sdk/browser-node-runtime";

@@ -1,6 +1,6 @@
 export type ToolContentBlock = Record<string, unknown>;
 
-function normalizeToolContentType(value: unknown): string {
+export function normalizeToolContentType(value: unknown): string {
   return typeof value === "string" ? value.toLowerCase() : "";
 }
 

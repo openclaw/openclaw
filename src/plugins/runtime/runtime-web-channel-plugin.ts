@@ -8,19 +8,15 @@ import {
   optimizeImageToJpeg as optimizeImageToJpegImpl,
 } from "../../media/web-media.js";
 import type { PollInput } from "../../polls.js";
+import type { PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import {
-  createPluginModuleLoaderCache,
-  type PluginModuleLoaderCache,
-} from "../plugin-module-loader-cache.js";
-import type { PluginOrigin } from "../plugin-origin.types.js";
-import {
-  loadPluginBoundaryModule,
+  loadPluginBoundaryModuleWithJiti,
   resolvePluginRuntimeRecordByEntryBaseNames,
   resolvePluginRuntimeModulePath,
 } from "./runtime-plugin-boundary.js";
 
 type WebChannelPluginRecord = {
-  origin?: PluginOrigin;
+  origin?: string;
   rootDir?: string;
   source: string;
 };
@@ -98,25 +94,21 @@ type WebChannelHeavyRuntimeModule = {
   ) => Promise<AgentToolResult<unknown>>;
   monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
+  runWebHeartbeatOnce: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
   waitForWaConnection: (sock: unknown) => Promise<void>;
   waitForWebLogin: (...args: unknown[]) => Promise<unknown>;
   extractMediaPlaceholder: (...args: unknown[]) => unknown;
   extractText: (...args: unknown[]) => unknown;
+  resolveHeartbeatRecipients: (...args: unknown[]) => unknown;
 };
 
-type WebChannelRuntimeModuleKind = "heavy" | "light";
-type CachedWebChannelRuntimeModule = {
-  modulePath: string;
-  module: WebChannelHeavyRuntimeModule | WebChannelLightRuntimeModule;
-};
+let cachedHeavyModulePath: string | null = null;
+let cachedHeavyModule: WebChannelHeavyRuntimeModule | null = null;
+let cachedLightModulePath: string | null = null;
+let cachedLightModule: WebChannelLightRuntimeModule | null = null;
 
-const webChannelRuntimeModuleCache = new Map<
-  WebChannelRuntimeModuleKind,
-  CachedWebChannelRuntimeModule
->();
-
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
 
 function resolveWebChannelPluginRecord(): WebChannelPluginRecord {
   return resolvePluginRuntimeRecordByEntryBaseNames(["light-runtime-api", "runtime-api"], () => {
@@ -140,45 +132,43 @@ function resolveWebChannelRuntimeModulePath(
 }
 
 function loadCurrentHeavyModuleSync(): WebChannelHeavyRuntimeModule {
-  const record = resolveWebChannelPluginRecord();
-  const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
-  return loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
-    origin: record.origin,
-  });
-}
-
-function getCachedWebChannelRuntimeModule<T extends CachedWebChannelRuntimeModule["module"]>(
-  kind: WebChannelRuntimeModuleKind,
-  modulePath: string,
-  load: () => T,
-): T {
-  const cached = webChannelRuntimeModuleCache.get(kind);
-  if (cached?.modulePath === modulePath) {
-    return cached.module as T;
-  }
-  const loaded = load();
-  webChannelRuntimeModuleCache.set(kind, { modulePath, module: loaded });
-  return loaded;
+  const modulePath = resolveWebChannelRuntimeModulePath(
+    resolveWebChannelPluginRecord(),
+    "runtime-api",
+  );
+  return loadPluginBoundaryModuleWithJiti<WebChannelHeavyRuntimeModule>(modulePath, jitiLoaders);
 }
 
 function loadWebChannelLightModule(): WebChannelLightRuntimeModule {
-  const record = resolveWebChannelPluginRecord();
-  const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
-  return getCachedWebChannelRuntimeModule("light", modulePath, () =>
-    loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, moduleLoaders, {
-      origin: record.origin,
-    }),
+  const modulePath = resolveWebChannelRuntimeModulePath(
+    resolveWebChannelPluginRecord(),
+    "light-runtime-api",
   );
+  if (cachedLightModule && cachedLightModulePath === modulePath) {
+    return cachedLightModule;
+  }
+  const loaded = loadPluginBoundaryModuleWithJiti<WebChannelLightRuntimeModule>(
+    modulePath,
+    jitiLoaders,
+  );
+  cachedLightModulePath = modulePath;
+  cachedLightModule = loaded;
+  return loaded;
 }
 
 async function loadWebChannelHeavyModule(): Promise<WebChannelHeavyRuntimeModule> {
   const record = resolveWebChannelPluginRecord();
   const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
-  return getCachedWebChannelRuntimeModule("heavy", modulePath, () =>
-    loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
-      origin: record.origin,
-    }),
+  if (cachedHeavyModule && cachedHeavyModulePath === modulePath) {
+    return cachedHeavyModule;
+  }
+  const loaded = loadPluginBoundaryModuleWithJiti<WebChannelHeavyRuntimeModule>(
+    modulePath,
+    jitiLoaders,
   );
+  cachedHeavyModulePath = modulePath;
+  cachedHeavyModule = loaded;
+  return loaded;
 }
 
 function getLightExport<K extends keyof WebChannelLightRuntimeModule>(
@@ -333,6 +323,12 @@ export async function optimizeImageToJpeg(
   return await optimizeImageToJpegImpl(...args);
 }
 
+export async function runWebHeartbeatOnce(
+  ...args: Parameters<WebChannelHeavyRuntimeModule["runWebHeartbeatOnce"]>
+): ReturnType<WebChannelHeavyRuntimeModule["runWebHeartbeatOnce"]> {
+  return (await getHeavyExport("runWebHeartbeatOnce"))(...args);
+}
+
 export async function startWebLoginWithQr(
   ...args: Parameters<WebChannelHeavyRuntimeModule["startWebLoginWithQr"]>
 ): ReturnType<WebChannelHeavyRuntimeModule["startWebLoginWithQr"]> {
@@ -362,4 +358,10 @@ export function getDefaultLocalRoots(
   ...args: Parameters<typeof getDefaultLocalRootsImpl>
 ): ReturnType<typeof getDefaultLocalRootsImpl> {
   return getDefaultLocalRootsImpl(...args);
+}
+
+export function resolveHeartbeatRecipients(
+  ...args: Parameters<WebChannelHeavyRuntimeModule["resolveHeartbeatRecipients"]>
+): ReturnType<WebChannelHeavyRuntimeModule["resolveHeartbeatRecipients"]> {
+  return loadCurrentHeavyModuleSync().resolveHeartbeatRecipients(...args);
 }

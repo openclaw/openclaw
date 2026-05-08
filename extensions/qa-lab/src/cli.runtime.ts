@@ -24,7 +24,6 @@ import {
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import {
   addQaCredentialSet,
-  diagnoseQaCredentialBroker,
   listQaCredentialSets,
   QaCredentialAdminError,
   removeQaCredentialSet,
@@ -125,11 +124,6 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
     throw new Error(`${label} must be a positive integer`);
   }
   return Math.floor(value);
-}
-
-function normalizeQaOptionalModelRef(input: string | undefined) {
-  const model = input?.trim();
-  return model && model.length > 0 ? model : undefined;
 }
 
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
@@ -433,18 +427,6 @@ function printQaCredentialListTable(credentials: QaCredentialRecord[]) {
   }
 }
 
-function printQaCredentialDoctorTable(
-  result: Awaited<ReturnType<typeof diagnoseQaCredentialBroker>>,
-) {
-  process.stdout.write(`QA credentials doctor: ${result.status}\n`);
-  const nameWidth = Math.max("check".length, ...result.checks.map((check) => check.name.length));
-  for (const check of result.checks) {
-    process.stdout.write(
-      `${check.name.padEnd(nameWidth)}  ${check.status.padEnd(4)}  ${check.details ?? ""}\n`,
-    );
-  }
-}
-
 export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output?: string }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const server = await startQaLabServer({
@@ -474,7 +456,6 @@ export async function runQaSuiteCommand(opts: {
   scenarioIds?: string[];
   concurrency?: number;
   allowFailures?: boolean;
-  enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
   memory?: string;
@@ -494,8 +475,6 @@ export async function runQaSuiteCommand(opts: {
   }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
-  const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
-  const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
   if (opts.preflight === true && runner !== "host") {
     throw new Error("--preflight requires --runner host.");
   }
@@ -518,8 +497,8 @@ export async function runQaSuiteCommand(opts: {
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       transportId,
       providerMode,
-      primaryModel,
-      alternateModel,
+      primaryModel: opts.primaryModel,
+      alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
       ...(thinkingDefault ? { thinkingDefault } : {}),
       allowFailures: true,
@@ -550,8 +529,8 @@ export async function runQaSuiteCommand(opts: {
       repoRoot,
       transportId,
       providerMode,
-      primaryModel,
-      alternateModel,
+      primaryModel: opts.primaryModel,
+      alternateModel: opts.alternateModel,
       allowFailures,
     });
     return;
@@ -562,13 +541,12 @@ export async function runQaSuiteCommand(opts: {
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     transportId,
     providerMode,
-    primaryModel,
-    alternateModel,
+    primaryModel: opts.primaryModel,
+    alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
     ...(thinkingDefault ? { thinkingDefault } : {}),
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
     scenarioIds,
-    ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
     ...(opts.concurrency !== undefined
       ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
       : {}),
@@ -859,27 +837,6 @@ export async function runQaCredentialsListCommand(opts: {
       return;
     }
     throw error;
-  }
-}
-
-export async function runQaCredentialsDoctorCommand(opts: {
-  actorId?: string;
-  endpointPrefix?: string;
-  json?: boolean;
-  siteUrl?: string;
-}) {
-  const result = await diagnoseQaCredentialBroker({
-    actorId: opts.actorId,
-    endpointPrefix: opts.endpointPrefix,
-    siteUrl: opts.siteUrl,
-  });
-  if (opts.json) {
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  } else {
-    printQaCredentialDoctorTable(result);
-  }
-  if (result.status === "fail") {
-    process.exitCode = 1;
   }
 }
 

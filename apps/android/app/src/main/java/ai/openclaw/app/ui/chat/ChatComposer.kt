@@ -1,18 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentBorderStrong
-import ai.openclaw.app.ui.mobileAccentSoft
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileHeadline
-import ai.openclaw.app.ui.mobileSurface
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileTextTertiary
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -59,6 +46,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
+import ai.openclaw.app.ui.mobileAccentSoft
+import ai.openclaw.app.ui.mobileBorder
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileHeadline
+import ai.openclaw.app.ui.mobileSurface
+import ai.openclaw.app.ui.mobileText
+import ai.openclaw.app.ui.mobileTextSecondary
+import ai.openclaw.app.ui.mobileTextTertiary
 
 internal data class DraftApplication(
   val input: String,
@@ -168,12 +168,7 @@ fun ChatComposer(
               style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
               color = mobileTextSecondary,
             )
-            Icon(
-              Icons.Default.ArrowDropDown,
-              contentDescription = "Select thinking level",
-              modifier = Modifier.size(18.dp),
-              tint = mobileTextTertiary,
-            )
+            Icon(Icons.Default.ArrowDropDown, contentDescription = "Select thinking level", modifier = Modifier.size(18.dp), tint = mobileTextTertiary)
           }
         }
 
@@ -313,13 +308,14 @@ private fun ThinkingMenuItem(
   )
 }
 
-private fun thinkingLabel(raw: String): String =
-  when (raw.trim().lowercase()) {
+private fun thinkingLabel(raw: String): String {
+  return when (raw.trim().lowercase()) {
     "low" -> "Low"
     "medium" -> "Medium"
     "high" -> "High"
     else -> "Off"
   }
+}
 
 @Composable
 private fun AttachmentsStrip(
@@ -340,10 +336,7 @@ private fun AttachmentsStrip(
 }
 
 @Composable
-private fun AttachmentChip(
-  fileName: String,
-  onRemove: () -> Unit,
-) {
+private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
   Surface(
     shape = RoundedCornerShape(999.dp),
     color = mobileAccentSoft,

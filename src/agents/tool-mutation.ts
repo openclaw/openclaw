@@ -52,12 +52,12 @@ const MESSAGE_MUTATING_ACTIONS = new Set([
   "unpin",
 ]);
 
-type ToolMutationState = {
+export type ToolMutationState = {
   mutatingAction: boolean;
   actionFingerprint?: string;
 };
 
-type ToolActionRef = {
+export type ToolActionRef = {
   toolName: string;
   meta?: string;
   actionFingerprint?: string;

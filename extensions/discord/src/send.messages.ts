@@ -1,20 +1,5 @@
 import type { APIChannel, APIMessage } from "discord-api-types/v10";
-import { ChannelType } from "discord-api-types/v10";
-import {
-  createChannelMessage,
-  createThread,
-  deleteChannelMessage,
-  editChannelMessage,
-  getChannel,
-  getChannelMessage,
-  listChannelArchivedThreads,
-  listGuildActiveThreads,
-  listChannelMessages,
-  listChannelPins,
-  pinChannelMessage,
-  searchGuildMessages,
-  unpinChannelMessage,
-} from "./internal/discord.js";
+import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordMessageEdit,
@@ -25,29 +10,10 @@ import type {
   DiscordThreadList,
 } from "./send.types.js";
 
-function formatDiscordThreadInitialMessageError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export class DiscordThreadInitialMessageError extends Error {
-  readonly initialMessageError: string;
-  readonly thread: APIChannel;
-
-  constructor(thread: APIChannel, error: unknown) {
-    const initialMessageError = formatDiscordThreadInitialMessageError(error);
-    super(
-      `Discord thread was created, but sending the initial message failed: ${initialMessageError}`,
-    );
-    this.name = "DiscordThreadInitialMessageError";
-    this.initialMessageError = initialMessageError;
-    this.thread = thread;
-  }
-}
-
 export async function readMessagesDiscord(
   channelId: string,
   query: DiscordMessageQuery = {},
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts = {},
 ): Promise<APIMessage[]> {
   const rest = resolveDiscordRest(opts);
   const limit =
@@ -67,72 +33,72 @@ export async function readMessagesDiscord(
   if (query.around) {
     params.around = query.around;
   }
-  return await listChannelMessages(rest, channelId, params);
+  return (await rest.get(Routes.channelMessages(channelId), params)) as APIMessage[];
 }
 
 export async function fetchMessageDiscord(
   channelId: string,
   messageId: string,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts = {},
 ): Promise<APIMessage> {
   const rest = resolveDiscordRest(opts);
-  return await getChannelMessage(rest, channelId, messageId);
+  return (await rest.get(Routes.channelMessage(channelId, messageId))) as APIMessage;
 }
 
 export async function editMessageDiscord(
   channelId: string,
   messageId: string,
   payload: DiscordMessageEdit,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts = {},
 ): Promise<APIMessage> {
   const rest = resolveDiscordRest(opts);
-  return await editChannelMessage(rest, channelId, messageId, {
+  return (await rest.patch(Routes.channelMessage(channelId, messageId), {
     body: { content: payload.content },
-  });
+  })) as APIMessage;
 }
 
 export async function deleteMessageDiscord(
   channelId: string,
   messageId: string,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts = {},
 ) {
   const rest = resolveDiscordRest(opts);
-  await deleteChannelMessage(rest, channelId, messageId);
+  await rest.delete(Routes.channelMessage(channelId, messageId));
   return { ok: true };
 }
 
 export async function pinMessageDiscord(
   channelId: string,
   messageId: string,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts = {},
 ) {
   const rest = resolveDiscordRest(opts);
-  await pinChannelMessage(rest, channelId, messageId);
+  await rest.put(Routes.channelPin(channelId, messageId));
   return { ok: true };
 }
 
 export async function unpinMessageDiscord(
   channelId: string,
   messageId: string,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts = {},
 ) {
   const rest = resolveDiscordRest(opts);
-  await unpinChannelMessage(rest, channelId, messageId);
+  await rest.delete(Routes.channelPin(channelId, messageId));
   return { ok: true };
 }
 
 export async function listPinsDiscord(
   channelId: string,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts = {},
 ): Promise<APIMessage[]> {
   const rest = resolveDiscordRest(opts);
-  return await listChannelPins(rest, channelId);
+  return (await rest.get(Routes.channelPins(channelId))) as APIMessage[];
 }
 
 export async function createThreadDiscord(
   channelId: string,
   payload: DiscordThreadCreate,
-  opts: DiscordReactOpts,
+  opts: DiscordReactOpts = {},
 ) {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = { name: payload.name };
@@ -147,7 +113,7 @@ export async function createThreadDiscord(
     // Only detect channel kind for route-less thread creation.
     // If this lookup fails, keep prior behavior and let Discord validate.
     try {
-      const channel = await getChannel(rest, channelId);
+      const channel = (await rest.get(Routes.channel(channelId))) as APIChannel | null | undefined;
       channelType = channel?.type;
     } catch {
       channelType = undefined;
@@ -168,24 +134,23 @@ export async function createThreadDiscord(
   if (!payload.messageId && !isForumLike && body.type === undefined) {
     body.type = ChannelType.PublicThread;
   }
-  const thread = await createThread(rest, channelId, { body }, payload.messageId);
+  const route = payload.messageId
+    ? Routes.threads(channelId, payload.messageId)
+    : Routes.threads(channelId);
+  const thread = (await rest.post(route, { body })) as { id: string };
 
   // For non-forum channels, send the initial message separately after thread creation.
   // Forum channels handle this via the `message` field in the request body.
-  if (!isForumLike && payload.content?.trim() && "id" in thread) {
-    try {
-      await createChannelMessage(rest, thread.id, {
-        body: { content: payload.content },
-      });
-    } catch (error) {
-      throw new DiscordThreadInitialMessageError(thread, error);
-    }
+  if (!isForumLike && payload.content?.trim()) {
+    await rest.post(Routes.channelMessages(thread.id), {
+      body: { content: payload.content },
+    });
   }
 
   return thread;
 }
 
-export async function listThreadsDiscord(payload: DiscordThreadList, opts: DiscordReactOpts) {
+export async function listThreadsDiscord(payload: DiscordThreadList, opts: DiscordReactOpts = {}) {
   const rest = resolveDiscordRest(opts);
   if (payload.includeArchived) {
     if (!payload.channelId) {
@@ -198,12 +163,15 @@ export async function listThreadsDiscord(payload: DiscordThreadList, opts: Disco
     if (payload.limit) {
       params.limit = payload.limit;
     }
-    return await listChannelArchivedThreads(rest, payload.channelId, params);
+    return await rest.get(Routes.channelThreads(payload.channelId, "public"), params);
   }
-  return await listGuildActiveThreads(rest, payload.guildId);
+  return await rest.get(Routes.guildActiveThreads(payload.guildId));
 }
 
-export async function searchMessagesDiscord(query: DiscordSearchQuery, opts: DiscordReactOpts) {
+export async function searchMessagesDiscord(
+  query: DiscordSearchQuery,
+  opts: DiscordReactOpts = {},
+) {
   const rest = resolveDiscordRest(opts);
   const params = new URLSearchParams();
   params.set("content", query.content);
@@ -221,5 +189,5 @@ export async function searchMessagesDiscord(query: DiscordSearchQuery, opts: Dis
     const limit = Math.min(Math.max(Math.floor(query.limit), 1), 25);
     params.set("limit", String(limit));
   }
-  return await searchGuildMessages(rest, query.guildId, params);
+  return await rest.get(`/guilds/${query.guildId}/messages/search?${params.toString()}`);
 }

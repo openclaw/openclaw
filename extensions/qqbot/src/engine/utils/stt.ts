@@ -14,7 +14,7 @@ import {
   sanitizeFileName,
 } from "./string-normalize.js";
 
-interface STTConfig {
+export interface STTConfig {
   baseUrl: string;
   apiKey: string;
   model: string;

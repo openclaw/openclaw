@@ -8,6 +8,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import {
   applySetupAccountConfigPatch,
+  clearSetupPromotionRuntimeModuleCache,
   createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -83,6 +84,7 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+  clearSetupPromotionRuntimeModuleCache();
   resetPluginRuntimeStateForTest();
 });
 

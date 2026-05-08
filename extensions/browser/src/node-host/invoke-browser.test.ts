@@ -17,23 +17,20 @@ const configMocks = vi.hoisted(() => ({
     browser: {},
     nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
   })),
-  sourceConfig: null as Record<string, unknown> | null,
 }));
 
 const browserConfigMocks = vi.hoisted(() => ({
-  resolveBrowserConfig: vi.fn((browser?: { defaultProfile?: string }) => ({
+  resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
-    defaultProfile: browser?.defaultProfile ?? "openclaw",
+    defaultProfile: "openclaw",
   })),
 }));
 
-vi.mock("../sdk-config.js", () => ({
-  getRuntimeConfig: configMocks.loadConfig,
-  getRuntimeConfigSourceSnapshot: () => configMocks.sourceConfig,
+vi.mock("openclaw/plugin-sdk/browser-config-runtime", () => ({
   loadConfig: configMocks.loadConfig,
 }));
 
-vi.mock("../sdk-node-runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/browser-node-runtime", () => ({
   withTimeout: vi.fn(
     async (
       run: (signal: AbortSignal | undefined) => Promise<unknown>,
@@ -68,7 +65,7 @@ vi.mock("../sdk-node-runtime.js", () => ({
   ),
 }));
 
-vi.mock("../sdk-setup-tools.js", () => ({
+vi.mock("openclaw/plugin-sdk/browser-setup-tools", () => ({
   detectMime: vi.fn(async () => "image/png"),
 }));
 
@@ -152,7 +149,6 @@ describe("runBrowserProxyCommand", () => {
     }));
     controlServiceMocks.createBrowserControlContext.mockReset().mockReturnValue({ control: true });
     controlServiceMocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue(true);
-    configMocks.sourceConfig = null;
     configMocks.loadConfig.mockReset().mockReturnValue({
       browser: {},
       nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
@@ -305,41 +301,6 @@ describe("runBrowserProxyCommand", () => {
       ),
     ).rejects.toThrow("INVALID_REQUEST: browser profile not allowed");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
-  });
-
-  it("uses the browser source snapshot for proxy default-profile decisions", async () => {
-    configMocks.loadConfig.mockReturnValue({
-      browser: { defaultProfile: "openclaw" },
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["work"] } },
-    });
-    configMocks.sourceConfig = {
-      browser: { defaultProfile: "work" },
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["work"] } },
-    };
-    browserConfigMocks.resolveBrowserConfig.mockImplementation(
-      (browser?: { defaultProfile?: string }) => ({
-        enabled: true,
-        defaultProfile: browser?.defaultProfile ?? "openclaw",
-      }),
-    );
-    dispatcherMocks.dispatch.mockResolvedValue({
-      status: 200,
-      body: { ok: true },
-    });
-
-    await runBrowserProxyCommand(
-      JSON.stringify({
-        method: "GET",
-        path: "/snapshot",
-        timeoutMs: 50,
-      }),
-    );
-
-    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "/snapshot",
-      }),
-    );
   });
 
   it("rejects unauthorized body.profile when allowProfiles is configured", async () => {

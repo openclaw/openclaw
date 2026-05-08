@@ -295,7 +295,6 @@ export function createMatrixNamedAccountsConfig(params: {
     {
       homeserver: string;
       accessToken?: string;
-      encryption?: boolean;
     }
   >;
 }): CoreConfig {

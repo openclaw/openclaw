@@ -1,16 +1,98 @@
-import { resolveRouteTargetForLoadedChannel } from "../channels/plugins/target-parsing-loaded.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveComparableTargetForLoadedChannel } from "../channels/plugins/target-parsing-loaded.js";
 import {
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-} from "../utils/delivery-context.shared.js";
-import type {
-  DeliveryContext,
-  DeliveryContextSessionSource,
-} from "../utils/delivery-context.types.js";
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
-export type { DeliveryContext } from "../utils/delivery-context.types.js";
+
+export type DeliveryContext = {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
+type DeliveryContextSource = {
+  channel?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+  origin?: {
+    provider?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+  deliveryContext?: DeliveryContext;
+};
+
+function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const normalized: DeliveryContext = {
+    channel: normalizeOptionalLowercaseString(context.channel),
+    to: normalizeOptionalString(context.to),
+    accountId: normalizeOptionalString(context.accountId),
+  };
+  const threadId = normalizeOptionalThreadValue(context.threadId);
+  if (threadId != null) {
+    normalized.threadId = threadId;
+  }
+  if (
+    !normalized.channel &&
+    !normalized.to &&
+    !normalized.accountId &&
+    normalized.threadId == null
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function mergeDeliveryContext(
+  primary?: DeliveryContext,
+  fallback?: DeliveryContext,
+): DeliveryContext | undefined {
+  const normalizedPrimary = normalizeDeliveryContext(primary);
+  const normalizedFallback = normalizeDeliveryContext(fallback);
+  if (!normalizedPrimary && !normalizedFallback) {
+    return undefined;
+  }
+  const channelsConflict =
+    normalizedPrimary?.channel &&
+    normalizedFallback?.channel &&
+    normalizedPrimary.channel !== normalizedFallback.channel;
+  return normalizeDeliveryContext({
+    channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
+    to: channelsConflict
+      ? normalizedPrimary?.to
+      : (normalizedPrimary?.to ?? normalizedFallback?.to),
+    accountId: channelsConflict
+      ? normalizedPrimary?.accountId
+      : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
+    threadId: channelsConflict
+      ? normalizedPrimary?.threadId
+      : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
+  });
+}
+
+function deliveryContextFromSession(entry?: DeliveryContextSource): DeliveryContext | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  return normalizeDeliveryContext({
+    channel:
+      entry.deliveryContext?.channel ??
+      entry.lastChannel ??
+      entry.channel ??
+      entry.origin?.provider,
+    to: entry.deliveryContext?.to ?? entry.lastTo,
+    accountId: entry.deliveryContext?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
+    threadId: entry.deliveryContext?.threadId ?? entry.lastThreadId ?? entry.origin?.threadId,
+  });
+}
 
 function stripThreadRouteSuffix(target: string): string {
   return /^(.*):topic:[^:]+$/u.exec(target)?.[1] ?? target;
@@ -21,9 +103,9 @@ function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undef
   if (!rawTo) {
     return undefined;
   }
-  const channel = normalizeOptionalString(context?.channel);
+  const channel = normalizeOptionalLowercaseString(context?.channel);
   const parsed = channel
-    ? resolveRouteTargetForLoadedChannel({
+    ? resolveComparableTargetForLoadedChannel({
         channel,
         rawTarget: rawTo,
         fallbackThreadId: context?.threadId,
@@ -59,7 +141,7 @@ function shouldStripThreadFromAnnounceEntry(
 }
 
 export function resolveAnnounceOrigin(
-  entry?: DeliveryContextSessionSource,
+  entry?: DeliveryContextSource,
   requesterOrigin?: DeliveryContext,
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);

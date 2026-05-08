@@ -1,6 +1,6 @@
 import type { QaProviderMode } from "./model-selection.js";
 
-type QaSuiteSummaryScenario = {
+export type QaSuiteSummaryScenario = {
   name: string;
   status: "pass" | "fail";
   steps: unknown[];
@@ -13,14 +13,6 @@ export type QaSuiteSummaryJson = {
     total: number;
     passed: number;
     failed: number;
-  };
-  metrics?: {
-    wallMs: number;
-    gatewayProcessCpuMs?: number | null;
-    gatewayCpuCoreRatio?: number | null;
-    gatewayProcessRssStartBytes?: number | null;
-    gatewayProcessRssEndBytes?: number | null;
-    gatewayProcessRssDeltaBytes?: number | null;
   };
   run: {
     startedAt: string;

@@ -1,5 +1,11 @@
 export {
+  chunkMarkdownTextWithMode,
   createReplyDispatcherWithTyping,
+  createReplyReferencePlanner,
   dispatchInboundMessage,
-  settleReplyDispatcher,
+  finalizeInboundContext,
+  getReplyFromConfig,
+  isSilentReplyText,
+  resolveTextChunkLimit,
+  SILENT_REPLY_TOKEN,
 } from "openclaw/plugin-sdk/reply-runtime";

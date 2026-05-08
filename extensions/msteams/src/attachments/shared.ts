@@ -34,12 +34,12 @@ type InlineImageLimitOptions = {
   maxInlineTotalBytes?: number;
 };
 
-const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
+export const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
 export const IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
 export const ATTACHMENT_TAG_RE = /<attachment[^>]+id=["']([^"']+)["'][^>]*>/gi;
 
-const DEFAULT_MEDIA_HOST_ALLOWLIST = [
+export const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "graph.microsoft.com",
   "graph.microsoft.us",
   "graph.microsoft.de",
@@ -67,7 +67,7 @@ const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "microsoft.com",
 ] as const;
 
-const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
+export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   "api.botframework.com",
   "botframework.com",
   // Bot Framework Service URL (smba.trafficmanager.net) used for outbound

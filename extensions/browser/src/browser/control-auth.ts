@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { getRuntimeConfig, replaceConfigFile } from "../config/config.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
@@ -24,18 +24,10 @@ export function resolveBrowserControlAuth(
   });
   const token = normalizeOptionalString(auth.token) ?? "";
   const password = normalizeOptionalString(auth.password) ?? "";
-  const mode = auth.mode;
-
-  switch (mode) {
-    case "password":
-    case "trusted-proxy":
-      return { password: password || undefined };
-    case "token":
-    case "none":
-      return { token: token || undefined };
-    default:
-      return {};
-  }
+  return {
+    token: token || undefined,
+    password: password || undefined,
+  };
 }
 
 export function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
@@ -87,13 +79,10 @@ async function generateAndPersistBrowserControlToken(params: {
       },
     },
   };
-  await replaceConfigFile({
-    nextConfig: nextCfg,
-    afterWrite: { mode: "auto" },
-  });
+  await writeConfigFile(nextCfg);
 
   // Re-read to stay consistent with any concurrent config writer.
-  const persistedAuth = resolveBrowserControlAuth(getRuntimeConfig(), params.env);
+  const persistedAuth = resolveBrowserControlAuth(loadConfig(), params.env);
   if (persistedAuth.token || persistedAuth.password) {
     return {
       auth: persistedAuth,
@@ -122,13 +111,10 @@ async function generateAndPersistBrowserControlPassword(params: {
       },
     },
   };
-  await replaceConfigFile({
-    nextConfig: nextCfg,
-    afterWrite: { mode: "auto" },
-  });
+  await writeConfigFile(nextCfg);
 
   // Re-read to stay consistent with any concurrent config writer.
-  const persistedAuth = resolveBrowserControlAuth(getRuntimeConfig(), params.env);
+  const persistedAuth = resolveBrowserControlAuth(loadConfig(), params.env);
   if (persistedAuth.token || persistedAuth.password) {
     return {
       auth: persistedAuth,
@@ -161,7 +147,7 @@ export async function ensureBrowserControlAuth(params: {
   }
 
   // Re-read latest config to avoid racing with concurrent config writers.
-  const latestCfg = getRuntimeConfig();
+  const latestCfg = loadConfig();
   const latestAuth = resolveBrowserControlAuth(latestCfg, env);
   if (latestAuth.token || latestAuth.password) {
     return { auth: latestAuth };

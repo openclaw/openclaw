@@ -38,7 +38,7 @@ describe("minimax model definitions", () => {
       id: "MiniMax-M2.7",
       name: "MiniMax M2.7",
       reasoning: true,
-      input: ["text"],
+      input: ["text", "image"], // M2.7 supports images
     });
   });
 
@@ -62,7 +62,7 @@ describe("minimax model definitions", () => {
     expect(model.cost).toEqual(MINIMAX_API_COST);
     expect(model.contextWindow).toBe(DEFAULT_MINIMAX_CONTEXT_WINDOW);
     expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
-    expect(model.input).toEqual(["text"]);
+    expect(model.input).toEqual(["text", "image"]);
   });
 
   it("falls back to generated name for unknown model id", () => {
@@ -71,14 +71,14 @@ describe("minimax model definitions", () => {
     expect(model.reasoning).toBe(false);
   });
 
-  it("keeps M2.7 text-only on the Anthropic-compatible chat path", () => {
+  it("M2.7 model includes image input", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7");
-    expect(model.input).toEqual(["text"]);
+    expect(model.input).toEqual(["text", "image"]);
   });
 
-  it("keeps M2.7-highspeed text-only on the Anthropic-compatible chat path", () => {
+  it("M2.7-highspeed model includes image input", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7-highspeed");
-    expect(model.input).toEqual(["text"]);
+    expect(model.input).toEqual(["text", "image"]);
     expect(model.cost).toEqual(MINIMAX_API_HIGHSPEED_COST);
   });
 

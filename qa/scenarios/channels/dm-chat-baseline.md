@@ -48,6 +48,5 @@ steps:
           - lambda:
               params: [candidate]
               expr: "candidate.conversation.id === 'alice'"
-          - expr: liveTurnTimeoutMs(env, 45000)
     detailsExpr: outbound.text
 ```

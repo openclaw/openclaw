@@ -92,7 +92,6 @@ function slugifyPluginId(raw: string | undefined, rootDir: string): string {
 
 function loadBundleManifestFile(params: {
   rootDir: string;
-  rootRealPath?: string;
   manifestRelativePath: string;
   rejectHardlinks: boolean;
   allowMissing?: boolean;
@@ -101,7 +100,6 @@ function loadBundleManifestFile(params: {
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
     rootPath: params.rootDir,
-    ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
     boundaryLabel: "plugin root",
     rejectHardlinks: params.rejectHardlinks,
   });
@@ -329,7 +327,6 @@ function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string):
 
 export function loadBundleManifest(params: {
   rootDir: string;
-  rootRealPath?: string;
   bundleFormat: PluginBundleFormat;
   rejectHardlinks?: boolean;
 }): BundleManifestLoadResult {
@@ -342,7 +339,6 @@ export function loadBundleManifest(params: {
         : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
   const loaded = loadBundleManifestFile({
     rootDir: params.rootDir,
-    ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
     manifestRelativePath,
     rejectHardlinks,
     allowMissing: params.bundleFormat === "claude",

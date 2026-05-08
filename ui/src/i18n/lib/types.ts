@@ -10,16 +10,11 @@ export type Locale =
   | "ja-JP"
   | "ko"
   | "fr"
-  | "ar"
-  | "it"
   | "tr"
   | "uk"
   | "id"
   | "pl"
-  | "th"
-  | "vi"
-  | "nl"
-  | "fa";
+  | "th";
 
 export interface I18nConfig {
   locale: Locale;

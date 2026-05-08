@@ -5,7 +5,6 @@ import {
   ensureConfigReady,
   installBaseProgramMocks,
   installSmokeProgramMocks,
-  runCrestodian,
   runTui,
   runtime,
   setupCommand,
@@ -40,7 +39,6 @@ describe("cli program (smoke)", () => {
     program = createProgram();
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
-    runCrestodian.mockResolvedValue(undefined);
     ensureConfigReady.mockResolvedValue(undefined);
   });
 
@@ -53,13 +51,6 @@ describe("cli program (smoke)", () => {
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
     expect(runTui).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45000 }));
-  });
-
-  it("runs crestodian one-shot requests", async () => {
-    await runProgram(["crestodian", "--message", "status"]);
-    expect(runCrestodian).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "status", yes: false, json: false }),
-    );
   });
 
   it("warns and ignores invalid tui timeout override", async () => {

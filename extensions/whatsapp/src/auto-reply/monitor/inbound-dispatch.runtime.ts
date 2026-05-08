@@ -5,7 +5,6 @@ export {
   getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,
-  resolveChannelSourceReplyDeliveryMode,
   resolveChunkMode,
   resolveIdentityNamePrefix,
   resolveInboundLastRouteSessionKey,

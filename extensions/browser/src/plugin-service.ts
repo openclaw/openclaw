@@ -2,7 +2,7 @@ import {
   startLazyPluginServiceModule,
   type LazyPluginServiceHandle,
   type OpenClawPluginService,
-} from "./sdk-node-runtime.js";
+} from "openclaw/plugin-sdk/browser-node-runtime";
 
 type BrowserControlHandle = LazyPluginServiceHandle | null;
 const UNSAFE_BROWSER_CONTROL_OVERRIDE_SPECIFIER = /^(?:data|http|https|node):/i;

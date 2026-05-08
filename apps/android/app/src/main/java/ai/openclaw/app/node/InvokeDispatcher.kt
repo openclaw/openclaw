@@ -2,10 +2,10 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
-import ai.openclaw.app.protocol.OpenClawCallLogCommand
-import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.app.protocol.OpenClawCanvasCommand
+import ai.openclaw.app.protocol.OpenClawCameraCommand
+import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
@@ -34,8 +34,8 @@ internal fun smsSearchAvailabilityError(
   readSmsAvailable: Boolean,
   smsFeatureEnabled: Boolean,
   smsTelephonyAvailable: Boolean,
-): GatewaySession.InvokeResult? =
-  when (
+): GatewaySession.InvokeResult? {
+  return when (
     classifySmsSearchAvailability(
       readSmsAvailable = readSmsAvailable,
       smsFeatureEnabled = smsFeatureEnabled,
@@ -43,14 +43,14 @@ internal fun smsSearchAvailabilityError(
     )
   ) {
     SmsSearchAvailabilityReason.Available,
-    SmsSearchAvailabilityReason.PermissionRequired,
-    -> null
+    SmsSearchAvailabilityReason.PermissionRequired -> null
     SmsSearchAvailabilityReason.Unavailable ->
       GatewaySession.InvokeResult.error(
         code = "SMS_UNAVAILABLE",
         message = "SMS_UNAVAILABLE: SMS not available on this device",
       )
   }
+}
 
 class InvokeDispatcher(
   private val canvas: CanvasController,
@@ -82,10 +82,7 @@ class InvokeDispatcher(
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
 ) {
-  suspend fun handleInvoke(
-    command: String,
-    paramsJson: String?,
-  ): GatewaySession.InvokeResult {
+  suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
     val spec =
       InvokeCommandRegistry.find(command)
         ?: return GatewaySession.InvokeResult.error(
@@ -154,7 +151,7 @@ class InvokeDispatcher(
           } catch (err: Throwable) {
             return GatewaySession.InvokeResult.error(
               code = "INVALID_REQUEST",
-              message = err.message ?: "invalid A2UI payload",
+              message = err.message ?: "invalid A2UI payload"
             )
           }
         withReadyA2ui {
@@ -189,10 +186,9 @@ class InvokeDispatcher(
       OpenClawSystemCommand.Notify.rawValue -> systemHandler.handleSystemNotify(paramsJson)
 
       // Photos command
-      ai.openclaw.app.protocol.OpenClawPhotosCommand.Latest.rawValue ->
-        photosHandler.handlePhotosLatest(
-          paramsJson,
-        )
+      ai.openclaw.app.protocol.OpenClawPhotosCommand.Latest.rawValue -> photosHandler.handlePhotosLatest(
+        paramsJson,
+      )
 
       // Contacts command
       OpenClawContactsCommand.Search.rawValue -> contactsHandler.handleContactsSearch(paramsJson)
@@ -220,13 +216,14 @@ class InvokeDispatcher(
     }
   }
 
-  private suspend fun withReadyA2ui(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult {
-    var a2uiUrl =
-      a2uiHandler.resolveA2uiHostUrl()
-        ?: return GatewaySession.InvokeResult.error(
-          code = "A2UI_HOST_NOT_CONFIGURED",
-          message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
-        )
+  private suspend fun withReadyA2ui(
+    block: suspend () -> GatewaySession.InvokeResult,
+  ): GatewaySession.InvokeResult {
+    var a2uiUrl = a2uiHandler.resolveA2uiHostUrl()
+      ?: return GatewaySession.InvokeResult.error(
+        code = "A2UI_HOST_NOT_CONFIGURED",
+        message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
+      )
     val readyOnFirstCheck = a2uiHandler.ensureA2uiReady(a2uiUrl)
     if (!readyOnFirstCheck) {
       if (!refreshNodeCanvasCapability()) {
@@ -250,8 +247,10 @@ class InvokeDispatcher(
     return block()
   }
 
-  private suspend fun withCanvasAvailable(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
-    try {
+  private suspend fun withCanvasAvailable(
+    block: suspend () -> GatewaySession.InvokeResult,
+  ): GatewaySession.InvokeResult {
+    return try {
       block()
     } catch (_: Throwable) {
       GatewaySession.InvokeResult.error(
@@ -259,9 +258,10 @@ class InvokeDispatcher(
         message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
       )
     }
+  }
 
-  private fun availabilityError(availability: InvokeCommandAvailability): GatewaySession.InvokeResult? =
-    when (availability) {
+  private fun availabilityError(availability: InvokeCommandAvailability): GatewaySession.InvokeResult? {
+    return when (availability) {
       InvokeCommandAvailability.Always -> null
       InvokeCommandAvailability.CameraEnabled ->
         if (cameraEnabled()) {
@@ -309,8 +309,7 @@ class InvokeDispatcher(
           )
         }
       InvokeCommandAvailability.ReadSmsAvailable,
-      InvokeCommandAvailability.RequestableSmsSearchAvailable,
-      ->
+      InvokeCommandAvailability.RequestableSmsSearchAvailable ->
         smsSearchAvailabilityError(
           readSmsAvailable = readSmsAvailable(),
           smsFeatureEnabled = smsFeatureEnabled(),
@@ -335,4 +334,5 @@ class InvokeDispatcher(
           )
         }
     }
+  }
 }

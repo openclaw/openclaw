@@ -10,7 +10,7 @@ const gatewayRpcMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
+vi.mock("./runtime-api.js", () => ({
   callGatewayFromCli: gatewayRpcMock.callGatewayFromCli,
 }));
 
@@ -51,12 +51,8 @@ describe("startQaGatewayRpcClient", () => {
       },
       { prompt: "hi" },
       {
-        clientName: "gateway-client",
-        deviceIdentity: null,
         expectFinal: true,
-        mode: "backend",
         progress: false,
-        scopes: ["operator.admin"],
       },
     );
 
@@ -128,12 +124,8 @@ describe("startQaGatewayRpcClient", () => {
       },
       {},
       {
-        clientName: "gateway-client",
-        deviceIdentity: null,
         expectFinal: undefined,
-        mode: "backend",
         progress: false,
-        scopes: ["operator.admin"],
       },
     );
 

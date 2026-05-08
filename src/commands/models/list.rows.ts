@@ -1,25 +1,22 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import {
-  shouldSuppressBuiltInModel,
-  shouldSuppressBuiltInModelFromManifest,
-} from "../../agents/model-suppression.js";
+import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { ModelListAuthIndex } from "./list.auth-index.js";
 import type { ListRowModel } from "./list.model-row.js";
-import { toModelRow } from "./list.model-row.js";
+import { toModelRow } from "./list.registry.js";
+import {
+  loadModelCatalog,
+  loadProviderCatalogModelsForList,
+  resolveModelWithRegistry,
+} from "./list.runtime.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 import { isLocalBaseUrl, modelKey } from "./shared.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
-type ModelCatalogModule = typeof import("../../agents/model-catalog.js");
-type ModelResolverModule = typeof import("../../agents/pi-embedded-runner/model.js");
-type ProviderCatalogModule = typeof import("./list.provider-catalog.js");
 
 type RowFilter = {
   provider?: string;
@@ -29,35 +26,13 @@ type RowFilter = {
 export type RowBuilderContext = {
   cfg: OpenClawConfig;
   agentDir: string;
-  authIndex: ModelListAuthIndex;
+  authStore: AuthProfileStore;
   availableKeys?: Set<string>;
   configuredByKey: ConfiguredByKey;
   discoveredKeys: Set<string>;
   filter: RowFilter;
   skipRuntimeModelSuppression?: boolean;
 };
-
-const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
-  () => import("../../agents/model-catalog.js"),
-);
-const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
-  () => import("../../agents/pi-embedded-runner/model.js"),
-);
-const providerCatalogModuleLoader = createLazyImportLoader<ProviderCatalogModule>(
-  () => import("./list.provider-catalog.js"),
-);
-
-function loadModelCatalogModule(): Promise<ModelCatalogModule> {
-  return modelCatalogModuleLoader.load();
-}
-
-function loadModelResolverModule(): Promise<ModelResolverModule> {
-  return modelResolverModuleLoader.load();
-}
-
-function loadProviderCatalogModule(): Promise<ProviderCatalogModule> {
-  return providerCatalogModuleLoader.load();
-}
 
 function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?: string }) {
   if (filter.provider && normalizeProviderId(model.provider) !== filter.provider) {
@@ -69,25 +44,22 @@ function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?
   return true;
 }
 
-async function buildRow(params: {
+function buildRow(params: {
   model: ListRowModel;
   key: string;
   context: RowBuilderContext;
   allowProviderAvailabilityFallback?: boolean;
-}): Promise<ModelRow> {
+}): ModelRow {
   const configured = params.context.configuredByKey.get(params.key);
-  const shouldResolveProviderAuth =
-    params.context.availableKeys === undefined || params.allowProviderAvailabilityFallback === true;
   return toModelRow({
     model: params.model,
     key: params.key,
     tags: configured ? Array.from(configured.tags) : [],
     aliases: configured?.aliases ?? [],
     availableKeys: params.context.availableKeys,
+    cfg: params.context.cfg,
+    authStore: params.context.authStore,
     allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback ?? false,
-    hasAuthForProvider: shouldResolveProviderAuth
-      ? (provider) => params.context.authIndex.hasProviderAuth(provider)
-      : undefined,
   });
 }
 
@@ -96,11 +68,7 @@ function shouldSuppressListModel(params: {
   context: RowBuilderContext;
 }): boolean {
   if (params.context.skipRuntimeModelSuppression) {
-    return shouldSuppressBuiltInModelFromManifest({
-      provider: params.model.provider,
-      id: params.model.id,
-      config: params.context.cfg,
-    });
+    return false;
   }
   return shouldSuppressBuiltInModel({
     provider: params.model.provider,
@@ -110,29 +78,25 @@ function shouldSuppressListModel(params: {
   });
 }
 
-async function appendVisibleRow(params: {
+function appendVisibleRow(params: {
   rows: ModelRow[];
   model: ListRowModel;
   key: string;
   context: RowBuilderContext;
   seenKeys?: Set<string>;
   allowProviderAvailabilityFallback?: boolean;
-  skipSuppression?: boolean;
-}): Promise<boolean> {
+}): boolean {
   if (params.seenKeys?.has(params.key)) {
     return false;
   }
   if (!matchesRowFilter(params.context.filter, params.model)) {
     return false;
   }
-  if (
-    !params.skipSuppression &&
-    shouldSuppressListModel({ model: params.model, context: params.context })
-  ) {
+  if (shouldSuppressListModel({ model: params.model, context: params.context })) {
     return false;
   }
   params.rows.push(
-    await buildRow({
+    buildRow({
       model: params.model,
       key: params.key,
       context: params.context,
@@ -166,18 +130,6 @@ function toConfiguredProviderListModel(params: {
     baseUrl: params.model.baseUrl ?? params.providerConfig.baseUrl,
     input: resolveConfiguredModelInput({ model: params.model }),
     contextWindow: params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-    contextTokens: params.model.contextTokens,
-  };
-}
-
-function toManifestCatalogListModel(row: NormalizedModelCatalogRow): ListRowModel {
-  return {
-    provider: row.provider,
-    id: row.id,
-    name: row.name,
-    baseUrl: row.baseUrl,
-    input: [...row.input],
-    contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
   };
 }
 
@@ -188,52 +140,12 @@ function shouldListConfiguredProviderModel(params: {
   return params.providerConfig.api !== undefined || params.model.api !== undefined;
 }
 
-function findConfiguredProviderModel(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  modelId: string;
-}): ListRowModel | undefined {
-  const providerConfig = params.cfg.models?.providers?.[params.provider];
-  const configuredModel = providerConfig?.models?.find((model) => model.id === params.modelId);
-  if (!providerConfig || !configuredModel) {
-    return undefined;
-  }
-  return toConfiguredProviderListModel({
-    provider: params.provider,
-    providerConfig,
-    model: configuredModel,
-  });
-}
-
-function toFallbackConfiguredListModel(entry: ConfiguredEntry, cfg: OpenClawConfig): ListRowModel {
-  return (
-    findConfiguredProviderModel({
-      cfg,
-      provider: entry.ref.provider,
-      modelId: entry.ref.model,
-    }) ?? {
-      provider: entry.ref.provider,
-      id: entry.ref.model,
-      name: entry.ref.model,
-      input: ["text"],
-      contextWindow: DEFAULT_CONTEXT_TOKENS,
-    }
-  );
-}
-
-export async function appendDiscoveredRows(params: {
+export function appendDiscoveredRows(params: {
   rows: ModelRow[];
   models: Model<Api>[];
-  modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
-  resolveWithRegistry?: boolean;
-  skipSuppression?: boolean;
-}): Promise<Set<string>> {
+}): Set<string> {
   const seenKeys = new Set<string>();
-  const modelResolver =
-    params.modelRegistry && params.resolveWithRegistry !== false
-      ? (await loadModelResolverModule()).resolveModelWithRegistry
-      : undefined;
   const sorted = [...params.models].toSorted((a, b) => {
     const providerCompare = a.provider.localeCompare(b.provider);
     if (providerCompare !== 0) {
@@ -244,38 +156,17 @@ export async function appendDiscoveredRows(params: {
 
   for (const model of sorted) {
     const key = modelKey(model.provider, model.id);
-    const resolvedModel =
-      params.modelRegistry && modelResolver
-        ? modelResolver({
-            provider: model.provider,
-            modelId: model.id,
-            modelRegistry: params.modelRegistry,
-            cfg: params.context.cfg,
-            agentDir: params.context.agentDir,
-          })
-        : undefined;
-    const rowModel =
-      resolvedModel && modelKey(resolvedModel.provider, resolvedModel.id) === key
-        ? resolvedModel
-        : model;
-    await appendVisibleRow({
-      rows: params.rows,
-      model: rowModel,
-      key,
-      context: params.context,
-      seenKeys,
-      skipSuppression: params.skipSuppression,
-    });
+    appendVisibleRow({ rows: params.rows, model, key, context: params.context, seenKeys });
   }
 
   return seenKeys;
 }
 
-export async function appendConfiguredProviderRows(params: {
+export function appendConfiguredProviderRows(params: {
   rows: ModelRow[];
   context: RowBuilderContext;
   seenKeys: Set<string>;
-}): Promise<void> {
+}): void {
   for (const [provider, providerConfig] of Object.entries(
     params.context.cfg.models?.providers ?? {},
   )) {
@@ -289,7 +180,7 @@ export async function appendConfiguredProviderRows(params: {
         providerConfig,
         model: configuredModel,
       });
-      await appendVisibleRow({
+      appendVisibleRow({
         rows: params.rows,
         model,
         key,
@@ -301,53 +192,12 @@ export async function appendConfiguredProviderRows(params: {
   }
 }
 
-export async function appendModelCatalogRows(params: {
-  rows: ModelRow[];
-  context: RowBuilderContext;
-  seenKeys: Set<string>;
-  catalogRows: readonly NormalizedModelCatalogRow[];
-}): Promise<number> {
-  let appended = 0;
-  for (const catalogRow of params.catalogRows) {
-    const key = modelKey(catalogRow.provider, catalogRow.id);
-    if (
-      await appendVisibleRow({
-        rows: params.rows,
-        model: toManifestCatalogListModel(catalogRow),
-        key,
-        context: params.context,
-        seenKeys: params.seenKeys,
-        allowProviderAvailabilityFallback: true,
-      })
-    ) {
-      appended += 1;
-    }
-  }
-  return appended;
-}
-
-export function appendManifestCatalogRows(params: {
-  rows: ModelRow[];
-  context: RowBuilderContext;
-  seenKeys: Set<string>;
-  manifestRows: readonly NormalizedModelCatalogRow[];
-}): Promise<number> {
-  return appendModelCatalogRows({
-    ...params,
-    catalogRows: params.manifestRows,
-  });
-}
-
 export async function appendCatalogSupplementRows(params: {
   rows: ModelRow[];
   modelRegistry: ModelRegistry;
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
-  const [{ loadModelCatalog }, { resolveModelWithRegistry }] = await Promise.all([
-    loadModelCatalogModule(),
-    loadModelResolverModule(),
-  ]);
   const catalog = await loadModelCatalog({ config: params.context.cfg, readOnly: true });
   for (const entry of catalog) {
     if (
@@ -357,9 +207,6 @@ export async function appendCatalogSupplementRows(params: {
       continue;
     }
     const key = modelKey(entry.provider, entry.id);
-    if (params.seenKeys.has(key)) {
-      continue;
-    }
     const model = resolveModelWithRegistry({
       provider: entry.provider,
       modelId: entry.id,
@@ -369,7 +216,7 @@ export async function appendCatalogSupplementRows(params: {
     if (!model) {
       continue;
     }
-    await appendVisibleRow({
+    appendVisibleRow({
       rows: params.rows,
       model,
       key,
@@ -379,7 +226,7 @@ export async function appendCatalogSupplementRows(params: {
     });
   }
 
-  if (params.context.filter.local || !params.context.filter.provider) {
+  if (params.context.filter.local) {
     return;
   }
 
@@ -397,7 +244,6 @@ export async function appendProviderCatalogRows(params: {
   staticOnly?: boolean;
 }): Promise<number> {
   let appended = 0;
-  const { loadProviderCatalogModelsForList } = await loadProviderCatalogModule();
   for (const model of await loadProviderCatalogModelsForList({
     cfg: params.context.cfg,
     agentDir: params.context.agentDir,
@@ -406,7 +252,7 @@ export async function appendProviderCatalogRows(params: {
   })) {
     const key = modelKey(model.provider, model.id);
     if (
-      await appendVisibleRow({
+      appendVisibleRow({
         rows: params.rows,
         model,
         key,
@@ -421,15 +267,12 @@ export async function appendProviderCatalogRows(params: {
   return appended;
 }
 
-export async function appendConfiguredRows(params: {
+export function appendConfiguredRows(params: {
   rows: ModelRow[];
   entries: ConfiguredEntry[];
-  modelRegistry?: ModelRegistry;
+  modelRegistry: ModelRegistry;
   context: RowBuilderContext;
-}): Promise<void> {
-  const resolveModelWithRegistry = params.modelRegistry
-    ? (await loadModelResolverModule()).resolveModelWithRegistry
-    : undefined;
+}) {
   for (const entry of params.entries) {
     if (
       params.context.filter.provider &&
@@ -437,15 +280,12 @@ export async function appendConfiguredRows(params: {
     ) {
       continue;
     }
-    const model =
-      params.modelRegistry && resolveModelWithRegistry
-        ? resolveModelWithRegistry({
-            provider: entry.ref.provider,
-            modelId: entry.ref.model,
-            modelRegistry: params.modelRegistry,
-            cfg: params.context.cfg,
-          })
-        : toFallbackConfiguredListModel(entry, params.context.cfg);
+    const model = resolveModelWithRegistry({
+      provider: entry.ref.provider,
+      modelId: entry.ref.model,
+      modelRegistry: params.modelRegistry,
+      cfg: params.context.cfg,
+    });
     if (params.context.filter.local && model && !isLocalBaseUrl(model.baseUrl ?? "")) {
       continue;
     }
@@ -455,10 +295,6 @@ export async function appendConfiguredRows(params: {
     if (model && shouldSuppressListModel({ model, context: params.context })) {
       continue;
     }
-    const shouldResolveProviderAuth =
-      model &&
-      (params.context.availableKeys === undefined ||
-        !params.context.discoveredKeys.has(modelKey(model.provider, model.id)));
     params.rows.push(
       toModelRow({
         model,
@@ -466,12 +302,11 @@ export async function appendConfiguredRows(params: {
         tags: Array.from(entry.tags),
         aliases: entry.aliases,
         availableKeys: params.context.availableKeys,
+        cfg: params.context.cfg,
+        authStore: params.context.authStore,
         allowProviderAvailabilityFallback: model
           ? !params.context.discoveredKeys.has(modelKey(model.provider, model.id))
           : false,
-        hasAuthForProvider: shouldResolveProviderAuth
-          ? (provider) => params.context.authIndex.hasProviderAuth(provider)
-          : undefined,
       }),
     );
   }

@@ -1,1 +1,5 @@
-export { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
+export {
+  extractAssistantText,
+  sanitizeTextContent,
+  stripToolMessages,
+} from "./chat-history-text.js";

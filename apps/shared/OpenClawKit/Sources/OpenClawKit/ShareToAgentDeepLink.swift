@@ -33,7 +33,7 @@ public enum ShareToAgentDeepLink {
         let urlText = payload.url?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedInstruction = self.clean(instruction) ?? ShareToAgentSettings.loadDefaultInstruction()
 
-        var lines = ["Shared from iOS."]
+        var lines: [String] = ["Shared from iOS."]
         if let title, !title.isEmpty {
             lines.append("Title: \(title)")
         }

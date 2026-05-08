@@ -60,9 +60,7 @@ const jwtMockImpl = {
 };
 
 vi.mock("jsonwebtoken", () => ({
-  // Match jsonwebtoken@9 under dynamic ESM import from plugin package deps:
-  // Node exposes decode as a named export, while verify is only on default.
-  decode: jwtMockImpl.decode,
+  ...jwtMockImpl,
   default: jwtMockImpl,
 }));
 

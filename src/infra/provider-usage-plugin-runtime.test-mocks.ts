@@ -7,7 +7,7 @@ const resolveProviderUsageSnapshotWithPluginMock = vi.hoisted(() =>
 );
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({}),
+  loadConfig: () => ({}),
 }));
 
 vi.mock("../plugins/provider-runtime.js", async () => {

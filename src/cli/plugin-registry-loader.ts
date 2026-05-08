@@ -1,20 +1,22 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loggingState } from "../logging/state.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import type { CliPluginRegistryScope } from "./command-catalog.js";
+import type { PluginRegistryScope } from "./plugin-registry.js";
 
-const pluginRegistryModuleLoader = createLazyImportLoader(() => import("./plugin-registry.js"));
+let pluginRegistryModulePromise: Promise<typeof import("./plugin-registry.js")> | undefined;
 
 function loadPluginRegistryModule() {
-  return pluginRegistryModuleLoader.load();
+  pluginRegistryModulePromise ??= import("./plugin-registry.js");
+  return pluginRegistryModulePromise;
 }
 
-export type CliPluginRegistryLoadPolicy = {
-  scope: CliPluginRegistryScope;
-};
+export function resolvePluginRegistryScopeForCommandPath(
+  commandPath: string[],
+): Exclude<PluginRegistryScope, "configured-channels"> {
+  return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
+}
 
 export async function ensureCliPluginRegistryLoaded(params: {
-  scope: CliPluginRegistryScope;
+  scope: PluginRegistryScope;
   routeLogsToStderr?: boolean;
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;

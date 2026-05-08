@@ -14,11 +14,11 @@ function cloneProvider(provider: ModelProviderConfig): ModelProviderConfig {
   };
 }
 
-function trimTrailingApiV1(baseUrl: string) {
+export function trimTrailingApiV1(baseUrl: string) {
   return baseUrl.replace(/\/v1\/?$/i, "");
 }
 
-function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig {
+export function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig {
   return {
     baseUrl,
     apiKey: "test",
@@ -28,8 +28,8 @@ function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig
     },
     models: [
       {
-        id: "gpt-5.5",
-        name: "gpt-5.5",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
         api: "openai-responses",
         reasoning: false,
         input: ["text", "image"],
@@ -38,8 +38,8 @@ function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig
         maxTokens: 4096,
       },
       {
-        id: "gpt-5.5-alt",
-        name: "gpt-5.5-alt",
+        id: "gpt-5.4-alt",
+        name: "gpt-5.4-alt",
         api: "openai-responses",
         reasoning: false,
         input: ["text", "image"],
@@ -61,7 +61,7 @@ function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig
   };
 }
 
-function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConfig {
+export function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConfig {
   return {
     baseUrl: trimTrailingApiV1(baseUrl),
     apiKey: "test",

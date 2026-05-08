@@ -1,7 +1,7 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackMessageEvent } from "../types.js";
 
-type SlackChatType = "direct" | "group" | "channel";
+export type SlackChatType = "direct" | "group" | "channel";
 
 export function inferSlackChannelType(
   channelId?: string | null,

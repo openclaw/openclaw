@@ -3,14 +3,14 @@ import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js"
 import type { IrcAccountConfig, IrcChannelConfig } from "./types.js";
 import type { IrcInboundMessage } from "./types.js";
 
-type IrcGroupMatch = {
+export type IrcGroupMatch = {
   allowed: boolean;
   groupConfig?: IrcChannelConfig;
   wildcardConfig?: IrcChannelConfig;
   hasConfiguredGroups: boolean;
 };
 
-type IrcGroupAccessGate = {
+export type IrcGroupAccessGate = {
   allowed: boolean;
   reason: string;
 };

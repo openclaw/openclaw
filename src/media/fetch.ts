@@ -7,11 +7,8 @@ import {
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { MAX_DOCUMENT_BYTES } from "./constants.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
-
-export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
 
 type FetchMediaResult = {
   buffer: Buffer;
@@ -212,28 +209,29 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       );
     }
 
-    const effectiveMaxBytes = maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES;
     const contentLength = res.headers.get("content-length");
-    if (contentLength) {
+    if (maxBytes && contentLength) {
       const length = Number(contentLength);
-      if (Number.isFinite(length) && length > effectiveMaxBytes) {
+      if (Number.isFinite(length) && length > maxBytes) {
         throw new MediaFetchError(
           "max_bytes",
-          `Failed to fetch media from ${sourceUrl}: content length ${length} exceeds maxBytes ${effectiveMaxBytes}`,
+          `Failed to fetch media from ${sourceUrl}: content length ${length} exceeds maxBytes ${maxBytes}`,
         );
       }
     }
 
     let buffer: Buffer;
     try {
-      buffer = await readResponseWithLimit(res, effectiveMaxBytes, {
-        onOverflow: ({ maxBytes, res }) =>
-          new MediaFetchError(
-            "max_bytes",
-            `Failed to fetch media from ${redactMediaUrl(res.url || url)}: payload exceeds maxBytes ${maxBytes}`,
-          ),
-        chunkTimeoutMs: readIdleTimeoutMs,
-      });
+      buffer = maxBytes
+        ? await readResponseWithLimit(res, maxBytes, {
+            onOverflow: ({ maxBytes, res }) =>
+              new MediaFetchError(
+                "max_bytes",
+                `Failed to fetch media from ${redactMediaUrl(res.url || url)}: payload exceeds maxBytes ${maxBytes}`,
+              ),
+            chunkTimeoutMs: readIdleTimeoutMs,
+          })
+        : Buffer.from(await res.arrayBuffer());
     } catch (err) {
       if (err instanceof MediaFetchError) {
         throw err;

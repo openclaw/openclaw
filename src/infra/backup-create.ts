@@ -277,24 +277,6 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
-function normalizeBackupFilterPath(value: string): string {
-  return value.replaceAll("\\", "/").replace(/\/+$/u, "");
-}
-
-export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
-  const normalizedStateDir = normalizeBackupFilterPath(stateDir);
-  const extensionsPrefix = `${normalizedStateDir}/extensions/`;
-
-  return (filePath: string): boolean => {
-    const normalizedFilePath = normalizeBackupFilterPath(filePath);
-    if (!normalizedFilePath.startsWith(extensionsPrefix)) {
-      return true;
-    }
-
-    return !normalizedFilePath.slice(extensionsPrefix.length).split("/").includes("node_modules");
-  };
-}
-
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
@@ -369,12 +351,9 @@ export async function createBackupArchive(
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
     const tar = await loadTarRuntime();
-    const stateAsset = result.assets.find((asset) => asset.kind === "state");
-    const filter = stateAsset ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath) : undefined;
     await tar.c(
       {
         file: tempArchivePath,
-        ...(filter ? { filter } : {}),
         gzip: true,
         portable: true,
         preservePaths: true,

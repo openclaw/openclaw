@@ -1,4 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import { streamSimple } from "@mariozechner/pi-ai";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
@@ -22,26 +23,8 @@ function patchOnPayloadResult(result: unknown): unknown {
   return result;
 }
 
-function buildCopilotRequestHeaders(
-  context: Parameters<StreamFn>[1],
-  headers: Record<string, string> | undefined,
-): Record<string, string> {
-  return {
-    ...buildCopilotDynamicHeaders({
-      messages: context.messages,
-      hasImages: hasCopilotVisionInput(context.messages),
-    }),
-    ...headers,
-  };
-}
-
-export function wrapCopilotAnthropicStream(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn | undefined {
-  if (!baseStreamFn) {
-    return undefined;
-  }
-  const underlying = baseStreamFn;
+export function wrapCopilotAnthropicStream(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (model.provider !== "github-copilot" || model.api !== "anthropic-messages") {
       return underlying(model, context, options);
@@ -53,20 +36,21 @@ export function wrapCopilotAnthropicStream(
       context,
       {
         ...options,
-        headers: buildCopilotRequestHeaders(context, options?.headers),
+        headers: {
+          ...buildCopilotDynamicHeaders({
+            messages: context.messages,
+            hasImages: hasCopilotVisionInput(context.messages),
+          }),
+          ...options?.headers,
+        },
       },
       applyAnthropicEphemeralCacheControlMarkers,
     );
   };
 }
 
-export function wrapCopilotOpenAIResponsesStream(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn | undefined {
-  if (!baseStreamFn) {
-    return undefined;
-  }
-  const underlying = baseStreamFn;
+export function wrapCopilotOpenAIResponsesStream(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (model.provider !== "github-copilot" || model.api !== "openai-responses") {
       return underlying(model, context, options);
@@ -75,7 +59,6 @@ export function wrapCopilotOpenAIResponsesStream(
     const originalOnPayload = options?.onPayload;
     const wrappedOptions: StreamOptions = {
       ...options,
-      headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
         rewriteCopilotResponsePayloadConnectionBoundIds(payload);
         return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
@@ -85,6 +68,6 @@ export function wrapCopilotOpenAIResponsesStream(
   };
 }
 
-export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   return wrapCopilotOpenAIResponsesStream(wrapCopilotAnthropicStream(ctx.streamFn));
 }

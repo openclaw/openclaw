@@ -8,16 +8,6 @@ const OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5_000;
 const OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS = 1_000;
 const OPENAI_CODEX_DEVICE_CALLBACK_URL = `${OPENAI_AUTH_BASE_URL}/deviceauth/callback`;
 
-function resolveOpenAICodexDeviceCodeHeaders(contentType: string): Record<string, string> {
-  const version = process.env.OPENCLAW_VERSION?.trim();
-  return {
-    "Content-Type": contentType,
-    originator: "openclaw",
-    ...(version ? { version } : {}),
-    "User-Agent": version ? `openclaw/${version}` : "openclaw",
-  };
-}
-
 type OpenAICodexDeviceCodePrompt = {
   verificationUrl: string;
   userCode: string;
@@ -139,7 +129,9 @@ function formatDeviceCodeError(params: {
 async function requestOpenAICodexDeviceCode(fetchFn: typeof fetch): Promise<RequestedDeviceCode> {
   const response = await fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/usercode`, {
     method: "POST",
-    headers: resolveOpenAICodexDeviceCodeHeaders("application/json"),
+    headers: {
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({
       client_id: OPENAI_CODEX_CLIENT_ID,
     }),
@@ -188,7 +180,9 @@ async function pollOpenAICodexDeviceCode(params: {
   while (Date.now() < deadline) {
     const response = await params.fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/token`, {
       method: "POST",
-      headers: resolveOpenAICodexDeviceCodeHeaders("application/json"),
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
         device_auth_id: params.deviceAuthId,
         user_code: params.userCode,
@@ -235,7 +229,9 @@ async function exchangeOpenAICodexDeviceCode(params: {
 }): Promise<OpenAICodexDeviceCodeCredentials> {
   const response = await params.fetchFn(`${OPENAI_AUTH_BASE_URL}/oauth/token`, {
     method: "POST",
-    headers: resolveOpenAICodexDeviceCodeHeaders("application/x-www-form-urlencoded"),
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code: params.authorizationCode,

@@ -2,10 +2,17 @@ import { isRecord } from "./comment-shared.js";
 
 export const FEISHU_CARD_INTERACTION_VERSION = "ocf1";
 
-type FeishuCardInteractionKind = "button" | "quick" | "meta";
-type FeishuCardInteractionReason = "malformed" | "stale" | "wrong_user" | "wrong_conversation";
+export type FeishuCardInteractionKind = "button" | "quick" | "meta";
+export type FeishuCardInteractionReason =
+  | "malformed"
+  | "stale"
+  | "wrong_user"
+  | "wrong_conversation";
 
-type FeishuCardInteractionMetadata = Record<string, string | number | boolean | null | undefined>;
+export type FeishuCardInteractionMetadata = Record<
+  string,
+  string | number | boolean | null | undefined
+>;
 
 export type FeishuCardInteractionEnvelope = {
   oc: typeof FEISHU_CARD_INTERACTION_VERSION;
@@ -22,7 +29,7 @@ export type FeishuCardInteractionEnvelope = {
   };
 };
 
-type FeishuCardActionEventLike = {
+export type FeishuCardActionEventLike = {
   operator: {
     open_id?: string;
   };
@@ -34,7 +41,7 @@ type FeishuCardActionEventLike = {
   };
 };
 
-type DecodedFeishuCardAction =
+export type DecodedFeishuCardAction =
   | {
       kind: "structured";
       envelope: FeishuCardInteractionEnvelope;

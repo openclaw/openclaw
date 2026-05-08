@@ -128,6 +128,10 @@ export function clearSynologyWebhookRateLimiterStateForTest(): void {
   webhookInFlightLimiter.clear();
 }
 
+export function getSynologyWebhookRateLimiterCountForTest(): number {
+  return rateLimiters.size + invalidTokenRateLimiters.size;
+}
+
 function getSynologyWebhookInvalidTokenRateLimitKey(req: IncomingMessage): string {
   return req.socket?.remoteAddress ?? "unknown";
 }
@@ -438,8 +442,7 @@ function authorizeSynologyWebhook(params: {
       return {
         ok: false,
         statusCode: 403,
-        error:
-          'Allowlist is empty. Configure allowedUserIds or use dmPolicy=open with allowedUserIds=["*"].',
+        error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
       };
     }
     params.log?.warn(`Unauthorized user: ${params.payload.user_id}`);

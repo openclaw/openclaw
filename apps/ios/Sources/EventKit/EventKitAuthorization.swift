@@ -31,3 +31,4 @@ enum EventKitAuthorization {
         }
     }
 }
+

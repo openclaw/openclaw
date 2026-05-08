@@ -149,9 +149,9 @@ function extractRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-type MSTeamsSendErrorKind = "auth" | "throttled" | "transient" | "permanent" | "unknown";
+export type MSTeamsSendErrorKind = "auth" | "throttled" | "transient" | "permanent" | "unknown";
 
-type MSTeamsSendErrorClassification = {
+export type MSTeamsSendErrorClassification = {
   kind: MSTeamsSendErrorKind;
   statusCode?: number;
   retryAfterMs?: number;

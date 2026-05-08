@@ -1,13 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  ensureStandalonePluginToolRegistryLoaded,
-  resolvePluginTools,
-} from "../../plugins/tools.js";
+import { resolvePluginTools } from "../../plugins/tools.js";
 import { ErrorCodes } from "../protocol/index.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
 vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({})),
+  loadConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -20,9 +17,6 @@ vi.mock("../../agents/agent-scope.js", () => ({
 const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
 
 vi.mock("../../plugins/tools.js", () => ({
-  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
-    JSON.stringify([pluginId, toolName]),
-  ensureStandalonePluginToolRegistryLoaded: vi.fn(),
   resolvePluginTools: vi.fn(() => [
     { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
     {
@@ -45,7 +39,7 @@ function createInvokeParams(params: Record<string, unknown>) {
       await toolsCatalogHandlers["tools.catalog"]({
         params,
         respond: respond as never,
-        context: { getRuntimeConfig: () => ({}) } as never,
+        context: {} as never,
         client: null,
         req: { type: "req", id: "req-1", method: "tools.catalog" },
         isWebchatConnect: () => false,
@@ -159,11 +153,6 @@ describe("tools.catalog handler", () => {
     await invoke();
 
     expect(vi.mocked(resolvePluginTools)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
-    );
-    expect(vi.mocked(ensureStandalonePluginToolRegistryLoaded)).toHaveBeenCalledWith(
       expect.objectContaining({
         allowGatewaySubagentBinding: true,
       }),

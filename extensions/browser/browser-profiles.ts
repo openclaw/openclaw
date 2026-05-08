@@ -1,6 +1,5 @@
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
@@ -11,5 +10,4 @@ export {
   resolveProfile,
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,
-  type ResolvedBrowserTabCleanupConfig,
 } from "./src/browser/config.js";

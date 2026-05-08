@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { describeGithubCopilotProviderDiscoveryContract } from "openclaw/plugin-sdk/provider-test-contracts";
+import { describeGithubCopilotProviderDiscoveryContract } from "../../test/helpers/plugins/provider-discovery-contract.js";
 
 describeGithubCopilotProviderDiscoveryContract({
   load: () => import("./index.js"),

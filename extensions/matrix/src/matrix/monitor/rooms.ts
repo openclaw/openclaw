@@ -1,7 +1,7 @@
 import type { MatrixRoomConfig } from "../../types.js";
 import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "./runtime-api.js";
 
-type MatrixRoomConfigResolved = {
+export type MatrixRoomConfigResolved = {
   allowed: boolean;
   allowlistConfigured: boolean;
   config?: MatrixRoomConfig;

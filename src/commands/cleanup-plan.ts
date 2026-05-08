@@ -1,5 +1,5 @@
 import {
-  getRuntimeConfig,
+  loadConfig,
   resolveConfigPath,
   resolveOAuthDir,
   resolveStateDir,
@@ -16,7 +16,7 @@ export function resolveCleanupPlanFromDisk(): {
   oauthInsideState: boolean;
   workspaceDirs: string[];
 } {
-  const cfg = getRuntimeConfig();
+  const cfg = loadConfig();
   const stateDir = resolveStateDir();
   const configPath = resolveConfigPath();
   const oauthDir = resolveOAuthDir();

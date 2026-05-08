@@ -23,11 +23,11 @@ final class RemindersService: RemindersServicing {
                 let filtered = (items ?? []).filter { reminder in
                     switch statusFilter {
                     case .all:
-                        true
+                        return true
                     case .completed:
-                        reminder.isCompleted
+                        return reminder.isCompleted
                     case .incomplete:
-                        !reminder.isCompleted
+                        return !reminder.isCompleted
                     }
                 }
                 let selected = Array(filtered.prefix(limit))

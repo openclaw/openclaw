@@ -9,22 +9,22 @@ export type QaMockProviderServer = {
   stop(): Promise<void>;
 };
 
-type QaProviderModelParamsInput = {
+export type QaProviderModelParamsInput = {
   modelRef: string;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
 };
 
-type QaProviderGatewayModelsInput = {
+export type QaProviderGatewayModelsInput = {
   providerBaseUrl: string;
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
 };
 
-type QaProviderDefaultImageInput = {
+export type QaProviderDefaultImageInput = {
   modelProviderIds: readonly string[];
 };
 
-type QaProviderTurnTimeoutInput = {
+export type QaProviderTurnTimeoutInput = {
   primaryModel: string;
   alternateModel: string;
   modelRef: string;

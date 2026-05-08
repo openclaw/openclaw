@@ -1,4 +1,4 @@
-type TelegramMediaContextPayload = {
+export type TelegramMediaContextPayload = {
   MediaPath?: string;
   MediaUrl?: string;
   MediaType?: string;

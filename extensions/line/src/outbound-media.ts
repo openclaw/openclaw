@@ -1,7 +1,7 @@
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
-type LineOutboundMediaKind = "image" | "video" | "audio";
+export type LineOutboundMediaKind = "image" | "video" | "audio";
 
 export type LineOutboundMediaResolved = {
   mediaUrl: string;

@@ -1,5 +1,3 @@
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
-
 type ProviderRuntimeModule = typeof import("./provider-runtime.js");
 
 type AugmentModelCatalogWithProviderPlugins =
@@ -14,14 +12,13 @@ type PrepareProviderRuntimeAuth = ProviderRuntimeModule["prepareProviderRuntimeA
 type RefreshProviderOAuthCredentialWithPlugin =
   ProviderRuntimeModule["refreshProviderOAuthCredentialWithPlugin"];
 
-const providerRuntimeLoader = createLazyImportLoader<ProviderRuntimeModule>(
-  () => import("./provider-runtime.js"),
-);
+let providerRuntimePromise: Promise<ProviderRuntimeModule> | undefined;
 
 async function loadProviderRuntime(): Promise<ProviderRuntimeModule> {
   // Keep the heavy provider runtime behind an actual async boundary so callers
   // can import this wrapper eagerly without collapsing the lazy chunk.
-  return await providerRuntimeLoader.load();
+  providerRuntimePromise ??= import("./provider-runtime.js");
+  return providerRuntimePromise;
 }
 
 export async function augmentModelCatalogWithProviderPlugins(

@@ -1,22 +1,14 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  resolveSlackAccountAllowFrom,
-  resolveSlackAccountDmPolicy,
-  type ResolvedSlackAccount,
-} from "./accounts.js";
+import type { ResolvedSlackAccount } from "./accounts.js";
 import type { ChannelPlugin } from "./channel-api.js";
 
 const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount>({
   channelKey: "slack",
-  resolvePolicy: (account) => account.config.dmPolicy,
-  resolveAllowFrom: (account) => account.config.allowFrom,
-  resolveAccess: ({ cfg, account }) => ({
-    dmPolicy: resolveSlackAccountDmPolicy({ cfg, accountId: account.accountId }),
-    allowFrom: resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId }),
-  }),
-  policyPathSuffix: "dmPolicy",
+  resolvePolicy: (account) => account.dm?.policy,
+  resolveAllowFrom: (account) => account.dm?.allowFrom,
+  allowFromPathSuffix: "dm.",
   normalizeEntry: (raw) =>
     raw
       .trim()

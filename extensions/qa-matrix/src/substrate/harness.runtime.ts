@@ -18,7 +18,6 @@ const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
 const MATRIX_QA_DEFAULT_PORT = 28008;
 const MATRIX_QA_INTERNAL_PORT = 8008;
 const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
-const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 
 type MatrixQaHarnessManifest = {
   image: string;
@@ -28,7 +27,7 @@ type MatrixQaHarnessManifest = {
   dataDir: string;
 };
 
-type MatrixQaHarnessFiles = {
+export type MatrixQaHarnessFiles = {
   outputDir: string;
   composeFile: string;
   manifestPath: string;
@@ -38,7 +37,7 @@ type MatrixQaHarnessFiles = {
   registrationToken: string;
 };
 
-type MatrixQaHarness = MatrixQaHarnessFiles & {
+export type MatrixQaHarness = MatrixQaHarnessFiles & {
   baseUrl: string;
   restartService(): Promise<void>;
   stopCommand: string;
@@ -53,28 +52,6 @@ async function isMatrixVersionsReachable(baseUrl: string, fetchImpl: FetchLike) 
   return await fetchImpl(buildVersionsUrl(baseUrl))
     .then((response) => response.ok)
     .catch(() => false);
-}
-
-async function withMatrixQaHarnessTimeout<T>(
-  label: string,
-  timeoutMs: number,
-  task: Promise<T>,
-): Promise<T> {
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      task,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
 }
 
 async function waitForReachableMatrixBaseUrl(params: {
@@ -302,14 +279,10 @@ export async function startMatrixQaHarness(
     },
     stopCommand: `docker compose -f ${files.composeFile} down --remove-orphans`,
     async stop() {
-      await withMatrixQaHarnessTimeout(
-        "Matrix homeserver cleanup",
-        MATRIX_QA_CLEANUP_TIMEOUT_MS,
-        runCommand(
-          "docker",
-          ["compose", "-f", files.composeFile, "down", "--remove-orphans"],
-          repoRoot,
-        ),
+      await runCommand(
+        "docker",
+        ["compose", "-f", files.composeFile, "down", "--remove-orphans"],
+        repoRoot,
       );
     },
   };
@@ -320,7 +293,6 @@ export const __testing = {
   MATRIX_QA_DEFAULT_PORT,
   MATRIX_QA_DEFAULT_SERVER_NAME,
   MATRIX_QA_SERVICE,
-  MATRIX_QA_CLEANUP_TIMEOUT_MS,
   buildVersionsUrl,
   isMatrixVersionsReachable,
   renderMatrixQaCompose,

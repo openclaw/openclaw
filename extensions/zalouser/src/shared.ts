@@ -15,7 +15,7 @@ import { buildChannelConfigSchema, formatAllowFromLowercase } from "./channel-ap
 import { ZalouserConfigSchema } from "./config-schema.js";
 import { zalouserDoctor } from "./doctor.js";
 
-const zalouserMeta: ChannelPlugin<ResolvedZalouserAccount>["meta"] = {
+export const zalouserMeta = {
   id: "zalouser",
   label: "Zalo Personal",
   selectionLabel: "Zalo (Personal Account)",
@@ -25,7 +25,7 @@ const zalouserMeta: ChannelPlugin<ResolvedZalouserAccount>["meta"] = {
   aliases: ["zlu"],
   order: 85,
   quickstartAllowFrom: false,
-};
+} satisfies ChannelPlugin<ResolvedZalouserAccount>["meta"];
 
 const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserAccount>({
   sectionKey: "zalouser",

@@ -1,7 +1,6 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -10,10 +9,11 @@ import {
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
-const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
+let compactRuntimePromise: Promise<typeof import("./commands-compact.runtime.js")> | null = null;
 
 function loadCompactRuntime(): Promise<typeof import("./commands-compact.runtime.js")> {
-  return compactRuntimeLoader.load();
+  compactRuntimePromise ??= import("./commands-compact.runtime.js");
+  return compactRuntimePromise;
 }
 
 function extractCompactInstructions(params: {
@@ -176,8 +176,6 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       storePath: params.storePath,
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
-      newSessionId: result.result?.sessionId,
-      newSessionFile: result.result?.sessionFile,
     });
   }
   // Use the post-compaction token count for context summary if available

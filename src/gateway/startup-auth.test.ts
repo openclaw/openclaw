@@ -12,12 +12,8 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(async (_params: { nextConfig: OpenClawConfig }) => {}),
 }));
 
-vi.mock("../config/mutate.js", () => ({
-  replaceConfigFile: mocks.replaceConfigFile,
-}));
-
-vi.mock("../config/mutate.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/mutate.js")>("../config/mutate.js");
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     replaceConfigFile: mocks.replaceConfigFile,

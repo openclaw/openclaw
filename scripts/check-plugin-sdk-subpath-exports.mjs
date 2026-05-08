@@ -30,16 +30,6 @@ function readEntrypoints() {
   return new Set(entrypoints.filter((entry) => entry !== "index"));
 }
 
-function readPrivateLocalOnlySubpaths() {
-  const subpaths = JSON.parse(
-    readFileSync(
-      path.join(repoRoot, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"),
-      "utf8",
-    ),
-  );
-  return new Set(subpaths.filter((entry) => typeof entry === "string" && !entry.includes("/")));
-}
-
 function parsePluginSdkSubpath(specifier) {
   if (!specifier.startsWith("openclaw/plugin-sdk/")) {
     return null;
@@ -61,7 +51,6 @@ function compareEntries(left, right) {
 async function collectViolations() {
   const entrypoints = readEntrypoints();
   const exports = readPackageExports();
-  const privateLocalOnlySubpaths = readPrivateLocalOnlySubpaths();
   const files = (await collectTypeScriptFilesFromRoots(scanRoots, { includeTests: true })).toSorted(
     (left, right) =>
       normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
@@ -81,9 +70,6 @@ async function collectViolations() {
     function push(kind, specifierNode, specifier) {
       const subpath = parsePluginSdkSubpath(specifier);
       if (!subpath) {
-        return;
-      }
-      if (privateLocalOnlySubpaths.has(subpath)) {
         return;
       }
 

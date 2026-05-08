@@ -3,34 +3,27 @@ import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
-import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
+import type { probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
-import { isProbeReachable } from "./gateway-status/helpers.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
-const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
-const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
-const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
+let gatewayProbeModulePromise: Promise<typeof import("./status.gateway-probe.js")> | undefined;
+let probeGatewayModulePromise: Promise<typeof import("../gateway/probe.js")> | undefined;
 
 function loadGatewayProbeModule() {
-  return gatewayProbeModuleLoader.load();
+  gatewayProbeModulePromise ??= import("./status.gateway-probe.js");
+  return gatewayProbeModulePromise;
 }
 
 function loadProbeGatewayModule() {
-  return probeGatewayModuleLoader.load();
-}
-
-function loadGatewayCallModule() {
-  return gatewayCallModuleLoader.load();
+  probeGatewayModulePromise ??= import("../gateway/probe.js");
+  return probeGatewayModulePromise;
 }
 
 export type MemoryStatusSnapshot = MemoryProviderStatus & {
@@ -62,103 +55,7 @@ export type GatewayProbeSnapshot = {
   };
 };
 
-type StatusMemorySearchManager = {
-  probeVectorStoreAvailability?(): Promise<boolean>;
-  probeVectorAvailability(): Promise<boolean>;
-  status(): MemoryProviderStatus;
-  close?(): Promise<void>;
-};
-
-type StatusMemorySearchManagerResolver = (params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose: "status";
-}) => Promise<{
-  manager: StatusMemorySearchManager | null;
-}>;
-
-function isLoopbackGatewayUrl(rawUrl: string): boolean {
-  try {
-    const hostname = new URL(rawUrl).hostname.toLowerCase();
-    const unbracketed =
-      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
-  } catch {
-    return false;
-  }
-}
-
-function shouldTryLocalStatusRpcFallback(params: {
-  gatewayMode: "local" | "remote";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult | null;
-}): params is {
-  gatewayMode: "local";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult;
-} {
-  if (
-    params.gatewayMode !== "local" ||
-    !params.gatewayProbe ||
-    params.gatewayProbe.ok ||
-    !isLoopbackGatewayUrl(params.gatewayUrl)
-  ) {
-    return false;
-  }
-  const error = params.gatewayProbe.error?.toLowerCase() ?? "";
-  return error.includes("timeout") || params.gatewayProbe.auth?.capability === "unknown";
-}
-
-async function applyLocalStatusRpcFallback(params: {
-  cfg: OpenClawConfig;
-  gatewayMode: "local" | "remote";
-  gatewayUrl: string;
-  gatewayProbe: GatewayProbeResult | null;
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  };
-  timeoutMs: number;
-  timeoutMsExplicit: boolean;
-}): Promise<GatewayProbeResult | null> {
-  if (!shouldTryLocalStatusRpcFallback(params)) {
-    return params.gatewayProbe;
-  }
-  const boundedFallbackTimeoutMs = Math.min(2000, Math.max(1000, params.timeoutMs));
-  const status = await loadGatewayCallModule()
-    .then(({ callGateway }) =>
-      callGateway({
-        config: params.cfg,
-        method: "status",
-        token: params.gatewayProbeAuth.token,
-        password: params.gatewayProbeAuth.password,
-        timeoutMs: params.timeoutMsExplicit
-          ? boundedFallbackTimeoutMs
-          : Math.max(params.cfg.gateway?.handshakeTimeoutMs ?? 0, boundedFallbackTimeoutMs),
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      }),
-    )
-    .catch(() => null);
-  if (!status) {
-    return params.gatewayProbe;
-  }
-  const auth = params.gatewayProbe.auth;
-  return {
-    ...params.gatewayProbe,
-    ok: true,
-    status,
-    auth:
-      auth.capability === "unknown"
-        ? {
-            ...auth,
-            capability: "read_only",
-          }
-        : auth,
-  };
-}
-
-function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
+export function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   if (
     cfg.agents?.defaults &&
     Object.prototype.hasOwnProperty.call(cfg.agents.defaults, "memorySearch")
@@ -209,34 +106,18 @@ export async function resolveGatewayProbeSnapshot(params: {
       )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const defaultProbeTimeoutMs = Math.max(
-    params.opts.all ? 5000 : 2500,
-    params.cfg.gateway?.handshakeTimeoutMs ?? 0,
-  );
-  const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
-  const probeTimeoutMs = params.opts.timeoutMs ?? defaultProbeTimeoutMs;
-  const initialGatewayProbe = shouldProbe
+  const gatewayProbe = shouldProbe
     ? await loadProbeGatewayModule()
         .then(({ probeGateway }) =>
           probeGateway({
             url: gatewayConnection.url,
             auth: gatewayProbeAuthResolution.auth,
-            preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
-            timeoutMs: probeTimeoutMs,
+            timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
             detailLevel: params.opts.detailLevel ?? "presence",
           }),
         )
         .catch(() => null)
     : null;
-  const gatewayProbe = await applyLocalStatusRpcFallback({
-    cfg: params.cfg,
-    gatewayMode,
-    gatewayUrl: gatewayConnection.url,
-    gatewayProbe: initialGatewayProbe,
-    gatewayProbeAuth: gatewayProbeAuthResolution.auth,
-    timeoutMs: probeTimeoutMs,
-    timeoutMsExplicit,
-  });
   if (
     (params.opts.mergeAuthWarningIntoProbeError ?? true) &&
     gatewayProbeAuthWarning &&
@@ -247,7 +128,7 @@ export async function resolveGatewayProbeSnapshot(params: {
       : gatewayProbeAuthWarning;
     gatewayProbeAuthWarning = undefined;
   }
-  const gatewayReachable = gatewayProbe ? isProbeReachable(gatewayProbe) : false;
+  const gatewayReachable = gatewayProbe?.ok === true;
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;
@@ -287,7 +168,17 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   agentStatus: { defaultId?: string | null };
   memoryPlugin: MemoryPluginStatus;
   resolveMemoryConfig: (cfg: OpenClawConfig, agentId: string) => { store: { path: string } } | null;
-  getMemorySearchManager: StatusMemorySearchManagerResolver;
+  getMemorySearchManager: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    purpose: "status";
+  }) => Promise<{
+    manager: {
+      probeVectorAvailability(): Promise<boolean>;
+      status(): MemoryProviderStatus;
+      close?(): Promise<void>;
+    } | null;
+  }>;
   requireDefaultStore?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
@@ -295,11 +186,6 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return null;
   }
   const agentId = agentStatus.defaultId ?? "main";
-
-  if (memoryPlugin.slot !== defaultSlotIdForKey("memory")) {
-    return await resolveMemoryManagerStatusSnapshot(params, agentId);
-  }
-
   const defaultStorePath = params.requireDefaultStore?.(agentId);
   if (
     defaultStorePath &&
@@ -317,36 +203,14 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   if (!shouldInspectStore) {
     return null;
   }
-  return await resolveMemoryManagerStatusSnapshot(params, agentId);
-}
-
-async function resolveMemoryManagerStatusSnapshot(
-  params: {
-    cfg: OpenClawConfig;
-    getMemorySearchManager: StatusMemorySearchManagerResolver;
-  },
-  agentId: string,
-): Promise<MemoryStatusSnapshot | null> {
-  const { manager } = await params.getMemorySearchManager({
-    cfg: params.cfg,
-    agentId,
-    purpose: "status",
-  });
+  const { manager } = await params.getMemorySearchManager({ cfg, agentId, purpose: "status" });
   if (!manager) {
     return null;
   }
   try {
-    try {
-      const currentStatus = manager.status();
-      if (currentStatus.backend === "builtin" && manager.probeVectorStoreAvailability) {
-        await manager.probeVectorStoreAvailability();
-      } else {
-        await manager.probeVectorAvailability();
-      }
-    } catch {}
-    const status = manager.status();
-    return { agentId, ...status };
-  } finally {
-    await manager.close?.().catch(() => {});
-  }
+    await manager.probeVectorAvailability();
+  } catch {}
+  const status = manager.status();
+  await manager.close?.().catch(() => {});
+  return { agentId, ...status };
 }

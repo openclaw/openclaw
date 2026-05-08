@@ -8,7 +8,7 @@ const installSkillMock = vi.fn();
 const updateSkillsFromClawHubMock = vi.fn();
 
 vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: () => loadConfigMock(),
+  loadConfig: () => loadConfigMock(),
   writeConfigFile: vi.fn(),
 }));
 
@@ -28,8 +28,6 @@ vi.mock("../../agents/skills-install.js", () => ({
 }));
 
 const { skillsHandlers } = await import("./skills.js");
-
-const makeContext = () => ({ getRuntimeConfig: () => ({}) });
 
 describe("skills gateway handlers (clawhub)", () => {
   beforeEach(() => {
@@ -65,7 +63,7 @@ describe("skills gateway handlers (clawhub)", () => {
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: makeContext() as never,
+      context: {} as never,
       respond: (success, result, err) => {
         ok = success;
         response = result;
@@ -111,7 +109,7 @@ describe("skills gateway handlers (clawhub)", () => {
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: makeContext() as never,
+      context: {} as never,
       respond: (success, result, err) => {
         ok = success;
         response = result;
@@ -158,7 +156,7 @@ describe("skills gateway handlers (clawhub)", () => {
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: makeContext() as never,
+      context: {} as never,
       respond: (success, result, err) => {
         ok = success;
         response = result;
@@ -198,7 +196,7 @@ describe("skills gateway handlers (clawhub)", () => {
       req: {} as never,
       client: null as never,
       isWebchatConnect: () => false,
-      context: makeContext() as never,
+      context: {} as never,
       respond: (success, _result, err) => {
         ok = success;
         error = err as { code?: string; message?: string } | undefined;

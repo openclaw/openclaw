@@ -26,7 +26,7 @@ const GENERATED_END = "<!-- openclaw:wiki:generated:end -->";
 const HUMAN_START = "<!-- openclaw:human:start -->";
 const HUMAN_END = "<!-- openclaw:human:end -->";
 
-type CreateSynthesisMemoryWikiMutation = {
+export type CreateSynthesisMemoryWikiMutation = {
   op: "create_synthesis";
   title: string;
   body: string;
@@ -38,7 +38,7 @@ type CreateSynthesisMemoryWikiMutation = {
   status?: string;
 };
 
-type UpdateMetadataMemoryWikiMutation = {
+export type UpdateMetadataMemoryWikiMutation = {
   op: "update_metadata";
   lookup: string;
   sourceIds?: string[];
@@ -53,7 +53,7 @@ export type ApplyMemoryWikiMutation =
   | CreateSynthesisMemoryWikiMutation
   | UpdateMetadataMemoryWikiMutation;
 
-type ApplyMemoryWikiMutationResult = {
+export type ApplyMemoryWikiMutationResult = {
   changed: boolean;
   operation: ApplyMemoryWikiMutation["op"];
   pagePath: string;

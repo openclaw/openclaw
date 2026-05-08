@@ -16,7 +16,6 @@ let clearRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js"
 let setRuntimeConfigSnapshot: typeof import("../../config/runtime-snapshot.js").setRuntimeConfigSnapshot;
 
 vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: loadConfigMock,
   loadConfig: loadConfigMock,
 }));
 

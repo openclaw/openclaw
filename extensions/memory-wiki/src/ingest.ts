@@ -6,7 +6,7 @@ import { appendMemoryWikiLog } from "./log.js";
 import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-type IngestMemoryWikiSourceResult = {
+export type IngestMemoryWikiSourceResult = {
   sourcePath: string;
   pageId: string;
   pagePath: string;

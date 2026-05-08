@@ -41,6 +41,7 @@ vi.mock("../api.js", async () => {
   return {
     ...actual,
     resolvePreferredOpenClawTmpDir: () => "/tmp",
+    supportsXHighThinking: () => false,
   };
 });
 
@@ -50,30 +51,6 @@ const runEmbeddedPiAgent = vi.fn(async () => ({
   meta: { startedAt: Date.now() },
   payloads: [{ text: "{}" }],
 }));
-
-const resolveThinkingPolicy = vi.fn(() => ({
-  levels: [
-    { id: "off", label: "off" },
-    { id: "minimal", label: "minimal" },
-    { id: "low", label: "low" },
-    { id: "medium", label: "medium" },
-    { id: "high", label: "high" },
-  ],
-}));
-
-const normalizeThinkingLevel = vi.fn((raw?: string | null) => {
-  const value = raw?.trim().toLowerCase();
-  if (!value) {
-    return undefined;
-  }
-  if (value === "on") {
-    return "low";
-  }
-  if (["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"].includes(value)) {
-    return value;
-  }
-  return undefined;
-});
 
 function fakeApi(overrides: any = {}) {
   return {
@@ -88,8 +65,6 @@ function fakeApi(overrides: any = {}) {
       version: "test",
       agent: {
         runEmbeddedPiAgent,
-        resolveThinkingPolicy,
-        normalizeThinkingLevel,
       },
     },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
@@ -180,25 +155,10 @@ describe("llm-task tool (json-only)", () => {
     expect(call.model).toBe("claude-4-sonnet");
   });
 
-  it("accepts model overrides that already include the selected provider prefix", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const call = await executeEmbeddedRun({
-      prompt: "x",
-      provider: "anthropic",
-      model: "anthropic/claude-4-sonnet",
-    });
-    expect(call.provider).toBe("anthropic");
-    expect(call.model).toBe("claude-4-sonnet");
-  });
-
   it("passes thinking override to embedded runner", async () => {
     mockEmbeddedRunJson({ ok: true });
     const call = await executeEmbeddedRun({ prompt: "x", thinking: "high" });
     expect(call.thinkLevel).toBe("high");
-    expect(resolveThinkingPolicy).toHaveBeenCalledWith({
-      provider: "openai-codex",
-      model: "gpt-5.2",
-    });
   });
 
   it("normalizes thinking aliases", async () => {

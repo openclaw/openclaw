@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { MSTeamsConfigSchema } from "../config-api.js";
+
+// Import the schema directly to avoid cross-extension import chains
+const { MSTeamsConfigSchema } = await import("../../../src/config/zod-schema.providers-core.js");
 
 describe("MSTeamsConfigSchema blockStreaming", () => {
   const baseConfig = {

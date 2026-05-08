@@ -7,11 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import {
-  BUILD_STAMP_FILE,
-  writeBuildStamp,
-  writeRuntimePostBuildStamp,
-} from "./lib/local-build-metadata.mjs";
+import { writeBuildStamp } from "./build-stamp.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
@@ -207,6 +203,23 @@ function snapshotTree(rootName) {
   return stats;
 }
 
+export function isIgnoredDistRuntimeWatchPath(entry) {
+  return (
+    entry === "dist-runtime/extensions/node_modules" ||
+    entry.startsWith("dist-runtime/extensions/node_modules/")
+  );
+}
+
+function summarizeDistRuntimeAddedPaths(added) {
+  const addedPaths = added.filter((entry) => entry.startsWith("dist-runtime/"));
+  const ignoredDependencyAddedPaths = addedPaths.filter(isIgnoredDistRuntimeWatchPath);
+  const topologyAddedPaths = addedPaths.filter((entry) => !isIgnoredDistRuntimeWatchPath(entry));
+  return {
+    ignoredDependencyAddedPaths,
+    topologyAddedPaths,
+  };
+}
+
 function writeSnapshot(snapshotDir) {
   ensureDir(snapshotDir);
   const pathEntries = [...listTreeEntries("dist"), ...listTreeEntries("dist-runtime")];
@@ -339,14 +352,10 @@ function readProcessTreeCpuMs(rootPid) {
   return totalCpuMs;
 }
 
-export function hasGatewayReadyLog(text) {
-  return /\[gateway\] (?:http server listening|ready \()/.test(text);
-}
-
 async function waitForGatewayReady(readText, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (hasGatewayReadyLog(readText())) {
+    if (/\[gateway\] ready \(/.test(readText())) {
       return true;
     }
     await sleep(100);
@@ -581,7 +590,7 @@ function buildRunNodeDeps(env) {
     spawnSync,
     distRoot: path.join(cwd, "dist"),
     distEntry: path.join(cwd, "dist", "/entry.js"),
-    buildStampPath: path.join(cwd, "dist", BUILD_STAMP_FILE),
+    buildStampPath: path.join(cwd, "dist", ".buildstamp"),
     sourceRoots: ["src", "extensions"].map((sourceRoot) => ({
       name: sourceRoot,
       path: path.join(cwd, sourceRoot),
@@ -600,25 +609,19 @@ export function shouldRefreshBuildStampForRestoredArtifacts(params) {
   );
 }
 
-export function writeBuildAndRuntimePostBuildStamps(params = {}) {
-  const cwd = params.cwd ?? process.cwd();
-  writeBuildStamp({ cwd });
-  writeRuntimePostBuildStamp({ cwd });
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
     runCheckedCommand("node", ["scripts/build-all.mjs", "gatewayWatch"]);
     // The watch harness must start from a completed dist/runtime baseline.
-    // Refresh both stamps after the gateway build finishes so run-node does not
-    // leave stale local artifact metadata after the bounded watch window.
-    writeBuildAndRuntimePostBuildStamps();
+    // Refresh the build stamp after the gateway build finishes so run-node
+    // does not spuriously rebuild inside the bounded watch window.
+    writeBuildStamp({ cwd: process.cwd() });
   } else {
     // Restored CI artifacts can be older than the fresh checkout mtimes.
-    // Refresh the local artifact stamps so run-node trusts the already-built dist.
-    writeBuildAndRuntimePostBuildStamps();
+    // Refresh only the stamp so run-node trusts the already-built dist.
+    writeBuildStamp({ cwd: process.cwd() });
   }
 
   let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
@@ -629,9 +632,9 @@ async function main() {
     })
   ) {
     // CI's skip-build path restores a built dist artifact after checkout.
-    // Refresh the stamps so checkout mtimes for package/config files do not
+    // Refresh the stamp so checkout mtimes for package/config files do not
     // force a duplicate build during the bounded gateway:watch window.
-    writeBuildAndRuntimePostBuildStamps();
+    writeBuildStamp({ cwd: process.cwd() });
     preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
   }
   if (
@@ -667,9 +670,10 @@ async function main() {
   const post = writeSnapshot(postDir);
   const diff = writeDiffArtifacts(options.outputDir, preDir, postDir);
 
-  const distRuntimeAddedPaths = diff.added.filter((entry) =>
-    entry.startsWith("dist-runtime/"),
-  ).length;
+  const distRuntimeAddedPathSummary = summarizeDistRuntimeAddedPaths(diff.added);
+  const distRuntimeAddedPaths = distRuntimeAddedPathSummary.topologyAddedPaths.length;
+  const distRuntimeIgnoredDependencyAddedPaths =
+    distRuntimeAddedPathSummary.ignoredDependencyAddedPaths.length;
   const distRuntimeFileGrowth = distRuntimeAddedPaths;
   const distRuntimeByteGrowth =
     distRuntimeAddedPaths === 0
@@ -703,6 +707,7 @@ async function main() {
     distRuntimeByteGrowth,
     distRuntimeByteGrowthMax: options.distRuntimeByteGrowthMax,
     distRuntimeAddedPaths,
+    distRuntimeIgnoredDependencyAddedPaths,
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,

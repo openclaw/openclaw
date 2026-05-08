@@ -12,7 +12,6 @@ export type ProviderSyntheticAuthResult = {
   apiKey: string;
   source: string;
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
-  expiresAt?: number;
 };
 
 export type ProviderResolveExternalOAuthProfilesContext = {

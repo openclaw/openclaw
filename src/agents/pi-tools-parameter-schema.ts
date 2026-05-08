@@ -75,10 +75,6 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 type FlattenableVariantKey = "anyOf" | "oneOf";
 type TopLevelConditionalKey = FlattenableVariantKey | "allOf";
 
-function isSchemaRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
 function hasTopLevelArrayKeyword(
   schemaRecord: Record<string, unknown>,
   key: TopLevelConditionalKey,
@@ -111,11 +107,7 @@ function hasTopLevelObjectSchema(
   schemaRecord: Record<string, unknown>,
   conditionalKey: TopLevelConditionalKey | null,
 ): boolean {
-  return (
-    schemaRecord.type === "object" &&
-    isSchemaRecord(schemaRecord.properties) &&
-    conditionalKey === null
-  );
+  return "type" in schemaRecord && "properties" in schemaRecord && conditionalKey === null;
 }
 
 function isObjectLikeSchemaMissingType(
@@ -124,20 +116,16 @@ function isObjectLikeSchemaMissingType(
 ): boolean {
   return (
     !("type" in schemaRecord) &&
-    (isSchemaRecord(schemaRecord.properties) || Array.isArray(schemaRecord.required)) &&
+    (typeof schemaRecord.properties === "object" || Array.isArray(schemaRecord.required)) &&
     conditionalKey === null
   );
 }
 
-function isTypedObjectSchemaMissingValidProperties(
+function isTypedSchemaMissingProperties(
   schemaRecord: Record<string, unknown>,
   conditionalKey: TopLevelConditionalKey | null,
 ): boolean {
-  return (
-    schemaRecord.type === "object" &&
-    !isSchemaRecord(schemaRecord.properties) &&
-    conditionalKey === null
-  );
+  return "type" in schemaRecord && !("properties" in schemaRecord) && conditionalKey === null;
 }
 
 function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
@@ -186,14 +174,10 @@ export function normalizeToolParameterSchema(
   }
 
   if (isObjectLikeSchemaMissingType(schemaRecord, conditionalKey)) {
-    return applyProviderCleaning({
-      ...schemaRecord,
-      type: "object",
-      properties: isSchemaRecord(schemaRecord.properties) ? schemaRecord.properties : {},
-    });
+    return applyProviderCleaning({ ...schemaRecord, type: "object" });
   }
 
-  if (isTypedObjectSchemaMissingValidProperties(schemaRecord, conditionalKey)) {
+  if (isTypedSchemaMissingProperties(schemaRecord, conditionalKey)) {
     return applyProviderCleaning({ ...schemaRecord, properties: {} });
   }
 

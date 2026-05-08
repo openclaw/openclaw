@@ -1,9 +1,9 @@
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
-} from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+} from "../../test/helpers/media-generation/provider-http-mocks.js";
 
 const { postJsonRequestMock, fetchWithTimeoutMock, resolveProviderHttpRequestConfigMock } =
   getProviderHttpMocks();
@@ -17,12 +17,6 @@ beforeAll(async () => {
 installProviderHttpMockCleanup();
 
 describe("openai video generation provider", () => {
-  it("declares the openai-codex alias for default-model ordering", () => {
-    const provider = buildOpenAIVideoGenerationProvider();
-
-    expect(provider.aliases).toContain("openai-codex");
-  });
-
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildOpenAIVideoGenerationProvider());
   });

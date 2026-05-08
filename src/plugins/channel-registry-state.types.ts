@@ -5,9 +5,6 @@ export type ActiveChannelPluginRuntimeShape = {
     markdownCapable?: boolean;
     order?: number;
   } | null;
-  messaging?: {
-    targetPrefixes?: readonly string[];
-  } | null;
   capabilities?: {
     nativeCommands?: boolean;
   } | null;
@@ -18,8 +15,6 @@ export type ActiveChannelPluginRuntimeShape = {
 
 export type ActivePluginChannelRegistration = {
   plugin: ActiveChannelPluginRuntimeShape;
-  pluginId?: string | null;
-  origin?: string | null;
 };
 
 export type ActivePluginChannelRegistry = {

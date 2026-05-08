@@ -46,17 +46,15 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
 
         ```json5
         {
-          plugins: {
-            entries: {
+          models: {
+            providers: {
               comfy: {
-                config: {
-                  mode: "local",
-                  baseUrl: "http://127.0.0.1:8188",
-                  image: {
-                    workflowPath: "./workflows/flux-api.json",
-                    promptNodeId: "6",
-                    outputNodeId: "9",
-                  },
+                mode: "local",
+                baseUrl: "http://127.0.0.1:8188",
+                image: {
+                  workflowPath: "./workflows/flux-api.json",
+                  promptNodeId: "6",
+                  outputNodeId: "9",
                 },
               },
             },
@@ -106,7 +104,7 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
         export COMFY_CLOUD_API_KEY="your-key"
 
         # Or inline in config
-        openclaw config set plugins.entries.comfy.config.apiKey "your-key"
+        openclaw config set models.providers.comfy.apiKey "your-key"
         ```
       </Step>
       <Step title="Prepare your workflow JSON">
@@ -117,16 +115,14 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
 
         ```json5
         {
-          plugins: {
-            entries: {
+          models: {
+            providers: {
               comfy: {
-                config: {
-                  mode: "cloud",
-                  image: {
-                    workflowPath: "./workflows/flux-api.json",
-                    promptNodeId: "6",
-                    outputNodeId: "9",
-                  },
+                mode: "cloud",
+                image: {
+                  workflowPath: "./workflows/flux-api.json",
+                  promptNodeId: "6",
+                  outputNodeId: "9",
                 },
               },
             },
@@ -167,27 +163,25 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 
 ```json5
 {
-  plugins: {
-    entries: {
+  models: {
+    providers: {
       comfy: {
-        config: {
-          mode: "local",
-          baseUrl: "http://127.0.0.1:8188",
-          image: {
-            workflowPath: "./workflows/flux-api.json",
-            promptNodeId: "6",
-            outputNodeId: "9",
-          },
-          video: {
-            workflowPath: "./workflows/video-api.json",
-            promptNodeId: "12",
-            outputNodeId: "21",
-          },
-          music: {
-            workflowPath: "./workflows/music-api.json",
-            promptNodeId: "3",
-            outputNodeId: "18",
-          },
+        mode: "local",
+        baseUrl: "http://127.0.0.1:8188",
+        image: {
+          workflowPath: "./workflows/flux-api.json",
+          promptNodeId: "6",
+          outputNodeId: "9",
+        },
+        video: {
+          workflowPath: "./workflows/video-api.json",
+          promptNodeId: "12",
+          outputNodeId: "21",
+        },
+        music: {
+          workflowPath: "./workflows/music-api.json",
+          promptNodeId: "3",
+          outputNodeId: "18",
         },
       },
     },
@@ -248,17 +242,15 @@ The `image` and `video` sections also support:
 
     ```json5
     {
-      plugins: {
-        entries: {
+      models: {
+        providers: {
           comfy: {
-            config: {
-              image: {
-                workflowPath: "./workflows/edit-api.json",
-                promptNodeId: "6",
-                inputImageNodeId: "7",
-                inputImageInputName: "image",
-                outputNodeId: "9",
-              },
+            image: {
+              workflowPath: "./workflows/edit-api.json",
+              promptNodeId: "6",
+              inputImageNodeId: "7",
+              inputImageInputName: "image",
+              outputNodeId: "9",
             },
           },
         },
@@ -307,14 +299,12 @@ The `image` and `video` sections also support:
 
     ```json5
     {
-      plugins: {
-        entries: {
+      models: {
+        providers: {
           comfy: {
-            config: {
-              workflowPath: "./workflows/flux-api.json",
-              promptNodeId: "6",
-              outputNodeId: "9",
-            },
+            workflowPath: "./workflows/flux-api.json",
+            promptNodeId: "6",
+            outputNodeId: "9",
           },
         },
       },

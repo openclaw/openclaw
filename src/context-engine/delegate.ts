@@ -74,8 +74,6 @@ export async function delegateCompactionToRuntime(
           tokensBefore: result.result.tokensBefore,
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
-          sessionId: result.result.sessionId,
-          sessionFile: result.result.sessionFile,
         }
       : undefined,
   };

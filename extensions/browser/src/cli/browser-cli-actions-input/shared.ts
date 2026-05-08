@@ -9,7 +9,7 @@ import {
   type BrowserFormField,
 } from "../core-api.js";
 
-type BrowserActionContext = {
+export type BrowserActionContext = {
   parent: BrowserParentOpts;
   profile: string | undefined;
 };

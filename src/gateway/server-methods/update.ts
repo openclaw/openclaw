@@ -1,36 +1,21 @@
-import { isRestartEnabled } from "../../config/commands.flags.js";
+import { loadConfig } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
-import { readPackageVersion } from "../../infra/package-json.js";
 import {
-  buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
-import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
+import { runGatewayUpdate } from "../../infra/update-runner.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
-import { validateUpdateRunParams, validateUpdateStatusParams } from "../protocol/index.js";
-import {
-  getLatestUpdateRestartSentinel,
-  recordLatestUpdateRestartSentinel,
-} from "../server-restart-sentinel.js";
+import { validateUpdateRunParams } from "../protocol/index.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
-  "update.status": async ({ params, respond }) => {
-    if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
-      return;
-    }
-    respond(true, {
-      sentinel: getLatestUpdateRestartSentinel(),
-    });
-  },
   "update.run": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
@@ -41,7 +26,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       deliveryContext: requestedDeliveryContext,
       threadId: requestedThreadId,
       note,
-      continuationMessage,
       restartDelayMs,
     } = parseRestartRequestParams(params);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
@@ -56,7 +40,7 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
-      const config = context.getRuntimeConfig();
+      const config = loadConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
       const root =
         (await resolveOpenClawPackageRoot({
@@ -64,47 +48,22 @@ export const updateHandlers: GatewayRequestHandlers = {
           argv1: process.argv[1],
           cwd: process.cwd(),
         })) ?? process.cwd();
-      const installSurface = await resolveUpdateInstallSurface({
+      result = await runGatewayUpdate({
         timeoutMs,
         cwd: root,
         argv1: process.argv[1],
+        channel: configChannel ?? undefined,
       });
-      const supervisor = detectRespawnSupervisor(process.env, process.platform);
-      if (!isRestartEnabled(config) && !supervisor) {
-        const beforeVersion = installSurface.root
-          ? await readPackageVersion(installSurface.root)
-          : null;
-        result = {
-          status: "skipped",
-          mode: installSurface.mode,
-          ...(installSurface.root ? { root: installSurface.root } : {}),
-          reason: installSurface.kind === "global" ? "restart-unavailable" : "restart-disabled",
-          ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
-          steps: [],
-          durationMs: 0,
-        };
-      } else {
-        result = await runGatewayUpdate({
-          timeoutMs,
-          cwd: root,
-          argv1: process.argv[1],
-          channel: configChannel ?? undefined,
-        });
-      }
-    } catch {
+    } catch (err) {
       result = {
         status: "error",
         mode: "unknown",
-        reason: "unexpected-error",
+        reason: String(err),
         steps: [],
         durationMs: 0,
       };
     }
 
-    const continuation =
-      result.status === "ok"
-        ? buildRestartSuccessContinuation({ sessionKey, continuationMessage })
-        : null;
     const payload: RestartSentinelPayload = {
       kind: "update",
       status: result.status,
@@ -113,7 +72,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       deliveryContext,
       threadId,
       message: note ?? null,
-      ...(continuation ? { continuation } : {}),
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
         mode: result.mode,
@@ -139,7 +97,6 @@ export const updateHandlers: GatewayRequestHandlers = {
     let sentinelPath: string | null = null;
     try {
       sentinelPath = await writeRestartSentinel(payload);
-      recordLatestUpdateRestartSentinel(payload);
     } catch {
       sentinelPath = null;
     }
@@ -147,14 +104,11 @@ export const updateHandlers: GatewayRequestHandlers = {
     // Only restart the gateway when the update actually succeeded.
     // Restarting after a failed update leaves the process in a broken state
     // (corrupted node_modules, partial builds) and causes a crash loop.
-    const updateWasPackageSwap = result.status === "ok" && result.mode !== "git";
     const restart =
       result.status === "ok"
         ? scheduleGatewaySigusr1Restart({
-            delayMs: updateWasPackageSwap ? 0 : restartDelayMs,
+            delayMs: restartDelayMs,
             reason: "update.run",
-            skipDeferral: updateWasPackageSwap,
-            skipCooldown: updateWasPackageSwap,
             audit: {
               actor: actor.actor,
               deviceId: actor.deviceId,
@@ -175,7 +129,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     respond(
       true,
       {
-        ok: result.status === "ok",
+        ok: result.status !== "error",
         result,
         restart,
         sentinel: {

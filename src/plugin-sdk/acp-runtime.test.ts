@@ -145,7 +145,6 @@ describe("tryDispatchAcpReplyHook", () => {
     expect(dispatchMock).toHaveBeenCalledWith(
       expect.objectContaining({
         suppressUserDelivery: true,
-        suppressReplyLifecycle: true,
         bypassForCommand: false,
       }),
     );

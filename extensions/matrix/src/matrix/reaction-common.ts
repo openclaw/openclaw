@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 export const MATRIX_ANNOTATION_RELATION_TYPE = "m.annotation";
 export const MATRIX_REACTION_EVENT_TYPE = "m.reaction";
 
-type MatrixReactionEventContent = {
+export type MatrixReactionEventContent = {
   "m.relates_to": {
     rel_type: typeof MATRIX_ANNOTATION_RELATION_TYPE;
     event_id: string;
@@ -17,7 +17,7 @@ export type MatrixReactionSummary = {
   users: string[];
 };
 
-type MatrixReactionAnnotation = {
+export type MatrixReactionAnnotation = {
   key: string;
   eventId?: string;
 };
@@ -28,7 +28,7 @@ type MatrixReactionEventLike = {
   event_id?: string | null;
 };
 
-function normalizeMatrixReactionMessageId(messageId: string): string {
+export function normalizeMatrixReactionMessageId(messageId: string): string {
   const normalized = messageId.trim();
   if (!normalized) {
     throw new Error("Matrix reaction requires a messageId");
@@ -36,7 +36,7 @@ function normalizeMatrixReactionMessageId(messageId: string): string {
   return normalized;
 }
 
-function normalizeMatrixReactionEmoji(emoji: string): string {
+export function normalizeMatrixReactionEmoji(emoji: string): string {
   const normalized = emoji.trim();
   if (!normalized) {
     throw new Error("Matrix reaction requires an emoji");
@@ -96,7 +96,7 @@ export function extractMatrixReactionAnnotation(
   };
 }
 
-function extractMatrixReactionKey(content: unknown): string | undefined {
+export function extractMatrixReactionKey(content: unknown): string | undefined {
   return extractMatrixReactionAnnotation(content)?.key;
 }
 

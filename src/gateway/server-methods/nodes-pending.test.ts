@@ -41,7 +41,6 @@ function makeContext(overrides?: Partial<Record<string, unknown>>) {
       info: vi.fn(),
       warn: vi.fn(),
     },
-    getRuntimeConfig: () => ({}),
     ...overrides,
   };
 }
@@ -158,7 +157,6 @@ describe("node.pending handlers", () => {
     });
     expect(mocks.maybeWakeNodeWithApns).toHaveBeenCalledWith("ios-node-2", {
       wakeReason: "node.pending",
-      cfg: {},
     });
     expect(mocks.waitForNodeReconnect).toHaveBeenCalledWith({
       nodeId: "ios-node-2",

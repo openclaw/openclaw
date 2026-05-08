@@ -1,4 +1,4 @@
-import { parseCustomId, type ComponentParserResult } from "./internal/discord.js";
+import { parseCustomId, type ComponentParserResult } from "@buape/carbon";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
@@ -49,7 +49,7 @@ function isDiscordComponentWildcardRegistrationId(id: string): boolean {
   return /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id);
 }
 
-export function parseDiscordComponentCustomIdForInteraction(id: string): ComponentParserResult {
+export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentParserResult {
   if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
@@ -60,7 +60,7 @@ export function parseDiscordComponentCustomIdForInteraction(id: string): Compone
   return { key: "*", data: parsed.data };
 }
 
-export function parseDiscordModalCustomIdForInteraction(id: string): ComponentParserResult {
+export function parseDiscordModalCustomIdForCarbon(id: string): ComponentParserResult {
   if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }

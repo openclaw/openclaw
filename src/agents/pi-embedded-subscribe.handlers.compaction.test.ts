@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { drainSessionStoreWriterQueuesForTest } from "../config/sessions.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  drainSessionStoreLockQueuesForTest,
+  resetSessionStoreLockRuntimeForTests,
+  setSessionWriteLockAcquirerForTests,
+} from "../config/sessions.js";
 import {
   readCompactionCount,
   seedSessionStore,
@@ -48,13 +52,18 @@ function createCompactionContext(params: {
       compactionCount += 1;
     },
     getCompactionCount: () => compactionCount,
-    noteCompactionTokensAfter: vi.fn(),
-    getLastCompactionTokensAfter: vi.fn(() => undefined),
   } as unknown as EmbeddedPiSubscribeContext;
 }
 
+beforeEach(() => {
+  setSessionWriteLockAcquirerForTests(async () => ({
+    release: async () => {},
+  }));
+});
+
 afterEach(async () => {
-  await drainSessionStoreWriterQueuesForTest();
+  resetSessionStoreLockRuntimeForTests();
+  await drainSessionStoreLockQueuesForTest();
 });
 
 describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
@@ -134,6 +143,5 @@ describe("handleCompactionEnd", () => {
     });
 
     expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
-    expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(undefined);
   });
 });

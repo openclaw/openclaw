@@ -7,6 +7,5 @@ export type {
 export {
   closeAllMemorySearchManagers,
   getMemorySearchManager,
-  type MemorySearchManagerPurpose,
   type MemorySearchManagerResult,
 } from "./search-manager.js";

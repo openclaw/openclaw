@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadChannelSecretContractApi } from "./channel-contract-api.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 import { getPath } from "./path-utils.js";
 import { getCoreSecretTargetRegistry, getSecretTargetRegistry } from "./target-registry-data.js";
 import {
@@ -32,7 +32,10 @@ let compiledCoreOpenClawTargetState: {
   targetsByType: Map<string, CompiledTargetRegistryEntry[]>;
 } | null = null;
 
-const compiledChannelOpenClawTargets = new Map<string, CompiledTargetRegistryEntry[] | null>();
+const compiledBundledChannelOpenClawTargets = new Map<
+  string,
+  CompiledTargetRegistryEntry[] | null
+>();
 
 function buildTargetTypeIndex(
   compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],
@@ -109,25 +112,21 @@ function getCompiledCoreOpenClawTargetState() {
   return compiledCoreOpenClawTargetState;
 }
 
-function getCompiledChannelOpenClawTargets(
+function getCompiledBundledChannelOpenClawTargets(
   channelId: string,
 ): CompiledTargetRegistryEntry[] | null {
   const normalizedChannelId = channelId.trim();
   if (!normalizedChannelId) {
     return null;
   }
-  if (compiledChannelOpenClawTargets.has(normalizedChannelId)) {
-    return compiledChannelOpenClawTargets.get(normalizedChannelId) ?? null;
+  if (compiledBundledChannelOpenClawTargets.has(normalizedChannelId)) {
+    return compiledBundledChannelOpenClawTargets.get(normalizedChannelId) ?? null;
   }
   const compiledEntries =
-    loadChannelSecretContractApi({
-      channelId: normalizedChannelId,
-      config: {} as OpenClawConfig,
-      env: process.env,
-    })
+    loadBundledChannelSecretContractApi(normalizedChannelId)
       ?.secretTargetRegistryEntries?.filter((entry) => entry.configFile === "openclaw.json")
       .map(compileTargetRegistryEntry) ?? null;
-  compiledChannelOpenClawTargets.set(normalizedChannelId, compiledEntries);
+  compiledBundledChannelOpenClawTargets.set(normalizedChannelId, compiledEntries);
   return compiledEntries;
 }
 
@@ -252,6 +251,12 @@ export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   );
 }
 
+export function isKnownSecretTargetType(value: unknown): value is string {
+  return (
+    typeof value === "string" && getCompiledSecretTargetRegistryState().targetsByType.has(value)
+  );
+}
+
 export function isKnownSecretTargetId(value: unknown): value is string {
   return (
     typeof value === "string" && getCompiledSecretTargetRegistryState().knownTargetIds.has(value)
@@ -328,11 +333,12 @@ export function resolveConfigSecretTargetByPath(pathSegments: string[]): Resolve
     return resolved;
   }
 
-  const explicitChannelId = pathSegments[0] === "channels" ? (pathSegments[1]?.trim() ?? "") : "";
-  const explicitChannelEntries = explicitChannelId
-    ? getCompiledChannelOpenClawTargets(explicitChannelId)
+  const explicitBundledChannelId =
+    pathSegments[0] === "channels" ? (pathSegments[1]?.trim() ?? "") : "";
+  const explicitBundledChannelEntries = explicitBundledChannelId
+    ? getCompiledBundledChannelOpenClawTargets(explicitBundledChannelId)
     : null;
-  for (const entry of explicitChannelEntries ?? []) {
+  for (const entry of explicitBundledChannelEntries ?? []) {
     if (!entry.includeInPlan) {
       continue;
     }
@@ -390,7 +396,11 @@ export function discoverConfigSecretTargetsByIds(
   return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }
 
-export function discoverAuthProfileSecretTargets(
+export function discoverAuthProfileSecretTargets(store: unknown): DiscoveredConfigSecretTarget[] {
+  return discoverAuthProfileSecretTargetsByIds(store);
+}
+
+export function discoverAuthProfileSecretTargetsByIds(
   store: unknown,
   targetIds?: Iterable<string>,
 ): DiscoveredConfigSecretTarget[] {

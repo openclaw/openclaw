@@ -7,7 +7,6 @@ export function resolveActiveRunQueueAction(params: {
   isHeartbeat: boolean;
   shouldFollowup: boolean;
   queueMode: QueueSettings["mode"];
-  resetTriggered?: boolean;
 }): ActiveRunQueueAction {
   if (!params.isActive) {
     return "run-now";
@@ -15,10 +14,7 @@ export function resolveActiveRunQueueAction(params: {
   if (params.isHeartbeat) {
     return "drop";
   }
-  if (params.resetTriggered) {
-    return "run-now";
-  }
-  if (params.shouldFollowup || params.queueMode === "steer" || params.queueMode === "queue") {
+  if (params.shouldFollowup || params.queueMode === "steer") {
     return "enqueue-followup";
   }
   return "run-now";

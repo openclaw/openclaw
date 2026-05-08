@@ -1,17 +1,24 @@
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
+import {
+  buildDoubaoModelDefinition,
+  DOUBAO_BASE_URL,
+  DOUBAO_CODING_BASE_URL,
+  DOUBAO_CODING_MODEL_CATALOG,
+  DOUBAO_MODEL_CATALOG,
+} from "./models.js";
 
 export function buildDoubaoProvider(): ModelProviderConfig {
-  return buildManifestModelProviderConfig({
-    providerId: "volcengine",
-    catalog: manifest.modelCatalog.providers.volcengine,
-  });
+  return {
+    baseUrl: DOUBAO_BASE_URL,
+    api: "openai-completions",
+    models: DOUBAO_MODEL_CATALOG.map(buildDoubaoModelDefinition),
+  };
 }
 
 export function buildDoubaoCodingProvider(): ModelProviderConfig {
-  return buildManifestModelProviderConfig({
-    providerId: "volcengine-plan",
-    catalog: manifest.modelCatalog.providers["volcengine-plan"],
-  });
+  return {
+    baseUrl: DOUBAO_CODING_BASE_URL,
+    api: "openai-completions",
+    models: DOUBAO_CODING_MODEL_CATALOG.map(buildDoubaoModelDefinition),
+  };
 }

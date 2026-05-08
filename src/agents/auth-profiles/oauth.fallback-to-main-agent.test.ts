@@ -19,7 +19,6 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
 }));
 
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -183,20 +182,20 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
     // Load the secondary agent's store (will merge with main agent's store)
     // Call resolveApiKeyForProfile with the secondary agent's expired credentials:
-    // fresh main credentials are used read-through without copying the refresh token.
+    // refresh fails, then fallback copies main credentials to secondary.
     const result = await resolveFromSecondaryAgent(profileId);
 
     expect(result).not.toBeNull();
     expect(result?.apiKey).toBe("fresh-access-token");
     expect(result?.provider).toBe("anthropic");
 
-    // The secondary store keeps its local credential; inherited OAuth is read-through.
-    const secondaryStore = JSON.parse(
+    // Verify the credentials were copied to the secondary agent
+    const updatedSecondaryStore = JSON.parse(
       await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    expect(secondaryStore.profiles[profileId]).toMatchObject({
-      access: "expired-access-token",
-      expires: expiredTime,
+    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
+      access: "fresh-access-token",
+      expires: freshTime,
     });
   });
 
@@ -230,12 +229,12 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
     expect(result?.apiKey).toBe("main-newer-access-token");
 
-    const secondaryStore = JSON.parse(
+    const updatedSecondaryStore = JSON.parse(
       await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    expect(secondaryStore.profiles[profileId]).toMatchObject({
-      access: "secondary-access-token",
-      expires: secondaryExpiry,
+    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
+      access: "main-newer-access-token",
+      expires: mainExpiry,
     });
   });
 

@@ -211,27 +211,6 @@ export function deriveTaskFlowStatusFromTask(
   return "failed";
 }
 
-function isTerminalTaskFlowStatus(status: TaskFlowStatus): boolean {
-  return (
-    status === "succeeded" ||
-    status === "blocked" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "lost"
-  );
-}
-
-function resolveTaskMirroredFlowTiming(
-  task: Pick<TaskRecord, "createdAt" | "lastEventAt" | "endedAt">,
-  isTerminal: boolean,
-): { updatedAt: number; endedAt?: number } {
-  if (!isTerminal) {
-    return { updatedAt: task.lastEventAt ?? task.createdAt };
-  }
-  const endedAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
-  return { updatedAt: endedAt, endedAt };
-}
-
 function ensureFlowRegistryReady() {
   if (restoreAttempted) {
     return;
@@ -404,10 +383,15 @@ export function createTaskFlowForTask(params: {
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
 }): TaskFlowRecord {
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(params.task);
-  const timing = resolveTaskMirroredFlowTiming(
-    params.task,
-    isTerminalTaskFlowStatus(terminalFlowStatus),
-  );
+  const isTerminal =
+    terminalFlowStatus === "succeeded" ||
+    terminalFlowStatus === "blocked" ||
+    terminalFlowStatus === "failed" ||
+    terminalFlowStatus === "cancelled" ||
+    terminalFlowStatus === "lost";
+  const endedAt = isTerminal
+    ? (params.task.endedAt ?? params.task.lastEventAt ?? params.task.createdAt)
+    : undefined;
   return createFlowRecord({
     syncMode: "task_mirrored",
     ownerKey: params.task.ownerKey,
@@ -420,8 +404,8 @@ export function createTaskFlowForTask(params: {
       terminalFlowStatus === "blocked" ? normalizeOptionalString(params.task.taskId) : undefined,
     blockedSummary: resolveFlowBlockedSummary(params.task),
     createdAt: params.task.createdAt,
-    updatedAt: timing.updatedAt,
-    ...(timing.endedAt !== undefined ? { endedAt: timing.endedAt } : {}),
+    updatedAt: params.task.lastEventAt ?? params.task.createdAt,
+    ...(endedAt !== undefined ? { endedAt } : {}),
   });
 }
 
@@ -613,15 +597,12 @@ export function syncFlowFromTask(
     return flow;
   }
   const terminalFlowStatus = deriveTaskFlowStatusFromTask(task);
-  const isTerminal = isTerminalTaskFlowStatus(terminalFlowStatus);
-  const timing = resolveTaskMirroredFlowTiming(
-    {
-      createdAt: flow.createdAt,
-      lastEventAt: task.lastEventAt,
-      endedAt: task.endedAt,
-    },
-    isTerminal,
-  );
+  const isTerminal =
+    terminalFlowStatus === "succeeded" ||
+    terminalFlowStatus === "blocked" ||
+    terminalFlowStatus === "failed" ||
+    terminalFlowStatus === "cancelled" ||
+    terminalFlowStatus === "lost";
   return updateFlowRecordByIdUnchecked(flowId, {
     status: terminalFlowStatus,
     notifyPolicy: task.notifyPolicy,
@@ -630,10 +611,10 @@ export function syncFlowFromTask(
     blockedSummary:
       terminalFlowStatus === "blocked" ? (resolveFlowBlockedSummary(task) ?? null) : null,
     waitJson: null,
-    updatedAt: timing.updatedAt,
+    updatedAt: task.lastEventAt ?? Date.now(),
     ...(isTerminal
       ? {
-          endedAt: timing.endedAt ?? timing.updatedAt,
+          endedAt: task.endedAt ?? task.lastEventAt ?? Date.now(),
         }
       : { endedAt: null }),
   });

@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "./channel-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
-export function buildSlackManifest(botName = "OpenClaw") {
+function buildSlackManifest(botName: string) {
   const safeName = botName.trim() || "OpenClaw";
   const manifest = {
     display_information: {
@@ -20,7 +20,6 @@ export function buildSlackManifest(botName = "OpenClaw") {
         always_online: true,
       },
       app_home: {
-        home_tab_enabled: true,
         messages_tab_enabled: true,
         messages_tab_read_only_enabled: false,
       },
@@ -56,7 +55,6 @@ export function buildSlackManifest(botName = "OpenClaw") {
           "pins:write",
           "reactions:read",
           "reactions:write",
-          "usergroups:read",
           "users:read",
         ],
       },
@@ -65,7 +63,6 @@ export function buildSlackManifest(botName = "OpenClaw") {
       socket_mode_enabled: true,
       event_subscriptions: {
         bot_events: [
-          "app_home_opened",
           "app_mention",
           "channel_rename",
           "member_joined_channel",
@@ -85,16 +82,18 @@ export function buildSlackManifest(botName = "OpenClaw") {
   return JSON.stringify(manifest, null, 2);
 }
 
-export function buildSlackSetupLines(): string[] {
+export function buildSlackSetupLines(botName = "OpenClaw"): string[] {
   return [
     "1) Slack API -> Create App -> From scratch or From manifest (with the JSON below)",
     "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
     "3) Install App to workspace to get the xoxb- bot token",
-    "4) Enable Event Subscriptions (socket) for message and App Home events",
-    "5) App Home -> enable the Home tab and Messages tab for DMs",
-    "Manifest JSON follows as plain text for copy/paste.",
+    "4) Enable Event Subscriptions (socket) for message events",
+    "5) App Home -> enable the Messages tab for DMs",
     "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
     `Docs: ${formatDocsLink("/slack", "slack")}`,
+    "",
+    "Manifest (JSON):",
+    buildSlackManifest(botName),
   ];
 }
 

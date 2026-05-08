@@ -56,10 +56,6 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
       configuredCredential: { pluginId: "searxng", field: "baseUrl" },
       selectionPluginId: "searxng",
     }),
-    credentialNote: [
-      "For the SearXNG JSON API to work, make sure your SearXNG instance",
-      "has the json format enabled in its settings.yml under search.formats.",
-    ].join("\n"),
     createTool: (ctx) => ({
       description:
         "Search the web using a self-hosted SearXNG instance. Returns titles, URLs, and snippets.",

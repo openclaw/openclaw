@@ -10,7 +10,6 @@ import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isWithinDir } from "../infra/path-safety.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
@@ -18,10 +17,11 @@ import type { SkillInstallResult } from "./skills-install.types.js";
 import type { SkillEntry, SkillInstallSpec } from "./skills.js";
 import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 
-const extractModuleLoader = createLazyImportLoader(() => import("./skills-install-extract.js"));
+let extractModulePromise: Promise<typeof import("./skills-install-extract.js")> | undefined;
 
 async function loadExtractModule() {
-  return await extractModuleLoader.load();
+  extractModulePromise ??= import("./skills-install-extract.js");
+  return await extractModulePromise;
 }
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {

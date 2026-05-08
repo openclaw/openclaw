@@ -1,13 +1,21 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } = vi.hoisted(() => ({
-  readLoggingConfigMock: vi.fn<() => unknown>(() => undefined),
-  shouldSkipMutatingLoggingConfigReadMock: vi.fn(() => false),
-}));
+const { fallbackRequireMock, readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } =
+  vi.hoisted(() => ({
+    readLoggingConfigMock: vi.fn(() => undefined),
+    shouldSkipMutatingLoggingConfigReadMock: vi.fn(() => false),
+    fallbackRequireMock: vi.fn(() => {
+      throw new Error("config fallback should not be used in this test");
+    }),
+  }));
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: readLoggingConfigMock,
   shouldSkipMutatingLoggingConfigRead: shouldSkipMutatingLoggingConfigReadMock,
+}));
+
+vi.mock("./node-require.js", () => ({
+  resolveNodeRequireFromMeta: () => fallbackRequireMock,
 }));
 
 let originalTestFileLog: string | undefined;
@@ -23,10 +31,10 @@ beforeEach(() => {
   originalOpenClawLogLevel = process.env.OPENCLAW_LOG_LEVEL;
   delete process.env.OPENCLAW_TEST_FILE_LOG;
   delete process.env.OPENCLAW_LOG_LEVEL;
-  readLoggingConfigMock.mockReset();
-  readLoggingConfigMock.mockReturnValue(undefined);
+  readLoggingConfigMock.mockClear();
   shouldSkipMutatingLoggingConfigReadMock.mockReset();
   shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(false);
+  fallbackRequireMock.mockClear();
   logging.resetLogger();
   logging.setLoggerOverride(null);
 });
@@ -52,31 +60,22 @@ describe("getResolvedLoggerSettings", () => {
     const settings = logging.getResolvedLoggerSettings();
     expect(settings.level).toBe("silent");
     expect(readLoggingConfigMock).not.toHaveBeenCalled();
+    expect(fallbackRequireMock).not.toHaveBeenCalled();
   });
 
   it("reads logging config when test file logging is explicitly enabled", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";
-    readLoggingConfigMock.mockReturnValue({
-      level: "debug",
-      file: "/tmp/openclaw-configured.log",
-      maxFileBytes: 2048,
-    });
-
     const settings = logging.getResolvedLoggerSettings();
-
-    expect(settings).toMatchObject({
-      level: "debug",
-      file: "/tmp/openclaw-configured.log",
-      maxFileBytes: 2048,
-    });
+    expect(settings.level).toBe("info");
   });
 
-  it("uses defaults when config schema skips logging config reads", () => {
+  it("skips fallback config loads for config schema", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";
     shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(true);
 
     const settings = logging.getResolvedLoggerSettings();
 
     expect(settings.level).toBe("info");
+    expect(fallbackRequireMock).not.toHaveBeenCalled();
   });
 });

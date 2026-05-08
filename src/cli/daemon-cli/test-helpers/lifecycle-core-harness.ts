@@ -40,9 +40,6 @@ export function resetLifecycleRuntimeLogs() {
 
 export function resetLifecycleServiceMocks() {
   service.stage.mockClear();
-  service.install.mockClear();
-  service.uninstall.mockClear();
-  service.stop.mockClear();
   service.isLoaded.mockClear();
   service.readCommand.mockClear();
   service.readRuntime.mockClear();
@@ -50,8 +47,6 @@ export function resetLifecycleServiceMocks() {
   service.isLoaded.mockResolvedValue(true);
   service.readCommand.mockResolvedValue({ programArguments: [], environment: {} });
   service.readRuntime.mockResolvedValue({ status: "running" });
-  service.stop.mockResolvedValue(undefined);
-  service.uninstall.mockResolvedValue(undefined);
   service.restart.mockResolvedValue({ outcome: "completed" });
 }
 

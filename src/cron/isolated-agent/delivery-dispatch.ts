@@ -13,20 +13,16 @@ import {
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { TtsAutoMode } from "../../config/types.tts.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
@@ -108,7 +104,6 @@ type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
-  runSessionKey: string;
   sessionId: string;
   runStartedAt: number;
   runEndedAt: number;
@@ -122,7 +117,6 @@ type DispatchCronDeliveryParams = {
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
   synthesizedText?: string;
-  ttsAuto?: TtsAutoMode;
   summary?: string;
   outputText?: string;
   telemetry?: CronRunTelemetry;
@@ -174,53 +168,51 @@ type CompletedDirectCronDelivery = {
   results: OutboundDeliveryResult[];
 };
 
-const gatewayCallRuntimeLoader = createLazyImportLoader(
-  () => import("../../gateway/call.runtime.js"),
-);
-const deliveryOutboundRuntimeLoader = createLazyImportLoader(
-  () => import("./delivery-outbound.runtime.js"),
-);
-const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
-  () => import("./delivery-subagent-registry.runtime.js"),
-);
-const deliveryLoggerRuntimeLoader = createLazyImportLoader(
-  () => import("./delivery-logger.runtime.js"),
-);
-const subagentFollowupRuntimeLoader = createLazyImportLoader(
-  () => import("./subagent-followup.runtime.js"),
-);
-const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
+let gatewayCallRuntimePromise: Promise<typeof import("../../gateway/call.runtime.js")> | undefined;
+let deliveryOutboundRuntimePromise:
+  | Promise<typeof import("./delivery-outbound.runtime.js")>
+  | undefined;
+let deliverySubagentRegistryRuntimePromise:
+  | Promise<typeof import("./delivery-subagent-registry.runtime.js")>
+  | undefined;
+let deliveryLoggerRuntimePromise:
+  | Promise<typeof import("./delivery-logger.runtime.js")>
+  | undefined;
+let subagentFollowupRuntimePromise:
+  | Promise<typeof import("./subagent-followup.runtime.js")>
+  | undefined;
 
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
 
 async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
-  return await gatewayCallRuntimeLoader.load();
+  gatewayCallRuntimePromise ??= import("../../gateway/call.runtime.js");
+  return await gatewayCallRuntimePromise;
 }
 
 async function loadDeliveryOutboundRuntime(): Promise<
   typeof import("./delivery-outbound.runtime.js")
 > {
-  return await deliveryOutboundRuntimeLoader.load();
+  deliveryOutboundRuntimePromise ??= import("./delivery-outbound.runtime.js");
+  return await deliveryOutboundRuntimePromise;
 }
 
 async function loadDeliverySubagentRegistryRuntime(): Promise<
   typeof import("./delivery-subagent-registry.runtime.js")
 > {
-  return await deliverySubagentRegistryRuntimeLoader.load();
+  deliverySubagentRegistryRuntimePromise ??= import("./delivery-subagent-registry.runtime.js");
+  return await deliverySubagentRegistryRuntimePromise;
 }
 
 async function loadDeliveryLoggerRuntime(): Promise<typeof import("./delivery-logger.runtime.js")> {
-  return await deliveryLoggerRuntimeLoader.load();
+  deliveryLoggerRuntimePromise ??= import("./delivery-logger.runtime.js");
+  return await deliveryLoggerRuntimePromise;
 }
 
 async function loadSubagentFollowupRuntime(): Promise<
   typeof import("./subagent-followup.runtime.js")
 > {
-  return await subagentFollowupRuntimeLoader.load();
-}
-
-async function loadTtsRuntime(): Promise<typeof import("../../tts/tts.runtime.js")> {
-  return await ttsRuntimeLoader.load();
+  subagentFollowupRuntimePromise ??= import("./subagent-followup.runtime.js");
+  return await subagentFollowupRuntimePromise;
 }
 
 async function logCronDeliveryWarn(message: string): Promise<void> {
@@ -309,40 +301,6 @@ function getCompletedDirectCronDelivery(
   return cloneDeliveryResults(cached.results);
 }
 
-async function maybeApplyTtsToCronPayloads(params: {
-  cfg: OpenClawConfig;
-  payloads: ReplyPayload[];
-  delivery: SuccessfulDeliveryTarget;
-  agentId: string;
-  ttsAuto?: TtsAutoMode;
-}): Promise<ReplyPayload[]> {
-  if (
-    !shouldAttemptTtsPayload({
-      cfg: params.cfg,
-      ttsAuto: params.ttsAuto,
-      agentId: params.agentId,
-      channelId: params.delivery.channel,
-      accountId: params.delivery.accountId,
-    })
-  ) {
-    return params.payloads;
-  }
-  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
-  return await Promise.all(
-    params.payloads.map((payload) =>
-      maybeApplyTtsToPayload({
-        payload,
-        cfg: params.cfg,
-        channel: params.delivery.channel,
-        kind: "final",
-        ttsAuto: params.ttsAuto,
-        agentId: params.agentId,
-        accountId: params.delivery.accountId,
-      }),
-    ),
-  );
-}
-
 function buildDirectCronDeliveryIdempotencyKey(params: {
   jobId: string;
   runStartedAt: number;
@@ -352,24 +310,16 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   const threadId =
     params.delivery.threadId == null || params.delivery.threadId === ""
       ? ""
-      : (stringifyRouteThreadId(params.delivery.threadId) ?? "");
+      : String(params.delivery.threadId);
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
   return `cron-direct-delivery:v1:${executionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
-function shouldQueueCronAwareness(params: {
-  job: CronJob;
-  delivery: SuccessfulDeliveryTarget;
-  deliveryBestEffort: boolean;
-}): boolean {
-  // Keep issue #52136 scoped to isolated runs with an explicit delivery target.
-  // Default isolated announce delivery must not mirror text into the main session.
-  return (
-    params.job.sessionTarget === "isolated" &&
-    !params.deliveryBestEffort &&
-    params.delivery.mode === "explicit"
-  );
+function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
+  // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs keep
+  // their existing behavior, and best-effort sends may only partially deliver.
+  return job.sessionTarget === "isolated" && !deliveryBestEffort;
 }
 
 function resolveCronAwarenessMainSessionKey(params: {
@@ -572,7 +522,7 @@ export async function dispatchCronDelivery(
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
-      const normalizedPayloads = rawPayloads
+      const payloadsForDelivery = rawPayloads
         .map((p) => {
           if (!p.text) {
             return p;
@@ -583,7 +533,7 @@ export async function dispatchCronDelivery(
           });
         })
         .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
-      if (normalizedPayloads.length === 0) {
+      if (payloadsForDelivery.length === 0) {
         return await finishSilentReplyDelivery();
       }
       if (params.isAborted()) {
@@ -622,18 +572,6 @@ export async function dispatchCronDelivery(
           delivered: false,
           ...params.telemetry,
         });
-      }
-      const payloadsForDelivery = (
-        await maybeApplyTtsToCronPayloads({
-          cfg: params.cfgWithAgentDefaults,
-          payloads: normalizedPayloads,
-          delivery,
-          agentId: params.agentId,
-          ttsAuto: params.ttsAuto,
-        })
-      ).filter((p) => hasReplyPayloadContent(p, { trimText: true }));
-      if (payloadsForDelivery.length === 0) {
-        return await finishSilentReplyDelivery();
       }
       deliveryAttempted = true;
       const cachedResults = getCompletedDirectCronDelivery(deliveryIdempotencyKey);
@@ -693,14 +631,7 @@ export async function dispatchCronDelivery(
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
-      if (
-        delivered &&
-        shouldQueueCronAwareness({
-          job: params.job,
-          delivery,
-          deliveryBestEffort: params.deliveryBestEffort,
-        })
-      ) {
+      if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
@@ -753,9 +684,8 @@ export async function dispatchCronDelivery(
     const initialSynthesizedText = synthesizedText.trim();
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
     const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
-    const subagentFollowupSessionKey = params.runSessionKey;
     let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-      subagentFollowupSessionKey,
+      params.agentSessionKey,
     );
     const shouldCheckCompletedDescendants =
       activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
@@ -771,24 +701,24 @@ export async function dispatchCronDelivery(
     // descendant's output instead of the interim cron text.
     const completedDescendantReply = shouldCheckCompletedDescendants
       ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: subagentFollowupSessionKey,
+          sessionKey: params.agentSessionKey,
           runStartedAt: params.runStartedAt,
         })
       : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
       let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
-        sessionKey: subagentFollowupSessionKey,
+        sessionKey: params.agentSessionKey,
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
       });
       activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-        subagentFollowupSessionKey,
+        params.agentSessionKey,
       );
       if (!finalReply && activeSubagentRuns === 0) {
         finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: subagentFollowupSessionKey,
+          sessionKey: params.agentSessionKey,
           runStartedAt: params.runStartedAt,
         });
       }

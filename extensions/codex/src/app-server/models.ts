@@ -1,4 +1,3 @@
-import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { v2 } from "./protocol-generated/typescript/index.js";
@@ -29,8 +28,6 @@ export type CodexAppServerListModelsOptions = {
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
-  agentDir?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sharedClient?: boolean;
 };
 
@@ -80,15 +77,11 @@ async function withCodexAppServerModelClient<T>(
         startOptions: options.startOptions,
         timeoutMs,
         authProfileId: options.authProfileId,
-        agentDir: options.agentDir,
-        config: options.config,
       })
     : await createIsolatedCodexAppServerClient({
         startOptions: options.startOptions,
         timeoutMs,
         authProfileId: options.authProfileId,
-        agentDir: options.agentDir,
-        config: options.config,
       });
   try {
     return await run({ client, timeoutMs });

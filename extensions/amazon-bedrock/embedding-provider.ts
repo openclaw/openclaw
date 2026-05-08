@@ -10,7 +10,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 // Types & constants
 // ---------------------------------------------------------------------------
 
-type BedrockEmbeddingClient = {
+export type BedrockEmbeddingClient = {
   region: string;
   model: string;
   dimensions?: number;
@@ -122,8 +122,6 @@ interface AwsCredentialProviderSdk {
   }>;
 }
 
-type AwsCredentialProviderLoader = () => Promise<AwsCredentialProviderSdk | null>;
-
 let sdkCache: AwsSdk | null = null;
 let credentialProviderSdkCache: AwsCredentialProviderSdk | null | undefined;
 
@@ -162,7 +160,7 @@ async function loadCredentialProviderSdk(): Promise<AwsCredentialProviderSdk | n
 const MODEL_PREFIX_RE = /^(?:bedrock|amazon-bedrock|aws)\//;
 const REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\./;
 
-function normalizeBedrockEmbeddingModel(model: string): string {
+export function normalizeBedrockEmbeddingModel(model: string): string {
   const trimmed = model.trim();
   return trimmed ? trimmed.replace(MODEL_PREFIX_RE, "") : DEFAULT_BEDROCK_EMBEDDING_MODEL;
 }
@@ -337,7 +335,7 @@ export async function createBedrockEmbeddingProvider(
 // Client resolution
 // ---------------------------------------------------------------------------
 
-function resolveBedrockEmbeddingClient(
+export function resolveBedrockEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): BedrockEmbeddingClient {
   const model = normalizeBedrockEmbeddingModel(options.model);
@@ -370,17 +368,24 @@ function resolveBedrockEmbeddingClient(
 // Credential detection
 // ---------------------------------------------------------------------------
 
-export async function hasAwsCredentials(
-  env: NodeJS.ProcessEnv = process.env,
-  loadCredentialProvider: AwsCredentialProviderLoader = loadCredentialProviderSdk,
-): Promise<boolean> {
+const CREDENTIAL_ENV_VARS = [
+  "AWS_PROFILE",
+  "AWS_BEARER_TOKEN_BEDROCK",
+  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  "AWS_EC2_METADATA_SERVICE_ENDPOINT",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "AWS_ROLE_ARN",
+] as const;
+
+export async function hasAwsCredentials(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
     return true;
   }
-  if (env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
+  if (CREDENTIAL_ENV_VARS.some((k) => env[k]?.trim())) {
     return true;
   }
-  const credentialProviderSdk = await loadCredentialProvider();
+  const credentialProviderSdk = await loadCredentialProviderSdk();
   if (!credentialProviderSdk) {
     return false;
   }

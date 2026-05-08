@@ -23,7 +23,6 @@ export const lmstudioMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdap
       provider,
       runtime: {
         id: "lmstudio",
-        inlineBatchTimeoutMs: 10 * 60_000,
         cacheKeyData: {
           provider: "lmstudio",
           baseUrl: client.baseUrl,

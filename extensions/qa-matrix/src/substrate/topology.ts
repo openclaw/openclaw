@@ -1,6 +1,6 @@
 export type MatrixQaParticipantRole = "driver" | "observer" | "sut";
 
-type MatrixQaRoomKind = "dm" | "group";
+export type MatrixQaRoomKind = "dm" | "group";
 
 export type MatrixQaTopologyRoomSpec = {
   encrypted?: boolean;
@@ -16,7 +16,7 @@ export type MatrixQaTopologySpec = {
   rooms: MatrixQaTopologyRoomSpec[];
 };
 
-type MatrixQaProvisionedRoom = {
+export type MatrixQaProvisionedRoom = {
   encrypted?: boolean;
   key: string;
   kind: MatrixQaRoomKind;

@@ -6,7 +6,6 @@ import {
   type SpeechProviderConfig,
   type SpeechProviderOverrides,
   type SpeechProviderPlugin,
-  type SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -49,7 +48,7 @@ function normalizeXaiSpeechResponseFormat(value: unknown): XaiSpeechResponseForm
 }
 
 function resolveSpeechResponseFormat(
-  target: SpeechSynthesisTarget,
+  target: "audio-file" | "voice-note",
   configuredFormat?: XaiSpeechResponseFormat,
 ): XaiSpeechResponseFormat {
   if (configuredFormat) {
@@ -230,7 +229,6 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
-      const overrides = readXaiOverrides(req.providerOverrides);
       const apiKey = config.apiKey || process.env.XAI_API_KEY;
       if (!apiKey) {
         throw new Error("xAI API key missing");
@@ -241,9 +239,9 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
-        voiceId: overrides.voiceId ?? config.voiceId,
-        language: overrides.language ?? config.language,
-        speed: overrides.speed ?? config.speed,
+        voiceId: config.voiceId,
+        language: config.language,
+        speed: config.speed,
         responseFormat: outputFormat,
         timeoutMs: req.timeoutMs,
       });

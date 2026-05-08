@@ -13,7 +13,7 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
     return true;
   }
-  if (resolvePluginSetupCliBackendRuntime({ backend: normalized, config: cfg })) {
+  if (resolvePluginSetupCliBackendRuntime({ backend: normalized })) {
     return true;
   }
   return false;

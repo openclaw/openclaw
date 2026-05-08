@@ -1,8 +1,5 @@
 import type { EventEmitter } from "node:events";
-import type { GatewayPlugin } from "../internal/gateway.js";
-
-export const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT =
-  "openclaw:discord-gateway-transport-activity";
+import type { GatewayPlugin } from "@buape/carbon/gateway";
 
 export type DiscordGatewayHandle = Pick<GatewayPlugin, "disconnect"> & {
   emitter?: EventEmitter;
@@ -10,7 +7,7 @@ export type DiscordGatewayHandle = Pick<GatewayPlugin, "disconnect"> & {
 
 type GatewaySocketListener = (...args: unknown[]) => void;
 
-type DiscordGatewaySocket = {
+export type DiscordGatewaySocket = {
   on: (event: "close" | "error", listener: GatewaySocketListener) => unknown;
   listeners: (event: "close" | "error") => GatewaySocketListener[];
   removeListener: (event: "close" | "error", listener: GatewaySocketListener) => unknown;

@@ -1,3 +1,3 @@
-import { describeOpenAICodexProviderAuthContract } from "openclaw/plugin-sdk/provider-test-contracts";
+import { describeOpenAICodexProviderAuthContract } from "../../test/helpers/plugins/provider-auth-contract.js";
 
 describeOpenAICodexProviderAuthContract(() => import("./index.js"));

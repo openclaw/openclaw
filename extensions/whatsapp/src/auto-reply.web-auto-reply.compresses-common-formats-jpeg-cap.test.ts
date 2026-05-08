@@ -3,7 +3,6 @@ import sharp from "sharp";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createMockWebListener,
-  createAcceptedWhatsAppSendResult,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
@@ -30,8 +29,7 @@ describe("web auto-reply", () => {
     sendMedia: ReturnType<typeof vi.fn>;
     reply?: ReturnType<typeof vi.fn>;
   }) {
-    const reply =
-      params.reply ?? vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
+    const reply = params.reply ?? vi.fn().mockResolvedValue(undefined);
     const sendComposing = vi.fn(async () => undefined);
     const resolver = vi.fn().mockResolvedValue(params.resolverValue);
 
@@ -386,7 +384,7 @@ describe("web auto-reply", () => {
     fetchMock.mockRestore();
   });
   it("sends media with a caption when delivery succeeds", async () => {
-    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
+    const sendMedia = vi.fn().mockResolvedValue(undefined);
     const { reply, dispatch } = await setupSingleInboundMessage({
       resolverValue: {
         text: "hi",

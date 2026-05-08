@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "./errors.js";
 import {
   __testing,
@@ -11,27 +11,21 @@ import type { AcpRuntime } from "./types.js";
 
 function createRuntimeStub(): AcpRuntime {
   return {
-    async ensureSession(input) {
-      return {
-        sessionKey: input.sessionKey,
-        backend: "stub",
-        runtimeSessionName: `${input.sessionKey}:runtime`,
-      };
-    },
-    async *runTurn() {
+    ensureSession: vi.fn(async (input) => ({
+      sessionKey: input.sessionKey,
+      backend: "stub",
+      runtimeSessionName: `${input.sessionKey}:runtime`,
+    })),
+    runTurn: vi.fn(async function* () {
       // no-op stream
-    },
-    async cancel() {},
-    async close() {},
+    }),
+    cancel: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
   };
 }
 
 describe("acp runtime registry", () => {
   beforeEach(() => {
-    __testing.resetAcpRuntimeBackendsForTests();
-  });
-
-  afterEach(() => {
     __testing.resetAcpRuntimeBackendsForTests();
   });
 

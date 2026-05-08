@@ -1,29 +1,25 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   collectChannelSchemaMetadata,
   collectPluginSchemaMetadata,
 } from "./channel-config-metadata.js";
-import { getRuntimeConfig, readConfigFileSnapshot } from "./config.js";
+import { loadConfig, readConfigFileSnapshot } from "./config.js";
 import type { OpenClawConfig } from "./config.js";
 import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
 
 function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-  const currentSnapshot = getCurrentPluginMetadataSnapshot({ config, env, workspaceDir });
-  if (currentSnapshot) {
-    return currentSnapshot.manifestRegistry;
-  }
-  return loadPluginMetadataSnapshot({
+  return loadPluginManifestRegistry({
     config,
-    env: env ?? process.env,
+    cache: false,
+    env,
     workspaceDir,
-  }).manifestRegistry;
+  });
 }
 
 export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
-  const config = getRuntimeConfig();
+  const config = loadConfig();
   const registry = loadManifestRegistry(config);
   return buildConfigSchema({
     plugins: collectPluginSchemaMetadata(registry),

@@ -1,4 +1,3 @@
-import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -34,7 +33,7 @@ export function resolveExternalBestEffortDeliveryTarget(params: {
     accountId: deliver ? normalizeOptionalString(params.accountId) : undefined,
     threadId:
       deliver && params.threadId != null && params.threadId !== ""
-        ? stringifyRouteThreadId(params.threadId)
+        ? String(params.threadId)
         : undefined,
   };
 }

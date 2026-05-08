@@ -1,6 +1,6 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-types";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
 import { createInternalHookEvent, triggerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import {
@@ -10,12 +10,8 @@ import {
   toPluginMessageSentEvent,
 } from "openclaw/plugin-sdk/hook-runtime";
 import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runtime";
-import {
-  buildOutboundMediaLoadOptions,
-  isGifMedia,
-  kindFromMime,
-  probeVideoDimensions,
-} from "openclaw/plugin-sdk/media-runtime";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -28,7 +24,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
+import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
@@ -36,7 +32,6 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "../format.js";
-import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -45,7 +40,6 @@ import {
   sendTelegramWithThreadFallback,
 } from "./delivery.send.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
-import type { TelegramNativeQuoteCandidateByMessageId } from "./native-quote.js";
 import {
   markReplyApplied,
   resolveReplyToForSend,
@@ -66,13 +60,6 @@ type DeliveryProgress = ReplyThreadDeliveryProgress & {
 type TelegramReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
-};
-
-type TelegramReplyQuoteForSend = {
-  messageId?: number;
-  text?: string;
-  position?: number;
-  entities?: unknown[];
 };
 
 type ChunkTextFn = (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
@@ -118,46 +105,6 @@ function filterEmptyTelegramTextChunks<T extends { text: string }>(chunks: reado
   return chunks.filter((chunk) => chunk.text.trim().length > 0);
 }
 
-function resolveReplyQuoteForSend(params: {
-  replyToId?: number;
-  replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
-  replyQuoteMessageId?: number;
-  replyQuoteText?: string;
-  replyQuotePosition?: number;
-  replyQuoteEntities?: unknown[];
-}): TelegramReplyQuoteForSend {
-  if (params.replyToId != null) {
-    const mapped = params.replyQuoteByMessageId?.[String(params.replyToId)];
-    if (mapped?.text) {
-      const quote: TelegramReplyQuoteForSend = {
-        messageId: params.replyToId,
-        text: mapped.text,
-      };
-      if (typeof mapped.position === "number") {
-        quote.position = mapped.position;
-      }
-      if (mapped.entities) {
-        quote.entities = mapped.entities;
-      }
-      return quote;
-    }
-  }
-  const quote: TelegramReplyQuoteForSend = {};
-  if (params.replyQuoteMessageId != null) {
-    quote.messageId = params.replyQuoteMessageId;
-  }
-  if (params.replyQuoteText != null) {
-    quote.text = params.replyQuoteText;
-  }
-  if (params.replyQuotePosition != null) {
-    quote.position = params.replyQuotePosition;
-  }
-  if (params.replyQuoteEntities != null) {
-    quote.entities = params.replyQuoteEntities;
-  }
-  return quote;
-}
-
 async function deliverTextReply(params: {
   bot: Bot;
   chatId: string;
@@ -166,10 +113,7 @@ async function deliverTextReply(params: {
   chunkText: ChunkTextFn;
   replyText: string;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
-  replyQuoteMessageId?: number;
   replyQuoteText?: string;
-  replyQuotePosition?: number;
-  replyQuoteEntities?: unknown[];
   linkPreview?: boolean;
   silent?: boolean;
   replyToId?: number;
@@ -194,10 +138,7 @@ async function deliverTextReply(params: {
         params.runtime,
         {
           replyToMessageId,
-          replyQuoteMessageId: params.replyQuoteMessageId,
           replyQuoteText,
-          replyQuotePosition: params.replyQuotePosition,
-          replyQuoteEntities: params.replyQuoteEntities,
           thread: params.thread,
           textMode: "html",
           plainText: chunk.text,
@@ -271,9 +212,6 @@ async function sendTelegramVoiceFallbackText(opts: {
   text: string;
   chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
   replyToId?: number;
-  replyQuoteMessageId?: number;
-  replyQuotePosition?: number;
-  replyQuoteEntities?: unknown[];
   thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
   silent?: boolean;
@@ -287,13 +225,9 @@ async function sendTelegramVoiceFallbackText(opts: {
     const chunk = chunks[i];
     // Only apply reply reference, quote text, and buttons to the first chunk.
     const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
-    const applyQuoteForChunk = !appliedReplyTo;
     const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
       replyToMessageId: replyToForChunk,
-      replyQuoteMessageId: applyQuoteForChunk ? opts.replyQuoteMessageId : undefined,
-      replyQuoteText: applyQuoteForChunk ? opts.replyQuoteText : undefined,
-      replyQuotePosition: applyQuoteForChunk ? opts.replyQuotePosition : undefined,
-      replyQuoteEntities: applyQuoteForChunk ? opts.replyQuoteEntities : undefined,
+      replyQuoteText: !appliedReplyTo ? opts.replyQuoteText : undefined,
       thread: opts.thread,
       textMode: "html",
       plainText: chunk.text,
@@ -325,10 +259,7 @@ async function deliverMediaReply(params: {
   onVoiceRecording?: () => Promise<void> | void;
   linkPreview?: boolean;
   silent?: boolean;
-  replyQuoteMessageId?: number;
   replyQuoteText?: string;
-  replyQuotePosition?: number;
-  replyQuoteEntities?: unknown[];
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyToId?: number;
   replyToMode: ReplyToMode;
@@ -366,18 +297,12 @@ async function deliverMediaReply(params: {
       progress: params.progress,
     });
     const shouldAttachButtonsToMedia = isFirstMedia && params.replyMarkup && !followUpText;
-    const videoDimensions = kind === "video" ? await probeVideoDimensions(media.buffer) : undefined;
     const mediaParams: Record<string, unknown> = {
       caption: htmlCaption,
       ...(htmlCaption ? { parse_mode: "HTML" } : {}),
       ...(shouldAttachButtonsToMedia ? { reply_markup: params.replyMarkup } : {}),
-      ...(videoDimensions ? { width: videoDimensions.width, height: videoDimensions.height } : {}),
       ...buildTelegramSendParams({
         replyToMessageId,
-        replyQuoteMessageId: params.replyQuoteMessageId,
-        replyQuoteText: params.replyQuoteText,
-        replyQuotePosition: params.replyQuotePosition,
-        replyQuoteEntities: params.replyQuoteEntities,
         thread: params.thread,
         silent: params.silent,
       }),
@@ -471,9 +396,6 @@ async function deliverMediaReply(params: {
               text: fallbackText,
               chunkText: params.chunkText,
               replyToId: voiceFallbackReplyTo,
-              replyQuoteMessageId: params.replyQuoteMessageId,
-              replyQuotePosition: params.replyQuotePosition,
-              replyQuoteEntities: params.replyQuoteEntities,
               thread: params.thread,
               linkPreview: params.linkPreview,
               silent: params.silent,
@@ -668,7 +590,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
-  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -690,16 +612,8 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** When true, messages are sent with disable_notification. */
   silent?: boolean;
-  /** Message id that the optional quote text belongs to. */
-  replyQuoteMessageId?: number;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
-  /** UTF-16 position of the selected quote in the original Telegram message. */
-  replyQuotePosition?: number;
-  /** Telegram entities that belong to the selected quote text. */
-  replyQuoteEntities?: unknown[];
-  /** Native Telegram quote candidates keyed by message id. */
-  replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
 }): Promise<{ delivered: boolean }> {
@@ -752,17 +666,7 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
-    const resolvedReplyText =
-      resolveTelegramInteractiveTextFallback({
-        text: reply?.text,
-        interactive: reply?.interactive,
-      }) ??
-      reply?.text ??
-      "";
-    if (reply && resolvedReplyText !== (reply.text ?? "")) {
-      reply = { ...reply, text: resolvedReplyText };
-    }
-    if (!resolvedReplyText && !hasMedia) {
+    if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -771,17 +675,9 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    const rawContent = resolvedReplyText;
+    const rawContent = reply.text || "";
     const replyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
-    const replyQuote = resolveReplyQuoteForSend({
-      replyToId,
-      replyQuoteByMessageId: params.replyQuoteByMessageId,
-      replyQuoteMessageId: params.replyQuoteMessageId,
-      replyQuoteText: params.replyQuoteText,
-      replyQuotePosition: params.replyQuotePosition,
-      replyQuoteEntities: params.replyQuoteEntities,
-    });
     if (hasMessageSendingHooks) {
       const hookResult = await hookRunner?.runMessageSending(
         {
@@ -814,12 +710,7 @@ export async function deliverReplies(params: {
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
-      const replyMarkup = buildInlineKeyboard(
-        resolveTelegramInlineButtons({
-          buttons: telegramData?.buttons,
-          interactive: reply.interactive,
-        }),
-      );
+      const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;
       if (mediaList.length === 0) {
         firstDeliveredMessageId = await deliverTextReply({
@@ -830,10 +721,7 @@ export async function deliverReplies(params: {
           chunkText,
           replyText: reply.text || "",
           replyMarkup,
-          replyQuoteMessageId: replyQuote.messageId,
-          replyQuoteText: replyQuote.text,
-          replyQuotePosition: replyQuote.position,
-          replyQuoteEntities: replyQuote.entities,
+          replyQuoteText: params.replyQuoteText,
           linkPreview: params.linkPreview,
           silent: params.silent,
           replyToId,
@@ -855,10 +743,7 @@ export async function deliverReplies(params: {
           onVoiceRecording: params.onVoiceRecording,
           linkPreview: params.linkPreview,
           silent: params.silent,
-          replyQuoteMessageId: replyQuote.messageId,
-          replyQuoteText: replyQuote.text,
-          replyQuotePosition: replyQuote.position,
-          replyQuoteEntities: replyQuote.entities,
+          replyQuoteText: params.replyQuoteText,
           replyMarkup,
           replyToId,
           replyToMode: params.replyToMode,

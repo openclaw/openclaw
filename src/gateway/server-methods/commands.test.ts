@@ -79,7 +79,7 @@ vi.mock("../../auto-reply/commands-registry.js", () => ({
 vi.mock("../../auto-reply/skill-commands.js", () => ({
   listSkillCommandsForAgents: vi.fn(() => mockSkillCommands),
 }));
-vi.mock("../../plugins/command-specs.js", () => ({
+vi.mock("../../plugins/command-registry-state.js", () => ({
   getPluginCommandSpecs: vi.fn((provider?: string) => {
     if (provider === "whatsapp") {
       return [];
@@ -101,7 +101,7 @@ vi.mock("../../plugins/commands.js", () => ({
   ]),
 }));
 vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({})),
+  loadConfig: vi.fn(() => ({})),
 }));
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: vi.fn(() => ["main", "dev"]),
@@ -174,7 +174,7 @@ function callHandler(params: Record<string, unknown> = {}) {
     req: {} as never,
     client: null,
     isWebchatConnect: () => false,
-    context: { getRuntimeConfig: () => ({}) } as never,
+    context: {} as never,
   });
   return result!;
 }

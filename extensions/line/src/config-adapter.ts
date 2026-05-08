@@ -6,7 +6,7 @@ import {
   type ResolvedLineAccount,
 } from "./channel-api.js";
 
-function normalizeLineAllowFrom(entry: string): string {
+export function normalizeLineAllowFrom(entry: string): string {
   return entry.replace(/^line:(?:user:)?/i, "");
 }
 

@@ -33,7 +33,6 @@ export type {
   ChannelLogoutContext,
   ChannelLogoutResult,
   ChannelOutboundAdapter,
-  ChannelOutboundChunkContext,
   ChannelOutboundContext,
   ChannelOutboundPayloadHint,
   ChannelOutboundTargetRef,

@@ -17,8 +17,6 @@ import {
   resolveMattermostThreadSessionContext,
   shouldFinalizeMattermostPreviewAfterDispatch,
   shouldClearMattermostDraftPreview,
-  shouldSuppressMattermostDefaultToolProgressMessages,
-  shouldUpdateMattermostDraftToolProgress,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
 } from "./monitor.js";
@@ -164,7 +162,6 @@ describe("resolveMattermostReplyRootId with block streaming payloads", () => {
     // mode, the deliver callback should still use the existing threadRootId.
     expect(
       resolveMattermostReplyRootId({
-        kind: "channel",
         threadRootId: "thread-root-1",
         replyToId: "streamed-reply-id",
       }),
@@ -176,7 +173,6 @@ describe("resolveMattermostReplyRootId with block streaming payloads", () => {
     // inbound post id as replyToId from the "all" threading mode.
     expect(
       resolveMattermostReplyRootId({
-        kind: "channel",
         replyToId: "inbound-post-for-threading",
       }),
     ).toBe("inbound-post-for-threading");
@@ -187,7 +183,6 @@ describe("resolveMattermostReplyRootId", () => {
   it("uses replyToId for top-level replies", () => {
     expect(
       resolveMattermostReplyRootId({
-        kind: "channel",
         replyToId: "inbound-post-123",
       }),
     ).toBe("inbound-post-123");
@@ -196,7 +191,6 @@ describe("resolveMattermostReplyRootId", () => {
   it("keeps the thread root when replying inside an existing thread", () => {
     expect(
       resolveMattermostReplyRootId({
-        kind: "channel",
         threadRootId: "thread-root-456",
         replyToId: "child-post-789",
       }),
@@ -204,36 +198,7 @@ describe("resolveMattermostReplyRootId", () => {
   });
 
   it("falls back to undefined when neither reply target is available", () => {
-    expect(resolveMattermostReplyRootId({ kind: "channel" })).toBeUndefined();
-  });
-
-  it("keeps direct-message replies top-level even when a payload reply target exists", () => {
-    expect(
-      resolveMattermostReplyRootId({
-        kind: "direct",
-        threadRootId: "dm-root-456",
-        replyToId: "dm-post-123",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("keeps direct-message replies top-level when only the payload reply target exists", () => {
-    expect(
-      resolveMattermostReplyRootId({
-        kind: "direct",
-        replyToId: "dm-post-123",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("keeps group replies on the existing Mattermost thread root", () => {
-    expect(
-      resolveMattermostReplyRootId({
-        kind: "group",
-        threadRootId: "group-root-456",
-        replyToId: "group-child-789",
-      }),
-    ).toBe("group-root-456");
+    expect(resolveMattermostReplyRootId({})).toBeUndefined();
   });
 });
 
@@ -241,7 +206,6 @@ describe("canFinalizeMattermostPreviewInPlace", () => {
   it("allows in-place finalization when the final reply target matches the preview thread", () => {
     expect(
       canFinalizeMattermostPreviewInPlace({
-        kind: "channel",
         previewRootId: "thread-root-456",
         threadRootId: "thread-root-456",
         replyToId: "child-post-789",
@@ -252,95 +216,7 @@ describe("canFinalizeMattermostPreviewInPlace", () => {
   it("prevents in-place finalization when a top-level preview would become a threaded reply", () => {
     expect(
       canFinalizeMattermostPreviewInPlace({
-        kind: "channel",
         replyToId: "child-post-789",
-      }),
-    ).toBe(false);
-  });
-
-  it("uses direct-message root suppression when checking in-place finalization", () => {
-    expect(
-      canFinalizeMattermostPreviewInPlace({
-        kind: "direct",
-        replyToId: "dm-post-123",
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("shouldUpdateMattermostDraftToolProgress", () => {
-  type MattermostConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["mattermost"]>;
-
-  function resolveToolProgressEnabled(mattermostConfig: MattermostConfig) {
-    const account = resolveMattermostAccount({
-      cfg: {
-        channels: {
-          mattermost: mattermostConfig,
-        },
-      },
-      accountId: "default",
-      allowUnresolvedSecretRef: true,
-    });
-    return shouldUpdateMattermostDraftToolProgress(account);
-  }
-
-  it("shows tool status draft lines by default", () => {
-    expect(resolveToolProgressEnabled({ enabled: true })).toBe(true);
-  });
-
-  it("honors disabled progress-mode tool status lines", () => {
-    expect(
-      resolveToolProgressEnabled({
-        streaming: {
-          mode: "progress",
-          progress: {
-            toolProgress: false,
-          },
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps tool status draft lines disabled when draft streaming is off", () => {
-    expect(
-      resolveToolProgressEnabled({
-        streaming: {
-          mode: "off",
-          progress: {
-            toolProgress: true,
-          },
-        },
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
-  type MattermostConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["mattermost"]>;
-
-  function resolveSuppressDefaultProgress(mattermostConfig: MattermostConfig) {
-    const account = resolveMattermostAccount({
-      cfg: {
-        channels: {
-          mattermost: mattermostConfig,
-        },
-      },
-      accountId: "default",
-      allowUnresolvedSecretRef: true,
-    });
-    return shouldSuppressMattermostDefaultToolProgressMessages(account);
-  }
-
-  it("suppresses standalone progress messages while draft previews are active", () => {
-    expect(resolveSuppressDefaultProgress({ enabled: true })).toBe(true);
-  });
-
-  it("keeps standalone progress messages available when draft streaming is off", () => {
-    expect(
-      resolveSuppressDefaultProgress({
-        streaming: {
-          mode: "off",
-        },
       }),
     ).toBe(false);
   });
@@ -383,7 +259,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     await deliverMattermostReplyWithDraftPreview({
       payload: { text: "  \n > Reasoning:\n> _hidden_" } as never,
       info: { kind: "final" },
-      kind: "channel",
       client: createMattermostClientMock(),
       draftStream,
       effectiveReplyToId: "thread-root-1",
@@ -407,7 +282,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     await deliverMattermostReplyWithDraftPreview({
       payload: { text: "All good", replyToId: "reply-1" } as never,
       info: { kind: "final" },
-      kind: "channel",
       client: createMattermostClientMock(),
       draftStream,
       resolvePreviewFinalText: (text) => text?.trim(),
@@ -434,7 +308,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
         mediaUrl: "https://example.com/a.png",
       } as never,
       info: { kind: "final" },
-      kind: "channel",
       client: createMattermostClientMock(),
       draftStream,
       effectiveReplyToId: "thread-root-1",
@@ -457,7 +330,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     await deliverMattermostReplyWithDraftPreview({
       payload: { text: "Error", isError: true } as never,
       info: { kind: "final" },
-      kind: "channel",
       client: createMattermostClientMock(),
       draftStream,
       effectiveReplyToId: "thread-root-1",
@@ -479,7 +351,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     await deliverMattermostReplyWithDraftPreview({
       payload: { text: "Final answer", replyToId: "child-post-789" } as never,
       info: { kind: "final" },
-      kind: "channel",
       client: createMattermostClientMock(),
       draftStream,
       effectiveReplyToId: "thread-root-456",
@@ -513,7 +384,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       deliverMattermostReplyWithDraftPreview({
         payload: { text: "Broken", replyToId: "reply-1" } as never,
         info: { kind: "final" },
-        kind: "channel",
         client: createMattermostClientMock(),
         draftStream,
         resolvePreviewFinalText: (text) => text?.trim(),
@@ -614,17 +484,6 @@ describe("resolveMattermostEffectiveReplyToId", () => {
       }),
     ).toBeUndefined();
   });
-
-  it("suppresses existing direct-message thread roots", () => {
-    expect(
-      resolveMattermostEffectiveReplyToId({
-        kind: "direct",
-        postId: "post-123",
-        replyToMode: "all",
-        threadRootId: "dm-root-456",
-      }),
-    ).toBeUndefined();
-  });
 });
 
 describe("resolveMattermostThreadSessionContext", () => {
@@ -682,7 +541,6 @@ describe("resolveMattermostThreadSessionContext", () => {
         kind: "direct",
         postId: "post-123",
         replyToMode: "all",
-        threadRootId: "dm-root-456",
       }),
     ).toEqual({
       effectiveReplyToId: undefined,

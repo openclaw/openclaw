@@ -73,3 +73,7 @@ export function getChannelSetupWizardAdapter(
 ): ChannelSetupWizardAdapter | undefined {
   return getChannelSetupWizardAdapterMap().get(channel);
 }
+
+export function listChannelSetupWizardAdapters(): ChannelSetupWizardAdapter[] {
+  return Array.from(getChannelSetupWizardAdapterMap().values());
+}

@@ -1,22 +1,3 @@
-import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import {
-  readStoreAllowFromForDmPolicy,
-  resolveEffectiveAllowFromLists,
-} from "openclaw/plugin-sdk/channel-policy";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import {
-  deliverFormattedTextWithAttachments,
-  type OutboundReplyPayload,
-} from "openclaw/plugin-sdk/reply-payload";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import {
-  GROUP_POLICY_BLOCKED_LABEL,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -30,6 +11,23 @@ import {
   resolveIrcGroupSenderAllowed,
   resolveIrcRequireMention,
 } from "./policy.js";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  createChannelPairingController,
+  deliverFormattedTextWithAttachments,
+  dispatchInboundReplyWithBase,
+  logInboundDrop,
+  isDangerousNameMatchingEnabled,
+  readStoreAllowFromForDmPolicy,
+  resolveControlCommandGate,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveEffectiveAllowFromLists,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  type OutboundReplyPayload,
+  type OpenClawConfig,
+  type RuntimeEnv,
+} from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
@@ -207,39 +205,40 @@ export async function handleIrcInbound(params: {
       runtime.log?.(`irc: drop DM sender=${senderDisplay} (dmPolicy=disabled)`);
       return;
     }
-    const dmAllowed = resolveIrcAllowlistMatch({
-      allowFrom: effectiveAllowFrom,
-      message,
-      allowNameMatching,
-    }).allowed;
-    if (!dmAllowed) {
-      if (dmPolicy === "pairing") {
-        await pairing.issueChallenge({
-          senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
-          senderIdLine: `Your IRC id: ${senderDisplay}`,
-          meta: { name: message.senderNick || undefined },
-          sendPairingReply: async (text) => {
-            await deliverIrcReply({
-              payload: { text },
-              cfg: config,
-              target: message.senderNick,
-              accountId: account.accountId,
-              sendReply: params.sendReply,
-              statusSink,
-            });
-          },
-          onReplyError: (err) => {
-            runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
-          },
-        });
+    if (dmPolicy !== "open") {
+      const dmAllowed = resolveIrcAllowlistMatch({
+        allowFrom: effectiveAllowFrom,
+        message,
+        allowNameMatching,
+      }).allowed;
+      if (!dmAllowed) {
+        if (dmPolicy === "pairing") {
+          await pairing.issueChallenge({
+            senderId: normalizeLowercaseStringOrEmpty(senderDisplay),
+            senderIdLine: `Your IRC id: ${senderDisplay}`,
+            meta: { name: message.senderNick || undefined },
+            sendPairingReply: async (text) => {
+              await deliverIrcReply({
+                payload: { text },
+                cfg: config,
+                target: message.senderNick,
+                accountId: account.accountId,
+                sendReply: params.sendReply,
+                statusSink,
+              });
+            },
+            onReplyError: (err) => {
+              runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
+            },
+          });
+        }
+        runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
+        return;
       }
-      runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
-      return;
     }
   }
 
   if (message.isGroup && commandGate.shouldBlock) {
-    const { logInboundDrop } = await import("openclaw/plugin-sdk/channel-inbound");
     logInboundDrop({
       log: (line) => runtime.log?.(line),
       channel: CHANNEL_ID,
@@ -333,8 +332,6 @@ export async function handleIrcInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  const { dispatchInboundReplyWithBase } =
-    await import("openclaw/plugin-sdk/inbound-reply-dispatch");
   await dispatchInboundReplyWithBase({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,

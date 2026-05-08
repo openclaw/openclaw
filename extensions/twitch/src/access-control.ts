@@ -4,7 +4,7 @@ import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 /**
  * Result of checking access control for a Twitch message
  */
-type TwitchAccessControlResult = {
+export type TwitchAccessControlResult = {
   allowed: boolean;
   reason?: string;
   matchKey?: string;

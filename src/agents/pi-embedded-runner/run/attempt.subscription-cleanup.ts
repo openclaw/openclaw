@@ -27,7 +27,6 @@ export async function cleanupEmbeddedAttemptResources(params: {
   releaseWsSession: (sessionId: string, options?: { allowPool?: boolean }) => void;
   allowWsSessionPool?: boolean;
   sessionId: string;
-  bundleMcpRuntime?: { dispose(): Promise<void> | void };
   bundleLspRuntime?: { dispose(): Promise<void> | void };
   sessionLock: { release(): Promise<void> | void };
 }): Promise<void> {
@@ -53,11 +52,6 @@ export async function cleanupEmbeddedAttemptResources(params: {
     }
     try {
       params.releaseWsSession(params.sessionId, { allowPool: params.allowWsSessionPool === true });
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await params.bundleMcpRuntime?.dispose();
     } catch {
       /* best-effort */
     }

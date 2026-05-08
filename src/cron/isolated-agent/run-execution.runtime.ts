@@ -1,6 +1,5 @@
 export { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-export { resolveCronAgentLane } from "../../agents/lanes.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 export { runWithModelFallback } from "../../agents/model-fallback.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";
@@ -8,14 +7,14 @@ export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
 export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 export { registerAgentRunContext } from "../../infra/agent-events.js";
 export { logWarn } from "../../logger.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
-const cronExecutionCliRuntimeLoader = createLazyImportLoader(
-  () => import("./run-execution-cli.runtime.js"),
-);
+let cronExecutionCliRuntimePromise:
+  | Promise<typeof import("./run-execution-cli.runtime.js")>
+  | undefined;
 
 async function loadCronExecutionCliRuntime() {
-  return await cronExecutionCliRuntimeLoader.load();
+  cronExecutionCliRuntimePromise ??= import("./run-execution-cli.runtime.js");
+  return await cronExecutionCliRuntimePromise;
 }
 
 export async function getCliSessionId(

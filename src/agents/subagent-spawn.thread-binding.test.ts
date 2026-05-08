@@ -35,7 +35,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   beforeAll(async () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
-      getRuntimeConfig: () => currentConfig,
+      loadConfig: () => currentConfig,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
@@ -54,11 +54,6 @@ describe("spawnSubagentDirect thread binding delivery", () => {
           workspace: os.tmpdir(),
         },
         list: [{ id: "main", workspace: "/tmp/workspace-main" }],
-      },
-      session: {
-        threadBindings: {
-          defaultSpawnContext: "isolated",
-        },
       },
     });
     currentSessionBindingService = { listBySession: () => [] };
@@ -139,7 +134,6 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         agentId: "bot-alpha",
         thread: true,
         mode: "session",
-        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -169,8 +163,9 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       expect.objectContaining({
         requesterOrigin: {
           channel: "matrix",
-          accountId: "bot-beta",
+          accountId: "bot-alpha",
           to: `room:${boundRoom}`,
+          threadId: "$thread-root",
         },
         expectsCompletionMessage: false,
         spawnMode: "session",
@@ -207,7 +202,6 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         task: "reply with a marker",
         thread: true,
         mode: "session",
-        context: "isolated",
       },
       {
         agentSessionKey: "agent:main:main",

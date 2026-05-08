@@ -22,6 +22,7 @@ import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
+export { maybeRepairLegacyOAuthProfileIds } from "./doctor-auth-legacy-oauth.js";
 
 const CODEX_PROVIDER_ID = "openai-codex";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
@@ -168,7 +169,7 @@ export function formatOAuthRefreshFailureDoctorLine(params: {
   return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run \`${command}\`.`;
 }
 
-async function resolveAuthIssueHint(
+export async function resolveAuthIssueHint(
   issue: AuthIssue,
   cfg: OpenClawConfig,
   store: ReturnType<typeof ensureAuthProfileStore>,

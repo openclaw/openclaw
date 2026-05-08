@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AcpRuntime } from "../runtime/types.js";
 import type { AcpRuntimeHandle } from "../runtime/types.js";
 import type { CachedRuntimeState } from "./runtime-cache.js";
@@ -6,19 +6,17 @@ import { RuntimeCache } from "./runtime-cache.js";
 
 function mockState(sessionKey: string): CachedRuntimeState {
   const runtime = {
-    async ensureSession() {
-      return {
-        sessionKey,
-        backend: "acpx",
-        runtimeSessionName: `runtime:${sessionKey}`,
-      };
-    },
-    async *runTurn() {
+    ensureSession: vi.fn(async () => ({
+      sessionKey,
+      backend: "acpx",
+      runtimeSessionName: `runtime:${sessionKey}`,
+    })),
+    runTurn: vi.fn(async function* () {
       yield { type: "done" as const };
-    },
-    async cancel() {},
-    async close() {},
-  } satisfies AcpRuntime;
+    }),
+    cancel: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+  } as unknown as AcpRuntime;
   return {
     runtime,
     handle: {
@@ -34,16 +32,21 @@ function mockState(sessionKey: string): CachedRuntimeState {
 
 describe("RuntimeCache", () => {
   it("tracks idle candidates with touch-aware lookups", () => {
-    const cache = new RuntimeCache();
-    const actor = "agent:codex:acp:s1";
-    cache.set(actor, mockState(actor), { now: 1_000 });
+    vi.useFakeTimers();
+    try {
+      const cache = new RuntimeCache();
+      const actor = "agent:codex:acp:s1";
+      cache.set(actor, mockState(actor), { now: 1_000 });
 
-    expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 1_999 })).toHaveLength(0);
-    expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 2_000 })).toHaveLength(1);
+      expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 1_999 })).toHaveLength(0);
+      expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 2_000 })).toHaveLength(1);
 
-    cache.get(actor, { now: 2_500 });
-    expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 3_200 })).toHaveLength(0);
-    expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 3_500 })).toHaveLength(1);
+      cache.get(actor, { now: 2_500 });
+      expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 3_200 })).toHaveLength(0);
+      expect(cache.collectIdleCandidates({ maxIdleMs: 1_000, now: 3_500 })).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns snapshot entries with idle durations", () => {

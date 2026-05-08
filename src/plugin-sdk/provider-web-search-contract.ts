@@ -6,7 +6,6 @@ import type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
-  WebSearchProviderToolExecutionContext,
 } from "../plugins/types.js";
 import { enablePluginInConfig } from "./provider-enable-config.js";
 import {
@@ -28,7 +27,6 @@ export type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
-  WebSearchProviderToolExecutionContext,
 };
 export type {
   CreateWebSearchProviderContractFieldsOptions,

@@ -2,7 +2,6 @@
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
-  HISTORY_CONTEXT_MARKER,
   buildHistoryContext,
   buildHistoryContextFromEntries,
   buildHistoryContextFromMap,

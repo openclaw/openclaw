@@ -193,31 +193,6 @@ function collectCliText(value: unknown): string {
   return "";
 }
 
-function unwrapNestedCliResultText(raw: string): string {
-  let text = raw;
-  for (let depth = 0; depth < 8; depth += 1) {
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("{")) {
-      return text;
-    }
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (
-        !isRecord(parsed) ||
-        typeof parsed.type !== "string" ||
-        parsed.type !== "result" ||
-        typeof parsed.result !== "string"
-      ) {
-        return text;
-      }
-      text = parsed.result;
-    } catch {
-      return text;
-    }
-  }
-  return text;
-}
-
 function collectExplicitCliErrorText(parsed: Record<string, unknown>): string {
   const nested = readNestedErrorMessage(parsed);
   if (nested) {
@@ -266,21 +241,7 @@ function pickCliSessionId(
   return undefined;
 }
 
-function shouldUnwrapNestedCliResultText(params: {
-  providerId?: string;
-  parsed: Record<string, unknown>;
-}): boolean {
-  if (!params.providerId || !isClaudeCliProvider(params.providerId)) {
-    return false;
-  }
-  return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
-}
-
-export function parseCliJson(
-  raw: string,
-  backend: CliBackendConfig,
-  providerId?: string,
-): CliOutput | null {
+export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
   const parsedRecords = parseJsonRecordCandidates(raw);
   if (parsedRecords.length === 0) {
     return null;
@@ -299,11 +260,7 @@ export function parseCliJson(
       collectCliText(parsed.result) ||
       collectCliText(parsed.response) ||
       collectCliText(parsed);
-    const trimmedText = (
-      shouldUnwrapNestedCliResultText({ providerId, parsed })
-        ? unwrapNestedCliResultText(nextText)
-        : nextText
-    ).trim();
+    const trimmedText = nextText.trim();
     if (trimmedText) {
       text = trimmedText;
       sawStructuredOutput = true;
@@ -335,7 +292,7 @@ function parseClaudeCliJsonlResult(params: {
     params.parsed.type === "result" &&
     typeof params.parsed.result === "string"
   ) {
-    const resultText = unwrapNestedCliResultText(params.parsed.result).trim();
+    const resultText = params.parsed.result.trim();
     if (resultText) {
       return { text: resultText, sessionId: params.sessionId, usage: params.usage };
     }
@@ -527,7 +484,7 @@ export function parseCliOutput(params: {
     );
   }
   return (
-    parseCliJson(params.raw, params.backend, params.providerId) ?? {
+    parseCliJson(params.raw, params.backend) ?? {
       text: params.raw.trim(),
       sessionId: params.fallbackSessionId,
     }

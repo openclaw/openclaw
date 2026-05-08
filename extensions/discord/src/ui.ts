@@ -1,6 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { Container } from "./internal/discord.js";
+import { Container } from "@buape/carbon";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeDiscordAccentColor, resolveDiscordAccentColor } from "./ui-colors.js";
+
+export { normalizeDiscordAccentColor, resolveDiscordAccentColor } from "./ui-colors.js";
 
 type DiscordContainerComponents = ConstructorParameters<typeof Container>[0];
 

@@ -12,8 +12,11 @@ export function getRuntimeApiMockState() {
   return runtimeApiMockState;
 }
 
-vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", () => {
+vi.mock("../../runtime-api.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
   return {
+    ...actual,
     dispatchReplyFromConfigWithSettledDispatcher:
       runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
   };

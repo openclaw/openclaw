@@ -1,24 +1,25 @@
 #!/usr/bin/env node
 
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import {
-  collectModuleReferencesFromSource,
+  collectTypeScriptInventory,
   normalizeRepoPath,
   resolveRepoSpecifier,
+  visitModuleSpecifiers,
   writeLine,
 } from "./lib/guard-inventory-utils.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveSourceRoots,
   runAsScript,
+  toLine,
 } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = resolveSourceRoots(repoRoot, ["src/plugin-sdk", "src/plugins/runtime"]);
-let architectureSmellsPromise;
 
 function compareEntries(left, right) {
   return (
@@ -35,7 +36,7 @@ function pushEntry(entries, entry) {
   entries.push(entry);
 }
 
-function scanPluginSdkExtensionFacadeSmells(source, filePath) {
+function scanPluginSdkExtensionFacadeSmells(sourceFile, filePath) {
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
   if (!relativeFile.startsWith("src/plugin-sdk/")) {
     return [];
@@ -43,28 +44,28 @@ function scanPluginSdkExtensionFacadeSmells(source, filePath) {
 
   const entries = [];
 
-  for (const { kind, line, specifier } of collectModuleReferencesFromSource(source)) {
+  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
     if (kind !== "export") {
-      continue;
+      return;
     }
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
     if (!resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-      continue;
+      return;
     }
     pushEntry(entries, {
       category: "plugin-sdk-extension-facade",
       file: relativeFile,
-      line,
+      line: toLine(sourceFile, specifierNode),
       kind,
       specifier,
       resolvedPath,
       reason: "plugin-sdk public surface re-exports extension-owned implementation",
     });
-  }
+  });
   return entries;
 }
 
-function scanRuntimeTypeImplementationSmells(source, filePath) {
+function scanRuntimeTypeImplementationSmells(sourceFile, filePath) {
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
   if (!/^src\/plugins\/runtime\/types(?:-[^/]+)?\.ts$/.test(relativeFile)) {
     return [];
@@ -72,32 +73,39 @@ function scanRuntimeTypeImplementationSmells(source, filePath) {
 
   const entries = [];
 
-  for (const { kind, line, specifier } of collectModuleReferencesFromSource(source)) {
-    if (kind !== "dynamic-import") {
-      continue;
-    }
-    const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
+  function visit(node) {
     if (
-      resolvedPath &&
-      (/^src\/plugins\/runtime\/runtime-[^/]+\.ts$/.test(resolvedPath) ||
-        /^extensions\/[^/]+\/runtime-api\.[^/]+$/.test(resolvedPath))
+      ts.isImportTypeNode(node) &&
+      ts.isLiteralTypeNode(node.argument) &&
+      ts.isStringLiteral(node.argument.literal)
     ) {
-      pushEntry(entries, {
-        category: "runtime-type-implementation-edge",
-        file: relativeFile,
-        line,
-        kind: "import-type",
-        specifier,
-        resolvedPath,
-        reason: "runtime type file references implementation shim directly",
-      });
+      const specifier = node.argument.literal.text;
+      const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
+      if (
+        resolvedPath &&
+        (/^src\/plugins\/runtime\/runtime-[^/]+\.ts$/.test(resolvedPath) ||
+          /^extensions\/[^/]+\/runtime-api\.[^/]+$/.test(resolvedPath))
+      ) {
+        pushEntry(entries, {
+          category: "runtime-type-implementation-edge",
+          file: relativeFile,
+          line: toLine(sourceFile, node.argument.literal),
+          kind: "import-type",
+          specifier,
+          resolvedPath,
+          reason: "runtime type file references implementation shim directly",
+        });
+      }
     }
+
+    ts.forEachChild(node, visit);
   }
 
+  visit(sourceFile);
   return entries;
 }
 
-function scanRuntimeServiceLocatorSmells(source, filePath) {
+function scanRuntimeServiceLocatorSmells(sourceFile, filePath) {
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
   if (
     !relativeFile.startsWith("src/plugin-sdk/") &&
@@ -111,24 +119,46 @@ function scanRuntimeServiceLocatorSmells(source, filePath) {
   const runtimeStoreCalls = [];
   const mutableStateNodes = [];
 
-  const lines = source.split(/\r?\n/);
-  for (const [index, line] of lines.entries()) {
-    const lineNumber = index + 1;
-    const exportedFunction = line.match(/^\s*export\s+function\s+([A-Za-z_$][\w$]*)/);
-    if (exportedFunction) {
-      exportedNames.add(exportedFunction[1]);
-    }
-    const exportedVariable = line.match(/^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/);
-    if (exportedVariable) {
-      exportedNames.add(exportedVariable[1]);
-    }
-    for (const mutableMatch of line.matchAll(/^\s*let\s+([A-Za-z_$][\w$]*)/g)) {
-      mutableStateNodes.push({ line: lineNumber, text: mutableMatch[1] });
-    }
-    if (line.includes("createPluginRuntimeStore")) {
-      runtimeStoreCalls.push({ line: lineNumber });
+  for (const statement of sourceFile.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name) {
+      const isExported = statement.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      );
+      if (isExported) {
+        exportedNames.add(statement.name.text);
+      }
+    } else if (ts.isVariableStatement(statement)) {
+      const isExported = statement.modifiers?.some(
+        (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+      );
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && isExported) {
+          exportedNames.add(declaration.name.text);
+        }
+        if (
+          !isExported &&
+          (statement.declarationList.flags & ts.NodeFlags.Let) !== 0 &&
+          ts.isIdentifier(declaration.name)
+        ) {
+          mutableStateNodes.push(declaration.name);
+        }
+      }
     }
   }
+
+  function visit(node) {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "createPluginRuntimeStore"
+    ) {
+      runtimeStoreCalls.push(node.expression);
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
 
   const getterNames = [...exportedNames].filter((name) => /^get[A-Z]/.test(name));
   const setterNames = [...exportedNames].filter((name) => /^set[A-Z]/.test(name));
@@ -138,7 +168,7 @@ function scanRuntimeServiceLocatorSmells(source, filePath) {
       pushEntry(entries, {
         category: "runtime-service-locator",
         file: relativeFile,
-        line: callNode.line,
+        line: toLine(sourceFile, callNode),
         kind: "runtime-store",
         specifier: "createPluginRuntimeStore",
         resolvedPath: relativeFile,
@@ -152,7 +182,7 @@ function scanRuntimeServiceLocatorSmells(source, filePath) {
       pushEntry(entries, {
         category: "runtime-service-locator",
         file: relativeFile,
-        line: identifier.line,
+        line: toLine(sourceFile, identifier),
         kind: "mutable-state",
         specifier: identifier.text,
         resolvedPath: relativeFile,
@@ -165,30 +195,21 @@ function scanRuntimeServiceLocatorSmells(source, filePath) {
 }
 
 export async function collectArchitectureSmells() {
-  if (!architectureSmellsPromise) {
-    architectureSmellsPromise = (async () => {
-      const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
-        normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
-      );
-      const entriesByFile = await Promise.all(
-        files.map(async (filePath) => {
-          const source = await fs.readFile(filePath, "utf8");
-          const entries = scanPluginSdkExtensionFacadeSmells(source, filePath);
-          entries.push(...scanRuntimeTypeImplementationSmells(source, filePath));
-          entries.push(...scanRuntimeServiceLocatorSmells(source, filePath));
-          return entries;
-        }),
-      );
-      return entriesByFile.flat().toSorted(compareEntries);
-    })();
-    try {
-      return await architectureSmellsPromise;
-    } catch (error) {
-      architectureSmellsPromise = undefined;
-      throw error;
-    }
-  }
-  return await architectureSmellsPromise;
+  const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
+    normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
+  );
+  return await collectTypeScriptInventory({
+    ts,
+    files,
+    compareEntries,
+    collectEntries(sourceFile, filePath) {
+      return [
+        ...scanPluginSdkExtensionFacadeSmells(sourceFile, filePath),
+        ...scanRuntimeTypeImplementationSmells(sourceFile, filePath),
+        ...scanRuntimeServiceLocatorSmells(sourceFile, filePath),
+      ];
+    },
+  });
 }
 
 function formatInventoryHuman(inventory) {
@@ -216,7 +237,7 @@ function formatInventoryHuman(inventory) {
   return lines.join("\n");
 }
 
-async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
+export async function runArchitectureSmellsCheck(argv = process.argv.slice(2), io) {
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
   const json = argv.includes("--json");
   const inventory = await collectArchitectureSmells();

@@ -25,12 +25,11 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
+import { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import {
   isWhatsAppGroupJid,
-  isWhatsAppNewsletterJid,
   looksLikeWhatsAppTargetId,
-  normalizeWhatsAppAllowFromEntry,
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize.js";
@@ -58,11 +57,7 @@ function parseWhatsAppExplicitTarget(raw: string) {
   }
   return {
     to: normalized,
-    chatType: isWhatsAppGroupJid(normalized)
-      ? ("group" as const)
-      : isWhatsAppNewsletterJid(normalized)
-        ? ("channel" as const)
-        : ("direct" as const),
+    chatType: isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const),
   };
 }
 
@@ -70,7 +65,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
   createChatChannelPlugin<ResolvedWhatsAppAccount>({
     pairing: {
       idLabel: "whatsappSenderId",
-      normalizeAllowEntry: (entry) => normalizeWhatsAppAllowFromEntry(entry) ?? "",
     },
     outbound: whatsappChannelOutbound,
     threading: {
@@ -117,14 +111,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
       },
       messaging: {
-        targetPrefixes: ["whatsapp"],
         normalizeTarget: normalizeWhatsAppMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveWhatsAppOutboundSessionRoute(params),
         parseExplicitTarget: ({ raw }) => parseWhatsAppExplicitTarget(raw),
         inferTargetChatType: ({ to }) => parseWhatsAppExplicitTarget(to)?.chatType,
         targetResolver: {
           looksLikeId: looksLikeWhatsAppTargetId,
-          hint: "<E.164|group JID|newsletter JID>",
+          hint: "<E.164|group JID>",
         },
       },
       directory: {
@@ -189,6 +182,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             ...(accountId ? { accountId } : {}),
           });
         },
+        resolveRecipients: ({ cfg, opts }) => resolveWhatsAppHeartbeatRecipients(cfg, opts),
       },
       status: createAsyncComputedAccountStatusAdapter<ResolvedWhatsAppAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
@@ -322,10 +316,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             timeoutMs,
             verbose,
           }),
-        loginWithQrWait: async ({ accountId, timeoutMs, currentQrDataUrl }) =>
-          await (
-            await loadWhatsAppChannelRuntime()
-          ).waitForWebLogin({ accountId, timeoutMs, currentQrDataUrl }),
+        loginWithQrWait: async ({ accountId, timeoutMs }) =>
+          await (await loadWhatsAppChannelRuntime()).waitForWebLogin({ accountId, timeoutMs }),
         logoutAccount: async ({ account, runtime }) => {
           const cleared = await (
             await loadWhatsAppChannelRuntime()

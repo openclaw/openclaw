@@ -30,7 +30,7 @@ export const TELEGRAM_USER_ID_HELP_LINES = [
   "Website: https://openclaw.ai",
 ];
 
-function normalizeTelegramAllowFromInput(raw: string): string {
+export function normalizeTelegramAllowFromInput(raw: string): string {
   return raw
     .trim()
     .replace(/^(telegram|tg):/i, "")

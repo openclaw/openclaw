@@ -1,3 +1,3 @@
-import { describeGithubCopilotProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
+import { describeGithubCopilotProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
 
 describeGithubCopilotProviderRuntimeContract(() => import("./index.js"));

@@ -14,7 +14,7 @@ type MockNodeCommandPolicyParams = {
 };
 
 const mocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(() => ({})),
+  loadConfig: vi.fn(() => ({})),
   resolveNodeCommandAllowlist: vi.fn<() => Set<string>>(() => new Set()),
   isNodeCommandAllowed: vi.fn<
     (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
@@ -32,8 +32,8 @@ const mocks = vi.hoisted(() => ({
   shouldClearStoredApnsRegistration: vi.fn(() => false),
 }));
 
-vi.mock("../../config/io.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
+vi.mock("../../config/config.js", () => ({
+  loadConfig: mocks.loadConfig,
 }));
 
 vi.mock("../node-command-policy.js", () => ({
@@ -134,7 +134,7 @@ function mockDirectWakeConfig(nodeId: string, overrides: WakeResultOverrides = {
 }
 
 function mockRelayWakeConfig(nodeId: string, overrides: WakeResultOverrides = {}) {
-  mocks.getRuntimeConfig.mockReturnValue({
+  mocks.loadConfig.mockReturnValue({
     gateway: {
       push: {
         apns: {
@@ -200,7 +200,6 @@ async function invokeNode(params: {
       nodeRegistry: params.nodeRegistry,
       execApprovalManager: undefined,
       logGateway,
-      getRuntimeConfig: () => mocks.getRuntimeConfig(),
     } as never,
     client: null,
     req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
@@ -230,7 +229,7 @@ async function pullPending(nodeId: string, commands?: string[]) {
   await nodeHandlers["node.pending.pull"]({
     params: {},
     respond: respond as never,
-    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
+    context: {} as never,
     client: createNodeClient(nodeId, commands) as never,
     req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
     isWebchatConnect: () => false,
@@ -243,7 +242,7 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   await nodeHandlers["node.pending.ack"]({
     params: { ids },
     respond: respond as never,
-    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
+    context: {} as never,
     client: createNodeClient(nodeId, commands) as never,
     req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
@@ -253,8 +252,8 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
 
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
-    mocks.getRuntimeConfig.mockClear();
-    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfig.mockClear();
+    mocks.loadConfig.mockReturnValue({});
     mocks.resolveNodeCommandAllowlist.mockClear();
     mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set());
     mocks.isNodeCommandAllowed.mockClear();

@@ -7,17 +7,17 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import {
-  normalizePluginsConfigWithResolver,
+  normalizePluginsConfig,
   resolveEffectivePluginActivationState,
-} from "../plugins/config-policy.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+} from "../plugins/config-state.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 
 const log = createSubsystemLogger("embedded-pi-settings");
 
 export const DEFAULT_EMBEDDED_PI_PROJECT_SETTINGS_POLICY = "sanitize";
-const SANITIZED_PROJECT_PI_KEYS = ["shellPath", "shellCommandPrefix"] as const;
+export const SANITIZED_PROJECT_PI_KEYS = ["shellPath", "shellCommandPrefix"] as const;
 
 export type EmbeddedPiProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
@@ -76,20 +76,15 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
   if (!workspaceDir) {
     return {};
   }
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const registry = loadPluginManifestRegistry({
     workspaceDir,
-    config: params.cfg ?? {},
-    env: process.env,
+    config: params.cfg,
   });
-  const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     return {};
   }
 
-  const normalizedPlugins = normalizePluginsConfigWithResolver(
-    params.cfg?.plugins,
-    metadataSnapshot.normalizePluginId,
-  );
+  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   let snapshot: PiSettingsSnapshot = {};
 
   for (const record of registry.plugins) {

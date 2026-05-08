@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 
+const OLLAMA_DEFAULT_BASE_URL_FOR_TEST = "http://127.0.0.1:11434";
+
 vi.mock("../plugins/provider-auth-input.js", () => ({
   ensureApiKeyFromEnvOrPrompt: vi.fn(
     async (params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]) => {
@@ -17,7 +19,7 @@ vi.mock("../plugins/provider-auth-input.js", () => ({
   ),
 }));
 
-function createTestPrompter(params: { text: string[]; select?: string[]; confirm?: boolean[] }): {
+function createTestPrompter(params: { text: string[]; select?: string[] }): {
   text: ReturnType<typeof vi.fn>;
   select: ReturnType<typeof vi.fn>;
   confirm: ReturnType<typeof vi.fn>;
@@ -32,10 +34,6 @@ function createTestPrompter(params: { text: string[]; select?: string[]; confirm
   for (const answer of params.select ?? []) {
     select.mockResolvedValueOnce(answer);
   }
-  const confirm = vi.fn(async () => false);
-  for (const answer of params.confirm ?? []) {
-    confirm.mockResolvedValueOnce(answer);
-  }
   return {
     text,
     progress: vi.fn(() => ({
@@ -43,7 +41,7 @@ function createTestPrompter(params: { text: string[]; select?: string[]; confirm
       stop: vi.fn(),
     })),
     select,
-    confirm,
+    confirm: vi.fn(),
     note: vi.fn(),
   };
 }
@@ -102,41 +100,9 @@ describe("promptCustomApiConfig", () => {
 
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
     expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
-    expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text"]);
-    expect(prompter.confirm).not.toHaveBeenCalled();
   });
 
-  it("skips the image-input prompt for known custom vision models", async () => {
-    const prompter = createTestPrompter({
-      text: ["https://proxy.example.com/v1", "test-key", "gpt-4o", "custom", ""],
-      select: ["plaintext", "openai"],
-    });
-    stubFetchSequence([{ ok: true }]);
-
-    const result = await runPromptCustomApi(prompter);
-
-    expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text", "image"]);
-    expect(prompter.confirm).not.toHaveBeenCalled();
-  });
-
-  it("prompts for custom model image support when the model is unknown", async () => {
-    const prompter = createTestPrompter({
-      text: ["https://proxy.example.com/v1", "test-key", "private-model", "custom", ""],
-      select: ["plaintext", "openai"],
-      confirm: [true],
-    });
-    stubFetchSequence([{ ok: true }]);
-
-    const result = await runPromptCustomApi(prompter);
-
-    expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text", "image"]);
-    expect(prompter.confirm).toHaveBeenCalledWith({
-      message: "Does this model support image input?",
-      initialValue: false,
-    });
-  });
-
-  it("does not seed custom setup with a provider-specific base URL", async () => {
+  it("defaults custom setup to the native Ollama base URL", async () => {
     const prompter = createTestPrompter({
       text: ["http://localhost:11434", "", "llama3", "custom", ""],
       select: ["plaintext", "openai"],
@@ -148,7 +114,7 @@ describe("promptCustomApiConfig", () => {
     expect(prompter.text).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "API Base URL",
-        initialValue: undefined,
+        initialValue: OLLAMA_DEFAULT_BASE_URL_FOR_TEST,
       }),
     );
   });

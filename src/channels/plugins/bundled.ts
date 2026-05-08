@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -12,18 +11,15 @@ import {
   resolveBundledChannelGeneratedPath,
   type BundledChannelPluginMetadata,
 } from "../../plugins/bundled-channel-runtime.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
-import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import {
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "../../plugins/plugin-module-loader-cache.js";
+  isBuiltBundledPluginRuntimeRoot,
+  prepareBundledPluginRuntimeRoot,
+} from "../../plugins/bundled-runtime-root.js";
+import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
 import { normalizeChannelMeta } from "./meta-normalization.js";
-import { loadChannelPluginModule } from "./module-loader.js";
+import { isJavaScriptModulePath, loadChannelPluginModule } from "./module-loader.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
@@ -36,13 +32,9 @@ type BundledChannelEntryRuntimeContract = {
     accountInspect?: boolean;
   };
   register: (api: unknown) => void;
-  loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => ChannelPlugin;
-  loadChannelSecrets?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => ChannelPlugin["secrets"] | undefined;
-  loadChannelAccountInspector?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
+  loadChannelPlugin: () => ChannelPlugin;
+  loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  loadChannelAccountInspector?: () => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
 
@@ -52,12 +44,8 @@ type BundledChannelSetupEntryRuntimeContract = {
   loadSetupSecrets?: (
     options?: BundledEntryModuleLoadOptions,
   ) => ChannelPlugin["secrets"] | undefined;
-  loadLegacyStateMigrationDetector?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => BundledChannelLegacyStateMigrationDetector;
-  loadLegacySessionSurface?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => BundledChannelLegacySessionSurface;
+  loadLegacyStateMigrationDetector?: () => BundledChannelLegacyStateMigrationDetector;
+  loadLegacySessionSurface?: () => BundledChannelLegacySessionSurface;
   features?: {
     legacyStateMigrations?: boolean;
     legacySessionSurfaces?: boolean;
@@ -74,7 +62,7 @@ type GeneratedBundledChannelEntry = {
   entry: BundledChannelEntryRuntimeContract;
 };
 
-type BundledChannelLoadContext = {
+type BundledChannelCacheContext = {
   pluginLoadInProgressIds: Set<ChannelId>;
   setupPluginLoadInProgressIds: Set<ChannelId>;
   entryLoadInProgressIds: Set<ChannelId>;
@@ -92,13 +80,6 @@ type BundledChannelLoadContext = {
 };
 
 const log = createSubsystemLogger("channels");
-const MAX_BUNDLED_CHANNEL_LOAD_CONTEXTS = 32;
-const bundledChannelLoadContextsByRoot = new Map<string, BundledChannelLoadContext>();
-const sourceBundledEntryLoaderCache: PluginModuleLoaderCache = new Map();
-
-function isSourceModulePath(modulePath: string): boolean {
-  return /\.(?:c|m)?tsx?$/iu.test(modulePath);
-}
 
 function resolveChannelPluginModuleEntry(
   moduleExport: unknown,
@@ -201,6 +182,7 @@ function loadGeneratedBundledChannelModule(params: {
   rootScope: BundledChannelRootScope;
   metadata: BundledChannelPluginMetadata;
   entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"];
+  installRuntimeDeps?: boolean;
 }): unknown {
   let modulePath = resolveGeneratedBundledChannelModulePath(params);
   if (!modulePath) {
@@ -213,25 +195,28 @@ function loadGeneratedBundledChannelModule(params: {
     metadata: params.metadata,
     modulePath,
   });
-  try {
-    return loadChannelPluginModule({
+  if (params.installRuntimeDeps !== false && isBuiltBundledPluginRuntimeRoot(boundaryRoot)) {
+    const prepared = prepareBundledPluginRuntimeRoot({
+      pluginId: params.metadata.manifest.id,
+      pluginRoot: boundaryRoot,
       modulePath,
-      rootDir: boundaryRoot,
-      boundaryRootDir: boundaryRoot,
+      env: process.env,
+      logInstalled: (installedSpecs) => {
+        log.debug(
+          `[channels] ${params.metadata.manifest.id} installed bundled runtime deps: ${installedSpecs.join(", ")}`,
+        );
+      },
     });
-  } catch (error) {
-    if (!isSourceModulePath(modulePath)) {
-      throw error;
-    }
-    const loader = getCachedPluginModuleLoader({
-      cache: sourceBundledEntryLoaderCache,
-      modulePath,
-      importerUrl: import.meta.url,
-      preferBuiltDist: true,
-      cacheScopeKey: "bundled-channel-source-entry",
-    });
-    return loader(modulePath);
+    modulePath = prepared.modulePath;
+    boundaryRoot = prepared.pluginRoot;
   }
+  return loadChannelPluginModule({
+    modulePath,
+    rootDir: boundaryRoot,
+    boundaryRootDir: boundaryRoot,
+    shouldTryNativeRequire: (safePath) =>
+      safePath.includes(`${path.sep}dist${path.sep}`) && isJavaScriptModulePath(safePath),
+  });
 }
 
 function loadGeneratedBundledChannelEntry(params: {
@@ -244,6 +229,7 @@ function loadGeneratedBundledChannelEntry(params: {
         rootScope: params.rootScope,
         metadata: params.metadata,
         entry: params.metadata.source,
+        installRuntimeDeps: true,
       }),
     );
     if (!entry) {
@@ -276,6 +262,7 @@ function loadGeneratedBundledChannelSetupEntry(params: {
         rootScope: params.rootScope,
         metadata: params.metadata,
         entry: params.metadata.setupSource,
+        installRuntimeDeps: false,
       }),
     );
     if (!setupEntry) {
@@ -294,7 +281,10 @@ function loadGeneratedBundledChannelSetupEntry(params: {
   }
 }
 
-function createBundledChannelLoadContext(): BundledChannelLoadContext {
+const cachedBundledChannelMetadata = new Map<string, readonly BundledChannelPluginMetadata[]>();
+const bundledChannelCacheContexts = new Map<string, BundledChannelCacheContext>();
+
+function createBundledChannelCacheContext(): BundledChannelCacheContext {
   return {
     pluginLoadInProgressIds: new Set(),
     setupPluginLoadInProgressIds: new Set(),
@@ -310,45 +300,43 @@ function createBundledChannelLoadContext(): BundledChannelLoadContext {
   };
 }
 
-function resolveActiveBundledChannelLoadScope(env: NodeJS.ProcessEnv = process.env): {
+function getBundledChannelCacheContext(cacheKey: string): BundledChannelCacheContext {
+  const cached = bundledChannelCacheContexts.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const created = createBundledChannelCacheContext();
+  bundledChannelCacheContexts.set(cacheKey, created);
+  return created;
+}
+
+function resolveActiveBundledChannelCacheScope(): {
   rootScope: BundledChannelRootScope;
-  loadContext: BundledChannelLoadContext;
+  cacheContext: BundledChannelCacheContext;
 } {
-  const rootScope = resolveBundledChannelRootScope(env);
-  const cachedContext = bundledChannelLoadContextsByRoot.get(rootScope.cacheKey);
-  if (cachedContext) {
-    bundledChannelLoadContextsByRoot.delete(rootScope.cacheKey);
-    bundledChannelLoadContextsByRoot.set(rootScope.cacheKey, cachedContext);
-    return {
-      rootScope,
-      loadContext: cachedContext,
-    };
-  }
-  const loadContext = createBundledChannelLoadContext();
-  bundledChannelLoadContextsByRoot.set(rootScope.cacheKey, loadContext);
-  while (bundledChannelLoadContextsByRoot.size > MAX_BUNDLED_CHANNEL_LOAD_CONTEXTS) {
-    const oldestKey = bundledChannelLoadContextsByRoot.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    bundledChannelLoadContextsByRoot.delete(oldestKey);
-  }
+  const rootScope = resolveBundledChannelRootScope();
   return {
     rootScope,
-    loadContext,
+    cacheContext: getBundledChannelCacheContext(rootScope.cacheKey),
   };
 }
 
 function listBundledChannelMetadata(
   rootScope = resolveBundledChannelRootScope(),
 ): readonly BundledChannelPluginMetadata[] {
+  const cached = cachedBundledChannelMetadata.get(rootScope.cacheKey);
+  if (cached) {
+    return cached;
+  }
   const scanDir = resolveBundledChannelScanDir(rootScope);
-  return listBundledChannelPluginMetadata({
+  const loaded = listBundledChannelPluginMetadata({
     rootDir: rootScope.packageRoot,
     ...(scanDir ? { scanDir } : {}),
     includeChannelConfigs: false,
     includeSyntheticChannelConfigs: false,
   }).filter((metadata) => (metadata.manifest.channels?.length ?? 0) > 0);
+  cachedBundledChannelMetadata.set(rootScope.cacheKey, loaded);
+  return loaded;
 }
 
 function listBundledChannelPluginIdsForRoot(
@@ -359,73 +347,15 @@ function listBundledChannelPluginIdsForRoot(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function shouldIncludeBundledChannelSetupFeatureForConfig(params: {
-  metadata: BundledChannelPluginMetadata;
-  config?: OpenClawConfig;
-}): boolean {
-  if (!params.config) {
-    return true;
-  }
-  const pluginId = params.metadata.manifest.id;
-  if (
-    !passesManifestOwnerBasePolicy({
-      plugin: { id: pluginId },
-      normalizedConfig: normalizePluginsConfig(params.config.plugins),
-      allowRestrictiveAllowlistBypass: true,
-    })
-  ) {
-    return false;
-  }
-
-  let hasExplicitChannelDisable = false;
-  for (const channelId of params.metadata.manifest.channels ?? [pluginId]) {
-    const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
-    if (!normalizedChannelId) {
-      continue;
-    }
-    const channelConfig = (params.config.channels as Record<string, unknown> | undefined)?.[
-      normalizedChannelId
-    ];
-    if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
-      continue;
-    }
-    if ((channelConfig as { enabled?: unknown }).enabled === false) {
-      hasExplicitChannelDisable = true;
-      continue;
-    }
-    return true;
-  }
-
-  return !hasExplicitChannelDisable;
-}
-
 function listBundledChannelPluginIdsForSetupFeature(
   rootScope: BundledChannelRootScope,
   feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
-  options: { config?: OpenClawConfig } = {},
 ): readonly ChannelId[] {
   const hinted = listBundledChannelMetadata(rootScope)
-    .filter(
-      (metadata) =>
-        metadata.packageManifest?.setupFeatures?.[feature] === true &&
-        shouldIncludeBundledChannelSetupFeatureForConfig({
-          metadata,
-          config: options.config,
-        }),
-    )
+    .filter((metadata) => metadata.packageManifest?.setupFeatures?.[feature] === true)
     .map((metadata) => metadata.manifest.id)
     .toSorted((left, right) => left.localeCompare(right));
-  return hinted.length > 0
-    ? hinted
-    : listBundledChannelMetadata(rootScope)
-        .filter((metadata) =>
-          shouldIncludeBundledChannelSetupFeatureForConfig({
-            metadata,
-            config: options.config,
-          }),
-        )
-        .map((metadata) => metadata.manifest.id)
-        .toSorted((left, right) => left.localeCompare(right));
+  return hinted.length > 0 ? hinted : listBundledChannelPluginIdsForRoot(rootScope);
 }
 
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
@@ -454,42 +384,42 @@ function resolveBundledChannelMetadata(
 function getLazyGeneratedBundledChannelEntryForRoot(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
-  loadContext: BundledChannelLoadContext,
+  cacheContext: BundledChannelCacheContext,
 ): GeneratedBundledChannelEntry | null {
-  const previous = loadContext.lazyEntriesById.get(id);
-  if (previous) {
-    return previous;
+  const cached = cacheContext.lazyEntriesById.get(id);
+  if (cached) {
+    return cached;
   }
-  if (previous === null) {
+  if (cached === null) {
     return null;
   }
   const metadata = resolveBundledChannelMetadata(id, rootScope);
   if (!metadata) {
-    loadContext.lazyEntriesById.set(id, null);
+    cacheContext.lazyEntriesById.set(id, null);
     return null;
   }
-  if (loadContext.entryLoadInProgressIds.has(id)) {
+  if (cacheContext.entryLoadInProgressIds.has(id)) {
     return null;
   }
-  loadContext.entryLoadInProgressIds.add(id);
+  cacheContext.entryLoadInProgressIds.add(id);
   try {
     const entry = loadGeneratedBundledChannelEntry({
       rootScope,
       metadata,
     });
-    loadContext.lazyEntriesById.set(id, entry);
+    cacheContext.lazyEntriesById.set(id, entry);
     if (entry?.entry.id && entry.entry.id !== id) {
-      loadContext.lazyEntriesById.set(entry.entry.id, entry);
+      cacheContext.lazyEntriesById.set(entry.entry.id, entry);
     }
     return entry;
   } finally {
-    loadContext.entryLoadInProgressIds.delete(id);
+    cacheContext.entryLoadInProgressIds.delete(id);
   }
 }
 
-function rememberBundledChannelSetupEntry(
+function cacheBundledChannelSetupEntry(
   metadata: BundledChannelPluginMetadata,
-  loadContext: BundledChannelLoadContext,
+  cacheContext: BundledChannelCacheContext,
   entry: BundledChannelSetupEntryRuntimeContract | null,
   requestedId?: ChannelId,
 ) {
@@ -499,62 +429,58 @@ function rememberBundledChannelSetupEntry(
     ...(requestedId ? [requestedId] : []),
   ]);
   for (const id of ids) {
-    loadContext.lazySetupEntriesById.set(id, entry);
+    cacheContext.lazySetupEntriesById.set(id, entry);
   }
 }
 
 function getLazyGeneratedBundledChannelSetupEntryForRoot(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
-  loadContext: BundledChannelLoadContext,
+  cacheContext: BundledChannelCacheContext,
 ): BundledChannelSetupEntryRuntimeContract | null {
-  if (loadContext.lazySetupEntriesById.has(id)) {
-    return loadContext.lazySetupEntriesById.get(id) ?? null;
+  if (cacheContext.lazySetupEntriesById.has(id)) {
+    return cacheContext.lazySetupEntriesById.get(id) ?? null;
   }
   const metadata = resolveBundledChannelMetadata(id, rootScope);
   if (!metadata) {
-    loadContext.lazySetupEntriesById.set(id, null);
+    cacheContext.lazySetupEntriesById.set(id, null);
     return null;
   }
-  if (loadContext.setupEntryLoadInProgressIds.has(id)) {
+  if (cacheContext.setupEntryLoadInProgressIds.has(id)) {
     return null;
   }
-  loadContext.setupEntryLoadInProgressIds.add(id);
+  cacheContext.setupEntryLoadInProgressIds.add(id);
   try {
     const setupEntry = loadGeneratedBundledChannelSetupEntry({
       rootScope,
       metadata,
     });
-    rememberBundledChannelSetupEntry(metadata, loadContext, setupEntry, id);
+    cacheBundledChannelSetupEntry(metadata, cacheContext, setupEntry, id);
     return setupEntry;
   } finally {
-    loadContext.setupEntryLoadInProgressIds.delete(id);
+    cacheContext.setupEntryLoadInProgressIds.delete(id);
   }
 }
 
 function getBundledChannelPluginForRoot(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
-  loadContext: BundledChannelLoadContext,
+  cacheContext: BundledChannelCacheContext,
 ): ChannelPlugin | undefined {
-  if (loadContext.lazyPluginsById.has(id)) {
-    return loadContext.lazyPluginsById.get(id) ?? undefined;
+  if (cacheContext.lazyPluginsById.has(id)) {
+    return cacheContext.lazyPluginsById.get(id) ?? undefined;
   }
-  if (loadContext.pluginLoadInProgressIds.has(id)) {
+  if (cacheContext.pluginLoadInProgressIds.has(id)) {
     return undefined;
   }
-  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, loadContext)?.entry;
+  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, cacheContext)?.entry;
   if (!entry) {
     return undefined;
   }
-  loadContext.pluginLoadInProgressIds.add(id);
+  cacheContext.pluginLoadInProgressIds.add(id);
   try {
     const metadata = resolveBundledChannelMetadata(id, rootScope);
-    const plugin = entry.loadChannelPlugin() as ChannelPlugin | undefined;
-    if (!plugin) {
-      loadContext.lazyPluginsById.set(id, null);
-      return undefined;
-    }
+    const plugin = entry.loadChannelPlugin();
     const normalizedPlugin = {
       ...plugin,
       meta: normalizeChannelMeta({
@@ -563,40 +489,40 @@ function getBundledChannelPluginForRoot(
         existing: metadata?.packageManifest?.channel,
       }),
     };
-    loadContext.lazyPluginsById.set(id, normalizedPlugin);
+    cacheContext.lazyPluginsById.set(id, normalizedPlugin);
     return normalizedPlugin;
   } catch (error) {
     const detail = formatErrorMessage(error);
     log.warn(`[channels] failed to load bundled channel ${id}: ${detail}`);
-    loadContext.lazyPluginsById.set(id, null);
+    cacheContext.lazyPluginsById.set(id, null);
     return undefined;
   } finally {
-    loadContext.pluginLoadInProgressIds.delete(id);
+    cacheContext.pluginLoadInProgressIds.delete(id);
   }
 }
 
 function getBundledChannelSecretsForRoot(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
-  loadContext: BundledChannelLoadContext,
+  cacheContext: BundledChannelCacheContext,
 ): ChannelPlugin["secrets"] | undefined {
-  if (loadContext.lazySecretsById.has(id)) {
-    return loadContext.lazySecretsById.get(id) ?? undefined;
+  if (cacheContext.lazySecretsById.has(id)) {
+    return cacheContext.lazySecretsById.get(id) ?? undefined;
   }
-  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, loadContext)?.entry;
+  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, cacheContext)?.entry;
   if (!entry) {
     return undefined;
   }
   try {
     const secrets =
       entry.loadChannelSecrets?.() ??
-      getBundledChannelPluginForRoot(id, rootScope, loadContext)?.secrets;
-    loadContext.lazySecretsById.set(id, secrets ?? null);
+      getBundledChannelPluginForRoot(id, rootScope, cacheContext)?.secrets;
+    cacheContext.lazySecretsById.set(id, secrets ?? null);
     return secrets;
   } catch (error) {
     const detail = formatErrorMessage(error);
     log.warn(`[channels] failed to load bundled channel secrets ${id}: ${detail}`);
-    loadContext.lazySecretsById.set(id, null);
+    cacheContext.lazySecretsById.set(id, null);
     return undefined;
   }
 }
@@ -604,24 +530,24 @@ function getBundledChannelSecretsForRoot(
 function getBundledChannelAccountInspectorForRoot(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
-  loadContext: BundledChannelLoadContext,
+  cacheContext: BundledChannelCacheContext,
 ): NonNullable<ChannelPlugin["config"]["inspectAccount"]> | undefined {
-  if (loadContext.lazyAccountInspectorsById.has(id)) {
-    return loadContext.lazyAccountInspectorsById.get(id) ?? undefined;
+  if (cacheContext.lazyAccountInspectorsById.has(id)) {
+    return cacheContext.lazyAccountInspectorsById.get(id) ?? undefined;
   }
-  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, loadContext)?.entry;
+  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, cacheContext)?.entry;
   if (!entry?.loadChannelAccountInspector) {
-    loadContext.lazyAccountInspectorsById.set(id, null);
+    cacheContext.lazyAccountInspectorsById.set(id, null);
     return undefined;
   }
   try {
     const inspector = entry.loadChannelAccountInspector();
-    loadContext.lazyAccountInspectorsById.set(id, inspector);
+    cacheContext.lazyAccountInspectorsById.set(id, inspector);
     return inspector;
   } catch (error) {
     const detail = formatErrorMessage(error);
     log.warn(`[channels] failed to load bundled channel account inspector ${id}: ${detail}`);
-    loadContext.lazyAccountInspectorsById.set(id, null);
+    cacheContext.lazyAccountInspectorsById.set(id, null);
     return undefined;
   }
 }
@@ -629,178 +555,169 @@ function getBundledChannelAccountInspectorForRoot(
 function getBundledChannelSetupPluginForRoot(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
-  loadContext: BundledChannelLoadContext,
+  cacheContext: BundledChannelCacheContext,
 ): ChannelPlugin | undefined {
-  if (loadContext.lazySetupPluginsById.has(id)) {
-    return loadContext.lazySetupPluginsById.get(id) ?? undefined;
+  if (cacheContext.lazySetupPluginsById.has(id)) {
+    return cacheContext.lazySetupPluginsById.get(id) ?? undefined;
   }
-  if (loadContext.setupPluginLoadInProgressIds.has(id)) {
+  if (cacheContext.setupPluginLoadInProgressIds.has(id)) {
     return undefined;
   }
-  const entry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
+  const entry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, cacheContext);
   if (!entry) {
     return undefined;
   }
-  loadContext.setupPluginLoadInProgressIds.add(id);
+  cacheContext.setupPluginLoadInProgressIds.add(id);
   try {
-    const plugin = entry.loadSetupPlugin();
-    loadContext.lazySetupPluginsById.set(id, plugin);
+    const plugin = entry.loadSetupPlugin({ installRuntimeDeps: false });
+    cacheContext.lazySetupPluginsById.set(id, plugin);
     return plugin;
   } catch (error) {
     const detail = formatErrorMessage(error);
     log.warn(`[channels] failed to load bundled channel setup ${id}: ${detail}`);
-    loadContext.lazySetupPluginsById.set(id, null);
+    cacheContext.lazySetupPluginsById.set(id, null);
     return undefined;
   } finally {
-    loadContext.setupPluginLoadInProgressIds.delete(id);
+    cacheContext.setupPluginLoadInProgressIds.delete(id);
   }
 }
 
 function getBundledChannelSetupSecretsForRoot(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
-  loadContext: BundledChannelLoadContext,
+  cacheContext: BundledChannelCacheContext,
 ): ChannelPlugin["secrets"] | undefined {
-  if (loadContext.lazySetupSecretsById.has(id)) {
-    return loadContext.lazySetupSecretsById.get(id) ?? undefined;
+  if (cacheContext.lazySetupSecretsById.has(id)) {
+    return cacheContext.lazySetupSecretsById.get(id) ?? undefined;
   }
-  const entry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
+  const entry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, cacheContext);
   if (!entry) {
     return undefined;
   }
   try {
     const secrets =
       entry.loadSetupSecrets?.() ??
-      getBundledChannelSetupPluginForRoot(id, rootScope, loadContext)?.secrets;
-    loadContext.lazySetupSecretsById.set(id, secrets ?? null);
+      getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext)?.secrets;
+    cacheContext.lazySetupSecretsById.set(id, secrets ?? null);
     return secrets;
   } catch (error) {
     const detail = formatErrorMessage(error);
     log.warn(`[channels] failed to load bundled channel setup secrets ${id}: ${detail}`);
-    loadContext.lazySetupSecretsById.set(id, null);
+    cacheContext.lazySetupSecretsById.set(id, null);
     return undefined;
   }
 }
 
 export function listBundledChannelPlugins(): readonly ChannelPlugin[] {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
   return listBundledChannelPluginIdsForRoot(rootScope).flatMap((id) => {
-    const plugin = getBundledChannelPluginForRoot(id, rootScope, loadContext);
+    const plugin = getBundledChannelPluginForRoot(id, rootScope, cacheContext);
     return plugin ? [plugin] : [];
   });
 }
 
 export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
   return listBundledChannelPluginIdsForRoot(rootScope).flatMap((id) => {
-    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
+    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
     return plugin ? [plugin] : [];
   });
 }
 
 export function listBundledChannelSetupPluginsByFeature(
   feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
-  options: { config?: OpenClawConfig } = {},
 ): readonly ChannelPlugin[] {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, feature, {
-    config: options.config,
-  }).flatMap((id) => {
-    const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, feature).flatMap((id) => {
+    const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, cacheContext);
     if (!hasSetupEntryFeature(setupEntry, feature)) {
       return [];
     }
-    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
+    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
     return plugin ? [plugin] : [];
   });
 }
 
-export function listBundledChannelLegacySessionSurfaces(
-  options: {
-    config?: OpenClawConfig;
-  } = {},
-): readonly BundledChannelLegacySessionSurface[] {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacySessionSurfaces", {
-    config: options.config,
-  }).flatMap((id) => {
-    const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
-    const surface = setupEntry?.loadLegacySessionSurface?.();
-    if (surface) {
-      return [surface];
-    }
-    if (!hasSetupEntryFeature(setupEntry, "legacySessionSurfaces")) {
-      return [];
-    }
-    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
-    return plugin?.messaging ? [plugin.messaging] : [];
-  });
+export function listBundledChannelLegacySessionSurfaces(): readonly BundledChannelLegacySessionSurface[] {
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacySessionSurfaces").flatMap(
+    (id) => {
+      const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(
+        id,
+        rootScope,
+        cacheContext,
+      );
+      const surface = setupEntry?.loadLegacySessionSurface?.();
+      if (surface) {
+        return [surface];
+      }
+      if (!hasSetupEntryFeature(setupEntry, "legacySessionSurfaces")) {
+        return [];
+      }
+      const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
+      return plugin?.messaging ? [plugin.messaging] : [];
+    },
+  );
 }
 
-export function listBundledChannelLegacyStateMigrationDetectors(
-  options: {
-    config?: OpenClawConfig;
-  } = {},
-): readonly BundledChannelLegacyStateMigrationDetector[] {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacyStateMigrations", {
-    config: options.config,
-  }).flatMap((id) => {
-    const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
-    const detector = setupEntry?.loadLegacyStateMigrationDetector?.();
-    if (detector) {
-      return [detector];
-    }
-    if (!hasSetupEntryFeature(setupEntry, "legacyStateMigrations")) {
-      return [];
-    }
-    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
-    return plugin?.lifecycle?.detectLegacyStateMigrations
-      ? [plugin.lifecycle.detectLegacyStateMigrations]
-      : [];
-  });
+export function listBundledChannelLegacyStateMigrationDetectors(): readonly BundledChannelLegacyStateMigrationDetector[] {
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacyStateMigrations").flatMap(
+    (id) => {
+      const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(
+        id,
+        rootScope,
+        cacheContext,
+      );
+      const detector = setupEntry?.loadLegacyStateMigrationDetector?.();
+      if (detector) {
+        return [detector];
+      }
+      if (!hasSetupEntryFeature(setupEntry, "legacyStateMigrations")) {
+        return [];
+      }
+      const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
+      return plugin?.lifecycle?.detectLegacyStateMigrations
+        ? [plugin.lifecycle.detectLegacyStateMigrations]
+        : [];
+    },
+  );
 }
 
 export function hasBundledChannelEntryFeature(
   id: ChannelId,
   feature: keyof NonNullable<BundledChannelEntryRuntimeContract["features"]>,
 ): boolean {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, loadContext)?.entry;
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, cacheContext)?.entry;
   return hasChannelEntryFeature(entry, feature);
 }
 
 export function getBundledChannelAccountInspector(
   id: ChannelId,
 ): NonNullable<ChannelPlugin["config"]["inspectAccount"]> | undefined {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return getBundledChannelAccountInspectorForRoot(id, rootScope, loadContext);
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  return getBundledChannelAccountInspectorForRoot(id, rootScope, cacheContext);
 }
 
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return getBundledChannelPluginForRoot(id, rootScope, loadContext);
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  return getBundledChannelPluginForRoot(id, rootScope, cacheContext);
 }
 
 export function getBundledChannelSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return getBundledChannelSecretsForRoot(id, rootScope, loadContext);
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  return getBundledChannelSecretsForRoot(id, rootScope, cacheContext);
 }
 
-export function getBundledChannelSetupPlugin(
-  id: ChannelId,
-  env: NodeJS.ProcessEnv = process.env,
-): ChannelPlugin | undefined {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope(env);
-  return getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
+export function getBundledChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  return getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
 }
 
-export function getBundledChannelSetupSecrets(
-  id: ChannelId,
-  env: NodeJS.ProcessEnv = process.env,
-): ChannelPlugin["secrets"] | undefined {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope(env);
-  return getBundledChannelSetupSecretsForRoot(id, rootScope, loadContext);
+export function getBundledChannelSetupSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  return getBundledChannelSetupSecretsForRoot(id, rootScope, cacheContext);
 }
 
 export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
@@ -812,8 +729,8 @@ export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
 }
 
 export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime): void {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  const setter = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, loadContext)?.entry
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  const setter = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, cacheContext)?.entry
     .setChannelRuntime;
   if (!setter) {
     throw new Error(`missing bundled channel runtime setter: ${id}`);

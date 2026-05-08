@@ -2,8 +2,8 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-type PiApiKeyCredential = { type: "api_key"; key: string };
-type PiOAuthCredential = {
+export type PiApiKeyCredential = { type: "api_key"; key: string };
+export type PiOAuthCredential = {
   type: "oauth";
   access: string;
   refresh: string;
@@ -13,7 +13,7 @@ type PiOAuthCredential = {
 export type PiCredential = PiApiKeyCredential | PiOAuthCredential;
 export type PiCredentialMap = Record<string, PiCredential>;
 
-function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): PiCredential | null {
+export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): PiCredential | null {
   if (cred.type === "api_key") {
     const key = normalizeOptionalString(cred.key) ?? "";
     if (!key) {

@@ -2,7 +2,6 @@ import { type ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-re
 import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createWhatsAppOutboundBase } from "./outbound-base.js";
-import { normalizeWhatsAppPayloadText } from "./outbound-media-contract.js";
 import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 
 type WhatsAppSendModule = typeof import("./send.js");
@@ -14,8 +13,8 @@ function loadWhatsAppSendModule(): Promise<WhatsAppSendModule> {
   return whatsAppSendModulePromise;
 }
 
-function normalizeOutboundText(text: string | undefined): string {
-  return normalizeWhatsAppPayloadText(text);
+function trimLeadingWhitespace(text: string | undefined): string {
+  return text?.trimStart() ?? "";
 }
 
 export const whatsappOutbound: ChannelOutboundAdapter = createWhatsAppOutboundBase({
@@ -23,7 +22,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = createWhatsAppOutboundBa
   sendMessageWhatsApp: async (to, text, options) =>
     await (
       await loadWhatsAppSendModule()
-    ).sendMessageWhatsApp(to, normalizeOutboundText(text), {
+    ).sendMessageWhatsApp(to, trimLeadingWhitespace(text), {
       ...options,
     }),
   sendPollWhatsApp: async (to, poll, options) =>
@@ -31,6 +30,6 @@ export const whatsappOutbound: ChannelOutboundAdapter = createWhatsAppOutboundBa
   shouldLogVerbose: () => shouldLogVerbose(),
   resolveTarget: ({ to, allowFrom, mode }) =>
     resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
-  normalizeText: normalizeOutboundText,
+  normalizeText: trimLeadingWhitespace,
   skipEmptyText: true,
 });

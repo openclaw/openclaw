@@ -12,15 +12,14 @@ import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js"
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
-  getSandboxHostPathPolicyKey,
-  isSandboxHostPathAbsolute,
   normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
 import { getBlockedNetworkModeReason } from "./network-mode.js";
 
 // Targeted denylist: host paths that should never be exposed inside sandbox containers.
-const BLOCKED_HOST_PATHS = [
+// Exported for reuse in security audit collectors.
+export const BLOCKED_HOST_PATHS = [
   "/etc",
   "/private/etc",
   "/proc",
@@ -93,19 +92,18 @@ function parseBindSpec(bind: string): ParsedBindSpec {
  * Parse the host/source path from a Docker bind mount string.
  * Format: `source:target[:mode]`
  */
-function parseBindSourcePath(bind: string): string {
+export function parseBindSourcePath(bind: string): string {
   return parseBindSpec(bind).source.trim();
 }
 
-function parseBindTargetPath(bind: string): string {
+export function parseBindTargetPath(bind: string): string {
   return parseBindSpec(bind).target.trim();
 }
 
 /**
  * Normalize a POSIX path: resolve `.`, `..`, collapse `//`, strip trailing `/`.
- * If it starts with the drive letter, convert it to the upper case.
  */
-function normalizeHostPath(raw: string): string {
+export function normalizeHostPath(raw: string): string {
   return normalizeSandboxHostPath(raw);
 }
 
@@ -118,9 +116,10 @@ function normalizeHostPath(raw: string): string {
  */
 export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   const sourceRaw = parseBindSourcePath(bind);
-  if (!isSandboxHostPathAbsolute(sourceRaw)) {
+  if (!sourceRaw.startsWith("/")) {
     return { kind: "non_absolute", sourcePath: sourceRaw };
   }
+
   const normalized = normalizeHostPath(sourceRaw);
   const blockedHostPaths = getBlockedHostPaths();
   const directReason = getBlockedReasonForSourcePath(normalized, blockedHostPaths);
@@ -136,17 +135,15 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   return null;
 }
 
-function getBlockedReasonForSourcePath(
+export function getBlockedReasonForSourcePath(
   sourceNormalized: string,
   blockedHostPaths: string[],
 ): BlockedBindReason | null {
   if (sourceNormalized === "/") {
     return { kind: "covers", blockedPath: "/" };
   }
-  const sourceKey = getSandboxHostPathPolicyKey(sourceNormalized);
   for (const blocked of blockedHostPaths) {
-    const blockedKey = getSandboxHostPathPolicyKey(blocked);
-    if (sourceKey === blockedKey || sourceKey.startsWith(`${blockedKey}/`)) {
+    if (sourceNormalized === blocked || sourceNormalized.startsWith(blocked + "/")) {
       return { kind: "targets", blockedPath: blocked };
     }
   }
@@ -197,7 +194,7 @@ function normalizeAllowedRoots(roots: string[] | undefined): string[] {
   }
   const normalized = roots
     .map((entry) => entry.trim())
-    .filter(isSandboxHostPathAbsolute)
+    .filter((entry) => entry.startsWith("/"))
     .map(normalizeHostPath);
   const expanded = new Set<string>();
   for (const root of normalized) {
@@ -214,9 +211,7 @@ function isPathInsidePosix(root: string, target: string): boolean {
   if (root === "/") {
     return true;
   }
-  const rootKey = getSandboxHostPathPolicyKey(root);
-  const targetKey = getSandboxHostPathPolicyKey(target);
-  return targetKey === rootKey || targetKey.startsWith(`${rootKey}/`);
+  return target === root || target.startsWith(`${root}/`);
 }
 
 function getOutsideAllowedRootsReason(
@@ -280,7 +275,7 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
   if (params.reason.kind === "non_absolute") {
     return new Error(
       `Sandbox security: bind mount "${params.bind}" uses a non-absolute source path ` +
-        `"${params.reason.sourcePath}". Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.`,
+        `"${params.reason.sourcePath}". Only absolute POSIX paths are supported for sandbox binds.`,
     );
   }
   if (params.reason.kind === "outside_allowed_roots") {

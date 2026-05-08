@@ -1,5 +1,5 @@
-import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import "./lifecycle.test-support.js";
 import {
   getFeishuLifecycleTestMocks,
@@ -33,7 +33,7 @@ const {
 } = getFeishuLifecycleTestMocks();
 
 let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
-let lastRuntime = createRuntimeEnv();
+let lastRuntime: ReturnType<typeof createRuntimeEnv> | null = null;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const lifecycleConfig = createFeishuLifecycleConfig({
   accountId: "acct-menu",
@@ -41,11 +41,9 @@ const lifecycleConfig = createFeishuLifecycleConfig({
   appSecret: "secret_test",
   channelConfig: {
     dmPolicy: "open",
-    allowFrom: ["ou_user1"],
   },
   accountConfig: {
     dmPolicy: "open",
-    allowFrom: ["ou_user1"],
   },
 });
 
@@ -55,7 +53,6 @@ const lifecycleAccount = createResolvedFeishuLifecycleAccount({
   appSecret: "secret_test",
   config: {
     dmPolicy: "open",
-    allowFrom: ["ou_user1"],
   },
 });
 
@@ -93,7 +90,7 @@ describe("Feishu bot-menu lifecycle", () => {
     vi.useRealTimers();
     resetFeishuLifecycleTestMocks();
     _handlers = {};
-    lastRuntime = createRuntimeEnv();
+    lastRuntime = null;
     setFeishuLifecycleStateDir("openclaw-feishu-bot-menu");
 
     createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
@@ -182,7 +179,7 @@ describe("Feishu bot-menu lifecycle", () => {
       expect.objectContaining({
         accountId: "acct-menu",
         chatId: "p2p:ou_user1",
-        replyToMessageId: undefined,
+        replyToMessageId: "bot-menu:quick-actions:1700000000001",
       }),
     );
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(

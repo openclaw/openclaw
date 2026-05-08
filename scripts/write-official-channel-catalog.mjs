@@ -9,20 +9,16 @@ export const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = "dist/channel-catalog.json
 
 function toCatalogInstall(value, packageName) {
   const install = isRecord(value) ? value : {};
-  const clawhubSpec = trimString(install.clawhubSpec);
   const npmSpec = trimString(install.npmSpec) || packageName;
-  if (!clawhubSpec && !npmSpec) {
+  if (!npmSpec) {
     return null;
   }
   const defaultChoice = trimString(install.defaultChoice);
   const minHostVersion = trimString(install.minHostVersion);
   const expectedIntegrity = trimString(install.expectedIntegrity);
   return {
-    ...(clawhubSpec ? { clawhubSpec } : {}),
-    ...(npmSpec ? { npmSpec } : {}),
-    ...(defaultChoice === "clawhub" || defaultChoice === "npm" || defaultChoice === "local"
-      ? { defaultChoice }
-      : {}),
+    npmSpec,
+    ...(defaultChoice === "npm" || defaultChoice === "local" ? { defaultChoice } : {}),
     ...(minHostVersion ? { minHostVersion } : {}),
     ...(expectedIntegrity ? { expectedIntegrity } : {}),
     ...(install.allowInvalidConfigRecovery === true ? { allowInvalidConfigRecovery: true } : {}),
@@ -57,10 +53,6 @@ function buildCatalogEntry(packageJson) {
   };
 }
 
-function getCatalogChannelId(entry) {
-  return trimString(entry?.openclaw?.channel?.id) || trimString(entry?.name);
-}
-
 export function buildOfficialChannelCatalog(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -82,11 +74,7 @@ export function buildOfficialChannelCatalog(params = {}) {
     try {
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
       const entry = buildCatalogEntry(packageJson);
-      const channelId = entry ? getCatalogChannelId(entry) : "";
-      const alreadyPresent = channelId
-        ? entries.some((existing) => getCatalogChannelId(existing) === channelId)
-        : false;
-      if (entry && !alreadyPresent) {
+      if (entry) {
         entries.push(entry);
       }
     } catch {

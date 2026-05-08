@@ -1,1 +1,6 @@
-export { CONFIG_DIR, escapeRegExp, resolveUserPath } from "./sdk-config.js";
+export {
+  CONFIG_DIR,
+  escapeRegExp,
+  resolveUserPath,
+  shortenHomePath,
+} from "openclaw/plugin-sdk/browser-config-support";

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { areBundledPluginsDisabled } from "../plugins/bundled-dir.js";
 import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
@@ -23,12 +22,23 @@ export function createFacadeResolutionKey(params: {
   dirName: string;
   artifactBasename: string;
   bundledPluginsDir?: string | null;
-  env?: NodeJS.ProcessEnv;
 }): string {
-  const disabledKey = areBundledPluginsDisabled(params.env ?? process.env) ? "disabled" : "enabled";
   return `${params.dirName}::${params.artifactBasename}::${
     params.bundledPluginsDir ? path.resolve(params.bundledPluginsDir) : "<default>"
-  }::${disabledKey}`;
+  }`;
+}
+
+export function resolveCachedFacadeModuleLocation<TLocation>(params: {
+  cache: Map<string, TLocation | null>;
+  key: string;
+  resolve: () => TLocation | null;
+}): TLocation | null {
+  if (params.cache.has(params.key)) {
+    return params.cache.get(params.key) ?? null;
+  }
+  const resolved = params.resolve();
+  params.cache.set(params.key, resolved);
+  return resolved;
 }
 
 export function resolveFacadeBoundaryRoot(params: {
@@ -54,8 +64,6 @@ export function resolveBundledFacadeModuleLocation(params: {
   bundledPluginsDir?: string | null;
 }): FacadeModuleLocationLike | null {
   const preferSource = !params.currentModulePath.includes(`${path.sep}dist${path.sep}`);
-  const env = params.env ?? process.env;
-  const packageSourceRoot = path.resolve(params.packageRoot, "extensions");
   const publicSurfaceParams = {
     rootDir: params.packageRoot,
     env: params.env,
@@ -67,16 +75,8 @@ export function resolveBundledFacadeModuleLocation(params: {
     ? (resolveBundledPluginSourcePublicSurfacePath({
         dirName: params.dirName,
         artifactBasename: params.artifactBasename,
-        sourceRoot: params.bundledPluginsDir ?? packageSourceRoot,
-      }) ??
-      (params.bundledPluginsDir && !areBundledPluginsDisabled(env)
-        ? resolveBundledPluginSourcePublicSurfacePath({
-            dirName: params.dirName,
-            artifactBasename: params.artifactBasename,
-            sourceRoot: packageSourceRoot,
-          })
-        : null) ??
-      resolveBundledPluginPublicSurfacePath(publicSurfaceParams))
+        sourceRoot: params.bundledPluginsDir ?? path.resolve(params.packageRoot, "extensions"),
+      }) ?? resolveBundledPluginPublicSurfacePath(publicSurfaceParams))
     : resolveBundledPluginPublicSurfacePath(publicSurfaceParams);
   return modulePath
     ? {

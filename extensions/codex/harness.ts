@@ -23,9 +23,6 @@ export function createCodexAppServerAgentHarness(options?: {
   return {
     id: options?.id ?? "codex",
     label: options?.label ?? "Codex agent harness",
-    deliveryDefaults: {
-      sourceVisibleReplies: "message_tool",
-    },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (providerIds.has(provider)) {
@@ -51,9 +48,8 @@ export function createCodexAppServerAgentHarness(options?: {
       }
     },
     dispose: async () => {
-      const { clearSharedCodexAppServerClientAndWait } =
-        await import("./src/app-server/shared-client.js");
-      await clearSharedCodexAppServerClientAndWait();
+      const { clearSharedCodexAppServerClient } = await import("./src/app-server/shared-client.js");
+      clearSharedCodexAppServerClient();
     },
   };
 }

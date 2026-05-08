@@ -1,6 +1,7 @@
 import type { ActivePluginChannelRegistration } from "../plugins/channel-registry-state.types.js";
 import { getActivePluginChannelRegistryFromState } from "../plugins/runtime-channel-state.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeChatChannelId, type ChatChannelId } from "./ids.js";
 import type { ChannelId } from "./plugins/channel-id.types.js";
 
 function listRegisteredChannelPluginEntries(): ActivePluginChannelRegistration[] {
@@ -9,6 +10,10 @@ function listRegisteredChannelPluginEntries(): ActivePluginChannelRegistration[]
     return channelRegistry.channels;
   }
   return [];
+}
+
+export function normalizeChannelId(raw?: string | null): ChatChannelId | null {
+  return normalizeChatChannelId(raw);
 }
 
 export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {

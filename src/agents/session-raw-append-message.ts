@@ -2,7 +2,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
 const RAW_APPEND_MESSAGE = Symbol("openclaw.session.rawAppendMessage");
 
-type SessionManagerWithRawAppend = SessionManager & {
+export type SessionManagerWithRawAppend = SessionManager & {
   [RAW_APPEND_MESSAGE]?: SessionManager["appendMessage"];
 };
 

@@ -27,27 +27,13 @@ function buildErrorObservationFields(error?: string): {
   };
 }
 
-type FallbackStepOutcome = "next_fallback" | "succeeded" | "chain_exhausted";
-
-export type ModelFallbackStepFields = {
-  fallbackStepType: "fallback_step";
-  fallbackStepFromModel: string;
-  fallbackStepToModel?: string;
-  fallbackStepFromFailureReason?: FailoverReason;
-  fallbackStepFromFailureDetail?: string;
-  fallbackStepChainPosition?: number;
-  fallbackStepFinalOutcome: FallbackStepOutcome;
-};
-
-export type ModelFallbackDecisionParams = {
+export function logModelFallbackDecision(params: {
   decision:
     | "skip_candidate"
     | "probe_cooldown_candidate"
     | "candidate_failed"
     | "candidate_succeeded";
   runId?: string;
-  sessionId?: string;
-  lane?: string;
   requestedProvider: string;
   requestedModel: string;
   candidate: ModelCandidate;
@@ -64,81 +50,13 @@ export type ModelFallbackDecisionParams = {
   allowTransientCooldownProbe?: boolean;
   profileCount?: number;
   previousAttempts?: FallbackAttempt[];
-};
-
-function formatModelRef(candidate: ModelCandidate): string {
-  return `${candidate.provider}/${candidate.model}`;
-}
-
-function buildFallbackStepFields(params: {
-  decision: "skip_candidate" | "candidate_failed" | "candidate_succeeded";
-  candidate: ModelCandidate;
-  reason?: FailoverReason | null;
-  error?: string;
-  nextCandidate?: ModelCandidate;
-  attempt?: number;
-  previousAttempts?: FallbackAttempt[];
-}): ModelFallbackStepFields | undefined {
-  const lastPreviousAttempt = params.previousAttempts?.at(-1);
-  if (params.decision === "candidate_succeeded") {
-    if (!lastPreviousAttempt) {
-      return undefined;
-    }
-    return {
-      fallbackStepType: "fallback_step",
-      fallbackStepFromModel: `${lastPreviousAttempt.provider}/${lastPreviousAttempt.model}`,
-      fallbackStepToModel: formatModelRef(params.candidate),
-      ...(lastPreviousAttempt.reason
-        ? { fallbackStepFromFailureReason: lastPreviousAttempt.reason }
-        : {}),
-      ...(lastPreviousAttempt.error
-        ? { fallbackStepFromFailureDetail: lastPreviousAttempt.error }
-        : {}),
-      ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
-      fallbackStepFinalOutcome: "succeeded",
-    };
-  }
-
-  const observed = buildErrorObservationFields(params.error);
-  return {
-    fallbackStepType: "fallback_step",
-    fallbackStepFromModel: formatModelRef(params.candidate),
-    ...(params.nextCandidate ? { fallbackStepToModel: formatModelRef(params.nextCandidate) } : {}),
-    ...(params.reason ? { fallbackStepFromFailureReason: params.reason } : {}),
-    ...((observed.providerErrorMessagePreview ?? observed.errorPreview)
-      ? {
-          fallbackStepFromFailureDetail:
-            observed.providerErrorMessagePreview ?? observed.errorPreview,
-        }
-      : {}),
-    ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
-    fallbackStepFinalOutcome: params.nextCandidate ? "next_fallback" : "chain_exhausted",
-  };
-}
-
-export function logModelFallbackDecision(
-  params: ModelFallbackDecisionParams,
-): ModelFallbackStepFields | undefined {
+}): void {
   const nextText = params.nextCandidate
     ? `${sanitizeForLog(params.nextCandidate.provider)}/${sanitizeForLog(params.nextCandidate.model)}`
     : "none";
   const reasonText = params.reason ?? "unknown";
   const observedError = buildErrorObservationFields(params.error);
   const detailText = observedError.providerErrorMessagePreview ?? observedError.errorPreview;
-  const fallbackStepFields =
-    params.decision === "skip_candidate" ||
-    params.decision === "candidate_failed" ||
-    params.decision === "candidate_succeeded"
-      ? buildFallbackStepFields({
-          decision: params.decision,
-          candidate: params.candidate,
-          reason: params.reason,
-          error: params.error,
-          nextCandidate: params.nextCandidate,
-          attempt: params.attempt,
-          previousAttempts: params.previousAttempts,
-        })
-      : undefined;
   const providerErrorTypeSuffix = observedError.providerErrorType
     ? ` providerErrorType=${sanitizeForLog(observedError.providerErrorType)}`
     : "";
@@ -147,8 +65,6 @@ export function logModelFallbackDecision(
     event: "model_fallback_decision",
     tags: ["error_handling", "model_fallback", params.decision],
     runId: params.runId,
-    sessionId: params.sessionId,
-    lane: params.lane,
     decision: params.decision,
     requestedProvider: params.requestedProvider,
     requestedModel: params.requestedModel,
@@ -160,7 +76,6 @@ export function logModelFallbackDecision(
     status: params.status,
     code: params.code,
     ...observedError,
-    ...fallbackStepFields,
     nextCandidateProvider: params.nextCandidate?.provider,
     nextCandidateModel: params.nextCandidate?.model,
     isPrimary: params.isPrimary,
@@ -180,5 +95,4 @@ export function logModelFallbackDecision(
       `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
       `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}`,
   });
-  return fallbackStepFields;
 }

@@ -8,20 +8,6 @@ import {
   resolveTailnetDnsHint,
 } from "./server-discovery.js";
 
-const DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS = 5_000;
-
-function resolveDiscoveryAdvertiseTimeoutMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS?.trim();
-  if (!raw) {
-    return DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
-  }
-  return parsed;
-}
-
 export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
@@ -46,7 +32,6 @@ export async function startGatewayDiscovery(params: {
   const mdnsMinimal = mdnsMode !== "full";
   const tailscaleEnabled = params.tailscaleMode !== "off";
   const needsTailnetDns = localDiscoveryEnabled || params.wideAreaDiscoveryEnabled;
-  const advertiseTimeoutMs = resolveDiscoveryAdvertiseTimeoutMs(process.env);
   const tailnetDns = needsTailnetDns
     ? await resolveTailnetDnsHint({ enabled: tailscaleEnabled })
     : undefined;
@@ -57,14 +42,9 @@ export async function startGatewayDiscovery(params: {
 
   if (localDiscoveryEnabled) {
     const stops: Array<() => void | Promise<void>> = [];
-    let attemptedLocalDiscovery = false;
-    let stoppedLocalDiscovery = false;
     for (const entry of params.gatewayDiscoveryServices ?? []) {
-      attemptedLocalDiscovery = true;
       try {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        let timedOut = false;
-        const context = {
+        const started = await entry.service.advertise({
           machineDisplayName: params.machineDisplayName,
           gatewayPort: params.port,
           gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
@@ -74,50 +54,7 @@ export async function startGatewayDiscovery(params: {
           tailnetDns,
           cliPath,
           minimal: mdnsMinimal,
-        };
-        const advertisePromise = Promise.resolve()
-          .then(() => entry.service.advertise(context))
-          .then(
-            async (started) => {
-              if (timedOut) {
-                if (started?.stop) {
-                  if (stoppedLocalDiscovery) {
-                    try {
-                      await started.stop();
-                    } catch (err) {
-                      params.logDiscovery.warn(`gateway discovery stop failed: ${String(err)}`);
-                    }
-                  } else {
-                    stops.push(started.stop);
-                  }
-                }
-                params.logDiscovery.warn(
-                  `gateway discovery service completed after startup timeout (${entry.service.id}, plugin=${entry.pluginId})`,
-                );
-              }
-              return started;
-            },
-            (err) => {
-              params.logDiscovery.warn(
-                `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
-              );
-              return undefined;
-            },
-          );
-        const timeoutPromise = new Promise<undefined>((resolve) => {
-          timer = setTimeout(() => {
-            timedOut = true;
-            params.logDiscovery.warn(
-              `gateway discovery service timed out after ${advertiseTimeoutMs}ms (${entry.service.id}, plugin=${entry.pluginId}); continuing startup`,
-            );
-            resolve(undefined);
-          }, advertiseTimeoutMs);
-          timer.unref?.();
         });
-        const started = await Promise.race([advertisePromise, timeoutPromise]);
-        if (timer) {
-          clearTimeout(timer);
-        }
         if (started?.stop) {
           stops.push(started.stop);
         }
@@ -127,9 +64,8 @@ export async function startGatewayDiscovery(params: {
         );
       }
     }
-    if (attemptedLocalDiscovery) {
+    if (stops.length > 0) {
       bonjourStop = async () => {
-        stoppedLocalDiscovery = true;
         for (const stop of stops.toReversed()) {
           try {
             await stop();

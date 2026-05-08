@@ -52,11 +52,6 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
   ...withProgramOnlySpecs(
     defineImportedProgramCommandGroupSpecs([
       {
-        commandNames: ["crestodian"],
-        loadModule: () => import("./register.crestodian.js"),
-        exportName: "registerCrestodianCommand",
-      },
-      {
         commandNames: ["setup"],
         loadModule: () => import("./register.setup.js"),
         exportName: "registerSetupCommand",
@@ -80,11 +75,6 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         commandNames: ["backup"],
         loadModule: () => import("./register.backup.js"),
         exportName: "registerBackupCommand",
-      },
-      {
-        commandNames: ["migrate"],
-        loadModule: () => import("./register.migrate.js"),
-        exportName: "registerMigrateCommand",
       },
       {
         commandNames: ["doctor", "dashboard", "reset", "uninstall"],
@@ -121,7 +111,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
   ...withProgramOnlySpecs(
     defineImportedProgramCommandGroupSpecs([
       {
-        commandNames: ["status", "health", "sessions", "commitments", "tasks"],
+        commandNames: ["status", "health", "sessions", "tasks"],
         loadModule: () => import("./register.status-health-sessions.js"),
         exportName: "registerStatusHealthSessionsCommands",
       },

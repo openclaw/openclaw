@@ -7,12 +7,12 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 
 const execFileAsync = promisify(execFile);
 
-type ObsidianCliProbe = {
+export type ObsidianCliProbe = {
   available: boolean;
   command: string | null;
 };
 
-type ObsidianCliResult = {
+export type ObsidianCliResult = {
   command: string;
   argv: string[];
   stdout: string;
@@ -33,7 +33,7 @@ async function isExecutableFile(inputPath: string): Promise<boolean> {
   }
 }
 
-async function resolveCommandOnPath(command: string): Promise<string | null> {
+export async function resolveCommandOnPath(command: string): Promise<string | null> {
   const pathValue = process.env.PATH ?? "";
   const pathEntries = pathValue.split(path.delimiter).filter(Boolean);
   const windowsExts =
@@ -72,7 +72,7 @@ export async function probeObsidianCli(
   };
 }
 
-async function runObsidianCli(params: {
+export async function runObsidianCli(params: {
   config: ResolvedMemoryWikiConfig;
   subcommand: string;
   args?: string[];

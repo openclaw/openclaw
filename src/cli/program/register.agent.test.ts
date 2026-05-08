@@ -109,20 +109,6 @@ describe("registerAgentCommands", () => {
     );
   });
 
-  it("accepts a model override for one-shot agent runs", async () => {
-    await runCli(["agent", "--message", "hi", "--agent", "ops", "--model", "openai/gpt-5.4"]);
-
-    expect(agentCliCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "hi",
-        agent: "ops",
-        model: "openai/gpt-5.4",
-      }),
-      runtime,
-      { deps: true },
-    );
-  });
-
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     expect(agentsAddCommandMock).toHaveBeenNthCalledWith(

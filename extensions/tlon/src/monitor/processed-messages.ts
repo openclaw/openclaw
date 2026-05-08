@@ -1,6 +1,6 @@
 import { createDedupeCache } from "../../runtime-api.js";
 
-type ProcessedMessageTracker = {
+export type ProcessedMessageTracker = {
   claim: (id?: string | null) => { kind: "claimed" } | { kind: "duplicate" };
   commit: (id?: string | null) => void;
   release: (id?: string | null) => void;

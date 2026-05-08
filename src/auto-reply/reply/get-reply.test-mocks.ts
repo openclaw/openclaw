@@ -38,7 +38,7 @@ vi.mock("../../channels/model-overrides.js", () => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({})),
+  loadConfig: vi.fn(() => ({})),
 }));
 
 vi.mock("../../runtime.js", () => ({

@@ -1,3 +1,4 @@
+import type { Command } from "commander";
 import {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
@@ -30,3 +31,7 @@ export const discordQaCliRegistration: LiveTransportQaCliRegistration =
     sutAccountHelp: "Temporary Discord account id inside the QA gateway config",
     run: runQaDiscord,
   });
+
+export function registerDiscordQaCli(qa: Command) {
+  discordQaCliRegistration.register(qa);
+}

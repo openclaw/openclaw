@@ -13,13 +13,13 @@ export const baseConfigSnapshot = {
   legacyIssues: [],
 };
 
-type TestRuntime = {
+export type TestRuntime = {
   log: MockFn<RuntimeEnv["log"]>;
   error: MockFn<RuntimeEnv["error"]>;
   exit: MockFn<RuntimeEnv["exit"]>;
 };
 
-type CapturingTestRuntime = {
+export type CapturingTestRuntime = {
   runtime: RuntimeEnv;
   logs: string[];
   errors: string[];

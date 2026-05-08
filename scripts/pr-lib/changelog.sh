@@ -14,13 +14,7 @@ const lines = original.split("\n");
 const prPattern = new RegExp(`(?:\\(#${pr}\\)|openclaw#${pr})`, "i");
 
 function findActiveSectionIndex(arr) {
-  const versionUnreleasedIndex = arr.findIndex((line) =>
-    /^##\s+.+\(\s*unreleased\s*\)\s*$/i.test(line.trim()),
-  );
-  if (versionUnreleasedIndex !== -1) {
-    return versionUnreleasedIndex;
-  }
-  return arr.findIndex((line) => line.trim().toLowerCase() === "## unreleased");
+  return arr.findIndex((line) => line.trim() === "## Unreleased");
 }
 
 function findSectionEnd(arr, start) {
@@ -102,7 +96,7 @@ function sectionTailInsertIndex(arr, subsectionIndex) {
   return insertAt;
 }
 
-const activeHeading = lines[ensureActiveSection(lines)]?.trim() || "## Unreleased";
+ensureActiveSection(lines);
 
 const moved = [];
 for (let i = 0; i < lines.length; i += 1) {
@@ -110,7 +104,7 @@ for (let i = 0; i < lines.length; i += 1) {
     continue;
   }
   const ctx = contextFor(lines, i);
-  if (ctx.major === activeHeading) {
+  if (ctx.major === "## Unreleased") {
     continue;
   }
   moved.push({
@@ -153,24 +147,6 @@ if (updated !== original) {
   fs.writeFileSync(path, updated);
 }
 EOF_NODE
-}
-
-validate_changelog_attribution_policy() {
-  node scripts/check-changelog-attributions.mjs CHANGELOG.md
-}
-
-changelog_thanks_required_for_contributor() {
-  local contrib="${1:-}"
-  local normalized
-  normalized=$(printf '%s' "$contrib" | tr '[:upper:]' '[:lower:]')
-
-  case "$normalized" in
-    ""|"null"|"app/"*|"codex"|"openclaw"|"clawsweeper"|"openclaw-clawsweeper"|"clawsweeper[bot]"|"openclaw-clawsweeper[bot]"|"steipete")
-      return 1
-      ;;
-  esac
-
-  return 0
 }
 
 validate_changelog_entry_for_pr() {
@@ -245,28 +221,6 @@ FNR == NR {
   file_line_count = FNR
 }
 END {
-  active_release_line = 0
-  bare_release_line = 0
-  active_release_name = "unreleased"
-  for (i = 1; i <= file_line_count; i++) {
-    if (changelog[i] !~ /^## /) {
-      continue
-    }
-    heading = tolower(changelog[i])
-    if (heading ~ /^##[[:space:]]+.+\([[:space:]]*unreleased[[:space:]]*\)[[:space:]]*$/) {
-      active_release_line = i
-      active_release_name = changelog[i]
-      break
-    }
-    if (heading == "## unreleased" && bare_release_line == 0) {
-      bare_release_line = i
-    }
-  }
-  if (active_release_line == 0 && bare_release_line != 0) {
-    active_release_line = bare_release_line
-    active_release_name = changelog[bare_release_line]
-  }
-
   for (idx = 1; idx <= pr_added_count; idx++) {
     entry_line = pr_added_lines[idx]
     release_line = 0
@@ -281,8 +235,8 @@ END {
         break
       }
     }
-    if (release_line == 0 || release_line != active_release_line) {
-      printf "CHANGELOG.md PR-linked entry must be in %s: line %d: %s\n", active_release_name, entry_line, pr_added_text[entry_line]
+    if (release_line == 0 || changelog[release_line] != "## Unreleased") {
+      printf "CHANGELOG.md PR-linked entry must be in ## Unreleased: line %d: %s\n", entry_line, pr_added_text[entry_line]
       issue_count++
       continue
     }
@@ -328,7 +282,7 @@ END {
   rm -f "$diff_file"
   echo "changelog placement validated: PR-linked entries are appended at section tail"
 
-  if changelog_thanks_required_for_contributor "$contrib"; then
+  if [ -n "$contrib" ] && [ "$contrib" != "null" ]; then
     local with_pr_and_thanks
     with_pr_and_thanks=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" | rg -i "thanks @$contrib" || true)
     if [ -z "$with_pr_and_thanks" ]; then
@@ -339,7 +293,7 @@ END {
     return 0
   fi
 
-  echo "changelog validated: found PR #$pr (no eligible human contributor handle, skipping thanks check)"
+  echo "changelog validated: found PR #$pr (contributor handle unavailable, skipping thanks check)"
 }
 
 validate_changelog_merge_hygiene() {

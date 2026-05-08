@@ -19,7 +19,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
   beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
-      getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
+      loadConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       updateSessionStoreMock,
       pruneLegacyStoreKeysMock,
       workspaceDir: os.tmpdir(),
@@ -83,18 +83,18 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       status: "accepted",
       modelApplied: true,
     });
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(3);
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: /^agent:main:subagent:/,
       provider: "openai-codex",
       model: "gpt-5.4",
-      overrideSource: "user",
     });
-    expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
-    expect(operations.indexOf("store:update")).toBeGreaterThan(-1);
-    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
-      operations.lastIndexOf("store:update"),
+    expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(1);
+    expect(operations.indexOf("gateway:sessions.patch")).toBeGreaterThan(-1);
+    expect(operations.indexOf("store:update")).toBeGreaterThan(
+      operations.indexOf("gateway:sessions.patch"),
     );
+    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
   });
 });

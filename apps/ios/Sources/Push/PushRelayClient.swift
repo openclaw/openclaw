@@ -24,7 +24,7 @@ enum PushRelayError: LocalizedError {
         case .unsupportedAppAttest:
             "App Attest unavailable on this device"
         case .missingReceipt:
-            "App Store app transaction missing after refresh"
+            "App Store receipt missing after refresh"
         }
     }
 }
@@ -83,6 +83,33 @@ private struct RelayErrorResponse: Decodable {
     var error: String?
     var message: String?
     var reason: String?
+}
+
+private final class PushRelayReceiptRefreshCoordinator: NSObject, SKRequestDelegate {
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var activeRequest: SKReceiptRefreshRequest?
+
+    func refresh() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            let request = SKReceiptRefreshRequest()
+            self.activeRequest = request
+            request.delegate = self
+            request.start()
+        }
+    }
+
+    func requestDidFinish(_ request: SKRequest) {
+        self.continuation?.resume(returning: ())
+        self.continuation = nil
+        self.activeRequest = nil
+    }
+
+    func request(_ request: SKRequest, didFailWithError error: Error) {
+        self.continuation?.resume(throwing: error)
+        self.continuation = nil
+        self.activeRequest = nil
+    }
 }
 
 private struct PushRelayAppAttestProof {
@@ -170,27 +197,25 @@ private final class PushRelayAppAttestService {
 
 private final class PushRelayReceiptProvider {
     func loadReceiptBase64() async throws -> String {
-        do {
-            let result = try await AppTransaction.shared
-            return try Self.appTransactionBase64(result)
-        } catch {
-            let refreshed = try await AppTransaction.refresh()
-            return try Self.appTransactionBase64(refreshed)
+        if let receipt = self.readReceiptData() {
+            return receipt.base64EncodedString()
         }
+        let refreshCoordinator = PushRelayReceiptRefreshCoordinator()
+        try await refreshCoordinator.refresh()
+        if let refreshed = self.readReceiptData() {
+            return refreshed.base64EncodedString()
+        }
+        throw PushRelayError.missingReceipt
     }
 
-    private static func appTransactionBase64(
-        _ result: StoreKit.VerificationResult<AppTransaction>) throws -> String
-    {
-        let jws = result.jwsRepresentation.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !jws.isEmpty else {
-            throw PushRelayError.missingReceipt
-        }
-        return Data(jws.utf8).base64EncodedString()
+    private func readReceiptData() -> Data? {
+        guard let url = Bundle.main.appStoreReceiptURL else { return nil }
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        return data
     }
 }
 
-/// The client is constructed once and used behind PushRegistrationManager actor isolation.
+// The client is constructed once and used behind PushRegistrationManager actor isolation.
 final class PushRelayClient: @unchecked Sendable {
     private let baseURL: URL
     private let session: URLSession
@@ -269,7 +294,8 @@ final class PushRelayClient: @unchecked Sendable {
                 status: status,
                 message: Self.decodeErrorMessage(data: data))
         }
-        return try self.decode(PushRelayRegisterResponse.self, from: data)
+        let decoded = try self.decode(PushRelayRegisterResponse.self, from: data)
+        return decoded
     }
 
     private func fetchChallenge() async throws -> PushRelayChallengeResponse {

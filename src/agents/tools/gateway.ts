@@ -1,4 +1,4 @@
-import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
+import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
@@ -122,7 +122,7 @@ function resolveGatewayOverrideToken(params: {
 }
 
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {
-  const cfg = getRuntimeConfig();
+  const cfg = loadConfig();
   const validatedOverride =
     trimToUndefined(opts?.gatewayUrl) !== undefined
       ? validateGatewayUrlOverrideForAgentTools({

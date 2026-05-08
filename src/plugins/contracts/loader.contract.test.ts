@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
+import { uniqueSortedStrings } from "../../../test/helpers/plugins/contracts-testkit.js";
 import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
-import { resolveManifestContractPluginIds } from "../plugin-registry.js";
+import { resolveManifestContractPluginIds } from "../manifest-registry.js";
 import { __testing as providerTesting } from "../providers.js";
 import { resolveBundledContractSnapshotPluginIds } from "./inventory/bundled-capability-metadata.js";
 import { providerContractCompatPluginIds } from "./registry.js";
@@ -26,7 +26,6 @@ function createAllowlistCompatConfig(pluginIds: string[]) {
     config: {
       plugins: {
         allow: [demoAllowEntry],
-        bundledDiscovery: "compat",
       },
     },
     pluginIds,
@@ -52,7 +51,6 @@ describe("plugin loader contract", () => {
       config: {
         plugins: {
           allow: [demoAllowEntry],
-          bundledDiscovery: "compat",
         },
       },
     });

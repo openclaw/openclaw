@@ -1,7 +1,7 @@
 import {
   getCommandPathWithRootOptions,
   getPrimaryCommand,
-  isHelpOrVersionInvocation,
+  hasHelpOrVersion,
   isRootHelpInvocation,
 } from "./argv.js";
 
@@ -18,7 +18,7 @@ export function resolveCliArgvInvocation(argv: string[]): CliArgvInvocation {
     argv,
     commandPath: getCommandPathWithRootOptions(argv, 2),
     primary: getPrimaryCommand(argv),
-    hasHelpOrVersion: isHelpOrVersionInvocation(argv),
+    hasHelpOrVersion: hasHelpOrVersion(argv),
     isRootHelpInvocation: isRootHelpInvocation(argv),
   };
 }

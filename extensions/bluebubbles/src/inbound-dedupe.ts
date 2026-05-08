@@ -159,7 +159,7 @@ export function resolveBlueBubblesInboundDedupeKey(
   return base;
 }
 
-type InboundDedupeClaim =
+export type InboundDedupeClaim =
   | { kind: "claimed"; finalize: () => Promise<void>; release: () => void }
   | { kind: "duplicate" }
   | { kind: "inflight" }

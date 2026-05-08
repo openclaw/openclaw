@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import {
   coerceSecretRef,
@@ -13,7 +13,7 @@ import {
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 
-type XaiFallbackAuth = {
+export type XaiFallbackAuth = {
   apiKey: string;
   source: string;
 };
@@ -95,6 +95,11 @@ function readLegacyGrokApiKeyResult(cfg?: OpenClawConfig): ConfiguredRuntimeApiK
   );
 }
 
+export function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
+  const resolved = readLegacyGrokApiKeyResult(cfg);
+  return resolved.status === "available" ? resolved.value : undefined;
+}
+
 function readPluginXaiWebSearchApiKeyResult(
   cfg?: OpenClawConfig,
 ): ConfiguredRuntimeApiKeyResolution {
@@ -103,6 +108,11 @@ function readPluginXaiWebSearchApiKeyResult(
     "plugins.entries.xai.config.webSearch.apiKey",
     cfg,
   );
+}
+
+export function readPluginXaiWebSearchApiKey(cfg?: OpenClawConfig): string | undefined {
+  const resolved = readPluginXaiWebSearchApiKeyResult(cfg);
+  return resolved.status === "available" ? resolved.value : undefined;
 }
 
 export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | undefined {

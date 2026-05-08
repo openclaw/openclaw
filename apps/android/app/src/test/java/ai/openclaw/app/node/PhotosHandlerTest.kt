@@ -37,16 +37,15 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
     val source =
       FakePhotosDataSource(
         hasPermission = true,
-        latest =
-          listOf(
-            EncodedPhotoPayload(
-              format = "jpeg",
-              base64 = "abc123",
-              width = 640,
-              height = 480,
-              createdAt = "2026-02-28T00:00:00Z",
-            ),
+        latest = listOf(
+          EncodedPhotoPayload(
+            format = "jpeg",
+            base64 = "abc123",
+            width = 640,
+            height = 480,
+            createdAt = "2026-02-28T00:00:00Z",
           ),
+        ),
       )
     val handler = PhotosHandler.forTesting(appContext(), source)
 
@@ -68,8 +67,5 @@ private class FakePhotosDataSource(
 ) : PhotosDataSource {
   override fun hasPermission(context: Context): Boolean = hasPermission
 
-  override fun latest(
-    context: Context,
-    request: PhotosLatestRequest,
-  ): List<EncodedPhotoPayload> = latest
+  override fun latest(context: Context, request: PhotosLatestRequest): List<EncodedPhotoPayload> = latest
 }

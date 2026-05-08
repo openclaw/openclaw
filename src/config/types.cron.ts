@@ -16,7 +16,6 @@ export type CronFailureAlertConfig = {
   enabled?: boolean;
   after?: number;
   cooldownMs?: number;
-  includeSkipped?: boolean;
   mode?: "announce" | "webhook";
   accountId?: string;
 };
@@ -35,7 +34,7 @@ export type CronConfig = {
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;
   /**
-   * @deprecated Legacy fallback webhook URL used only for stored jobs with notify=true.
+   * Deprecated legacy fallback webhook URL used only for stored jobs with notify=true.
    * Prefer per-job delivery.mode="webhook" with delivery.to.
    */
   webhook?: string;

@@ -13,7 +13,6 @@ import {
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -32,69 +31,77 @@ import {
 } from "./discover.js";
 import { addGatewayRunCommand } from "./run.js";
 
-const configModuleLoader = createLazyImportLoader(
-  () => import("../../config/read-best-effort-config.runtime.js"),
-);
-const gatewayStatusModuleLoader = createLazyImportLoader(
-  () => import("../../commands/gateway-status.js"),
-);
-const gatewayHealthModuleLoader = createLazyImportLoader(() => import("../../commands/health.js"));
-const bonjourDiscoveryModuleLoader = createLazyImportLoader(
-  () => import("../../infra/bonjour-discovery.js"),
-);
-const wideAreaDnsModuleLoader = createLazyImportLoader(() => import("../../infra/widearea-dns.js"));
-const healthStyleModuleLoader = createLazyImportLoader(
-  () => import("../../terminal/health-style.js"),
-);
-const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
-const stabilityBundleModuleLoader = createLazyImportLoader(
-  () => import("../../logging/diagnostic-stability-bundle.js"),
-);
-const supportExportModuleLoader = createLazyImportLoader(
-  () => import("../../logging/diagnostic-support-export.js"),
-);
-const daemonStatusGatherModuleLoader = createLazyImportLoader(
-  () => import("../daemon-cli/status.gather.js"),
-);
+let configModulePromise:
+  | Promise<typeof import("../../config/read-best-effort-config.runtime.js")>
+  | undefined;
+let gatewayStatusModulePromise:
+  | Promise<typeof import("../../commands/gateway-status.js")>
+  | undefined;
+let gatewayHealthModulePromise: Promise<typeof import("../../commands/health.js")> | undefined;
+let bonjourDiscoveryModulePromise:
+  | Promise<typeof import("../../infra/bonjour-discovery.js")>
+  | undefined;
+let wideAreaDnsModulePromise: Promise<typeof import("../../infra/widearea-dns.js")> | undefined;
+let healthStyleModulePromise: Promise<typeof import("../../terminal/health-style.js")> | undefined;
+let usageFormatModulePromise: Promise<typeof import("../../utils/usage-format.js")> | undefined;
+let stabilityBundleModulePromise:
+  | Promise<typeof import("../../logging/diagnostic-stability-bundle.js")>
+  | undefined;
+let supportExportModulePromise:
+  | Promise<typeof import("../../logging/diagnostic-support-export.js")>
+  | undefined;
+let daemonStatusGatherModulePromise:
+  | Promise<typeof import("../daemon-cli/status.gather.js")>
+  | undefined;
 
 function loadConfigModule() {
-  return configModuleLoader.load();
+  configModulePromise ??= import("../../config/read-best-effort-config.runtime.js");
+  return configModulePromise;
 }
 
 function loadGatewayStatusModule() {
-  return gatewayStatusModuleLoader.load();
+  gatewayStatusModulePromise ??= import("../../commands/gateway-status.js");
+  return gatewayStatusModulePromise;
 }
 
 function loadGatewayHealthModule() {
-  return gatewayHealthModuleLoader.load();
+  gatewayHealthModulePromise ??= import("../../commands/health.js");
+  return gatewayHealthModulePromise;
 }
 
 function loadBonjourDiscoveryModule() {
-  return bonjourDiscoveryModuleLoader.load();
+  bonjourDiscoveryModulePromise ??= import("../../infra/bonjour-discovery.js");
+  return bonjourDiscoveryModulePromise;
 }
 
 function loadWideAreaDnsModule() {
-  return wideAreaDnsModuleLoader.load();
+  wideAreaDnsModulePromise ??= import("../../infra/widearea-dns.js");
+  return wideAreaDnsModulePromise;
 }
 
 function loadHealthStyleModule() {
-  return healthStyleModuleLoader.load();
+  healthStyleModulePromise ??= import("../../terminal/health-style.js");
+  return healthStyleModulePromise;
 }
 
 function loadUsageFormatModule() {
-  return usageFormatModuleLoader.load();
+  usageFormatModulePromise ??= import("../../utils/usage-format.js");
+  return usageFormatModulePromise;
 }
 
 function loadStabilityBundleModule() {
-  return stabilityBundleModuleLoader.load();
+  stabilityBundleModulePromise ??= import("../../logging/diagnostic-stability-bundle.js");
+  return stabilityBundleModulePromise;
 }
 
 function loadSupportExportModule() {
-  return supportExportModuleLoader.load();
+  supportExportModulePromise ??= import("../../logging/diagnostic-support-export.js");
+  return supportExportModulePromise;
 }
 
 function loadDaemonStatusGatherModule() {
-  return daemonStatusGatherModuleLoader.load();
+  daemonStatusGatherModulePromise ??= import("../daemon-cli/status.gather.js");
+  return daemonStatusGatherModulePromise;
 }
 
 function runGatewayCommand(action: () => Promise<void>, label?: string) {

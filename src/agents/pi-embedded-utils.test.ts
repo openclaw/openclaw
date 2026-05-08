@@ -563,7 +563,7 @@ File contents here`,
       {
         name: "unclosed think tag",
         text: "<think>Pensando sobre el problema...",
-        expected: "Pensando sobre el problema...",
+        expected: "",
       },
       {
         name: "thinking tag",
@@ -804,20 +804,6 @@ describe("promoteThinkingTagsToBlocks", () => {
     const types = msg.content.map((b: { type?: string }) => b?.type);
     expect(types).toContain("thinking");
     expect(types).toContain("text");
-  });
-
-  it("splits antml namespaced thinking tags into thinking blocks", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "<antml:thinking>hidden</antml:thinking>Visible" }],
-      timestamp: Date.now(),
-    });
-
-    promoteThinkingTagsToBlocks(msg);
-    expect(msg.content).toEqual([
-      { type: "thinking", thinking: "hidden" },
-      { type: "text", text: "Visible" },
-    ]);
   });
 
   it("does not crash on undefined content entries", () => {

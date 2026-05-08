@@ -23,6 +23,7 @@ async function prepareRoutedCommand(params: {
   const { VERSION } = await import("../version.js");
   await applyCliExecutionStartupPresentation({
     argv: params.argv,
+    routeLogsToStderrOnSuppress: false,
     startupPolicy,
     showBanner: process.stdout.isTTY && !startupPolicy.suppressDoctorStdout,
     version: VERSION,
@@ -48,11 +49,8 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   if (!invocation.commandPath[0]) {
     return false;
   }
-  const route = findRoutedCommand(invocation.commandPath, argv);
+  const route = findRoutedCommand(invocation.commandPath);
   if (!route) {
-    return false;
-  }
-  if (route.canRun && !route.canRun(argv)) {
     return false;
   }
   await prepareRoutedCommand({

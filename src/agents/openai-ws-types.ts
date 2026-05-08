@@ -24,9 +24,9 @@ export type InputItem =
   | {
       type: "reasoning";
       id?: string;
-      content?: unknown;
+      content?: string;
       encrypted_content?: string;
-      summary?: unknown;
+      summary?: string;
     }
   | { type: "item_reference"; id: string };
 
@@ -59,7 +59,6 @@ export interface ResponseCreateEvent {
   temperature?: number;
   top_p?: number;
   metadata?: Record<string, string>;
-  include?: string[];
   reasoning?: {
     effort?: "none" | "low" | "medium" | "high" | "xhigh";
     summary?: "auto" | "concise" | "detailed";

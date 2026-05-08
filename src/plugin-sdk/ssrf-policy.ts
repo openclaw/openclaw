@@ -23,7 +23,7 @@ export type PrivateNetworkOptInInput =
   | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
   | {
       dangerouslyAllowPrivateNetwork?: boolean | null;
-      /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
+      /** Compatibility alias for legacy callers; prefer dangerouslyAllowPrivateNetwork. */
       allowPrivateNetwork?: boolean | null;
       network?:
         | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
@@ -76,9 +76,6 @@ export function mergeSsrFPolicies(
     }
     if (policy.allowRfc2544BenchmarkRange) {
       merged.allowRfc2544BenchmarkRange = true;
-    }
-    if (policy.allowIpv6UniqueLocalRange) {
-      merged.allowIpv6UniqueLocalRange = true;
     }
     if (policy.allowedHostnames?.length) {
       merged.allowedHostnames = Array.from(

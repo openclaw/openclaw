@@ -21,7 +21,6 @@ export type ResolveWebSearchDefinitionParams = {
 
 export type RunWebSearchParams = ResolveWebSearchDefinitionParams & {
   args: Record<string, unknown>;
-  signal?: AbortSignal;
 };
 
 export type RunWebSearchResult = {

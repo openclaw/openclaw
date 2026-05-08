@@ -212,7 +212,6 @@ export async function setupSkills(
     const apiKey = await prompter.text({
       message: `Enter ${skill.primaryEnv}`,
       validate: (value) => (value?.trim() ? undefined : "Required"),
-      sensitive: true,
     });
     next = upsertSkillEntry(next, skill.skillKey, { apiKey: normalizeSecretInput(apiKey) });
   }

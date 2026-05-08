@@ -12,7 +12,7 @@ const PALACE_KIND_LABELS: Record<WikiPageKind, string> = {
   report: "Reports",
 };
 
-type MemoryWikiPalaceItem = {
+export type MemoryWikiPalaceItem = {
   pagePath: string;
   title: string;
   kind: WikiPageKind;
@@ -28,7 +28,7 @@ type MemoryWikiPalaceItem = {
   snippet?: string;
 };
 
-type MemoryWikiPalaceCluster = {
+export type MemoryWikiPalaceCluster = {
   key: WikiPageKind;
   label: string;
   itemCount: number;
@@ -39,7 +39,7 @@ type MemoryWikiPalaceCluster = {
   items: MemoryWikiPalaceItem[];
 };
 
-type MemoryWikiPalaceStatus = {
+export type MemoryWikiPalaceStatus = {
   totalItems: number;
   totalClaims: number;
   totalQuestions: number;

@@ -9,11 +9,10 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({})),
   loadConfig: vi.fn(() => ({})),
 }));
 
@@ -28,24 +27,19 @@ function createRuntime(): RuntimeEnv {
 }
 
 async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>): Promise<void> {
-  await withOpenClawTestState(
-    {
-      layout: "state-only",
-      prefix: "openclaw-flows-command-",
-    },
-    async (state) => {
+  await withTempDir({ prefix: "openclaw-flows-command-" }, async (root) => {
+    process.env.OPENCLAW_STATE_DIR = root;
+    resetTaskRegistryDeliveryRuntimeForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    try {
+      await run(root);
+    } finally {
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
-      try {
-        await run(state.stateDir);
-      } finally {
-        resetTaskRegistryDeliveryRuntimeForTests();
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
-      }
-    },
-  );
+    }
+  });
 }
 
 describe("flows commands", () => {

@@ -450,7 +450,6 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
       setup: msteamsSetupAdapter,
       messaging: {
-        targetPrefixes: ["msteams", "teams"],
         normalizeTarget: normalizeMSTeamsMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
         targetResolver: {

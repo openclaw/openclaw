@@ -1,4 +1,4 @@
-import { pluginRegistrationContractCases } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-test-contracts";
+import { pluginRegistrationContractCases } from "../../../test/helpers/plugins/plugin-registration-contract-cases.js";
+import { describePluginRegistrationContract } from "../../../test/helpers/plugins/plugin-registration-contract.js";
 
 describePluginRegistrationContract(pluginRegistrationContractCases.brave);

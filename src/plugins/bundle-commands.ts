@@ -18,7 +18,7 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 export type ClaudeBundleCommandSpec = {
   pluginId: string;
@@ -176,10 +176,10 @@ export function loadEnabledClaudeBundleCommands(params: {
   if (!hasExplicitPluginConfig(params.cfg?.plugins)) {
     return [];
   }
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const registry = loadPluginManifestRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
-    includeDisabled: true,
+    cache: false,
   });
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   const commands: ClaudeBundleCommandSpec[] = [];

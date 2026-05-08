@@ -3,7 +3,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 
 export { formatErrorMessage };
 
-type ManagerLookupResult<T> = {
+export type ManagerLookupResult<T> = {
   manager: T | null;
   error?: string;
 };

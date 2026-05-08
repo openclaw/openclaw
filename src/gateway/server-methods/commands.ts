@@ -7,8 +7,9 @@ import type {
 } from "../../auto-reply/commands-registry.types.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getPluginCommandSpecs } from "../../plugins/command-specs.js";
+import { getPluginCommandSpecs } from "../../plugins/command-registry-state.js";
 import { listPluginCommands } from "../../plugins/commands.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { CommandEntry, CommandsListResult } from "../protocol/index.js";
@@ -51,11 +52,8 @@ function clampDescription(value: string | undefined): string {
   return clampString(value ?? "", COMMAND_DESCRIPTION_MAX_LENGTH);
 }
 
-function resolveAgentIdOrRespondError(
-  rawAgentId: unknown,
-  respond: RespondFn,
-  cfg: OpenClawConfig,
-) {
+function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
+  const cfg = loadConfig();
   const knownAgents = listAgentIds(cfg);
   const requestedAgentId = typeof rawAgentId === "string" ? rawAgentId.trim() : "";
   const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
@@ -174,10 +172,9 @@ function mapCommand(
 function buildPluginCommandEntries(params: {
   provider?: string;
   nameSurface: CommandNameSurface;
-  cfg: OpenClawConfig;
 }): CommandEntry[] {
   const pluginTextSpecs = listPluginCommands();
-  const pluginNativeSpecs = getPluginCommandSpecs(params.provider, { config: params.cfg });
+  const pluginNativeSpecs = getPluginCommandSpecs(params.provider);
   const entries: CommandEntry[] = [];
 
   for (const [index, textSpec] of pluginTextSpecs.entries()) {
@@ -236,13 +233,13 @@ export function buildCommandsListResult(params: {
     );
   }
 
-  commands.push(...buildPluginCommandEntries({ provider, nameSurface, cfg: params.cfg }));
+  commands.push(...buildPluginCommandEntries({ provider, nameSurface }));
 
   return { commands: commands.slice(0, COMMAND_LIST_MAX_ITEMS) };
 }
 
 export const commandsHandlers: GatewayRequestHandlers = {
-  "commands.list": ({ params, respond, context }) => {
+  "commands.list": ({ params, respond }) => {
     if (!validateCommandsListParams(params)) {
       respond(
         false,
@@ -254,11 +251,7 @@ export const commandsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = resolveAgentIdOrRespondError(
-      params.agentId,
-      respond,
-      context.getRuntimeConfig(),
-    );
+    const resolved = resolveAgentIdOrRespondError(params.agentId, respond);
     if (!resolved) {
       return;
     }

@@ -21,7 +21,7 @@ type ResolveNpmIntegrityDriftParams<TPayload> = {
   warn?: (payload: TPayload) => void;
 };
 
-type ResolveNpmIntegrityDriftResult<TPayload> = {
+export type ResolveNpmIntegrityDriftResult<TPayload> = {
   integrityDrift?: NpmIntegrityDrift;
   proceed: boolean;
   payload?: TPayload;

@@ -23,19 +23,18 @@ type QueuedWizardPrompterFactory<T extends WizardPromptHarness> = (params: {
   textValues?: string[];
 }) => T;
 
-const WHATSAPP_OWNER_NUMBER_INPUT = "+1 (555) 555-0123";
-const WHATSAPP_OWNER_NUMBER_E164 = "+15555550123";
-const WHATSAPP_OWNER_NUMBER = "15555550123";
-const WHATSAPP_PERSONAL_NUMBER_INPUT = "+1 (555) 111-2222";
-const WHATSAPP_PERSONAL_NUMBER = "15551112222";
-const WHATSAPP_ACCESS_NOTE_TITLE = "WhatsApp DM access";
-const WHATSAPP_LOGIN_NOTE_TITLE = "WhatsApp";
+export const WHATSAPP_OWNER_NUMBER_INPUT = "+1 (555) 555-0123";
+export const WHATSAPP_OWNER_NUMBER = "+15555550123";
+export const WHATSAPP_PERSONAL_NUMBER_INPUT = "+1 (555) 111-2222";
+export const WHATSAPP_PERSONAL_NUMBER = "+15551112222";
+export const WHATSAPP_ACCESS_NOTE_TITLE = "WhatsApp DM access";
+export const WHATSAPP_LOGIN_NOTE_TITLE = "WhatsApp";
 
 export function createWhatsAppRootAllowFromConfig(): WhatsAppSetupConfig {
   return {
     channels: {
       whatsapp: {
-        allowFrom: [WHATSAPP_OWNER_NUMBER_E164],
+        allowFrom: [WHATSAPP_OWNER_NUMBER],
       },
     },
   };
@@ -79,7 +78,7 @@ export function createWhatsAppWorkAccountConfig(
       whatsapp: {
         ...(params.defaultAccount ? { defaultAccount: params.defaultAccount } : {}),
         dmPolicy: "disabled",
-        allowFrom: [WHATSAPP_OWNER_NUMBER_E164],
+        allowFrom: [WHATSAPP_OWNER_NUMBER],
         accounts: {
           work: {
             authDir: "/tmp/work",
@@ -100,7 +99,7 @@ export function createWhatsAppAllowlistModeInput(): {
   };
 }
 
-function expectWhatsAppDmAccess(
+export function expectWhatsAppDmAccess(
   cfg: WhatsAppSetupConfig,
   expected: {
     selfChatMode: boolean;
@@ -119,12 +118,12 @@ function expectWhatsAppDmAccess(
 
 export function expectWhatsAppWorkAccountOpenAccess(cfg: WhatsAppSetupConfig): void {
   expect(cfg.channels?.whatsapp?.dmPolicy).toBe("disabled");
-  expect(cfg.channels?.whatsapp?.allowFrom).toEqual([WHATSAPP_OWNER_NUMBER_E164]);
+  expect(cfg.channels?.whatsapp?.allowFrom).toEqual([WHATSAPP_OWNER_NUMBER]);
   expect(cfg.channels?.whatsapp?.accounts?.work?.dmPolicy).toBe("open");
   expect(cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual(["*", WHATSAPP_OWNER_NUMBER]);
 }
 
-function expectWhatsAppOwnerNumberPrompt(harness: WizardPromptHarness): void {
+export function expectWhatsAppOwnerNumberPrompt(harness: WizardPromptHarness): void {
   expect(harness.text).toHaveBeenCalledWith(
     expect.objectContaining({
       message: "Your personal WhatsApp number (the phone you will message from)",

@@ -8,7 +8,7 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  function createReasoningBlockReplyHarness(params: { thinkingLevel?: "off" | "medium" } = {}) {
+  function createReasoningBlockReplyHarness() {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
 
@@ -18,7 +18,6 @@ describe("subscribeEmbeddedPiSession", () => {
       onBlockReply,
       blockReplyBreak: "message_end",
       reasoningMode: "on",
-      thinkingLevel: params.thinkingLevel,
     });
 
     return { emit, onBlockReply };
@@ -39,16 +38,6 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expectReasoningAndAnswerCalls(onBlockReply);
   });
-
-  it("does not emit native reasoning when thinking is disabled", () => {
-    const { emit, onBlockReply } = createReasoningBlockReplyHarness({ thinkingLevel: "off" });
-
-    emit({ type: "message_end", message: createReasoningFinalAnswerMessage() });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
-  });
-
   it.each(THINKING_TAG_CASES)(
     "promotes <%s> tags to thinking blocks at write-time",
     ({ open, close }) => {

@@ -2,8 +2,6 @@ import { createServer } from "node:net";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
-const DEFAULT_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
-
 export type RunCommand = (
   command: string,
   args: string[],
@@ -28,7 +26,7 @@ export async function fetchHealthUrl(url: string): Promise<{ ok: boolean }> {
   }
 }
 
-function describeError(error: unknown) {
+export function describeError(error: unknown) {
   if (error instanceof Error) {
     return error.message;
   }
@@ -88,11 +86,7 @@ function trimCommandOutput(output: string) {
 
 export async function execCommand(command: string, args: string[], cwd: string) {
   try {
-    return await runExec(command, args, {
-      cwd,
-      maxBuffer: 10 * 1024 * 1024,
-      timeoutMs: DEFAULT_DOCKER_COMMAND_TIMEOUT_MS,
-    });
+    return await runExec(command, args, { cwd, maxBuffer: 10 * 1024 * 1024 });
   } catch (error) {
     const failedProcess = error as Error & { stdout?: string; stderr?: string };
     const renderedStdout = trimCommandOutput(failedProcess.stdout ?? "");
@@ -273,3 +267,8 @@ export async function resolveComposeServiceUrl(
   }
   return (await isHealthy(`${baseUrl}healthz`, fetchImpl)) ? baseUrl : null;
 }
+
+export const __testing = {
+  fetchHealthUrl,
+  normalizeDockerServiceStatus,
+};

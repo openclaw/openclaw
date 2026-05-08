@@ -7,20 +7,22 @@ read_when:
 title: "Nix"
 ---
 
-Install OpenClaw declaratively with **[nix-openclaw](https://github.com/openclaw/nix-openclaw)** — a batteries-included Home Manager module.
+# Nix Installation
+
+Install OpenClaw declaratively with **[nix-openclaw](https://github.com/openclaw/nix-openclaw)** -- a batteries-included Home Manager module.
 
 <Info>
 The [nix-openclaw](https://github.com/openclaw/nix-openclaw) repo is the source of truth for Nix installation. This page is a quick overview.
 </Info>
 
-## What you get
+## What You Get
 
 - Gateway + macOS app + tools (whisper, spotify, cameras) -- all pinned
 - Launchd service that survives reboots
 - Plugin system with declarative config
 - Instant rollback: `home-manager switch --rollback`
 
-## Quick start
+## Quick Start
 
 <Steps>
   <Step title="Install Determinate Nix">
@@ -48,7 +50,7 @@ The [nix-openclaw](https://github.com/openclaw/nix-openclaw) repo is the source 
 
 See the [nix-openclaw README](https://github.com/openclaw/nix-openclaw) for full module options and examples.
 
-## Nix-mode runtime behavior
+## Nix Mode Runtime Behavior
 
 When `OPENCLAW_NIX_MODE=1` is set (automatic with nix-openclaw), OpenClaw enters a deterministic mode that disables auto-install flows.
 
@@ -79,18 +81,6 @@ OpenClaw reads JSON5 config from `OPENCLAW_CONFIG_PATH` and stores mutable data 
 | `OPENCLAW_HOME`        | `HOME` / `USERPROFILE` / `os.homedir()` |
 | `OPENCLAW_STATE_DIR`   | `~/.openclaw`                           |
 | `OPENCLAW_CONFIG_PATH` | `$OPENCLAW_STATE_DIR/openclaw.json`     |
-
-### Service PATH discovery
-
-The launchd/systemd gateway service auto-discovers Nix-profile binaries so
-plugins and tools that shell out to `nix`-installed executables work without
-manual PATH setup:
-
-- When `NIX_PROFILES` is set, every entry is added to the service PATH in
-  right-to-left precedence (matches Nix shell precedence — rightmost wins).
-- When `NIX_PROFILES` is unset, `~/.nix-profile/bin` is added as a fallback.
-
-This applies to both macOS launchd and Linux systemd service environments.
 
 ## Related
 

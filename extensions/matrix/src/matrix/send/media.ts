@@ -18,7 +18,7 @@ import {
 
 const getCore = () => getMatrixRuntime();
 
-function buildMatrixMediaInfo(params: {
+export function buildMatrixMediaInfo(params: {
   size: number;
   mimetype?: string;
   durationMs?: number;

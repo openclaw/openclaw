@@ -19,7 +19,7 @@ import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
 import {
   sendText as senderSendText,
-  sendMedia as senderSendMedia,
+  sendImage as senderSendImage,
   withTokenRetry,
   buildDeliveryTarget,
   accountToCreds,
@@ -28,7 +28,7 @@ import {
 // ---- Injected dependency interfaces ----
 
 /** Media target context — describes where to send media. */
-interface MediaTargetContext {
+export interface MediaTargetContext {
   targetType: "c2c" | "group" | "channel" | "dm";
   targetId: string;
   account: GatewayAccount;
@@ -36,14 +36,14 @@ interface MediaTargetContext {
 }
 
 /** Media send result. */
-interface MediaSendResult {
+export interface MediaSendResult {
   channel?: string;
   error?: string;
   messageId?: string;
 }
 
 /** Media sender interface — implemented by the upper-layer outbound.ts module. */
-interface MediaSender {
+export interface MediaSender {
   sendPhoto(target: MediaTargetContext, imageUrl: string): Promise<MediaSendResult>;
   sendVoice(
     target: MediaTargetContext,
@@ -73,9 +73,9 @@ export interface DeliverDeps {
 // ---- Exported types ----
 
 /** Maximum text length for a single QQ Bot message. */
-const TEXT_CHUNK_LIMIT = 5000;
+export const TEXT_CHUNK_LIMIT = 5000;
 
-interface DeliverEventContext {
+export interface DeliverEventContext {
   type: "c2c" | "guild" | "dm" | "group";
   senderId: string;
   messageId: string;
@@ -85,7 +85,7 @@ interface DeliverEventContext {
   msgIdx?: string;
 }
 
-interface DeliverAccountContext {
+export interface DeliverAccountContext {
   account: GatewayAccount;
   qualifiedTarget: string;
   log?: {
@@ -96,10 +96,10 @@ interface DeliverAccountContext {
 }
 
 /** Wrapper that retries when the access token expires. */
-type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Promise<T>;
+export type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Promise<T>;
 
 /** Consume a quote ref exactly once. */
-type ConsumeQuoteRefFn = () => string | undefined;
+export type ConsumeQuoteRefFn = () => string | undefined;
 
 // ---- Internal helpers ----
 
@@ -458,11 +458,10 @@ export async function parseAndSendMediaTags(
 
 // ---- Plain reply ----
 
-interface PlainReplyPayload {
+export interface PlainReplyPayload {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string;
-  audioAsVoice?: boolean;
 }
 
 /**
@@ -659,13 +658,7 @@ async function sendMarkdownReply(
         const creds = accountToCreds(account);
         if (target.type === "c2c" || target.type === "group") {
           await withTokenRetry(creds, async () => {
-            await senderSendMedia({
-              target,
-              creds,
-              kind: "image",
-              source: { url: imageUrl },
-              msgId: event.messageId,
-            });
+            await senderSendImage(target, imageUrl, creds, { msgId: event.messageId });
           });
         } else {
           log?.debug?.(`${target.type} does not support rich media, skipping Base64 image`);

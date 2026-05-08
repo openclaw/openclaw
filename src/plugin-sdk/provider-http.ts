@@ -3,16 +3,6 @@
 
 export {
   assertOkOrThrowHttpError,
-  assertOkOrThrowProviderError,
-  createProviderHttpError,
-  extractProviderErrorDetail,
-  extractProviderRequestId,
-  formatProviderErrorPayload,
-  formatProviderHttpErrorMessage,
-  readResponseTextLimited,
-  truncateErrorDetail,
-} from "../agents/provider-http-errors.js";
-export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
   fetchWithTimeout,
@@ -48,7 +38,6 @@ export type {
   ProviderRequestTlsOverride,
   ProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.js";
-export { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 export {
   resolveProviderEndpoint,
   resolveProviderRequestCapabilities,

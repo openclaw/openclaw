@@ -84,7 +84,8 @@ struct RuntimeLocatorTests {
                 kind: .node,
                 raw: "garbage",
                 path: "/usr/local/bin/node",
-                searchPaths: ["/usr/local/bin"]))
+                searchPaths: ["/usr/local/bin"],
+            ))
         #expect(parseMsg.contains("Node >=22.16.0"))
     }
 

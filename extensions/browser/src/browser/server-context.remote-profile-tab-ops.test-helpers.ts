@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, vi } from "vitest";
 
 export type RemoteProfileTestDeps = {
-  cdpModule: typeof import("./cdp.js");
   chromeModule: typeof import("./chrome.js");
   InvalidBrowserNavigationUrlError: typeof import("./navigation-guard.js").InvalidBrowserNavigationUrlError;
   pwAiModule: typeof import("./pw-ai-module.js");
@@ -19,7 +18,6 @@ let remoteProfileTestDepsPromise: Promise<RemoteProfileTestDeps> | undefined;
 export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps> {
   remoteProfileTestDepsPromise ??= (async () => {
     await import("./server-context.chrome-test-harness.js");
-    const cdpModule = await import("./cdp.js");
     const chromeModule = await import("./chrome.js");
     const { InvalidBrowserNavigationUrlError } = await import("./navigation-guard.js");
     const pwAiModule = await import("./pw-ai-module.js");
@@ -33,7 +31,6 @@ export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps
       originalFetch,
     } = await import("./server-context.remote-tab-ops.harness.js");
     return {
-      cdpModule,
       chromeModule,
       InvalidBrowserNavigationUrlError,
       pwAiModule,

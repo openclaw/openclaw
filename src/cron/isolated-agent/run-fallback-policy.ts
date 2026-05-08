@@ -17,7 +17,6 @@ export function resolveCronFallbacksOverride(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       hasSessionModelOverride: hasCronPayloadModelOverride,
-      modelOverrideSource: hasCronPayloadModelOverride ? "auto" : undefined,
     })
   );
 }

@@ -18,7 +18,7 @@ function resolveLoginctlUser(env: Record<string, string | undefined>): string | 
   }
 }
 
-type SystemdUserLingerStatus = {
+export type SystemdUserLingerStatus = {
   user: string;
   linger: "yes" | "no";
 };

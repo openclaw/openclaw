@@ -25,7 +25,7 @@ const MAX_PENDING_UPLOADS = 100;
 
 const STORE_FILENAME = "msteams-pending-uploads.json";
 
-type PendingUploadFsRecord = {
+export type PendingUploadFsRecord = {
   id: string;
   bufferBase64: string;
   filename: string;
@@ -36,7 +36,7 @@ type PendingUploadFsRecord = {
   createdAt: number;
 };
 
-type PendingUploadFs = {
+export type PendingUploadFs = {
   id: string;
   buffer: Buffer;
   filename: string;
@@ -53,7 +53,7 @@ type PendingUploadStoreData = {
 
 const empty: PendingUploadStoreData = { version: 1, uploads: {} };
 
-type PendingUploadsFsOptions = {
+export type PendingUploadsFsOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;

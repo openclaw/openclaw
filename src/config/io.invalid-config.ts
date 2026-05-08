@@ -1,6 +1,6 @@
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
-type ConfigValidationIssueLike = {
+export type ConfigValidationIssueLike = {
   path: string;
   message: string;
 };

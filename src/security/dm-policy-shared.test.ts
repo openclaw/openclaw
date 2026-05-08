@@ -83,24 +83,6 @@ describe("security/dm-policy-shared", () => {
     expect(state.isMultiUserDm).toBe(false);
   });
 
-  it("does not count pairing-store senders for allowlist DM policy", async () => {
-    let called = false;
-    const state = await resolveDmAllowState({
-      provider: "demo-channel-c" as never,
-      accountId: "default",
-      dmPolicy: "allowlist",
-      allowFrom: ["owner"],
-      readStore: async (_provider, _accountId) => {
-        called = true;
-        return ["paired-user"];
-      },
-    });
-
-    expect(called).toBe(false);
-    expect(state.allowCount).toBe(1);
-    expect(state.isMultiUserDm).toBe(false);
-  });
-
   it.each([
     {
       name: "dmPolicy is allowlist",
@@ -108,14 +90,6 @@ describe("security/dm-policy-shared", () => {
         provider: "demo-channel-a",
         accountId: "default",
         dmPolicy: "allowlist" as const,
-      },
-    },
-    {
-      name: "dmPolicy is open",
-      params: {
-        provider: "demo-channel-open",
-        accountId: "default",
-        dmPolicy: "open" as const,
       },
     },
     {
@@ -211,17 +185,6 @@ describe("security/dm-policy-shared", () => {
     expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc"]);
   });
 
-  it("excludes pairing-store entries when dmPolicy is open", () => {
-    const lists = resolveEffectiveAllowFromLists({
-      allowFrom: ["owner"],
-      groupAllowFrom: ["group:abc"],
-      storeAllowFrom: ["paired-user"],
-      dmPolicy: "open",
-    });
-    expect(lists.effectiveAllowFrom).toEqual(["owner"]);
-    expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc"]);
-  });
-
   it("keeps group allowlist explicit when dmPolicy is pairing", () => {
     const lists = resolveEffectiveAllowFromLists({
       allowFrom: ["+1111"],
@@ -297,32 +260,9 @@ describe("security/dm-policy-shared", () => {
       isSenderAllowed: () => false,
       command: controlCommand,
     });
-    expect(resolved.decision).toBe("block");
-    expect(resolved.reasonCode).toBe(DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED);
-    expect(resolved.reason).toBe("dmPolicy=open (not allowlisted)");
+    expect(resolved.decision).toBe("allow");
     expect(resolved.commandAuthorized).toBe(false);
     expect(resolved.shouldBlockControlCommand).toBe(false);
-  });
-
-  it("allows open-mode DMs only for wildcard or matching allowlist entries", () => {
-    const publicAccess = resolveDmGroupAccessWithLists({
-      isGroup: false,
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      isSenderAllowed: () => true,
-    });
-    expect(publicAccess.decision).toBe("allow");
-    expect(publicAccess.reasonCode).toBe(DM_GROUP_ACCESS_REASON.DM_POLICY_OPEN);
-
-    const constrainedAccess = resolveDmGroupAccessWithLists({
-      isGroup: false,
-      dmPolicy: "open",
-      allowFrom: ["owner"],
-      isSenderAllowed: (allowFrom) => allowFrom.includes("owner"),
-    });
-    expect(constrainedAccess.decision).toBe("allow");
-    expect(constrainedAccess.reasonCode).toBe(DM_GROUP_ACCESS_REASON.DM_POLICY_ALLOWLISTED);
-    expect(constrainedAccess.reason).toBe("dmPolicy=open (allowlisted)");
   });
 
   it("keeps allowlist mode strict in shared resolver (no pairing-store fallback)", () => {
@@ -413,16 +353,8 @@ describe("security/dm-policy-shared", () => {
     channels.flatMap((channel) =>
       [
         createParityCase({
-          name: "dmPolicy=open without wildcard",
+          name: "dmPolicy=open",
           dmPolicy: "open",
-          expectedDecision: "block",
-          expectedReactionAllowed: false,
-        }),
-        createParityCase({
-          name: "dmPolicy=open with wildcard",
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          isSenderAllowed: (allowFrom: string[]) => allowFrom.includes("*"),
           expectedDecision: "allow",
           expectedReactionAllowed: true,
         }),

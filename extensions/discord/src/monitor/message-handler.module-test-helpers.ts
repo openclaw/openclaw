@@ -1,9 +1,10 @@
-import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
-import type { DiscordMessageRunQueueTestingHooks } from "./message-run-queue.js";
+import type { DiscordInboundWorkerTestingHooks } from "./inbound-worker.js";
 
 export const preflightDiscordMessageMock: MockFn = vi.fn();
 export const processDiscordMessageMock: MockFn = vi.fn();
+export const deliverDiscordReplyMock: MockFn = vi.fn(async () => undefined);
 
 const { createDiscordMessageHandler: createRealDiscordMessageHandler } =
   await import("./message-handler.js");
@@ -13,8 +14,9 @@ type PreflightDiscordMessageHook = NonNullable<
   DiscordMessageHandlerTestingHooks["preflightDiscordMessage"]
 >;
 type ProcessDiscordMessageHook = NonNullable<
-  DiscordMessageRunQueueTestingHooks["processDiscordMessage"]
+  DiscordInboundWorkerTestingHooks["processDiscordMessage"]
 >;
+type DeliverDiscordReplyHook = NonNullable<DiscordInboundWorkerTestingHooks["deliverDiscordReply"]>;
 
 export function createDiscordMessageHandler(
   ...args: Parameters<typeof createRealDiscordMessageHandler>
@@ -26,6 +28,7 @@ export function createDiscordMessageHandler(
       ...params.__testing,
       preflightDiscordMessage: preflightDiscordMessageMock as PreflightDiscordMessageHook,
       processDiscordMessage: processDiscordMessageMock as ProcessDiscordMessageHook,
+      deliverDiscordReply: deliverDiscordReplyMock as DeliverDiscordReplyHook,
     },
   });
 }

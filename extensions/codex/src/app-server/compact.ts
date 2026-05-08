@@ -74,7 +74,6 @@ export async function maybeCompactCodexAppServerSession(
           sessionFile: params.sessionFile,
           reason: "compaction",
           runtimeContext: params.contextEngineRuntimeContext,
-          config: params.config,
         });
       } catch (error) {
         embeddedAgentLog.warn(
@@ -110,7 +109,7 @@ async function compactCodexNativeThread(
   options: { pluginConfig?: unknown } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
-  const binding = await readCodexAppServerBinding(params.sessionFile, { config: params.config });
+  const binding = await readCodexAppServerBinding(params.sessionFile);
   if (!binding?.threadId) {
     return { ok: false, compacted: false, reason: "no codex app-server thread binding" };
   }
@@ -126,8 +125,6 @@ async function compactCodexNativeThread(
   const client = await clientFactory(
     appServer.start,
     requestedAuthProfileId ?? binding.authProfileId,
-    params.agentDir,
-    params.config,
   );
   const waiter = createCodexNativeCompactionWaiter(client, binding.threadId);
   let completion: CodexNativeCompactionCompletion;

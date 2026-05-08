@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { formatErrorMessage } from "./error-utils.js";
+import { formatErrorMessage } from "../../../../src/infra/errors.js";
 
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;

@@ -1,18 +1,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
-import {
-  buildGatewayConnectionDetails,
-  isGatewayTransportError,
-  type GatewayConnectionDetails,
-} from "../gateway/call.js";
+import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { readConnectPairingRequiredMessage } from "../gateway/protocol/connect-error-details.js";
-import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
@@ -23,12 +17,11 @@ import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
 type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
 
-const logsCliRuntimeLoader = createLazyImportLoader<LogsCliRuntimeModule>(
-  () => import("./logs-cli.runtime.js"),
-);
+let logsCliRuntimePromise: Promise<LogsCliRuntimeModule> | undefined;
 
 async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
-  return logsCliRuntimeLoader.load();
+  logsCliRuntimePromise ??= import("./logs-cli.runtime.js");
+  return logsCliRuntimePromise;
 }
 
 type LogsTailPayload = {
@@ -56,7 +49,7 @@ type LogsCliOptions = {
   expectFinal?: boolean;
 };
 
-const LOCAL_FALLBACK_NOTICE = "Local Gateway RPC unavailable; reading configured file log instead.";
+const LOCAL_FALLBACK_NOTICE = "Gateway pairing required; reading local log file instead.";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) {
@@ -88,7 +81,6 @@ async function fetchLogs(
     if (!shouldUseLocalLogsFallback(opts, error)) {
       throw error;
     }
-    // Match the Gateway logs.tail source when implicit local RPC is unavailable.
     return {
       ...(await readConfiguredLogTail({ cursor, limit, maxBytes })),
       localFallback: true,
@@ -104,19 +96,14 @@ function normalizeErrorMessage(error: unknown): string {
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
-  if (!isLocalGatewayRpcUnavailableError(error)) {
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
+  if (!readConnectPairingRequiredMessage(message)) {
     return false;
   }
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
     return false;
   }
-  const connection = isGatewayTransportError(error)
-    ? error.connectionDetails
-    : buildGatewayConnectionDetails();
-  return isImplicitLoopbackGatewayConnection(connection);
-}
-
-function isImplicitLoopbackGatewayConnection(connection: GatewayConnectionDetails): boolean {
+  const connection = buildGatewayConnectionDetails();
   if (connection.urlSource !== "local loopback") {
     return false;
   }
@@ -125,49 +112,6 @@ function isImplicitLoopbackGatewayConnection(connection: GatewayConnectionDetail
   } catch {
     return false;
   }
-}
-
-function isLocalGatewayRpcUnavailableError(error: unknown): boolean {
-  if (isGatewayTransportError(error)) {
-    return error.kind === "closed" || error.kind === "timeout";
-  }
-  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  if (readConnectPairingRequiredMessage(message)) {
-    return true;
-  }
-  // GatewayClient pending request failures are still plain Error instances.
-  return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
-}
-
-function isPlainGatewayRequestCloseError(message: string): boolean {
-  return message.startsWith("gateway closed (");
-}
-
-function isPlainGatewayRequestTimeoutError(message: string): boolean {
-  return /^gateway timeout after \d+ms\b/u.test(message);
-}
-
-const MAX_FOLLOW_RETRIES = 8;
-
-const FOLLOW_BACKOFF_POLICY = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitter: 0.2 };
-
-// Returns true only for transport-level disconnects that are worth retrying.
-// Auth errors (4xxx), policy violations (1008), and pairing-required messages are
-// non-recoverable without user action and must not loop.
-function isTransientFollowError(error: unknown): boolean {
-  if (isGatewayTransportError(error)) {
-    if (error.kind === "timeout") {
-      return true;
-    }
-    const code = error.code ?? 0;
-    // 1008 = policy violation (pairing required); 4xxx = app-defined (auth, rate-limit)
-    return code !== 1008 && !(code >= 4000 && code <= 4999);
-  }
-  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  if (readConnectPairingRequiredMessage(message)) {
-    return false;
-  }
-  return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
 }
 
 export function formatLogTimestamp(
@@ -330,7 +274,6 @@ export function registerLogsCli(program: Command) {
     const localTime =
       Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
 
-    let followRetryAttempt = 0;
     while (true) {
       let payload: LogsTailPayload;
       // Show progress spinner only on first fetch, not during follow polling
@@ -338,20 +281,6 @@ export function registerLogsCli(program: Command) {
       try {
         payload = await fetchLogs(opts, cursor, showProgress);
       } catch (err) {
-        if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
-          followRetryAttempt += 1;
-          const backoffMs = computeBackoff(FOLLOW_BACKOFF_POLICY, followRetryAttempt);
-          const message = `[logs] gateway disconnected, reconnecting in ${Math.round(backoffMs / 1_000)}s...`;
-          if (jsonMode) {
-            if (!emitJsonLine({ type: "notice", message }, true)) {
-              return;
-            }
-          } else if (!errorLine(colorize(rich, theme.warn, message))) {
-            return;
-          }
-          await delay(backoffMs);
-          continue;
-        }
         await emitGatewayError(
           err,
           opts,
@@ -363,17 +292,6 @@ export function registerLogsCli(program: Command) {
         process.exit(1);
         return;
       }
-      if (followRetryAttempt > 0) {
-        const message = "[logs] gateway reconnected";
-        if (jsonMode) {
-          if (!emitJsonLine({ type: "notice", message }, true)) {
-            return;
-          }
-        } else if (!errorLine(colorize(rich, theme.muted, message))) {
-          return;
-        }
-      }
-      followRetryAttempt = 0;
       const lines = Array.isArray(payload.lines) ? payload.lines : [];
       if (jsonMode) {
         if (first) {

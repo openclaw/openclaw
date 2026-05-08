@@ -8,7 +8,6 @@ import {
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { parseMusicGenerationModelRef } from "./model-ref.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
 import { getMusicGenerationProvider, listMusicGenerationProviders } from "./provider-registry.js";
@@ -17,46 +16,30 @@ import type { MusicGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("music-generation");
 
-export type MusicGenerationRuntimeDeps = {
-  getProvider?: typeof getMusicGenerationProvider;
-  listProviders?: typeof listMusicGenerationProviders;
-  getProviderEnvVars?: typeof getProviderEnvVars;
-  log?: Pick<typeof log, "debug">;
-};
-
 export type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 
-export function listRuntimeMusicGenerationProviders(
-  params?: { config?: OpenClawConfig },
-  deps: MusicGenerationRuntimeDeps = {},
-) {
-  return (deps.listProviders ?? listMusicGenerationProviders)(params?.config);
+export function listRuntimeMusicGenerationProviders(params?: { config?: OpenClawConfig }) {
+  return listMusicGenerationProviders(params?.config);
 }
 
 export async function generateMusic(
   params: GenerateMusicParams,
-  deps: MusicGenerationRuntimeDeps = {},
 ): Promise<GenerateMusicRuntimeResult> {
-  const getProvider = deps.getProvider ?? getMusicGenerationProvider;
-  const listProviders = deps.listProviders ?? listMusicGenerationProviders;
-  const logger = deps.log ?? log;
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
     modelConfig: params.cfg.agents?.defaults?.musicGenerationModel,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
     agentDir: params.agentDir,
-    listProviders,
-    autoProviderFallback: params.autoProviderFallback,
+    listProviders: listMusicGenerationProviders,
   });
   if (candidates.length === 0) {
     throw new Error(
       buildNoCapabilityModelConfiguredMessage({
         capabilityLabel: "music-generation",
         modelConfigKey: "musicGenerationModel",
-        providers: listProviders(params.cfg),
+        providers: listMusicGenerationProviders(params.cfg),
         fallbackSampleRef: "google/lyria-3-clip-preview",
-        getProviderEnvVars: deps.getProviderEnvVars,
       }),
     );
   }
@@ -65,7 +48,7 @@ export async function generateMusic(
   let lastError: unknown;
 
   for (const candidate of candidates) {
-    const provider = getProvider(candidate.provider, params.cfg);
+    const provider = getMusicGenerationProvider(candidate.provider, params.cfg);
     if (!provider) {
       const error = `No music-generation provider registered for ${candidate.provider}`;
       attempts.push({
@@ -127,7 +110,7 @@ export async function generateMusic(
         model: candidate.model,
         error: err,
       });
-      logger.debug(`music-generation candidate failed: ${candidate.provider}/${candidate.model}`);
+      log.debug(`music-generation candidate failed: ${candidate.provider}/${candidate.model}`);
     }
   }
 

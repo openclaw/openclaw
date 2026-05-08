@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
@@ -16,7 +17,7 @@ import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { createMSTeamsSetupWizardBase } from "./setup-core.js";
+import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
 import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
 
 const channel = "msteams" as const;
@@ -29,9 +30,19 @@ const setMSTeamsGroupPolicy = createTopLevelChannelGroupPolicySetter({
 });
 
 export function openDelegatedOAuthUrl(url: string): Promise<void> {
-  return Promise.reject(
-    new Error(`Automatic browser launch is not available. Open this URL manually: ${url}`),
-  );
+  return new Promise<void>((resolve, reject) => {
+    const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+    const child = spawn(cmd, [url], { stdio: "ignore", shell: false });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
+      reject(new Error(`${cmd} failed with ${reason}`));
+    });
+  });
 }
 
 function looksLikeGuid(value: string): boolean {
@@ -233,6 +244,8 @@ const msteamsDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   promptAllowFrom: promptMSTeamsAllowFrom,
 });
 
+export { msteamsSetupAdapter } from "./setup-core.js";
+
 const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 
 export const msteamsSetupWizard: ChannelSetupWizard = {
@@ -266,10 +279,12 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         };
         try {
           const { loginMSTeamsDelegated } = await import("./oauth.js");
+          const { shouldUseManualOAuthFlow } = await import("./oauth.flow.js");
+          const isRemote = Boolean(process.env.SSH_TTY || process.env.SSH_CONNECTION);
           const progress = params.prompter.progress("MSTeams Delegated OAuth");
           const tokens = await loginMSTeamsDelegated(
             {
-              isRemote: true,
+              isRemote: shouldUseManualOAuthFlow(isRemote),
               openUrl: openDelegatedOAuthUrl,
               log: (msg) => params.prompter.note(msg),
               note: (msg, title) => params.prompter.note(msg, title),

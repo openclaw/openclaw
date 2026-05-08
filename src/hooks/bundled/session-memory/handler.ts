@@ -28,63 +28,6 @@ import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } fro
 
 const log = createSubsystemLogger("hooks/session-memory");
 
-function pickDateTimePart(
-  parts: Intl.DateTimeFormatPart[],
-  type: Intl.DateTimeFormatPartTypes,
-): string | undefined {
-  return parts.find((part) => part.type === type)?.value;
-}
-
-function resolveLocalTimeZone(): string | undefined {
-  const timeZone = process.env.TZ?.trim();
-  if (!timeZone) {
-    return undefined;
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
-    return timeZone;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatLocalSessionTimestamp(date: Date): {
-  date: string;
-  time: string;
-  timeSlug: string;
-  timeZoneName?: string;
-} {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: resolveLocalTimeZone(),
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-    timeZoneName: "short",
-  }).formatToParts(date);
-
-  const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
-  const month = pickDateTimePart(parts, "month") ?? String(date.getMonth() + 1).padStart(2, "0");
-  const day = pickDateTimePart(parts, "day") ?? String(date.getDate()).padStart(2, "0");
-  const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
-  const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
-  const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
-  const timeZoneName = [...parts]
-    .toReversed()
-    .find((part) => part.type === "timeZoneName")
-    ?.value?.trim();
-
-  return {
-    date: `${year}-${month}-${day}`,
-    time: `${hour}:${minute}:${second}`,
-    timeSlug: `${hour}${minute}`,
-    timeZoneName,
-  };
-}
-
 function resolveDisplaySessionKey(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -137,10 +80,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Use the user's local timezone for memory artifact names and headings.
+    // Get today's date for filename
     const now = new Date(event.timestamp);
-    const localTimestamp = formatLocalSessionTimestamp(now);
-    const dateStr = localTimestamp.date;
+    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
 
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
@@ -218,7 +160,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // If no slug, use timestamp
     if (!slug) {
-      slug = localTimestamp.timeSlug;
+      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
+      slug = timeSlug.slice(0, 4); // HHMM
       log.debug("Using fallback timestamp slug", { slug });
     }
 
@@ -230,8 +173,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
       path: memoryFilePath.replace(os.homedir(), "~"),
     });
 
-    const timeStr = localTimestamp.time;
-    const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
+    // Format time as HH:MM:SS UTC
+    const timeStr = now.toISOString().split("T")[1].split(".")[0];
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
@@ -239,7 +182,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr}${timeZoneSuffix}`,
+      `# Session: ${dateStr} ${timeStr} UTC`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,

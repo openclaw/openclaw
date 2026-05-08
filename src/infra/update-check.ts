@@ -3,7 +3,6 @@ import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
-import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
@@ -32,7 +31,6 @@ export type DepsStatus = {
 
 export type RegistryStatus = {
   latestVersion: string | null;
-  tag?: string;
   error?: string;
 };
 
@@ -304,20 +302,6 @@ export async function fetchNpmLatestVersion(params?: {
   };
 }
 
-export async function fetchNpmRegistryVersionForChannel(params: {
-  channel: UpdateChannel;
-  timeoutMs?: number;
-}): Promise<RegistryStatus> {
-  const res = await resolveNpmChannelTag({
-    channel: params.channel,
-    timeoutMs: params.timeoutMs,
-  });
-  return {
-    latestVersion: res.version,
-    tag: res.tag,
-  };
-}
-
 export async function fetchNpmPackageTargetStatus(params: {
   target: string;
   timeoutMs?: number;
@@ -385,12 +369,6 @@ export async function resolveNpmChannelTag(params: {
 }
 
 export function compareSemverStrings(a: string | null, b: string | null): number | null {
-  if (a && b) {
-    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
-    if (openClawReleaseCmp != null) {
-      return openClawReleaseCmp;
-    }
-  }
   return compareComparableSemver(
     parseComparableSemver(a, { normalizeLegacyDotBeta: true }),
     parseComparableSemver(b, { normalizeLegacyDotBeta: true }),
@@ -402,23 +380,15 @@ export async function checkUpdateStatus(params: {
   timeoutMs?: number;
   fetchGit?: boolean;
   includeRegistry?: boolean;
-  registryChannel?: UpdateChannel;
 }): Promise<UpdateCheckResult> {
   const timeoutMs = params.timeoutMs ?? 6000;
-  const fetchRegistry = () =>
-    params.registryChannel
-      ? fetchNpmRegistryVersionForChannel({
-          channel: params.registryChannel,
-          timeoutMs,
-        })
-      : fetchNpmLatestVersion({ timeoutMs });
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
     return {
       root: null,
       installKind: "unknown",
       packageManager: "unknown",
-      registry: params.includeRegistry ? await fetchRegistry() : undefined,
+      registry: params.includeRegistry ? await fetchNpmLatestVersion({ timeoutMs }) : undefined,
     };
   }
 
@@ -426,7 +396,7 @@ export async function checkUpdateStatus(params: {
   const [pm, gitRoot, registry] = await Promise.all([
     detectPackageManager(root),
     detectGitRoot(root),
-    params.includeRegistry ? fetchRegistry() : Promise.resolve(undefined),
+    params.includeRegistry ? fetchNpmLatestVersion({ timeoutMs }) : Promise.resolve(undefined),
   ]);
   const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
 

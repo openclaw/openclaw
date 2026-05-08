@@ -2,7 +2,7 @@ import type {
   ChannelThreadingContext,
   ChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { parseTelegramTarget } from "./targets.js";
 

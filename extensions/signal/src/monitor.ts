@@ -1,10 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  detectMime,
-  estimateBase64DecodedBytes,
-  saveMediaBuffer,
-} from "openclaw/plugin-sdk/media-runtime";
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/config-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
+import { estimateBase64DecodedBytes, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -16,23 +19,16 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
   type BackoffPolicy,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/runtime-group-policy";
-import {
   normalizeE164,
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/text-runtime";
-import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
@@ -255,20 +251,6 @@ async function waitForSignalDaemonReady(params: {
   });
 }
 
-const SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES = 64 * 1024;
-const SIGNAL_BASE64_OVERHEAD_NUMERATOR = 4;
-const SIGNAL_BASE64_OVERHEAD_DENOMINATOR = 3;
-
-function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | undefined {
-  if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
-    return undefined;
-  }
-  const base64Bytes = Math.ceil(
-    (maxBytes * SIGNAL_BASE64_OVERHEAD_NUMERATOR) / SIGNAL_BASE64_OVERHEAD_DENOMINATOR,
-  );
-  return base64Bytes + SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES;
-}
-
 async function fetchAttachment(params: {
   baseUrl: string;
   account?: string;
@@ -302,7 +284,6 @@ async function fetchAttachment(params: {
 
   const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
-    maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
   });
   if (!result?.data) {
     return null;
@@ -313,16 +294,11 @@ async function fetchAttachment(params: {
     );
   }
   const buffer = Buffer.from(result.data, "base64");
-  const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
-  const contentType =
-    normalizeOptionalString(attachment.contentType ?? undefined) ??
-    (await detectMime({ buffer, filePath: originalFilename }));
   const saved = await saveMediaBuffer(
     buffer,
-    contentType,
+    attachment.contentType ?? undefined,
     "inbound",
     params.maxBytes,
-    originalFilename,
   );
   return { path: saved.path, contentType: saved.contentType };
 }
@@ -375,7 +351,7 @@ async function deliverReplies(params: {
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? loadConfig();
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -504,8 +480,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       abortSignal: daemonLifecycle.abortSignal,
       runtime,
-      // signal-cli can keep the SSE event endpoint idle until the next inbound event.
-      timeoutMs: 0,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {

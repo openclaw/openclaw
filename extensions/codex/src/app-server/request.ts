@@ -1,4 +1,3 @@
-import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
   CodexAppServerRequestMethod,
@@ -15,7 +14,6 @@ export async function requestCodexAppServerJson<M extends CodexAppServerRequestM
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
 }): Promise<CodexAppServerRequestResult<M>>;
 export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
   method: string;
@@ -23,7 +21,6 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
 }): Promise<T>;
 export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
   method: string;
@@ -31,7 +28,6 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
 }): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
   return await withTimeout(
@@ -40,7 +36,6 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
         startOptions: params.startOptions,
         timeoutMs,
         authProfileId: params.authProfileId,
-        config: params.config,
       });
       return await client.request<T>(params.method, params.requestParams, { timeoutMs });
     })(),

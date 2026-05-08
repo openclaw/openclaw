@@ -219,13 +219,13 @@ private struct WatchExecApprovalDetailView: View {
     private func riskText(_ risk: WatchRiskLevel?) -> String? {
         switch risk {
         case .high:
-            "High"
+            return "High"
         case .medium:
-            "Medium"
+            return "Medium"
         case .low:
-            "Low"
+            return "Low"
         case nil:
-            nil
+            return nil
         }
     }
 
@@ -246,11 +246,11 @@ private struct WatchGenericInboxView: View {
     private func role(for action: WatchPromptAction) -> ButtonRole? {
         switch action.style?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "destructive":
-            .destructive
+            return .destructive
         case "cancel":
-            .cancel
+            return .cancel
         default:
-            nil
+            return nil
         }
     }
 

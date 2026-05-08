@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
-import { getRuntimeConfig, replaceConfigFile } from "../config/config.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
@@ -101,7 +101,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
-    const cfg = getRuntimeConfig();
+    const cfg = loadConfig();
     const rawProfiles = cfg.browser?.profiles ?? {};
     if (name in rawProfiles) {
       throw new BrowserConflictError(`profile "${name}" already exists`);
@@ -176,10 +176,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       },
     };
 
-    await replaceConfigFile({
-      nextConfig,
-      afterWrite: { mode: "auto" },
-    });
+    await writeConfigFile(nextConfig);
 
     state.resolved.profiles[name] = profileConfig;
     const resolved = resolveProfile(state.resolved, name);
@@ -210,7 +207,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     }
 
     const state = ctx.state();
-    const cfg = getRuntimeConfig();
+    const cfg = loadConfig();
     const profiles = cfg.browser?.profiles ?? {};
     const defaultProfile = cfg.browser?.defaultProfile ?? state.resolved.defaultProfile;
     if (name === defaultProfile) {
@@ -249,10 +246,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       },
     };
 
-    await replaceConfigFile({
-      nextConfig,
-      afterWrite: { mode: "auto" },
-    });
+    await writeConfigFile(nextConfig);
 
     delete state.resolved.profiles[name];
     state.profiles.delete(name);

@@ -55,7 +55,7 @@ Example:
 }
 ```
 
-## How to use it
+## How To Use It
 
 Ask naturally and make the analysis intent explicit:
 

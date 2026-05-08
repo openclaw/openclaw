@@ -7,7 +7,7 @@ title: "BTW side questions"
 ---
 
 `/btw` lets you ask a quick side question about the **current session** without
-turning that question into normal conversation history. `/side` is an alias.
+turning that question into normal conversation history.
 
 It is modeled after Claude Code's `/btw` behavior, but adapted to OpenClaw's
 Gateway and multi-channel architecture.
@@ -121,7 +121,6 @@ Examples:
 
 ```text
 /btw what file are we editing?
-/side what changed while the main run continued?
 /btw what does this error mean?
 /btw summarize the current task in one sentence
 /btw what is 17 * 19?

@@ -1,14 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import {
-  createEmptyPluginRegistry,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
+import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChannelType, type AutocompleteInteraction } from "../internal/discord.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type ConversationRuntimeModule = typeof import("openclaw/plugin-sdk/conversation-binding-runtime");
@@ -96,7 +92,7 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   normalizeProviderId: (value: string) => value.trim().toLowerCase(),
-  resolveDefaultModelForAgent: (params: { cfg: OpenClawConfig }) => {
+  resolveDefaultModelForAgent: (params: { cfg: ReturnType<typeof loadConfig> }) => {
     const configuredModel = params.cfg.agents?.defaults?.model;
     const primary =
       typeof configuredModel === "string"
@@ -129,44 +125,14 @@ let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth").f
 let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgChoices;
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").resolveDiscordNativeChoiceContext;
 
-function installProviderThinkingRegistryForTest(): void {
-  const registry = createEmptyPluginRegistry();
-  registry.providers.push({
-    pluginId: "discord-test",
-    source: "test",
-    provider: {
-      id: "discord-test-thinking",
-      label: "Discord Test Thinking",
-      aliases: ["anthropic", "openai-codex"],
-      auth: [],
-      isBinaryThinking: (context) =>
-        providerThinkingMocks.resolveProviderBinaryThinking({
-          provider: context.provider,
-          context,
-        }),
-      supportsXHighThinking: (context) =>
-        providerThinkingMocks.resolveProviderXHighThinking({
-          provider: context.provider,
-          context,
-        }),
-      resolveThinkingProfile: (context) =>
-        providerThinkingMocks.resolveProviderThinkingProfile({
-          provider: context.provider,
-          context,
-        }),
-      resolveDefaultThinkingLevel: (context) =>
-        providerThinkingMocks.resolveProviderDefaultThinkingLevel({
-          provider: context.provider,
-          context,
-        }),
-    },
-  });
-  setActivePluginRegistry(registry);
-}
-
 async function loadDiscordThinkAutocompleteModulesForTest() {
   vi.resetModules();
-  installProviderThinkingRegistryForTest();
+  vi.doMock("../../../../src/plugins/provider-thinking.js", () => ({
+    resolveProviderBinaryThinking: providerThinkingMocks.resolveProviderBinaryThinking,
+    resolveProviderDefaultThinkingLevel: providerThinkingMocks.resolveProviderDefaultThinkingLevel,
+    resolveProviderThinkingProfile: providerThinkingMocks.resolveProviderThinkingProfile,
+    resolveProviderXHighThinking: providerThinkingMocks.resolveProviderXHighThinking,
+  }));
   const commandAuth = await import("openclaw/plugin-sdk/command-auth");
   const nativeCommandUi = await import("./native-command-ui.js");
   return {
@@ -217,7 +183,6 @@ describe("discord native /think autocomplete", () => {
         ? true
         : undefined,
     );
-    installProviderThinkingRegistryForTest();
     fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
     fs.writeFileSync(
       STORE_PATH,
@@ -251,7 +216,7 @@ describe("discord native /think autocomplete", () => {
       session: {
         store: STORE_PATH,
       },
-    } as OpenClawConfig;
+    } as ReturnType<typeof loadConfig>;
   }
 
   it("uses the session override context for /think choices", async () => {

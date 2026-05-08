@@ -3,31 +3,31 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { sameFileIdentity } from "../infra/file-identity.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
-import { resolvePluginLoaderTryNative, resolveLoaderPackageRoot } from "./sdk-alias.js";
+import {
+  isBundledPluginExtensionPath,
+  resolvePluginLoaderJitiTryNative,
+  resolveLoaderPackageRoot,
+} from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
-const publicSurfaceModuleCache = new Map<string, unknown>();
+const loadedPublicSurfaceModules = new Map<string, unknown>();
 const sourceArtifactRequire = createRequire(import.meta.url);
-const publicSurfaceLocationCache = new Map<
+const publicSurfaceLocations = new Map<
   string,
   {
     modulePath: string;
     boundaryRoot: string;
-  }
+  } | null
 >();
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
+const sharedBundledPublicSurfaceJitiLoaders: PluginJitiLoaderCache = new Map();
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
@@ -84,33 +84,58 @@ function resolvePublicSurfaceLocation(params: {
   artifactBasename: string;
 }): { modulePath: string; boundaryRoot: string } | null {
   const key = createResolutionKey(params);
-  const cached = publicSurfaceLocationCache.get(key);
-  if (cached) {
-    return cached;
+  if (publicSurfaceLocations.has(key)) {
+    return publicSurfaceLocations.get(key) ?? null;
   }
   const resolved = resolvePublicSurfaceLocationUncached(params);
-  if (resolved) {
-    publicSurfaceLocationCache.set(key, resolved);
-  }
+  publicSurfaceLocations.set(key, resolved);
   return resolved;
 }
 
-function getModuleLoader(modulePath: string) {
-  return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
+function getJiti(modulePath: string) {
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
+  const sharedLoader = getSharedBundledPublicSurfaceJiti(modulePath, tryNative);
+  if (sharedLoader) {
+    return sharedLoader;
+  }
+  const loader = getCachedPluginJitiLoader({
+    cache: jitiLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    loaderFilename: import.meta.url,
+    jitiFilename: import.meta.url,
   });
+  return loader;
 }
 
 function loadPublicSurfaceModule(modulePath: string): unknown {
-  const tryNative = resolvePluginLoaderTryNative(modulePath, { preferBuiltDist: true });
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
   if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
     return sourceArtifactRequire(modulePath);
   }
-  return getModuleLoader(modulePath)(modulePath);
+  return getJiti(modulePath)(modulePath);
+}
+
+function getSharedBundledPublicSurfaceJiti(modulePath: string, tryNative: boolean) {
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  if (
+    !isBundledPluginExtensionPath({
+      modulePath,
+      openClawPackageRoot: OPENCLAW_PACKAGE_ROOT,
+      ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
+    })
+  ) {
+    return null;
+  }
+  const cacheKey = tryNative ? "bundled:native" : "bundled:source";
+  return getCachedPluginJitiLoader({
+    cache: sharedBundledPublicSurfaceJitiLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    jitiFilename: import.meta.url,
+    cacheScopeKey: cacheKey,
+    tryNative,
+  });
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
@@ -124,7 +149,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const cached = publicSurfaceModuleCache.get(location.modulePath);
+  const cached = loadedPublicSurfaceModules.get(location.modulePath);
   if (cached) {
     return cached as T;
   }
@@ -133,8 +158,10 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
     absolutePath: location.modulePath,
     rootPath: location.boundaryRoot,
     boundaryLabel:
-      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
-    rejectHardlinks: true,
+      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
+        ? "OpenClaw package root"
+        : "bundled plugin directory",
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     throw new Error(
@@ -142,27 +169,16 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       { cause: opened.error },
     );
   }
-  const validatedPath = opened.path;
-  const validatedStat = opened.stat;
   fs.closeSync(opened.fd);
 
-  const currentStat = fs.statSync(validatedPath);
-  if (!sameFileIdentity(validatedStat, currentStat)) {
-    throw new Error(
-      `Bundled plugin public surface changed after validation: ${params.dirName}/${params.artifactBasename}`,
-    );
-  }
-
   const sentinel = {} as T;
-  publicSurfaceModuleCache.set(location.modulePath, sentinel);
-  publicSurfaceModuleCache.set(validatedPath, sentinel);
+  loadedPublicSurfaceModules.set(location.modulePath, sentinel);
   try {
-    const loaded = loadPublicSurfaceModule(validatedPath) as T;
+    const loaded = loadPublicSurfaceModule(location.modulePath) as T;
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {
-    publicSurfaceModuleCache.delete(location.modulePath);
-    publicSurfaceModuleCache.delete(validatedPath);
+    loadedPublicSurfaceModules.delete(location.modulePath);
     throw error;
   }
 }
@@ -175,7 +191,8 @@ export function resolveBundledPluginPublicArtifactPath(params: {
 }
 
 export function resetBundledPluginPublicArtifactLoaderForTest(): void {
-  publicSurfaceModuleCache.clear();
-  publicSurfaceLocationCache.clear();
-  moduleLoaders.clear();
+  loadedPublicSurfaceModules.clear();
+  publicSurfaceLocations.clear();
+  jitiLoaders.clear();
+  sharedBundledPublicSurfaceJitiLoaders.clear();
 }

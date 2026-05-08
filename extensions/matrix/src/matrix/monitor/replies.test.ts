@@ -34,7 +34,7 @@ describe("deliverMatrixReplies", () => {
 
   const runtimeStub = {
     config: {
-      current: () => loadConfigMock(),
+      loadConfig: () => loadConfigMock(),
     },
     channel: {
       text: {

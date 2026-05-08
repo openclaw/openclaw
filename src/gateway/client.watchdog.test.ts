@@ -94,17 +94,6 @@ describe("GatewayClient", () => {
         connectChallengeTimeoutMs: 5_000,
       }),
     ).toBe(5_000);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        preauthHandshakeTimeoutMs: 30_000,
-      }),
-    ).toBe(30_000);
-    expect(
-      resolveGatewayClientConnectChallengeTimeoutMs({
-        connectChallengeTimeoutMs: 45_000,
-        preauthHandshakeTimeoutMs: 30_000,
-      }),
-    ).toBe(30_000);
   });
 
   test("closes on missing ticks", async () => {

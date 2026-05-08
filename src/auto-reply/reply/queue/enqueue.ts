@@ -1,5 +1,4 @@
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
-import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
@@ -17,15 +16,6 @@ const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_I
   maxSize: 10_000,
 });
 
-function followupRouteIdentityKey(run: FollowupRun): string {
-  return channelRouteDedupeKey({
-    channel: run.originatingChannel,
-    to: run.originatingTo,
-    accountId: run.originatingAccountId,
-    threadId: run.originatingThreadId,
-  });
-}
-
 function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
   const messageId = normalizeOptionalString(run.messageId);
   if (!messageId) {
@@ -33,7 +23,15 @@ function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | u
   }
   // Use JSON tuple serialization to avoid delimiter-collision edge cases when
   // channel/to/account values contain "|" characters.
-  return JSON.stringify(["queue", queueKey, followupRouteIdentityKey(run), messageId]);
+  return JSON.stringify([
+    "queue",
+    queueKey,
+    run.originatingChannel ?? "",
+    run.originatingTo ?? "",
+    run.originatingAccountId ?? "",
+    run.originatingThreadId == null ? "" : String(run.originatingThreadId),
+    messageId,
+  ]);
 }
 
 function isRunAlreadyQueued(
@@ -41,8 +39,11 @@ function isRunAlreadyQueued(
   items: FollowupRun[],
   allowPromptFallback = false,
 ): boolean {
-  const routeKey = followupRouteIdentityKey(run);
-  const hasSameRouting = (item: FollowupRun) => followupRouteIdentityKey(item) === routeKey;
+  const hasSameRouting = (item: FollowupRun) =>
+    item.originatingChannel === run.originatingChannel &&
+    item.originatingTo === run.originatingTo &&
+    item.originatingAccountId === run.originatingAccountId &&
+    item.originatingThreadId === run.originatingThreadId;
 
   const messageId = normalizeOptionalString(run.messageId);
   if (messageId) {

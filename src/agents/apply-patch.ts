@@ -58,12 +58,12 @@ export type ApplyPatchSummary = {
   deleted: string[];
 };
 
-type ApplyPatchResult = {
+export type ApplyPatchResult = {
   summary: ApplyPatchSummary;
   text: string;
 };
 
-type ApplyPatchToolDetails = {
+export type ApplyPatchToolDetails = {
   summary: ApplyPatchSummary;
 };
 

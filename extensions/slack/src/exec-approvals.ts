@@ -4,7 +4,7 @@ import {
   isChannelExecApprovalTargetRecipient,
 } from "openclaw/plugin-sdk/approval-client-runtime";
 import { doesApprovalRequestMatchChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 

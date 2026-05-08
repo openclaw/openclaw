@@ -3,7 +3,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 
-type VoiceWakeConfig = {
+export type VoiceWakeConfig = {
   triggers: string[];
   updatedAtMs: number;
 };

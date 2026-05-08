@@ -9,7 +9,6 @@ export type {
   EmbeddedPiRunResult,
 } from "./pi-embedded-runner.js";
 export {
-  abortAndDrainEmbeddedPiRun,
   abortEmbeddedAgentRun,
   abortEmbeddedPiRun,
   compactEmbeddedAgentSession,

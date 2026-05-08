@@ -6,9 +6,7 @@ import Foundation
 public struct AnyCodable: Codable, @unchecked Sendable, Hashable {
     public let value: Any
 
-    public init(_ value: Any) {
-        self.value = Self.normalize(value)
-    }
+    public init(_ value: Any) { self.value = Self.normalize(value) }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()

@@ -23,7 +23,7 @@ function tlonChannelId() {
   return "tlon" as const;
 }
 
-type TlonSetupInput = ChannelSetupInput & TlonAccountFieldsInput;
+export type TlonSetupInput = ChannelSetupInput & TlonAccountFieldsInput;
 
 function isConfigured(account: TlonResolvedAccount): boolean {
   return Boolean(account.ship && account.url && account.code);

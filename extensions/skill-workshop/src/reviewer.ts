@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  resolveAgentEffectiveModelPrimary,
-  resolveDefaultModelForAgent,
-} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
 import { normalizeSkillName } from "./skills.js";
@@ -37,22 +33,6 @@ type ReviewerJson = {
   oldText?: string;
   newText?: string;
 };
-
-function resolveReviewerFallbackModel(params: { api: OpenClawPluginApi; agentId: string }): {
-  provider: string;
-  model: string;
-} {
-  if (resolveAgentEffectiveModelPrimary(params.api.config, params.agentId)) {
-    return resolveDefaultModelForAgent({
-      cfg: params.api.config,
-      agentId: params.agentId,
-    });
-  }
-  return {
-    provider: params.api.runtime.agent.defaults.provider,
-    model: params.api.runtime.agent.defaults.model,
-  };
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -244,10 +224,6 @@ export async function reviewTranscriptForProposal(params: {
   });
   const sessionId = `skill-workshop-review-${randomUUID()}`;
   const stateDir = params.api.runtime.state.resolveStateDir();
-  const fallbackModel = resolveReviewerFallbackModel({
-    api: params.api,
-    agentId: params.ctx.agentId,
-  });
   const result = await params.api.runtime.agent.runEmbeddedPiAgent({
     sessionId,
     sessionKey: params.ctx.sessionKey,
@@ -259,8 +235,8 @@ export async function reviewTranscriptForProposal(params: {
     agentDir: params.api.runtime.agent.resolveAgentDir(params.api.config, params.ctx.agentId),
     config: params.api.config,
     prompt,
-    provider: params.ctx.modelProviderId ?? fallbackModel.provider,
-    model: params.ctx.modelId ?? fallbackModel.model,
+    provider: params.ctx.modelProviderId ?? params.api.runtime.agent.defaults.provider,
+    model: params.ctx.modelId ?? params.api.runtime.agent.defaults.model,
     timeoutMs: params.config.reviewTimeoutMs,
     runId: sessionId,
     trigger: "manual",

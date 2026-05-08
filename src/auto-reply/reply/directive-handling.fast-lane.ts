@@ -78,7 +78,6 @@ export async function applyInlineDirectivesFastLane(
     aliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
-    thinkingCatalog: await modelState.resolveThinkingCatalog(),
     resetModelOverride,
     provider,
     model,
@@ -93,7 +92,6 @@ export async function applyInlineDirectivesFastLane(
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
     senderIsOwner: params.senderIsOwner,
-    workspaceDir: params.workspaceDir,
   });
 
   if (sessionEntry?.providerOverride) {

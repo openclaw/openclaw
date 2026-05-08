@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { isNotFoundPathError, isPathInside } from "./path-guards.js";
 
-type BoundaryPathIntent = "read" | "write" | "create" | "delete" | "stat";
+export type BoundaryPathIntent = "read" | "write" | "create" | "delete" | "stat";
 
 export type BoundaryPathAliasPolicy = {
   allowFinalSymlinkForUnlink?: boolean;
@@ -22,7 +22,7 @@ export const BOUNDARY_PATH_ALIAS_POLICIES = {
   }),
 } as const;
 
-type ResolveBoundaryPathParams = {
+export type ResolveBoundaryPathParams = {
   absolutePath: string;
   rootPath: string;
   boundaryLabel: string;
@@ -32,7 +32,7 @@ type ResolveBoundaryPathParams = {
   rootCanonicalPath?: string;
 };
 
-type ResolvedBoundaryPathKind = "missing" | "file" | "directory" | "symlink" | "other";
+export type ResolvedBoundaryPathKind = "missing" | "file" | "directory" | "symlink" | "other";
 
 export type ResolvedBoundaryPath = {
   absolutePath: string;
@@ -660,7 +660,7 @@ function buildResolvedBoundaryPath(params: {
   };
 }
 
-async function resolvePathViaExistingAncestor(targetPath: string): Promise<string> {
+export async function resolvePathViaExistingAncestor(targetPath: string): Promise<string> {
   const normalized = path.resolve(targetPath);
   let cursor = normalized;
   const missingSuffix: string[] = [];

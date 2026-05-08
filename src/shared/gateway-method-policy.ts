@@ -1,13 +1,13 @@
-const RESERVED_ADMIN_GATEWAY_METHOD_PREFIXES = [
+export const RESERVED_ADMIN_GATEWAY_METHOD_PREFIXES = [
   "exec.approvals.",
   "config.",
   "wizard.",
   "update.",
 ] as const;
 
-const RESERVED_ADMIN_GATEWAY_METHOD_SCOPE = "operator.admin" as const;
+export const RESERVED_ADMIN_GATEWAY_METHOD_SCOPE = "operator.admin" as const;
 
-function isReservedAdminGatewayMethod(method: string): boolean {
+export function isReservedAdminGatewayMethod(method: string): boolean {
   return RESERVED_ADMIN_GATEWAY_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix));
 }
 

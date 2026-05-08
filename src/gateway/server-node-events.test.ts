@@ -61,8 +61,6 @@ const sanitizeInboundSystemTagsMock = vi.hoisted(() =>
       .replace(/^(\s*)System:(?=\s|$)/gim, "$1System (untrusted):"),
   ),
 );
-const updatePairedDeviceMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-const updatePairedNodeMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
 const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: ingressAgentCommandMock,
@@ -76,7 +74,7 @@ const runtimeMocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
-  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
   loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   migrateAndPruneGatewaySessionStoreKey: vi.fn(
@@ -91,8 +89,7 @@ const runtimeMocks = vi.hoisted(() => ({
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
-  requestHeartbeat: vi.fn(),
-  resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
+  requestHeartbeatNow: vi.fn(),
   resolveGatewayModelSupportsImages: vi.fn(
     async ({
       loadGatewayModelCatalog,
@@ -134,25 +131,15 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
-vi.mock("../infra/device-pairing.js", () => ({
-  updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
-}));
-vi.mock("../infra/node-pairing.js", () => ({
-  updatePairedNodeMetadata: updatePairedNodeMetadataMock,
-}));
 
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
-import {
-  getRecentNodePresencePersistCountForTests,
-  handleNodeEvent,
-  resetNodeEventDeduplicationForTests,
-} from "./server-node-events.js";
+import { handleNodeEvent, resetNodeEventDeduplicationForTests } from "./server-node-events.js";
 
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
-const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
-const loadConfigMock = runtimeMocks.getRuntimeConfig;
+const requestHeartbeatNowMock = runtimeMocks.requestHeartbeatNow;
+const loadConfigMock = runtimeMocks.loadConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
 const updateSessionStoreMock = runtimeMocks.updateSessionStore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
@@ -187,16 +174,12 @@ describe("node exec events", () => {
     resetNodeEventDeduplicationForTests();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
-    requestHeartbeatMock.mockClear();
+    requestHeartbeatNowMock.mockClear();
     registerApnsRegistrationVi.mockClear();
     loadOrCreateDeviceIdentityMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sanitizeInboundSystemTagsMock.mockClear();
-    updatePairedDeviceMetadataMock.mockClear();
-    updatePairedDeviceMetadataMock.mockResolvedValue(true);
-    updatePairedNodeMetadataMock.mockClear();
-    updatePairedNodeMetadataMock.mockResolvedValue(true);
   });
 
   it("enqueues exec.started events", async () => {
@@ -214,7 +197,7 @@ describe("node exec events", () => {
       "Exec started (node=node-1 id=run-1): ls -la",
       { sessionKey: "agent:main:main", contextKey: "exec:run-1", trusted: false },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
       sessionKey: "agent:main:main",
     });
@@ -236,7 +219,7 @@ describe("node exec events", () => {
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
       { sessionKey: "node-node-2", contextKey: "exec:run-2", trusted: false },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
@@ -259,7 +242,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-dup-finished, code 0)\ndone",
       {
@@ -291,7 +274,7 @@ describe("node exec events", () => {
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
       { sessionKey: "agent:main:node-node-2", contextKey: "exec:run-2", trusted: false },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
       sessionKey: "agent:main:node-node-2",
     });
@@ -310,7 +293,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("truncates long exec.finished output in system events", async () => {
@@ -330,7 +313,7 @@ describe("node exec events", () => {
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThan(280);
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
   it("enqueues exec.denied events with reason", async () => {
@@ -349,7 +332,7 @@ describe("node exec events", () => {
       "Exec denied (node=node-3 id=run-3, allowlist-miss): rm -rf /",
       { sessionKey: "agent:demo:main", contextKey: "exec:run-3", trusted: false },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
       sessionKey: "agent:demo:main",
     });
@@ -374,7 +357,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("suppresses exec.finished when notifyOnExit is false", async () => {
@@ -397,7 +380,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("suppresses exec.denied when notifyOnExit is false", async () => {
@@ -420,7 +403,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("sanitizes remote exec event content before enqueue", async () => {
@@ -687,7 +670,7 @@ describe("voice transcript events", () => {
 describe("notifications changed events", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
-    requestHeartbeatMock.mockClear();
+    requestHeartbeatNowMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
@@ -712,9 +695,7 @@ describe("notifications changed events", () => {
       "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
       { sessionKey: "node-node-n1", contextKey: "notification:notif-1", trusted: false },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      source: "notifications-event",
-      intent: "event",
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
       sessionKey: "node-node-n1",
     });
@@ -735,9 +716,7 @@ describe("notifications changed events", () => {
       "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
       { sessionKey: "node-node-n2", contextKey: "notification:notif-2", trusted: false },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      source: "notifications-event",
-      intent: "event",
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
       sessionKey: "node-node-n2",
     });
@@ -754,9 +733,7 @@ describe("notifications changed events", () => {
       }),
     });
 
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      source: "notifications-event",
-      intent: "event",
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
       sessionKey: "agent:main:main",
     });
@@ -785,9 +762,7 @@ describe("notifications changed events", () => {
         trusted: false,
       },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      source: "notifications-event",
-      intent: "event",
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
       sessionKey: "agent:main:node-node-n5",
     });
@@ -803,7 +778,7 @@ describe("notifications changed events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("sanitizes notification text before enqueueing an untrusted system event", async () => {
@@ -846,7 +821,7 @@ describe("notifications changed events", () => {
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses exec notifyOnExit events when payload opts out", async () => {
@@ -863,7 +838,7 @@ describe("notifications changed events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 });
 
@@ -948,7 +923,7 @@ describe("agent request events", () => {
     expect(opts.runId).toBe(opts.sessionId);
   });
 
-  it("passes supportsInlineImages false for text-only node-session models", async () => {
+  it("passes supportsImages false for text-only node-session models", async () => {
     const ctx = buildCtx();
     ctx.loadGatewayModelCatalog = async () => [
       {
@@ -985,176 +960,7 @@ describe("agent request events", () => {
     expect(parseMessageWithAttachmentsMock).toHaveBeenCalledWith(
       "describe",
       expect.any(Array),
-      expect.objectContaining({ supportsInlineImages: false }),
+      expect.objectContaining({ supportsImages: false }),
     );
-  });
-
-  it("declines non-image attachments cleanly when parse throws UnsupportedAttachmentError", async () => {
-    const warn = vi.fn();
-    const ctx = buildCtx();
-    ctx.logGateway = { warn };
-
-    parseMessageWithAttachmentsMock.mockRejectedValueOnce(
-      Object.assign(new Error("attachment a.pdf: non-image attachments not supported"), {
-        name: "UnsupportedAttachmentError",
-        reason: "unsupported-non-image",
-      }),
-    );
-
-    await handleNodeEvent(ctx, "node-non-image-refusal", {
-      event: "agent.request",
-      payloadJSON: JSON.stringify({
-        message: "read this",
-        sessionKey: "agent:main:main",
-        attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "a.pdf",
-            content: "JVBERi0=",
-          },
-        ],
-      }),
-    });
-
-    // server-node-events must log-and-return on parse failure — no agent
-    // dispatch, no crash, and the refusal reason bubbles up via logGateway.
-    expect(agentCommandMock).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/attachment parse failed.*non-image/i));
-  });
-
-  beforeEach(() => {
-    resetNodeEventDeduplicationForTests();
-    updatePairedDeviceMetadataMock.mockClear();
-    updatePairedDeviceMetadataMock.mockResolvedValue(true);
-    updatePairedNodeMetadataMock.mockClear();
-    updatePairedNodeMetadataMock.mockResolvedValue(true);
-  });
-
-  it("persists authenticated node presence alive events", async () => {
-    const ctx = buildCtx();
-    const result = await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({
-          trigger: "bg_app_refresh",
-          sentAtMs: 123,
-        }),
-      },
-      { deviceId: "ios-node" },
-    );
-
-    expect(result).toEqual({
-      ok: true,
-      event: "node.presence.alive",
-      handled: true,
-      reason: "persisted",
-    });
-    expect(updatePairedNodeMetadataMock).toHaveBeenCalledWith("ios-node", {
-      lastSeenAtMs: expect.any(Number),
-      lastSeenReason: "bg_app_refresh",
-    });
-    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("ios-node", {
-      lastSeenAtMs: expect.any(Number),
-      lastSeenReason: "bg_app_refresh",
-    });
-    expect(getRecentNodePresencePersistCountForTests()).toBe(1);
-  });
-
-  it("rejects node presence alive events without authenticated device identity", async () => {
-    const ctx = buildCtx();
-    const result = await handleNodeEvent(ctx, "ios-node", {
-      event: "node.presence.alive",
-      payloadJSON: JSON.stringify({ trigger: "silent_push" }),
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      event: "node.presence.alive",
-      handled: false,
-      reason: "missing_device_identity",
-    });
-    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
-    expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
-    expect(getRecentNodePresencePersistCountForTests()).toBe(0);
-  });
-
-  it("normalizes unknown node presence alive triggers before persistence", async () => {
-    const ctx = buildCtx();
-    await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "x".repeat(4096) }),
-      },
-      { deviceId: "ios-node" },
-    );
-
-    expect(updatePairedNodeMetadataMock).toHaveBeenCalledWith("ios-node", {
-      lastSeenAtMs: expect.any(Number),
-      lastSeenReason: "background",
-    });
-    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("ios-node", {
-      lastSeenAtMs: expect.any(Number),
-      lastSeenReason: "background",
-    });
-  });
-
-  it("does not throttle unknown node presence alive identities", async () => {
-    updatePairedNodeMetadataMock.mockResolvedValue(false);
-    updatePairedDeviceMetadataMock.mockResolvedValue(false);
-    const ctx = buildCtx();
-    const result = await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
-      },
-      { deviceId: "ios-node" },
-    );
-
-    expect(result).toEqual({
-      ok: true,
-      event: "node.presence.alive",
-      handled: false,
-      reason: "unpaired",
-    });
-    expect(getRecentNodePresencePersistCountForTests()).toBe(0);
-  });
-
-  it("throttles repeated node presence alive persistence per device", async () => {
-    const ctx = buildCtx();
-    await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
-      },
-      { deviceId: "ios-node" },
-    );
-    const result = await handleNodeEvent(
-      ctx,
-      "ios-node",
-      {
-        event: "node.presence.alive",
-        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
-      },
-      { deviceId: "ios-node" },
-    );
-
-    expect(result).toEqual({
-      ok: true,
-      event: "node.presence.alive",
-      handled: true,
-      reason: "throttled",
-    });
-    expect(updatePairedNodeMetadataMock).toHaveBeenCalledTimes(1);
-    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledTimes(1);
-    expect(getRecentNodePresencePersistCountForTests()).toBe(1);
   });
 });

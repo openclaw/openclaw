@@ -96,8 +96,6 @@ describe("route-args", () => {
         "sqlite",
         "--active",
         "true",
-        "--limit",
-        "25",
       ]),
     ).toEqual({
       json: true,
@@ -105,19 +103,13 @@ describe("route-args", () => {
       agent: "default",
       store: "sqlite",
       active: "true",
-      limit: "25",
     });
     expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent"])).toBeNull();
-    expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--limit"])).toBeNull();
     expect(
       parseAgentsListRouteArgs(["node", "openclaw", "agents", "list", "--json", "--bindings"]),
     ).toEqual({
       json: true,
       bindings: true,
-    });
-    expect(parseAgentsListRouteArgs(["node", "openclaw", "agents"])).toEqual({
-      json: false,
-      bindings: false,
     });
   });
 

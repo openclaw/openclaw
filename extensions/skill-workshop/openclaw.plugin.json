@@ -1,8 +1,5 @@
 {
   "id": "skill-workshop",
-  "activation": {
-    "onStartup": true
-  },
   "name": "Skill Workshop",
   "description": "Captures repeatable workflows as workspace skills, with pending review, safe writes, and skill prompt refresh.",
   "contracts": {

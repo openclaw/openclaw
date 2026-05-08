@@ -4,7 +4,6 @@ import {
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
-  buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
   buildBootstrapTruncationSignature,
   formatBootstrapTruncationWarningLines,
@@ -135,18 +134,6 @@ describe("bootstrap prompt warnings", () => {
         preserveExactPrompt: heartbeatPrompt,
       }),
     ).toBe(heartbeatPrompt);
-  });
-
-  it("builds a concise agent notice without raw truncation diagnostics", () => {
-    const notice = buildBootstrapPromptWarningNotice([
-      "AGENTS.md: 200 raw -> 0 injected",
-      "If unintentional, raise agents.defaults.bootstrapMaxChars.",
-    ]);
-
-    expect(notice).toContain("[Bootstrap truncation warning]");
-    expect(notice).toContain("Treat Project Context as partial");
-    expect(notice).not.toContain("raw ->");
-    expect(notice).not.toContain("bootstrapMaxChars");
   });
 
   it("resolves seen signatures from report history or legacy single signature", () => {

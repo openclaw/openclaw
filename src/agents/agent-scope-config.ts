@@ -5,10 +5,11 @@ import type {
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
+import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
@@ -25,7 +26,6 @@ export type ResolvedAgentConfig = {
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
-  tts?: AgentEntry["tts"];
   contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
@@ -36,16 +36,12 @@ export type ResolvedAgentConfig = {
   tools?: AgentEntry["tools"];
 };
 
+let log: ReturnType<typeof createSubsystemLogger> | null = null;
 let defaultAgentWarned = false;
 
-function warnMultipleDefaultAgents(): void {
-  void import("../logging/subsystem.js")
-    .then(({ createSubsystemLogger }) => {
-      createSubsystemLogger("agent-scope").warn(
-        "Multiple agents marked default=true; using the first entry as default.",
-      );
-    })
-    .catch(() => undefined);
+function getLog(): ReturnType<typeof createSubsystemLogger> {
+  log ??= createSubsystemLogger("agent-scope");
+  return log;
 }
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
@@ -87,7 +83,7 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const defaults = agents.filter((agent) => agent?.default);
   if (defaults.length > 1 && !defaultAgentWarned) {
     defaultAgentWarned = true;
-    warnMultipleDefaultAgents();
+    getLog().warn("Multiple agents marked default=true; using the first entry as default.");
   }
   const chosen = (defaults[0] ?? agents[0])?.id?.trim();
   return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
@@ -124,7 +120,6 @@ export function resolveAgentConfig(
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
-    tts: entry.tts,
     contextLimits:
       typeof entry.contextLimits === "object" && entry.contextLimits
         ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }

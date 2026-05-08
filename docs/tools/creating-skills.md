@@ -29,7 +29,7 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
     ```markdown
     ---
-    name: hello-world
+    name: hello_world
     description: A simple skill that says hello.
     ---
 
@@ -38,9 +38,6 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     When the user asks for a greeting, use the `echo` tool to say
     "Hello from your custom skill!".
     ```
-
-    Use hyphen-case with lowercase letters, digits, and hyphens for the skill
-    `name`. Keep the folder name and frontmatter `name` aligned.
 
   </Step>
 
@@ -86,13 +83,13 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
 The YAML frontmatter supports these fields:
 
-| Field                               | Required | Description                                                    |
-| ----------------------------------- | -------- | -------------------------------------------------------------- |
-| `name`                              | Yes      | Unique identifier using lowercase letters, digits, and hyphens |
-| `description`                       | Yes      | One-line description shown to the agent                        |
-| `metadata.openclaw.os`              | No       | OS filter (`["darwin"]`, `["linux"]`, etc.)                    |
-| `metadata.openclaw.requires.bins`   | No       | Required binaries on PATH                                      |
-| `metadata.openclaw.requires.config` | No       | Required config keys                                           |
+| Field                               | Required | Description                                 |
+| ----------------------------------- | -------- | ------------------------------------------- |
+| `name`                              | Yes      | Unique identifier (snake_case)              |
+| `description`                       | Yes      | One-line description shown to the agent     |
+| `metadata.openclaw.os`              | No       | OS filter (`["darwin"]`, `["linux"]`, etc.) |
+| `metadata.openclaw.requires.bins`   | No       | Required binaries on PATH                   |
+| `metadata.openclaw.requires.config` | No       | Required config keys                        |
 
 ## Best practices
 

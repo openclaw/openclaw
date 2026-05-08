@@ -4,7 +4,7 @@ import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js"
 const resolveProviderUsageSnapshotWithPluginMock = vi.fn();
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({}),
+  loadConfig: () => ({}),
 }));
 
 vi.mock("../plugins/provider-runtime.js", async () => {

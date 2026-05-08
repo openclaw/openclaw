@@ -1,13 +1,13 @@
 import type { WebClient } from "@slack/web-api";
 import { vi } from "vitest";
 
-type SlackEditTestClient = WebClient & {
+export type SlackEditTestClient = WebClient & {
   chat: {
     update: ReturnType<typeof vi.fn>;
   };
 };
 
-type SlackSendTestClient = WebClient & {
+export type SlackSendTestClient = WebClient & {
   conversations: {
     open: ReturnType<typeof vi.fn>;
   };
@@ -25,6 +25,16 @@ const slackBlockTestState = vi.hoisted(() => ({
   },
   config: {},
 }));
+
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    loadConfig: () => slackBlockTestState.config,
+  };
+});
 
 vi.mock("./accounts.js", async () => {
   const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");

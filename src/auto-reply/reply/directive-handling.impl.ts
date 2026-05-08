@@ -104,7 +104,6 @@ export async function handleDirectiveOnly(
     aliasIndex,
     allowedModelCatalog,
     resetModelOverride,
-    workspaceDir: params.workspaceDir,
     surface: params.surface,
     sessionEntry,
   });
@@ -131,12 +130,6 @@ export async function handleDirectiveOnly(
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
-  const thinkingCatalog =
-    params.thinkingCatalog && params.thinkingCatalog.length > 0
-      ? params.thinkingCatalog
-      : allowedModelCatalog.length > 0
-        ? allowedModelCatalog
-        : undefined;
   const fastModeState = resolveFastModeState({
     cfg: params.cfg,
     provider: resolvedProvider,
@@ -155,12 +148,12 @@ export async function handleDirectiveOnly(
       return {
         text: withOptions(
           `Current thinking level: ${level}.`,
-          formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog),
+          formatThinkingLevels(resolvedProvider, resolvedModel),
         ),
       };
     }
     return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}.`,
+      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
@@ -307,11 +300,10 @@ export async function handleDirectiveOnly(
       provider: resolvedProvider,
       model: resolvedModel,
       level: directives.thinkLevel,
-      catalog: thinkingCatalog,
     })
   ) {
     return {
-      text: `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}.`,
+      text: `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
     };
   }
 
@@ -326,13 +318,11 @@ export async function handleDirectiveOnly(
       provider: resolvedProvider,
       model: resolvedModel,
       level: nextThinkLevel,
-      catalog: thinkingCatalog,
     })
       ? resolveSupportedThinkingLevel({
           provider: resolvedProvider,
           model: resolvedModel,
           level: nextThinkLevel,
-          catalog: thinkingCatalog,
         })
       : undefined;
   const shouldRemapUnsupportedThinkLevel =
@@ -464,7 +454,6 @@ export async function handleDirectiveOnly(
         key: sessionKey,
         nextProvider: modelSelection.provider,
         nextModel: modelSelection.model,
-        nextModelOverrideSource: "user",
         nextAuthProfileId: profileOverride,
         nextAuthProfileIdSource: profileOverride ? "user" : undefined,
       });
@@ -596,7 +585,7 @@ export async function handleDirectiveOnly(
     parts.push(
       modelSelection.isDefault
         ? `Model reset to default (${labelWithAlias}).`
-        : `Model set to ${labelWithAlias} for this session.`,
+        : `Model set to ${labelWithAlias}.`,
     );
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);

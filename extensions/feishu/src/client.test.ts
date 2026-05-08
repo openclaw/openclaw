@@ -91,6 +91,11 @@ vi.mock("./subagent-hooks.js", () => ({
   registerFeishuSubagentHooks: registerFeishuSubagentHooksMock,
 }));
 
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
   selectionSource: "explicit",
@@ -119,23 +124,9 @@ function readCallOptions(
   return isRecord(call) ? call : {};
 }
 
-function firstWsClientOptions(): {
-  agent?: unknown;
-  wsConfig?: unknown;
-  onError?: unknown;
-  onReady?: unknown;
-  onReconnected?: unknown;
-  onReconnecting?: unknown;
-} {
+function firstWsClientOptions(): { agent?: unknown } {
   const options = readCallOptions(wsClientCtorMock, 0);
-  return {
-    agent: options.agent,
-    wsConfig: options.wsConfig,
-    onError: options.onError,
-    onReady: options.onReady,
-    onReconnected: options.onReconnected,
-    onReconnecting: options.onReconnecting,
-  };
+  return { agent: options.agent };
 }
 
 beforeAll(async () => {
@@ -359,40 +350,6 @@ describe("createFeishuClient HTTP timeout", () => {
 });
 
 describe("createFeishuWSClient proxy handling", () => {
-  it("passes heartbeat wsConfig defaults to Lark.WSClient", async () => {
-    await createFeishuWSClient(baseAccount);
-
-    const options = firstWsClientOptions();
-    expect(options.wsConfig).toEqual({
-      PingInterval: 30,
-      PingTimeout: 3,
-    });
-  });
-
-  it("passes lifecycle callbacks while preserving heartbeat wsConfig defaults", async () => {
-    const onError = vi.fn();
-    const onReady = vi.fn();
-    const onReconnected = vi.fn();
-    const onReconnecting = vi.fn();
-
-    await createFeishuWSClient(baseAccount, {
-      onError,
-      onReady,
-      onReconnected,
-      onReconnecting,
-    });
-
-    const options = firstWsClientOptions();
-    expect(options.onError).toBe(onError);
-    expect(options.onReady).toBe(onReady);
-    expect(options.onReconnected).toBe(onReconnected);
-    expect(options.onReconnecting).toBe(onReconnecting);
-    expect(options.wsConfig).toEqual({
-      PingInterval: 30,
-      PingTimeout: 3,
-    });
-  });
-
   it("does not set a ws proxy agent when proxy env is absent", async () => {
     await createFeishuWSClient(baseAccount);
 

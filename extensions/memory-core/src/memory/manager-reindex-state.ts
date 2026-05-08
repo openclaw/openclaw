@@ -19,11 +19,11 @@ export type MemoryIndexMeta = {
 export function resolveConfiguredSourcesForMeta(sources: Iterable<MemorySource>): MemorySource[] {
   const normalized = Array.from(sources)
     .filter((source): source is MemorySource => source === "memory" || source === "sessions")
-    .toSorted((left, right) => left.localeCompare(right));
+    .toSorted();
   return normalized.length > 0 ? normalized : ["memory"];
 }
 
-function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
+export function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
   if (!Array.isArray(meta.sources)) {
     // Backward compatibility for older indexes that did not persist sources.
     return ["memory"];
@@ -34,11 +34,11 @@ function normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
         (source): source is MemorySource => source === "memory" || source === "sessions",
       ),
     ),
-  ).toSorted((left, right) => left.localeCompare(right));
+  ).toSorted();
   return normalized.length > 0 ? normalized : ["memory"];
 }
 
-function configuredMetaSourcesDiffer(params: {
+export function configuredMetaSourcesDiffer(params: {
   meta: MemoryIndexMeta;
   configuredSources: MemorySource[];
 }): boolean {

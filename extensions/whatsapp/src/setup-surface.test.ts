@@ -1,11 +1,11 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/setup";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardStatus,
   createQueuedWizardPrompter,
   runSetupWizardFinalize,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/setup";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { whatsappSetupWizard } from "./setup-surface.js";
 import {
   createWhatsAppAllowlistModeInput,

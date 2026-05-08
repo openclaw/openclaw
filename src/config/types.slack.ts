@@ -106,22 +106,11 @@ export type SlackThreadConfig = {
   requireExplicitMention?: boolean;
 };
 
-export type SlackSocketModeConfig = {
-  /** Slack SDK pong timeout in milliseconds. Socket Mode only. Default: 15000. */
-  clientPingTimeout?: number;
-  /** Slack SDK server ping timeout in milliseconds. Socket Mode only. */
-  serverPingTimeout?: number;
-  /** Enable Slack SDK ping/pong transport logging. Socket Mode only. */
-  pingPongLoggingEnabled?: boolean;
-};
-
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** Slack connection mode (socket|http). Default: socket. */
   mode?: "socket" | "http";
-  /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
-  socketMode?: SlackSocketModeConfig;
   /** Slack signing secret (required for HTTP mode). */
   signingSecret?: string;
   /** Slack Events API webhook path (default: /slack/events). */
@@ -187,12 +176,12 @@ export type SlackAccountConfig = {
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   /**
-   * Canonical DM policy key. Doctor migrates legacy channels.slack.dm.policy here.
+   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
    * Legacy key: channels.slack.dm.policy.
    */
   dmPolicy?: DmPolicy;
   /**
-   * Canonical DM allowlist. Doctor migrates legacy channels.slack.dm.allowFrom here.
+   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
    * Legacy key: channels.slack.dm.allowFrom.
    */
   allowFrom?: Array<string | number>;

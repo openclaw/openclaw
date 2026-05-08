@@ -121,14 +121,6 @@ describe("stripReasoningTagsFromText", () => {
         expected: "You can start with <think and then close with",
       },
       {
-        input: "Internal reasoning </think> final answer",
-        expected: "final answer",
-      },
-      {
-        input: "Use `<think>` to open and `</think>` to close. Final sentence.",
-        expected: "Use `<think>` to open and `</think>` to close. Final sentence.",
-      },
-      {
         input: "A < think >content< /think > B",
         expected: "A  B",
       },
@@ -176,7 +168,7 @@ describe("stripReasoningTagsFromText", () => {
     it.each([
       {
         input: "<think>outer <think>inner</think> still outer</think>visible",
-        expected: "visible",
+        expected: "still outervisible",
       },
       {
         input: "A<final>1</final>B<final>2</final>C",
@@ -230,21 +222,9 @@ describe("stripReasoningTagsFromText", () => {
   describe("strict vs preserve mode", () => {
     it.each([
       {
-        name: "keeps strict mode from leaking unclosed trailing reasoning after visible text",
+        name: "applies strict mode to unclosed tags",
         input: "Before <think>unclosed content after",
         expected: "Before",
-        opts: { mode: "strict" as const },
-      },
-      {
-        name: "recovers fully wrapped unclosed tags that would otherwise deliver empty text",
-        input: "<think>Answer after malformed opening tag",
-        expected: "Answer after malformed opening tag",
-        opts: { mode: "strict" as const },
-      },
-      {
-        name: "does not recover fully closed reasoning-only blocks in strict mode",
-        input: "<think>hidden reasoning only</think>",
-        expected: "",
         opts: { mode: "strict" as const },
       },
       {

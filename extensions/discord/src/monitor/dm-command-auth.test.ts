@@ -1,15 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
-
-const canViewDiscordGuildChannelMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../send.permissions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.permissions.js")>();
-  return {
-    ...actual,
-    canViewDiscordGuildChannel: canViewDiscordGuildChannelMock,
-  };
-});
 
 describe("resolveDiscordDmCommandAccess", () => {
   const sender = {
@@ -17,10 +7,6 @@ describe("resolveDiscordDmCommandAccess", () => {
     name: "alice",
     tag: "alice#0001",
   };
-
-  beforeEach(() => {
-    canViewDiscordGuildChannelMock.mockReset();
-  });
 
   async function resolveOpenDmAccess(configuredAllowFrom: string[]) {
     return await resolveDiscordDmCommandAccess({
@@ -34,11 +20,11 @@ describe("resolveDiscordDmCommandAccess", () => {
     });
   }
 
-  it("blocks open DMs without allowlist wildcard entries", async () => {
+  it("allows open DMs and keeps command auth enabled without allowlist entries", async () => {
     const result = await resolveOpenDmAccess([]);
 
-    expect(result.decision).toBe("block");
-    expect(result.commandAuthorized).toBe(false);
+    expect(result.decision).toBe("allow");
+    expect(result.commandAuthorized).toBe(true);
   });
 
   it("marks command auth true when sender is allowlisted", async () => {
@@ -48,7 +34,7 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(result.commandAuthorized).toBe(true);
   });
 
-  it("blocks open DMs when configured allowlist does not match", async () => {
+  it("keeps command auth enabled for open DMs when configured allowlist does not match", async () => {
     const result = await resolveDiscordDmCommandAccess({
       accountId: "default",
       dmPolicy: "open",
@@ -59,9 +45,9 @@ describe("resolveDiscordDmCommandAccess", () => {
       readStoreAllowFrom: async () => [],
     });
 
-    expect(result.decision).toBe("block");
+    expect(result.decision).toBe("allow");
     expect(result.allowMatch.allowed).toBe(false);
-    expect(result.commandAuthorized).toBe(false);
+    expect(result.commandAuthorized).toBe(true);
   });
 
   it("returns pairing decision and unauthorized command auth for unknown senders", async () => {
@@ -94,93 +80,7 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(result.commandAuthorized).toBe(true);
   });
 
-  it("authorizes allowlist DMs from a Discord channel audience access group", async () => {
-    canViewDiscordGuildChannelMock.mockResolvedValueOnce(true);
-
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
-      dmPolicy: "allowlist",
-      configuredAllowFrom: ["accessGroup:maintainers"],
-      sender,
-      allowNameMatching: false,
-      useAccessGroups: true,
-      cfg: {
-        accessGroups: {
-          maintainers: {
-            type: "discord.channelAudience",
-            guildId: "guild-1",
-            channelId: "channel-1",
-          },
-        },
-      },
-      token: "token",
-      readStoreAllowFrom: async () => [],
-    });
-
-    expect(canViewDiscordGuildChannelMock).toHaveBeenCalledWith(
-      "guild-1",
-      "channel-1",
-      "123",
-      expect.objectContaining({ accountId: "default", token: "token" }),
-    );
-    expect(result.decision).toBe("allow");
-    expect(result.commandAuthorized).toBe(true);
-  });
-
-  it("authorizes allowlist DMs from a generic message sender access group", async () => {
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
-      dmPolicy: "allowlist",
-      configuredAllowFrom: ["accessGroup:owners"],
-      sender,
-      allowNameMatching: false,
-      useAccessGroups: true,
-      cfg: {
-        accessGroups: {
-          owners: {
-            type: "message.senders",
-            members: {
-              discord: ["discord:123"],
-              telegram: ["987"],
-            },
-          },
-        },
-      },
-      readStoreAllowFrom: async () => [],
-    });
-
-    expect(canViewDiscordGuildChannelMock).not.toHaveBeenCalled();
-    expect(result.decision).toBe("allow");
-    expect(result.commandAuthorized).toBe(true);
-  });
-
-  it("fails closed when a Discord channel audience access group lookup rejects", async () => {
-    canViewDiscordGuildChannelMock.mockRejectedValueOnce(new Error("missing intent"));
-
-    const result = await resolveDiscordDmCommandAccess({
-      accountId: "default",
-      dmPolicy: "allowlist",
-      configuredAllowFrom: ["accessGroup:maintainers"],
-      sender,
-      allowNameMatching: false,
-      useAccessGroups: true,
-      cfg: {
-        accessGroups: {
-          maintainers: {
-            type: "discord.channelAudience",
-            guildId: "guild-1",
-            channelId: "channel-1",
-          },
-        },
-      },
-      readStoreAllowFrom: async () => [],
-    });
-
-    expect(result.decision).toBe("block");
-    expect(result.commandAuthorized).toBe(false);
-  });
-
-  it("keeps open DM blocked without wildcard even when access groups are disabled", async () => {
+  it("keeps open DM command auth true when access groups are disabled", async () => {
     const result = await resolveDiscordDmCommandAccess({
       accountId: "default",
       dmPolicy: "open",
@@ -191,7 +91,7 @@ describe("resolveDiscordDmCommandAccess", () => {
       readStoreAllowFrom: async () => [],
     });
 
-    expect(result.decision).toBe("block");
-    expect(result.commandAuthorized).toBe(false);
+    expect(result.decision).toBe("allow");
+    expect(result.commandAuthorized).toBe(true);
   });
 });

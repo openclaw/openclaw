@@ -1,5 +1,4 @@
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
-import { formatChannelProgressDraftLineForEntry } from "openclaw/plugin-sdk/channel-streaming";
 import {
   createMattermostPost,
   deleteMattermostPost,
@@ -10,7 +9,7 @@ import {
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
 const DEFAULT_THROTTLE_MS = 1000;
 
-type MattermostDraftStream = {
+export type MattermostDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   postId: () => string | undefined;
@@ -21,7 +20,7 @@ type MattermostDraftStream = {
   forceNewMessage: () => void;
 };
 
-function normalizeMattermostDraftText(text: string, maxChars: number): string {
+export function normalizeMattermostDraftText(text: string, maxChars: number): string {
   const trimmed = text.trim();
   if (!trimmed) {
     return "";
@@ -32,25 +31,9 @@ function normalizeMattermostDraftText(text: string, maxChars: number): string {
   return `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
-export function buildMattermostToolStatusText(params: {
-  name?: string;
-  phase?: string;
-  args?: Record<string, unknown>;
-  detailMode?: "explain" | "raw";
-  config?: Parameters<typeof formatChannelProgressDraftLineForEntry>[0];
-}): string {
-  return (
-    formatChannelProgressDraftLineForEntry(
-      params.config,
-      {
-        event: "tool",
-        name: params.name,
-        phase: params.phase,
-        args: params.args,
-      },
-      params.detailMode ? { detailMode: params.detailMode } : undefined,
-    ) ?? "Running tool..."
-  );
+export function buildMattermostToolStatusText(params: { name?: string; phase?: string }): string {
+  const tool = params.name?.trim() ? ` \`${params.name.trim()}\`` : " tool";
+  return `Running${tool}…`;
 }
 
 export function createMattermostDraftStream(params: {

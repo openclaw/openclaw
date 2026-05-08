@@ -20,7 +20,6 @@ export function buildMatrixQaObservedEventsArtifact(params: {
           relatesTo: event.relatesTo,
           mentions: event.mentions,
           reaction: event.reaction,
-          ...(event.approval ? { approval: event.approval } : {}),
           attachment: event.attachment
             ? {
                 kind: event.attachment.kind,

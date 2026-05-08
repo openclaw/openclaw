@@ -12,7 +12,7 @@ import {
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import type { RunResult } from "./invoke-types.js";
 
-type SystemRunAllowlistAnalysis = {
+export type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   allowlistSatisfied: boolean;

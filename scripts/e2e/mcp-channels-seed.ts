@@ -23,16 +23,6 @@ async function main() {
           enabled: false,
         },
       },
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "0m",
-          },
-        },
-      },
-      plugins: {
-        enabled: false,
-      },
     } satisfies OpenClawConfig,
     "sk-docker-smoke-test",
   );
@@ -47,12 +37,10 @@ async function main() {
           sessionId: "sess-main",
           sessionFile,
           updatedAt: now,
-          deliveryContext: {
-            channel: "imessage",
-            to: "+15551234567",
-            accountId: "imessage-default",
-            threadId: "thread-42",
-          },
+          lastChannel: "imessage",
+          lastTo: "+15551234567",
+          lastAccountId: "imessage-default",
+          lastThreadId: "thread-42",
           displayName: "Docker MCP Channel Smoke",
           derivedTitle: "Docker MCP Channel Smoke",
           lastMessagePreview: "seeded transcript",

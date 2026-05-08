@@ -11,6 +11,7 @@ import { resolveNextcloudTalkAccount } from "./accounts.js";
 import {
   clearNextcloudTalkAccountFields,
   nextcloudTalkDmPolicy,
+  nextcloudTalkSetupAdapter,
   normalizeNextcloudTalkBaseUrl,
   setNextcloudTalkAccountConfig,
   validateNextcloudTalkBaseUrl,
@@ -188,3 +189,5 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
   dmPolicy: nextcloudTalkDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
+
+export { nextcloudTalkSetupAdapter };

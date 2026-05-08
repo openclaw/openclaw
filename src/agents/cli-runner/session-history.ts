@@ -1,6 +1,6 @@
-import fsp from "node:fs/promises";
+import fs from "node:fs";
 import path from "node:path";
-import { migrateSessionEntries, parseSessionEntries } from "@mariozechner/pi-coding-agent";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -14,95 +14,10 @@ import {
 
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
-export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 
-type HistoryMessage = {
-  role?: unknown;
-  content?: unknown;
-  summary?: unknown;
-};
-type HistoryEntry = {
-  type?: unknown;
-  message?: unknown;
-  summary?: unknown;
-};
-
-function coerceHistoryText(content: unknown): string {
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .flatMap((block) => {
-      if (!block || typeof block !== "object") {
-        return [];
-      }
-      const text = (block as { text?: unknown }).text;
-      return typeof text === "string" && text.trim().length > 0 ? [text.trim()] : [];
-    })
-    .join("\n")
-    .trim();
-}
-
-export function buildCliSessionHistoryPrompt(params: {
-  messages: unknown[];
-  prompt: string;
-  maxHistoryChars?: number;
-}): string | undefined {
-  const maxHistoryChars = params.maxHistoryChars ?? MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
-  const renderedHistoryRaw = params.messages
-    .flatMap((message) => {
-      if (!message || typeof message !== "object") {
-        return [];
-      }
-      const entry = message as HistoryMessage;
-      const role =
-        entry.role === "assistant"
-          ? "Assistant"
-          : entry.role === "user"
-            ? "User"
-            : entry.role === "compactionSummary"
-              ? "Compaction summary"
-              : undefined;
-      if (!role) {
-        return [];
-      }
-      const text =
-        entry.role === "compactionSummary" && typeof entry.summary === "string"
-          ? entry.summary.trim()
-          : coerceHistoryText(entry.content);
-      return text ? [`${role}: ${text}`] : [];
-    })
-    .join("\n\n")
-    .trim();
-  const renderedHistory =
-    renderedHistoryRaw.length > maxHistoryChars
-      ? `${renderedHistoryRaw.slice(0, maxHistoryChars).trimEnd()}\n[OpenClaw reseed history truncated]`
-      : renderedHistoryRaw;
-
-  if (!renderedHistory) {
-    return undefined;
-  }
-
-  return [
-    "Continue this conversation using the OpenClaw transcript below as prior session history.",
-    "Treat it as authoritative context for this fresh CLI session.",
-    "",
-    "<conversation_history>",
-    renderedHistory,
-    "</conversation_history>",
-    "",
-    "<next_user_message>",
-    params.prompt,
-    "</next_user_message>",
-  ].join("\n");
-}
-
-async function safeRealpath(filePath: string): Promise<string | undefined> {
+function safeRealpathSync(filePath: string): string | undefined {
   try {
-    return await fsp.realpath(filePath);
+    return fs.realpathSync(filePath);
   } catch {
     return undefined;
   }
@@ -140,81 +55,34 @@ function resolveSafeCliSessionFile(params: {
   };
 }
 
-async function loadCliSessionEntries(params: {
+export function loadCliSessionHistoryMessages(params: {
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-}): Promise<unknown[]> {
+}): unknown[] {
   try {
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
-    const entryStat = await fsp.lstat(sessionFile);
+    const entryStat = fs.lstatSync(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
       return [];
     }
-    const realSessionsDir = (await safeRealpath(sessionsDir)) ?? path.resolve(sessionsDir);
-    const realSessionFile = await safeRealpath(sessionFile);
+    const realSessionsDir = safeRealpathSync(sessionsDir) ?? path.resolve(sessionsDir);
+    const realSessionFile = safeRealpathSync(sessionFile);
     if (!realSessionFile || !isPathWithinBase(realSessionsDir, realSessionFile)) {
       return [];
     }
-    const stat = await fsp.stat(realSessionFile);
+    const stat = fs.statSync(realSessionFile);
     if (!stat.isFile() || stat.size > MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
       return [];
     }
-    const entries = parseSessionEntries(await fsp.readFile(realSessionFile, "utf-8"));
-    migrateSessionEntries(entries);
-    return entries.filter((entry) => entry.type !== "session");
+    const entries = SessionManager.open(realSessionFile).getEntries();
+    const history = entries.flatMap((entry) =>
+      entry?.type === "message" ? [entry.message as unknown] : [],
+    );
+    return limitAgentHookHistoryMessages(history, MAX_CLI_SESSION_HISTORY_MESSAGES);
   } catch {
     return [];
   }
-}
-
-export async function loadCliSessionHistoryMessages(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<unknown[]> {
-  const history = (await loadCliSessionEntries(params)).flatMap((entry) => {
-    const candidate = entry as HistoryEntry;
-    return candidate.type === "message" ? [candidate.message] : [];
-  });
-  return limitAgentHookHistoryMessages(history, MAX_CLI_SESSION_HISTORY_MESSAGES);
-}
-
-export async function loadCliSessionReseedMessages(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<unknown[]> {
-  const entries = await loadCliSessionEntries(params);
-  const latestCompactionIndex = entries.findLastIndex((entry) => {
-    const candidate = entry as HistoryEntry;
-    return candidate.type === "compaction" && typeof candidate.summary === "string";
-  });
-  if (latestCompactionIndex < 0) {
-    return [];
-  }
-
-  const compaction = entries[latestCompactionIndex] as HistoryEntry;
-  const summary = typeof compaction.summary === "string" ? compaction.summary.trim() : "";
-  if (!summary) {
-    return [];
-  }
-
-  const tailMessages = entries.slice(latestCompactionIndex + 1).flatMap((entry) => {
-    const candidate = entry as HistoryEntry;
-    return candidate.type === "message" ? [candidate.message] : [];
-  });
-  return [
-    {
-      role: "compactionSummary",
-      summary,
-    },
-    ...limitAgentHookHistoryMessages(tailMessages, MAX_CLI_SESSION_HISTORY_MESSAGES - 1),
-  ];
 }

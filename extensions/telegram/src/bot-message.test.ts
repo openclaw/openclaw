@@ -76,10 +76,7 @@ describe("telegram bot message processor", () => {
     sendMessage: ReturnType<typeof vi.fn>,
   ) {
     const runtimeError = vi.fn();
-    buildTelegramMessageContext.mockResolvedValue({
-      sendTyping: vi.fn().mockResolvedValue(undefined),
-      ...context,
-    });
+    buildTelegramMessageContext.mockResolvedValue(context);
     dispatchTelegramMessage.mockRejectedValue(new Error("dispatch exploded"));
     const processMessage = createTelegramMessageProcessor({
       ...baseDeps,
@@ -90,21 +87,12 @@ describe("telegram bot message processor", () => {
   }
 
   it("dispatches when context is available", async () => {
-    const sendTyping = vi.fn().mockResolvedValue(undefined);
-    buildTelegramMessageContext.mockResolvedValue({
-      chatId: 123,
-      route: { sessionKey: "agent:main:main" },
-      sendTyping,
-    });
+    buildTelegramMessageContext.mockResolvedValue({ route: { sessionKey: "agent:main:main" } });
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
     await processSampleMessage(processMessage);
 
-    expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
-      dispatchTelegramMessage.mock.invocationCallOrder[0],
-    );
   });
 
   it("skips dispatch when no context is produced", async () => {
@@ -112,21 +100,6 @@ describe("telegram bot message processor", () => {
     const processMessage = createTelegramMessageProcessor(baseDeps);
     await processSampleMessage(processMessage);
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
-  });
-
-  it("keeps dispatch running when the early typing cue fails", async () => {
-    const sendTyping = vi.fn().mockRejectedValue(new Error("typing failed"));
-    buildTelegramMessageContext.mockResolvedValue({
-      chatId: 123,
-      route: { sessionKey: "agent:main:main" },
-      sendTyping,
-    });
-
-    const processMessage = createTelegramMessageProcessor(baseDeps);
-    await processSampleMessage(processMessage);
-
-    expect(sendTyping).toHaveBeenCalledTimes(1);
-    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
   });
 
   it("sends user-visible fallback when dispatch throws", async () => {

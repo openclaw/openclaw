@@ -7,12 +7,9 @@ import {
   buildAuthHealthSummary,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
-import {
-  ensureAuthProfileStore,
-  externalCliDiscoveryForConfigStatus,
-} from "../../agents/auth-profiles.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
 import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
@@ -23,6 +20,9 @@ import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
+
+/** The `ts` sentinel the UI uses to distinguish "never loaded" from "load failed". */
+export const MODEL_AUTH_STATUS_NEVER_LOADED = 0;
 
 /**
  * Models-auth status wire types. Mirrored in ui/src/ui/types.ts via an
@@ -282,7 +282,7 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
-  "models.authStatus": async ({ params, respond, context }) => {
+  "models.authStatus": async ({ params, respond }) => {
     const now = Date.now();
     const bypassCache = Boolean((params as { refresh?: boolean } | undefined)?.refresh);
     if (!bypassCache && cached && now - cached.ts < CACHE_TTL_MS) {
@@ -290,11 +290,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const cfg = context.getRuntimeConfig();
+      const cfg = loadConfig();
       const agentDir = resolveOpenClawAgentDir();
-      const store = ensureAuthProfileStore(agentDir, {
-        externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
-      });
+      const store = ensureAuthProfileStore(agentDir);
       const configured = resolveConfiguredProviders(cfg);
       const authHealth: AuthHealthSummary = buildAuthHealthSummary({
         store,

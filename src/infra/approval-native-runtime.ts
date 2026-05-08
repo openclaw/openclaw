@@ -28,7 +28,7 @@ type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 
 export type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
 
-type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
+export type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
   entries: TPendingEntry[];
   deliveryPlan: ChannelApprovalNativeDeliveryPlan;
   deliveredTargets: ChannelApprovalNativePlannedTarget[];

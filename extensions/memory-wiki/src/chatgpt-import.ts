@@ -78,7 +78,7 @@ type ChatGptConversationRecord = {
 
 type ChatGptImportOperation = "create" | "update" | "skip";
 
-type ChatGptImportAction = {
+export type ChatGptImportAction = {
   conversationId: string;
   title: string;
   pagePath: string;

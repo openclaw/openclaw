@@ -1,9 +1,9 @@
-type StructuredCommandPathMatchRule = {
+export type StructuredCommandPathMatchRule = {
   pattern: readonly string[];
   exact?: boolean;
 };
 
-type CommandPathMatchRule = readonly string[] | StructuredCommandPathMatchRule;
+export type CommandPathMatchRule = readonly string[] | StructuredCommandPathMatchRule;
 
 type NormalizedCommandPathMatchRule = {
   pattern: readonly string[];

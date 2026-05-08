@@ -187,7 +187,7 @@ describe("buildApiErrorObservationFields", () => {
 
     expect(observed).toMatchObject({
       httpCode: "401",
-      providerRuntimeFailureKind: "unclassified",
+      providerRuntimeFailureKind: "unknown",
     });
   });
 });

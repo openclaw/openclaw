@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveCliBackendLiveTest } from "../agents/cli-backends.js";
-import { migrateLegacyRuntimeModelRef } from "../agents/model-runtime-aliases.js";
-import { parseModelRef } from "../agents/model-selection.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -18,7 +16,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 
 // Aggregate docker live runs can contend on startup enough that the gateway
@@ -33,14 +30,6 @@ export type BootstrapWorkspaceContext = {
 
 export type SystemPromptReport = {
   injectedWorkspaceFiles?: Array<{ name?: string }>;
-};
-
-export type CliBackendLiveModelSelection = {
-  providerId: string;
-  cliModelKey: string;
-  configModelKey: string;
-  configModelSwitchTarget: string | undefined;
-  agentRuntime: { id: string };
 };
 
 export type CliBackendLiveEnvSnapshot = {
@@ -58,41 +47,6 @@ export type CliBackendLiveEnvSnapshot = {
   anthropicApiKey?: string;
   anthropicApiKeyOld?: string;
 };
-
-export function resolveCliBackendLiveModelSelection(params: {
-  rawModel: string;
-  defaultProvider: string;
-  modelSwitchTarget?: string;
-}): CliBackendLiveModelSelection {
-  const parsed = parseModelRef(params.rawModel, params.defaultProvider);
-  if (!parsed) {
-    throw new Error(
-      `OPENCLAW_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${params.rawModel}`,
-    );
-  }
-
-  const migrated = migrateLegacyRuntimeModelRef(params.rawModel);
-  if (migrated?.cli) {
-    return {
-      providerId: migrated.runtime,
-      cliModelKey: `${migrated.runtime}/${migrated.model}`,
-      configModelKey: migrated.ref,
-      configModelSwitchTarget: params.modelSwitchTarget
-        ? (migrateLegacyRuntimeModelRef(params.modelSwitchTarget)?.ref ?? params.modelSwitchTarget)
-        : undefined,
-      agentRuntime: { id: migrated.runtime },
-    };
-  }
-
-  const modelKey = `${parsed.provider}/${parsed.model}`;
-  return {
-    providerId: parsed.provider,
-    cliModelKey: modelKey,
-    configModelKey: modelKey,
-    configModelSwitchTarget: params.modelSwitchTarget,
-    agentRuntime: { id: "pi" },
-  };
-}
 
 export function parseJsonStringArray(name: string, raw?: string): string[] | undefined {
   const trimmed = raw?.trim();
@@ -335,13 +289,11 @@ async function connectClientOnce(params: {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
     let client: GatewayClient | undefined;
-    const abortStart = new AbortController();
     const finish = (result: { client?: GatewayClient; error?: Error }) => {
       if (done) {
         return;
       }
       done = true;
-      abortStart.abort();
       clearTimeout(connectTimeout);
       if (result.error) {
         if (client) {
@@ -382,19 +334,7 @@ async function connectClientOnce(params: {
       params.timeoutMs,
     );
     connectTimeout.unref();
-    void startGatewayClientWhenEventLoopReady(client, {
-      timeoutMs: params.timeoutMs,
-      signal: abortStart.signal,
-    }).then(
-      (readiness) => {
-        if (!readiness.ready && !readiness.aborted) {
-          finish({ error: new Error("gateway event loop readiness timeout") });
-        }
-      },
-      (error) => {
-        finish({ error: error instanceof Error ? error : new Error(String(error)) });
-      },
-    );
+    client.start();
   });
 }
 

@@ -1,7 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
-  installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
@@ -11,12 +10,10 @@ const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
   depthBySession: new Map<string, number>(),
-  updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
 }));
 
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-let persistedStore: Record<string, Record<string, unknown>> | undefined;
 
 function createDepthLimitConfig(subagents?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig("/tmp/workspace-main", {
@@ -49,9 +46,8 @@ describe("subagent spawn depth + child limits", () => {
   beforeAll(async () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
-      getRuntimeConfig: () => hoisted.configOverride,
+      loadConfig: () => hoisted.configOverride,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
-      updateSessionStoreMock: hoisted.updateSessionStoreMock,
       getSubagentDepthFromSessionStore: (sessionKey) => hoisted.depthBySession.get(sessionKey) ?? 0,
       countActiveRunsForSession: (sessionKey) =>
         hoisted.activeChildrenBySession.get(sessionKey) ?? 0,
@@ -64,13 +60,6 @@ describe("subagent spawn depth + child limits", () => {
     hoisted.depthBySession.clear();
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();
-    hoisted.updateSessionStoreMock.mockReset();
-    persistedStore = undefined;
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
-      },
-    });
     hoisted.configOverride = createDepthLimitConfig();
     setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
   });
@@ -98,14 +87,23 @@ describe("subagent spawn depth + child limits", () => {
       runId: "run-1",
     });
 
-    const childSession = persistedStore?.[result.childSessionKey as string];
-    expect(childSession).toMatchObject({
-      spawnedBy: "agent:main:subagent:parent",
-      spawnDepth: 2,
-      subagentRole: "leaf",
-      subagentControlScope: "none",
-    });
-    expect(typeof childSession?.spawnedWorkspaceDir).toBe("string");
+    const calls = hoisted.callGatewayMock.mock.calls.map(
+      (call) => call[0] as { method?: string; params?: Record<string, unknown> },
+    );
+    const spawnedByPatch = calls.find(
+      (entry) =>
+        entry.method === "sessions.patch" &&
+        entry.params?.spawnedBy === "agent:main:subagent:parent",
+    );
+    expect(spawnedByPatch?.params?.key).toMatch(/^agent:main:subagent:/);
+    expect(typeof spawnedByPatch?.params?.spawnedWorkspaceDir).toBe("string");
+
+    const spawnDepthPatch = calls.find(
+      (entry) => entry.method === "sessions.patch" && entry.params?.spawnDepth === 2,
+    );
+    expect(spawnDepthPatch?.params?.key).toMatch(/^agent:main:subagent:/);
+    expect(spawnDepthPatch?.params?.subagentRole).toBe("leaf");
+    expect(spawnDepthPatch?.params?.subagentControlScope).toBe("none");
   });
 
   it("rejects callers when stored spawn depth is already at the configured max", async () => {
@@ -153,17 +151,19 @@ describe("subagent spawn depth + child limits", () => {
     });
   });
 
-  it("fails spawn when the initial child session patch rejects the model", async () => {
+  it("fails spawn when sessions.patch rejects the model", async () => {
     hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
     hoisted.callGatewayMock.mockImplementation(
       async (opts: { method?: string; params?: { model?: string } }) => {
+        if (opts.method === "sessions.patch" && opts.params?.model === "bad-model") {
+          throw new Error("invalid model: bad-model");
+        }
         if (opts.method === "agent") {
           return { runId: "run-depth" };
         }
         return {};
       },
     );
-    hoisted.updateSessionStoreMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
 
     const result = await spawnFrom("main", { model: "bad-model" });
 

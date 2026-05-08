@@ -4,10 +4,7 @@ import {
   ensureBrowserControlAuth,
   resolveBrowserControlAuth,
 } from "../../plugin-sdk/browser-control-auth.js";
-import {
-  DEFAULT_BROWSER_EVALUATE_ENABLED,
-  resolveBrowserConfig,
-} from "../../plugin-sdk/browser-profiles.js";
+import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
@@ -49,7 +46,6 @@ async function ensureSandboxWorkspaceLayout(params: {
       sandboxWorkspaceDir,
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
-      params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
     );
     if (cfg.workspaceAccess !== "rw") {
       try {
@@ -175,18 +171,14 @@ export async function resolveSandboxContext(params: {
     configLabelKind: backend.configLabelKind ?? "Image",
   });
 
-  const resolvedBrowserConfig = resolvedCfg.browser.enabled
-    ? resolveBrowserConfig(params.config?.browser, params.config)
-    : undefined;
   const evaluateEnabled =
-    resolvedBrowserConfig?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
+    params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
 
   const bridgeAuth = cfg.browser.enabled
     ? await (async () => {
         // Sandbox browser bridge server runs on a loopback TCP port; always wire up
         // the same auth that loopback browser clients will send (token/password).
-        const cfgForAuth =
-          params.config ?? (await import("../../config/config.js")).getRuntimeConfig();
+        const cfgForAuth = params.config ?? (await import("../../config/config.js")).loadConfig();
         let browserAuth = resolveBrowserControlAuth(cfgForAuth);
         try {
           const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });
@@ -212,7 +204,6 @@ export async function resolveSandboxContext(params: {
           cfg: resolvedCfg,
           evaluateEnabled,
           bridgeAuth,
-          ssrfPolicy: resolvedBrowserConfig?.ssrfPolicy,
         })
       : null;
 

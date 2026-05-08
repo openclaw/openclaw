@@ -1,11 +1,11 @@
 import os from "node:os";
 import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
-} from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+} from "../../../test/helpers/sandbox-fixtures.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SandboxConfig } from "./types.js";
 

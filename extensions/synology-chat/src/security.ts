@@ -2,13 +2,13 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
 
-type DmAuthorizationResult =
+export type DmAuthorizationResult =
   | { allowed: true }
   | { allowed: false; reason: "disabled" | "allowlist-empty" | "not-allowlisted" };
 
@@ -31,9 +31,6 @@ export function checkUserAllowed(userId: string, allowedUserIds: string[]): bool
   if (allowedUserIds.length === 0) {
     return false;
   }
-  if (allowedUserIds.includes("*")) {
-    return true;
-  }
   return allowedUserIds.includes(userId);
 }
 
@@ -50,9 +47,7 @@ export function authorizeUserForDm(
     return { allowed: false, reason: "disabled" };
   }
   if (dmPolicy === "open") {
-    return checkUserAllowed(userId, allowedUserIds)
-      ? { allowed: true }
-      : { allowed: false, reason: "not-allowlisted" };
+    return { allowed: true };
   }
   if (allowedUserIds.length === 0) {
     return { allowed: false, reason: "allowlist-empty" };

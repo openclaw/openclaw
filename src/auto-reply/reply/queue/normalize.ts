@@ -7,7 +7,7 @@ export function normalizeQueueMode(raw?: string): QueueMode | undefined {
     return undefined;
   }
   if (cleaned === "queue" || cleaned === "queued") {
-    return "queue";
+    return "steer";
   }
   if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort") {
     return "interrupt";

@@ -1,8 +1,5 @@
-/**
- * @deprecated Legacy compat surface for plugins that still import
- * openclaw/extension-api. Use the injected plugin runtime or focused
- * openclaw/plugin-sdk subpaths instead.
- */
+// Legacy compat surface for plugins that still import openclaw/extension-api.
+// Keep this file intentionally narrow and forward-only.
 
 const shouldWarnExtensionApiImport =
   process.env.VITEST !== "true" &&
@@ -31,7 +28,5 @@ export {
   resolveStorePath,
   loadSessionStore,
   saveSessionStore,
-  updateSessionStore,
-  updateSessionStoreEntry,
   resolveSessionFilePath,
 } from "./config/sessions.js";

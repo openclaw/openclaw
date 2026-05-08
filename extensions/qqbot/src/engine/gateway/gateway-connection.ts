@@ -31,7 +31,7 @@ import type { GatewayAccount, EngineLogger, GatewayPluginRuntime, WSPayload } fr
 
 // ============ Connection context ============
 
-interface GatewayConnectionContext {
+export interface GatewayConnectionContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
   cfg: unknown;
@@ -197,7 +197,6 @@ export class GatewayConnection {
       // ---- Slash command interception ----
       const slashCtx: SlashCommandHandlerContext = {
         account,
-        cfg: this.ctx.cfg,
         log,
         getMessagePeerId: (msg) => this.msgQueue.getMessagePeerId(msg),
         getQueueSnapshot: (peerId) => this.msgQueue.getSnapshot(peerId),

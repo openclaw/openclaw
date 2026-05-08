@@ -1,10 +1,3 @@
-import {
-  buildMentionRegexes,
-  implicitMentionKindWhen,
-  matchesMentionPatterns,
-  matchesMentionWithExplicit,
-  resolveInboundMentionDecision,
-} from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
 type SessionRecord = {
@@ -54,13 +47,6 @@ export function createQaRunnerRuntime(): PluginRuntime {
             body: ctx.BodyForAgent ?? ctx.Body ?? "",
           });
         },
-      },
-      mentions: {
-        buildMentionRegexes,
-        matchesMentionPatterns,
-        matchesMentionWithExplicit,
-        implicitMentionKindWhen,
-        resolveInboundMentionDecision,
       },
       reply: {
         resolveEnvelopeFormatOptions() {

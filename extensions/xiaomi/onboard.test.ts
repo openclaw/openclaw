@@ -1,8 +1,8 @@
+import { describe, expect, it } from "vitest";
 import {
   expectProviderOnboardMergedLegacyConfig,
   expectProviderOnboardPrimaryModel,
-} from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it } from "vitest";
+} from "../../test/helpers/plugins/provider-onboard.js";
 import { applyXiaomiConfig, applyXiaomiProviderConfig } from "./onboard.js";
 
 describe("xiaomi onboard", () => {

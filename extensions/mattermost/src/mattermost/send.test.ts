@@ -1,5 +1,5 @@
-import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectProvidedCfgSkipsRuntimeLoad } from "../../../../test/helpers/plugins/send-config.js";
 
 let parseMattermostTarget: typeof import("./send.js").parseMattermostTarget;
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
@@ -38,11 +38,7 @@ vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
-vi.mock("./runtime-api.js", () => ({
-  loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
-}));
-
-vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   requireRuntimeConfig: (cfg: unknown) => {
     if (cfg) {
       return cfg;

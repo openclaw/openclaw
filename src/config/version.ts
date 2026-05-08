@@ -3,7 +3,7 @@ import {
   normalizeLegacyDotBetaVersion,
 } from "../infra/semver-compare.js";
 
-type OpenClawVersion = {
+export type OpenClawVersion = {
   major: number;
   minor: number;
   patch: number;
@@ -111,11 +111,10 @@ export function shouldWarnOnTouchedVersion(
     parsedTouched &&
     parsedCurrent.major === parsedTouched.major &&
     parsedCurrent.minor === parsedTouched.minor &&
-    parsedCurrent.patch === parsedTouched.patch
+    parsedCurrent.patch === parsedTouched.patch &&
+    parsedTouched.revision != null
   ) {
-    if (!parsedTouched.prerelease?.length) {
-      return false;
-    }
+    return false;
   }
   if (isSameOpenClawStableFamily(current, touched)) {
     return false;

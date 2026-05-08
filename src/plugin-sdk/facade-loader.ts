@@ -5,29 +5,40 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-  type PluginModuleLoaderFactory,
-} from "../plugins/plugin-module-loader-cache.js";
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+  type PluginJitiLoaderFactory,
+} from "../plugins/jiti-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
-import { resolveBundledFacadeModuleLocation } from "./facade-resolution-shared.js";
+import {
+  createFacadeResolutionKey as createFacadeResolutionKeyShared,
+  resolveBundledFacadeModuleLocation,
+  resolveCachedFacadeModuleLocation,
+} from "./facade-resolution-shared.js";
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 
 const nodeRequire = createRequire(import.meta.url);
-const moduleLoaders: PluginModuleLoaderCache = new Map();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
 const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
-let facadeLoaderSourceTransformFactory: PluginModuleLoaderFactory | undefined;
+const cachedFacadeModuleLocationsByKey = new Map<
+  string,
+  {
+    modulePath: string;
+    boundaryRoot: string;
+  } | null
+>();
+let facadeLoaderJitiFactory: PluginJitiLoaderFactory | undefined;
 let cachedOpenClawPackageRoot: string | undefined;
 
-function getSourceTransformFactory() {
-  if (facadeLoaderSourceTransformFactory) {
-    return facadeLoaderSourceTransformFactory;
+function getJitiFactory() {
+  if (facadeLoaderJitiFactory) {
+    return facadeLoaderJitiFactory;
   }
   const { createJiti } = nodeRequire("jiti") as typeof import("jiti");
-  facadeLoaderSourceTransformFactory = createJiti;
-  return facadeLoaderSourceTransformFactory;
+  facadeLoaderJitiFactory = createJiti;
+  return facadeLoaderJitiFactory;
 }
 
 function getOpenClawPackageRoot() {
@@ -42,7 +53,16 @@ function getOpenClawPackageRoot() {
   return cachedOpenClawPackageRoot;
 }
 
-function resolveFacadeModuleLocation(params: {
+function createFacadeResolutionKey(params: {
+  dirName: string;
+  artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
+  return createFacadeResolutionKeyShared({ ...params, bundledPluginsDir });
+}
+
+function resolveFacadeModuleLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
@@ -56,14 +76,26 @@ function resolveFacadeModuleLocation(params: {
   });
 }
 
-function getModuleLoader(modulePath: string) {
-  return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
+function resolveFacadeModuleLocation(params: {
+  dirName: string;
+  artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
+}): { modulePath: string; boundaryRoot: string } | null {
+  return resolveCachedFacadeModuleLocation({
+    cache: cachedFacadeModuleLocationsByKey,
+    key: createFacadeResolutionKey(params),
+    resolve: () => resolveFacadeModuleLocationUncached(params),
+  });
+}
+
+function getJiti(modulePath: string) {
+  return getCachedPluginJitiLoader({
+    cache: jitiLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    loaderFilename: import.meta.url,
-    createLoader: getSourceTransformFactory(),
+    jitiFilename: import.meta.url,
+    createLoader: getJitiFactory(),
   });
 }
 
@@ -139,41 +171,41 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
   trackedPluginId: string | (() => string);
   loadModule?: (modulePath: string) => T;
 }): T {
-  const location = params.location;
-  const cached = loadedFacadeModules.get(location.modulePath);
+  const cached = loadedFacadeModules.get(params.location.modulePath);
   if (cached) {
     return cached as T;
   }
 
   const opened = openBoundaryFileSync({
-    absolutePath: location.modulePath,
-    rootPath: location.boundaryRoot,
+    absolutePath: params.location.modulePath,
+    rootPath: params.location.boundaryRoot,
     boundaryLabel:
-      location.boundaryRoot === getOpenClawPackageRoot()
+      params.location.boundaryRoot === getOpenClawPackageRoot()
         ? "OpenClaw package root"
         : (() => {
             const bundledDir = resolveBundledPluginsDir();
-            return bundledDir && path.resolve(location.boundaryRoot) === path.resolve(bundledDir)
+            return bundledDir &&
+              path.resolve(params.location.boundaryRoot) === path.resolve(bundledDir)
               ? "bundled plugin directory"
               : "plugin root";
           })(),
     rejectHardlinks: false,
   });
   if (!opened.ok) {
-    throw new Error(`Unable to open bundled plugin public surface ${location.modulePath}`, {
+    throw new Error(`Unable to open bundled plugin public surface ${params.location.modulePath}`, {
       cause: opened.error,
     });
   }
   fs.closeSync(opened.fd);
 
   const sentinel = {} as T;
-  loadedFacadeModules.set(location.modulePath, sentinel);
+  loadedFacadeModules.set(params.location.modulePath, sentinel);
 
   let loaded: T;
   try {
     loaded =
-      params.loadModule?.(location.modulePath) ??
-      (getModuleLoader(location.modulePath)(location.modulePath) as T);
+      params.loadModule?.(params.location.modulePath) ??
+      (getJiti(params.location.modulePath)(params.location.modulePath) as T);
     Object.assign(sentinel, loaded);
     loadedFacadePluginIds.add(
       typeof params.trackedPluginId === "function"
@@ -181,7 +213,7 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
         : params.trackedPluginId,
     );
   } catch (err) {
-    loadedFacadeModules.delete(location.modulePath);
+    loadedFacadeModules.delete(params.location.modulePath);
     throw err;
   }
 
@@ -211,6 +243,7 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
   dirName: string;
   artifactBasename: string;
   trackedPluginId?: string | (() => string);
+  env?: NodeJS.ProcessEnv;
 }): Promise<T> {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
@@ -218,31 +251,28 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const preparedLocation = location;
-  const cached = loadedFacadeModules.get(preparedLocation.modulePath);
+  const cached = loadedFacadeModules.get(location.modulePath);
   if (cached) {
     return cached as T;
   }
 
   const opened = openBoundaryFileSync({
-    absolutePath: preparedLocation.modulePath,
-    rootPath: preparedLocation.boundaryRoot,
+    absolutePath: location.modulePath,
+    rootPath: location.boundaryRoot,
     boundaryLabel:
-      preparedLocation.boundaryRoot === getOpenClawPackageRoot()
-        ? "OpenClaw package root"
-        : "plugin root",
+      location.boundaryRoot === getOpenClawPackageRoot() ? "OpenClaw package root" : "plugin root",
     rejectHardlinks: false,
   });
   if (!opened.ok) {
-    throw new Error(`Unable to open bundled plugin public surface ${preparedLocation.modulePath}`, {
+    throw new Error(`Unable to open bundled plugin public surface ${location.modulePath}`, {
       cause: opened.error,
     });
   }
   fs.closeSync(opened.fd);
 
   try {
-    const loaded = (await import(pathToFileURL(preparedLocation.modulePath).href)) as T;
-    loadedFacadeModules.set(preparedLocation.modulePath, loaded);
+    const loaded = (await import(pathToFileURL(location.modulePath).href)) as T;
+    loadedFacadeModules.set(location.modulePath, loaded);
     loadedFacadePluginIds.add(
       typeof params.trackedPluginId === "function"
         ? params.trackedPluginId()
@@ -251,7 +281,7 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
     return loaded;
   } catch {
     return loadFacadeModuleAtLocationSync({
-      location: preparedLocation,
+      location,
       trackedPluginId: params.trackedPluginId ?? params.dirName,
     });
   }
@@ -264,13 +294,14 @@ export function listImportedBundledPluginFacadeIds(): string[] {
 export function resetFacadeLoaderStateForTest(): void {
   loadedFacadeModules.clear();
   loadedFacadePluginIds.clear();
-  moduleLoaders.clear();
-  facadeLoaderSourceTransformFactory = undefined;
+  jitiLoaders.clear();
+  cachedFacadeModuleLocationsByKey.clear();
+  facadeLoaderJitiFactory = undefined;
   cachedOpenClawPackageRoot = undefined;
 }
 
-export function setFacadeLoaderSourceTransformFactoryForTest(
-  factory: PluginModuleLoaderFactory | undefined,
+export function setFacadeLoaderJitiFactoryForTest(
+  factory: PluginJitiLoaderFactory | undefined,
 ): void {
-  facadeLoaderSourceTransformFactory = factory;
+  facadeLoaderJitiFactory = factory;
 }

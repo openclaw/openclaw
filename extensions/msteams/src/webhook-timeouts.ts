@@ -4,7 +4,7 @@ const MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS = 30_000;
 const MSTEAMS_WEBHOOK_REQUEST_TIMEOUT_MS = 30_000;
 const MSTEAMS_WEBHOOK_HEADERS_TIMEOUT_MS = 15_000;
 
-type ApplyMSTeamsWebhookTimeoutsOpts = {
+export type ApplyMSTeamsWebhookTimeoutsOpts = {
   inactivityTimeoutMs?: number;
   requestTimeoutMs?: number;
   headersTimeoutMs?: number;

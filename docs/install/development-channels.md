@@ -46,9 +46,8 @@ install method:
   `OPENCLAW_GIT_DIR`), switches to `main`, rebases on upstream, builds, and
   installs the global CLI from that checkout.
 
-<Tip>
-If you want stable and dev in parallel, keep two clones and point your gateway at the stable one.
-</Tip>
+Tip: if you want stable + dev in parallel, keep two clones and point your
+gateway at the stable one.
 
 ## One-off version or tag targeting
 

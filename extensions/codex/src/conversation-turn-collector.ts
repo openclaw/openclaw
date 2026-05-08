@@ -4,7 +4,9 @@ import {
   type JsonObject,
 } from "./app-server/protocol.js";
 
-const MAX_PENDING_NOTIFICATIONS_PER_TURN = 100;
+export type CodexConversationTurnCollector = ReturnType<
+  typeof createCodexConversationTurnCollector
+>;
 
 export function createCodexConversationTurnCollector(threadId: string) {
   let turnId: string | undefined;
@@ -13,7 +15,6 @@ export function createCodexConversationTurnCollector(threadId: string) {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const assistantTextByItem = new Map<string, string>();
   const assistantOrder: string[] = [];
-  const pendingNotificationsByTurnId = new Map<string, CodexServerNotification[]>();
   let resolveCompletion: ((value: { replyText: string }) => void) | undefined;
   let rejectCompletion: ((error: Error) => void) | undefined;
 
@@ -49,80 +50,59 @@ export function createCodexConversationTurnCollector(threadId: string) {
     clearWaitState();
   };
 
-  const handleNotification = (notification: CodexServerNotification) => {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || readString(params, "threadId") !== threadId) {
-      return;
-    }
-    if (!turnId) {
-      const pendingTurnId = readNotificationTurnId(params);
-      if (pendingTurnId) {
-        const pending = pendingNotificationsByTurnId.get(pendingTurnId) ?? [];
-        if (pending.length < MAX_PENDING_NOTIFICATIONS_PER_TURN) {
-          pending.push(notification);
-          pendingNotificationsByTurnId.set(pendingTurnId, pending);
-        }
-      }
-      return;
-    }
-    if (!isNotificationForTurn(params, threadId, turnId)) {
-      return;
-    }
-    if (notification.method === "item/agentMessage/delta") {
-      const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "assistant";
-      const delta = readTextString(params, "delta");
-      if (!delta) {
-        return;
-      }
-      rememberItem(itemId);
-      assistantTextByItem.set(itemId, `${assistantTextByItem.get(itemId) ?? ""}${delta}`);
-      return;
-    }
-    if (notification.method === "item/completed") {
-      const item = isJsonObject(params.item) ? params.item : undefined;
-      if (item?.type === "agentMessage") {
-        const itemId = readString(item, "id") ?? readString(params, "itemId") ?? "assistant";
-        const text = readTextString(item, "text");
-        if (text) {
-          rememberItem(itemId);
-          assistantTextByItem.set(itemId, text);
-        }
-      }
-      return;
-    }
-    if (notification.method === "turn/completed") {
-      const turn = isJsonObject(params.turn) ? params.turn : undefined;
-      const status = readString(turn, "status");
-      if (status === "failed") {
-        failedError =
-          readString(readRecord(turn?.error), "message") ?? "codex app-server turn failed";
-      }
-      const items = Array.isArray(turn?.items) ? turn.items : [];
-      for (const item of items) {
-        if (!isJsonObject(item) || item.type !== "agentMessage") {
-          continue;
-        }
-        const itemId = readString(item, "id") ?? `assistant-${assistantOrder.length + 1}`;
-        const text = readTextString(item, "text");
-        if (text) {
-          rememberItem(itemId);
-          assistantTextByItem.set(itemId, text);
-        }
-      }
-      finish();
-    }
-  };
-
   return {
     setTurnId(nextTurnId: string) {
       turnId = nextTurnId;
-      const pending = pendingNotificationsByTurnId.get(nextTurnId) ?? [];
-      pendingNotificationsByTurnId.clear();
-      for (const notification of pending) {
-        handleNotification(notification);
+    },
+    handleNotification(notification: CodexServerNotification) {
+      const params = isJsonObject(notification.params) ? notification.params : undefined;
+      if (!params || !isNotificationForTurn(params, threadId, turnId)) {
+        return;
+      }
+      if (notification.method === "item/agentMessage/delta") {
+        const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "assistant";
+        const delta = readTextString(params, "delta");
+        if (!delta) {
+          return;
+        }
+        rememberItem(itemId);
+        assistantTextByItem.set(itemId, `${assistantTextByItem.get(itemId) ?? ""}${delta}`);
+        return;
+      }
+      if (notification.method === "item/completed") {
+        const item = isJsonObject(params.item) ? params.item : undefined;
+        if (item?.type === "agentMessage") {
+          const itemId = readString(item, "id") ?? readString(params, "itemId") ?? "assistant";
+          const text = readTextString(item, "text");
+          if (text) {
+            rememberItem(itemId);
+            assistantTextByItem.set(itemId, text);
+          }
+        }
+        return;
+      }
+      if (notification.method === "turn/completed") {
+        const turn = isJsonObject(params.turn) ? params.turn : undefined;
+        const status = readString(turn, "status");
+        if (status === "failed") {
+          failedError =
+            readString(readRecord(turn?.error), "message") ?? "codex app-server turn failed";
+        }
+        const items = Array.isArray(turn?.items) ? turn.items : [];
+        for (const item of items) {
+          if (!isJsonObject(item) || item.type !== "agentMessage") {
+            continue;
+          }
+          const itemId = readString(item, "id") ?? `assistant-${assistantOrder.length + 1}`;
+          const text = readTextString(item, "text");
+          if (text) {
+            rememberItem(itemId);
+            assistantTextByItem.set(itemId, text);
+          }
+        }
+        finish();
       }
     },
-    handleNotification,
     wait(params: { timeoutMs: number }): Promise<{ replyText: string }> {
       if (completed) {
         return failedError
@@ -162,11 +142,7 @@ function isNotificationForTurn(
     return directTurnId === turnId;
   }
   const turn = isJsonObject(params.turn) ? params.turn : undefined;
-  return readString(turn, "id") === turnId;
-}
-
-function readNotificationTurnId(params: JsonObject): string | undefined {
-  return readString(params, "turnId") ?? readString(readRecord(params.turn), "id");
+  return !turn || readString(turn, "id") === turnId;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {

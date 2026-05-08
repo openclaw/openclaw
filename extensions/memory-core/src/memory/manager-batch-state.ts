@@ -1,6 +1,6 @@
 export const MEMORY_BATCH_FAILURE_LIMIT = 2;
 
-type MemoryBatchFailureState = {
+export type MemoryBatchFailureState = {
   enabled: boolean;
   count: number;
   lastError?: string;

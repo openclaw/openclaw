@@ -64,7 +64,7 @@ export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) 
   if (direct) {
     return direct;
   }
-  const segments = path.map(String);
+  const segments = key.split(".");
   for (const [hintKey, hint] of Object.entries(hints)) {
     if (!hintKey.includes("*")) {
       continue;
@@ -120,28 +120,6 @@ const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 
 export const REDACTED_PLACEHOLDER = "[redacted - click reveal to view]";
 
-const MAX_SENSITIVE_SCAN_DEPTH = 64;
-const MAX_SENSITIVE_SCAN_NODES = 20_000;
-
-type SensitiveScanState = {
-  visited: number;
-};
-
-function createSensitiveScanState(): SensitiveScanState {
-  return { visited: 0 };
-}
-
-function enterSensitiveScanNode(state: SensitiveScanState, depth: number): boolean {
-  if (depth > MAX_SENSITIVE_SCAN_DEPTH) {
-    return false;
-  }
-  state.visited += 1;
-  if (state.visited > MAX_SENSITIVE_SCAN_NODES) {
-    return false;
-  }
-  return true;
-}
-
 function isEnvVarPlaceholder(value: string): boolean {
   return ENV_VAR_PLACEHOLDER_PATTERN.test(value.trim());
 }
@@ -168,20 +146,6 @@ export function hasSensitiveConfigData(
   path: Array<string | number>,
   hints: ConfigUiHints,
 ): boolean {
-  return hasSensitiveConfigDataInner(value, path, hints, createSensitiveScanState(), 0);
-}
-
-function hasSensitiveConfigDataInner(
-  value: unknown,
-  path: Array<string | number>,
-  hints: ConfigUiHints,
-  scan: SensitiveScanState,
-  depth: number,
-): boolean {
-  if (!enterSensitiveScanNode(scan, depth)) {
-    return true;
-  }
-
   const key = pathKey(path);
   const hint = hintForPath(path, hints);
   const pathIsSensitive = isHintSensitive(hint) || isSensitiveConfigPath(key);
@@ -191,14 +155,12 @@ function hasSensitiveConfigDataInner(
   }
 
   if (Array.isArray(value)) {
-    return value.some((item, index) =>
-      hasSensitiveConfigDataInner(item, [...path, index], hints, scan, depth + 1),
-    );
+    return value.some((item, index) => hasSensitiveConfigData(item, [...path, index], hints));
   }
 
   if (value && typeof value === "object") {
     return Object.entries(value as Record<string, unknown>).some(([childKey, childValue]) =>
-      hasSensitiveConfigDataInner(childValue, [...path, childKey], hints, scan, depth + 1),
+      hasSensitiveConfigData(childValue, [...path, childKey], hints),
     );
   }
 
@@ -210,20 +172,6 @@ export function countSensitiveConfigValues(
   path: Array<string | number>,
   hints: ConfigUiHints,
 ): number {
-  return countSensitiveConfigValuesInner(value, path, hints, createSensitiveScanState(), 0);
-}
-
-function countSensitiveConfigValuesInner(
-  value: unknown,
-  path: Array<string | number>,
-  hints: ConfigUiHints,
-  scan: SensitiveScanState,
-  depth: number,
-): number {
-  if (!enterSensitiveScanNode(scan, depth)) {
-    return 1;
-  }
-
   if (value == null) {
     return 0;
   }
@@ -238,8 +186,7 @@ function countSensitiveConfigValuesInner(
 
   if (Array.isArray(value)) {
     return value.reduce(
-      (count, item, index) =>
-        count + countSensitiveConfigValuesInner(item, [...path, index], hints, scan, depth + 1),
+      (count, item, index) => count + countSensitiveConfigValues(item, [...path, index], hints),
       0,
     );
   }
@@ -247,8 +194,7 @@ function countSensitiveConfigValuesInner(
   if (value && typeof value === "object") {
     return Object.entries(value as Record<string, unknown>).reduce(
       (count, [childKey, childValue]) =>
-        count +
-        countSensitiveConfigValuesInner(childValue, [...path, childKey], hints, scan, depth + 1),
+        count + countSensitiveConfigValues(childValue, [...path, childKey], hints),
       0,
     );
   }

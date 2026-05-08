@@ -1,7 +1,8 @@
 import type { webhook } from "@line/bot-sdk";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { NextFunction, Request, Response } from "express";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
   logVerbose,
@@ -11,8 +12,9 @@ import { resolveLineAccount } from "./accounts.js";
 import { createLineWebhookReplayCache, handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
+import { startLineWebhook } from "./webhook.js";
 
-interface LineBotOptions {
+export interface LineBotOptions {
   channelAccessToken: string;
   channelSecret: string;
   accountId?: string;
@@ -22,7 +24,7 @@ interface LineBotOptions {
   onMessage?: (ctx: LineInboundContext) => Promise<void>;
 }
 
-interface LineBot {
+export interface LineBot {
   handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
   account: ResolvedLineAccount;
 }
@@ -30,7 +32,7 @@ interface LineBot {
 export function createLineBot(opts: LineBotOptions): LineBot {
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? loadConfig();
   const account = resolveLineAccount({
     cfg,
     accountId: opts.accountId,
@@ -67,4 +69,18 @@ export function createLineBot(opts: LineBotOptions): LineBot {
     handleWebhook,
     account,
   };
+}
+
+export function createLineWebhookCallback(
+  bot: LineBot,
+  channelSecret: string,
+  path = "/line/webhook",
+): { path: string; handler: (req: Request, res: Response, _next: NextFunction) => Promise<void> } {
+  const { handler } = startLineWebhook({
+    channelSecret,
+    onEvents: bot.handleWebhook,
+    path,
+  });
+
+  return { path, handler };
 }

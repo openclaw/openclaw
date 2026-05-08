@@ -705,12 +705,11 @@ export async function handleOpenResponsesHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
-      // If the agent invoked client tools, return one `function_call`
-      // output item per call (in arrival order) plus any assistant text the
-      // model produced before the tool calls. Pre-#52288 only the first
-      // pending call was emitted, so multi-tool turns lost every call but
-      // the leading one.
+      // If agent called a client tool, return function_call (and any assistant text) to caller
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
+        const functionCall = pendingToolCalls[0];
+        const functionCallItemId = `call_${randomUUID()}`;
+
         const assistantText =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads
@@ -730,16 +729,14 @@ export async function handleOpenResponsesHttpRequest(
             }),
           );
         }
-        for (const functionCall of pendingToolCalls) {
-          output.push(
-            createFunctionCallOutputItem({
-              id: `call_${randomUUID()}`,
-              callId: functionCall.id,
-              name: functionCall.name,
-              arguments: functionCall.arguments,
-            }),
-          );
-        }
+        output.push(
+          createFunctionCallOutputItem({
+            id: functionCallItemId,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          }),
+        );
 
         const response = createResponseResource({
           id: responseId,
@@ -1001,6 +998,7 @@ export async function handleOpenResponsesHttpRequest(
         pendingToolCalls &&
         pendingToolCalls.length > 0
       ) {
+        const functionCall = pendingToolCalls[0];
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
           accumulatedText ||
@@ -1038,49 +1036,36 @@ export async function handleOpenResponsesHttpRequest(
           item: completedItem,
         });
 
-        // Emit one `function_call` output item per pending call, preserving
-        // arrival order. `output_index` continues past the assistant
-        // message at index 0 so the SSE stream keeps a single, monotonic
-        // index per response. Pre-#52288 the streaming path read only
-        // `pendingToolCalls[0]` and hard-coded `output_index: 1`, so a turn
-        // with multiple client tool calls dropped every call past the
-        // first.
-        const functionCallItems: OutputItem[] = [];
-        let nextStreamOutputIndex = 1;
-        for (const functionCall of pendingToolCalls) {
-          const functionCallItemId = `call_${randomUUID()}`;
-          const functionCallItem = createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.added",
-            output_index: nextStreamOutputIndex,
-            item: functionCallItem,
-          });
-          const completedFunctionCallItem = createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-            status: "completed",
-          });
-          writeSseEvent(res, {
-            type: "response.output_item.done",
-            output_index: nextStreamOutputIndex,
-            item: completedFunctionCallItem,
-          });
-          functionCallItems.push(functionCallItem);
-          nextStreamOutputIndex += 1;
-        }
+        const functionCallItemId = `call_${randomUUID()}`;
+        const functionCallItem = createFunctionCallOutputItem({
+          id: functionCallItemId,
+          callId: functionCall.id,
+          name: functionCall.name,
+          arguments: functionCall.arguments,
+        });
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: functionCallItem,
+        });
+        const completedFunctionCallItem = createFunctionCallOutputItem({
+          id: functionCallItemId,
+          callId: functionCall.id,
+          name: functionCall.name,
+          arguments: functionCall.arguments,
+          status: "completed",
+        });
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: completedFunctionCallItem,
+        });
 
         const incompleteResponse = createResponseResource({
           id: responseId,
           model,
           status: "incomplete",
-          output: [completedItem, ...functionCallItems],
+          output: [completedItem, functionCallItem],
           usage,
         });
         closed = true;

@@ -48,10 +48,7 @@ enum ConfigStore {
     }
 
     @MainActor
-    static func save(
-        _ root: sending [String: Any],
-        allowGatewayAuthMutation: Bool = false) async throws
-    {
+    static func save(_ root: sending [String: Any]) async throws {
         let overrides = await self.overrideStore.overrides
         if await self.isRemoteMode() {
             if let override = overrides.saveRemote {
@@ -66,10 +63,7 @@ enum ConfigStore {
                 do {
                     try await self.saveToGateway(root)
                 } catch {
-                    OpenClawConfigFile.saveDict(
-                        root,
-                        preserveExistingKeys: true,
-                        allowGatewayAuthMutation: allowGatewayAuthMutation)
+                    OpenClawConfigFile.saveDict(root)
                 }
             }
         }

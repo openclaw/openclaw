@@ -5,7 +5,6 @@ import {
   NATIVE_ANTHROPIC_REPLAY_HOOKS,
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
-  resolveClaudeThinkingProfile,
 } from "./provider-model-shared.js";
 
 describe("buildProviderReplayFamilyHooks", () => {
@@ -184,13 +183,12 @@ describe("buildProviderReplayFamilyHooks", () => {
       OPENAI_COMPATIBLE_REPLAY_HOOKS.buildReplayPolicy?.({
         provider: "xai",
         modelApi: "openai-completions",
-        modelId: "google/gemma-4-26b-a4b-it",
+        modelId: "grok-4",
       } as never),
     ).toMatchObject({
       sanitizeToolCallIds: true,
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
-      dropReasoningFromHistory: true,
     });
 
     const nativeIdsHooks = buildProviderReplayFamilyHooks({
@@ -248,28 +246,5 @@ describe("buildProviderReplayFamilyHooks", () => {
       preserveSignatures: true,
       validateAnthropicTurns: true,
     });
-  });
-});
-
-describe("resolveClaudeThinkingProfile", () => {
-  it("exposes Opus 4.7 thinking levels for direct and proxied Claude providers", () => {
-    expect(resolveClaudeThinkingProfile("claude-opus-4-7")).toMatchObject({
-      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
-      defaultLevel: "off",
-    });
-    expect(resolveClaudeThinkingProfile("claude-opus-4.7-20260219")).toMatchObject({
-      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
-      defaultLevel: "off",
-    });
-  });
-
-  it("keeps adaptive-only Claude variants from advertising xhigh or max", () => {
-    const profile = resolveClaudeThinkingProfile("claude-sonnet-4-6");
-
-    expect(profile).toMatchObject({
-      levels: expect.arrayContaining([{ id: "adaptive" }]),
-      defaultLevel: "adaptive",
-    });
-    expect(profile.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(false);
   });
 });

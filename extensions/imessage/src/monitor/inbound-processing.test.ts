@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { sanitizeTerminalText } from "../../../../src/terminal/safe-text.js";
 import {
   describeIMessageEchoDropLog,
   resolveIMessageInboundDecision,
@@ -31,7 +31,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       cfg,
       accountId: "default",
       opts: undefined,
-      allowFrom: ["*"],
+      allowFrom: [],
       groupAllowFrom: [],
       groupPolicy: "open",
       dmPolicy: "open",
@@ -303,12 +303,7 @@ describe("describeIMessageEchoDropLog", () => {
 
 describe("resolveIMessageInboundDecision command auth", () => {
   const cfg = {} as OpenClawConfig;
-  const resolveDmCommandDecision = (params: {
-    messageId: number;
-    storeAllowFrom: string[];
-    dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
-    allowFrom?: string[];
-  }) =>
+  const resolveDmCommandDecision = (params: { messageId: number; storeAllowFrom: string[] }) =>
     resolveIMessageInboundDecision({
       cfg,
       accountId: "default",
@@ -322,10 +317,10 @@ describe("resolveIMessageInboundDecision command auth", () => {
       opts: undefined,
       messageText: "/status",
       bodyText: "/status",
-      allowFrom: params.allowFrom ?? [],
+      allowFrom: [],
       groupAllowFrom: [],
       groupPolicy: "open",
-      dmPolicy: params.dmPolicy ?? "open",
+      dmPolicy: "open",
       storeAllowFrom: params.storeAllowFrom,
       historyLimit: 0,
       groupHistories: new Map(),
@@ -339,13 +334,16 @@ describe("resolveIMessageInboundDecision command auth", () => {
       storeAllowFrom: [],
     });
 
-    expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+    expect(decision.commandAuthorized).toBe(false);
   });
 
-  it("authorizes DM commands for senders in pairing-mode store allowlist", () => {
+  it("authorizes DM commands for senders in pairing-store allowlist", () => {
     const decision = resolveDmCommandDecision({
       messageId: 101,
-      dmPolicy: "pairing",
       storeAllowFrom: ["+15555550123"],
     });
 

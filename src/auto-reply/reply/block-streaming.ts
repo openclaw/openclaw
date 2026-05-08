@@ -184,7 +184,7 @@ export function resolveBlockStreamingChunking(
   };
 }
 
-function resolveBlockStreamingCoalescing(
+export function resolveBlockStreamingCoalescing(
   cfg: OpenClawConfig | undefined,
   provider?: string,
   accountId?: string | null,

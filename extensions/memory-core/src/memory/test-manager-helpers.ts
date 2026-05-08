@@ -20,7 +20,7 @@ async function loadGetMemorySearchManager(): Promise<MemoryIndexModule["getMemor
 export async function getRequiredMemoryIndexManager(params: {
   cfg: OpenClawConfig;
   agentId?: string;
-  purpose?: "default" | "status" | "cli";
+  purpose?: "default" | "status";
 }): Promise<MemoryIndexManager> {
   await ensureEmbeddingMocksLoaded();
   const getMemorySearchManager = await loadGetMemorySearchManager();

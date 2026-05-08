@@ -1,6 +1,7 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -20,7 +21,7 @@ import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 
-type SendMSTeamsMessageParams = {
+export type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID to send to */
@@ -35,7 +36,7 @@ type SendMSTeamsMessageParams = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
-type SendMSTeamsMessageResult = {
+export type SendMSTeamsMessageResult = {
   messageId: string;
   conversationId: string;
   /** If a FileConsentCard was sent instead of the file, this contains the upload ID */
@@ -51,7 +52,7 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
  */
 const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
-type SendMSTeamsPollParams = {
+export type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID to send to */
@@ -64,13 +65,13 @@ type SendMSTeamsPollParams = {
   maxSelections?: number;
 };
 
-type SendMSTeamsPollResult = {
+export type SendMSTeamsPollResult = {
   pollId: string;
   messageId: string;
   conversationId: string;
 };
 
-type SendMSTeamsCardParams = {
+export type SendMSTeamsCardParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID to send to */
@@ -79,7 +80,7 @@ type SendMSTeamsCardParams = {
   card: Record<string, unknown>;
 };
 
-type SendMSTeamsCardResult = {
+export type SendMSTeamsCardResult = {
   messageId: string;
   conversationId: string;
 };
@@ -526,7 +527,7 @@ export async function sendAdaptiveCardMSTeams(
   };
 }
 
-type EditMSTeamsMessageParams = {
+export type EditMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID */
@@ -537,11 +538,11 @@ type EditMSTeamsMessageParams = {
   text: string;
 };
 
-type EditMSTeamsMessageResult = {
+export type EditMSTeamsMessageResult = {
   conversationId: string;
 };
 
-type DeleteMSTeamsMessageParams = {
+export type DeleteMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
   /** Conversation ID or user ID */
@@ -550,7 +551,7 @@ type DeleteMSTeamsMessageParams = {
   activityId: string;
 };
 
-type DeleteMSTeamsMessageResult = {
+export type DeleteMSTeamsMessageResult = {
   conversationId: string;
 };
 
@@ -634,4 +635,23 @@ export async function deleteMessageMSTeams(
   log.info("deleted proactive message", { conversationId, activityId });
 
   return { conversationId };
+}
+
+/**
+ * List all known conversation references (for debugging/CLI).
+ */
+export async function listMSTeamsConversations(): Promise<
+  Array<{
+    conversationId: string;
+    userName?: string;
+    conversationType?: string;
+  }>
+> {
+  const store = createMSTeamsConversationStoreFs();
+  const all = await store.list();
+  return all.map(({ conversationId, reference }) => ({
+    conversationId,
+    userName: reference.user?.name,
+    conversationType: reference.conversation?.conversationType,
+  }));
 }

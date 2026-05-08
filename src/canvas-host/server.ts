@@ -20,9 +20,9 @@ import { ensureDir, resolveUserPath } from "../utils.js";
 import {
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
+  handleA2uiHttpRequest,
   injectCanvasLiveReload,
-  isA2uiPath,
-} from "./a2ui-shared.js";
+} from "./a2ui.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
 type ChokidarWatch = typeof import("chokidar").watch;
@@ -469,11 +469,8 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
       return;
     }
     void (async () => {
-      if (req.url && isA2uiPath(new URL(req.url, "http://localhost").pathname)) {
-        const { handleA2uiHttpRequest } = await import("./a2ui.js");
-        if (await handleA2uiHttpRequest(req, res)) {
-          return;
-        }
+      if (await handleA2uiHttpRequest(req, res)) {
+        return;
       }
       if (await handler.handleHttpRequest(req, res)) {
         return;

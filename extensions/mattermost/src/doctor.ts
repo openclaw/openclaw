@@ -25,7 +25,7 @@ function isMattermostMutableAllowEntry(raw: string): boolean {
   return true;
 }
 
-const collectMattermostMutableAllowlistWarnings =
+export const collectMattermostMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "mattermost",
     detector: isMattermostMutableAllowEntry,

@@ -7,10 +7,8 @@ import {
   DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
   buildRestartSuccessContinuation,
   consumeRestartSentinel,
-  finalizeUpdateRestartSentinelRunningVersion,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
-  markUpdateRestartSentinelFailure,
   readRestartSentinel,
   resolveRestartSentinelPath,
   summarizeRestartSentinel,
@@ -185,55 +183,6 @@ describe("restart sentinel", () => {
     ).toBe("Gateway restart update skipped");
     expect(trimLogTail("hello\n")).toBe("hello");
     expect(trimLogTail(undefined)).toBeNull();
-  });
-
-  it("writes the running version back to update sentinels on startup", async () => {
-    await withRestartSentinelStateDir(async () => {
-      await writeRestartSentinel({
-        kind: "update",
-        status: "ok",
-        ts: Date.now(),
-        stats: {
-          after: { version: "expected-version" },
-        },
-      });
-
-      await finalizeUpdateRestartSentinelRunningVersion("actual-version");
-
-      await expect(readRestartSentinel()).resolves.toMatchObject({
-        payload: {
-          kind: "update",
-          stats: {
-            after: {
-              version: "actual-version",
-            },
-          },
-        },
-      });
-    });
-  });
-
-  it("marks update restart failures with a stable reason", async () => {
-    await withRestartSentinelStateDir(async () => {
-      await writeRestartSentinel({
-        kind: "update",
-        status: "ok",
-        ts: Date.now(),
-        stats: {},
-      });
-
-      await markUpdateRestartSentinelFailure("restart-unhealthy");
-
-      await expect(readRestartSentinel()).resolves.toMatchObject({
-        payload: {
-          kind: "update",
-          status: "error",
-          stats: {
-            reason: "restart-unhealthy",
-          },
-        },
-      });
-    });
   });
 });
 

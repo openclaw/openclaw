@@ -5,26 +5,39 @@ import {
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
 import {
+  coerceXaiToolConfig,
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
 import { type XaiWebSearchResponse } from "./web-search-shared.js";
 
-const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
-const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";
+export const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
+export const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";
 
-type XaiCodeExecutionResponse = XaiWebSearchResponse & {
+export type XaiCodeExecutionConfig = {
+  apiKey?: unknown;
+  model?: unknown;
+  maxTurns?: unknown;
+};
+
+export type XaiCodeExecutionResponse = XaiWebSearchResponse & {
   output?: Array<{
     type?: string;
   }>;
 };
 
-type XaiCodeExecutionResult = {
+export type XaiCodeExecutionResult = {
   content: string;
   citations: string[];
   usedCodeExecution: boolean;
   outputTypes: string[];
 };
+
+export function resolveXaiCodeExecutionConfig(
+  config?: Record<string, unknown>,
+): XaiCodeExecutionConfig {
+  return coerceXaiToolConfig(config) as XaiCodeExecutionConfig;
+}
 
 export function resolveXaiCodeExecutionModel(config?: Record<string, unknown>): string {
   return resolveNormalizedXaiToolModel({
@@ -101,3 +114,12 @@ export async function requestXaiCodeExecution(params: {
     },
   );
 }
+
+export const __testing = {
+  buildXaiCodeExecutionPayload,
+  requestXaiCodeExecution,
+  resolveXaiCodeExecutionConfig,
+  resolveXaiCodeExecutionMaxTurns,
+  resolveXaiCodeExecutionModel,
+  XAI_DEFAULT_CODE_EXECUTION_MODEL,
+} as const;

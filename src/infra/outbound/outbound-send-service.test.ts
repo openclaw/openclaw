@@ -116,7 +116,7 @@ describe("executeSendAction", () => {
     }>,
   ) {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({ ...expected, config: {} }),
+      expect.objectContaining(expected),
     );
   }
 

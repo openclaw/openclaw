@@ -23,11 +23,11 @@ type MockCallsWithFirstArg = {
   };
 };
 
-function normalizeRuntimeStdout(value: string): string {
+export function normalizeRuntimeStdout(value: string): string {
   return value.endsWith("\n") ? value.slice(0, -1) : value;
 }
 
-function stringifyRuntimeJson(value: unknown, space = 2): string {
+export function stringifyRuntimeJson(value: unknown, space = 2): string {
   return JSON.stringify(value, null, space > 0 ? space : undefined);
 }
 

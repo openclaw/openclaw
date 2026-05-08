@@ -2,12 +2,12 @@ import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-type OwnerDisplaySetting = {
+export type OwnerDisplaySetting = {
   ownerDisplay?: "raw" | "hash";
   ownerDisplaySecret?: string;
 };
 
-type OwnerDisplaySecretResolution = {
+export type OwnerDisplaySecretResolution = {
   config: OpenClawConfig;
   generatedSecret?: string;
 };

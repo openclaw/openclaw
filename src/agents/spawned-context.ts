@@ -19,7 +19,7 @@ export type SpawnedToolContext = {
   workspaceDir?: string;
 };
 
-type NormalizedSpawnedRunMetadata = {
+export type NormalizedSpawnedRunMetadata = {
   spawnedBy?: string;
   groupId?: string;
   groupChannel?: string;

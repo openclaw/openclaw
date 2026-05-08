@@ -9,7 +9,7 @@ export const SLACK_SOCKET_RECONNECT_POLICY = {
   maxAttempts: 12,
 } as const;
 
-type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
+export type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
 
 type EmitterLike = {
   on: (event: string, listener: (...args: unknown[]) => void) => unknown;
@@ -94,17 +94,14 @@ export function isNonRecoverableSlackAuthError(error: unknown): boolean {
 }
 
 export function formatUnknownError(error: unknown): string {
-  if (error === undefined || error === null) {
-    return "unknown error";
-  }
   if (error instanceof Error) {
-    return error.message || error.name || "unknown error";
+    return error.message;
   }
   if (typeof error === "string") {
-    return error || "unknown error";
+    return error;
   }
   try {
-    return JSON.stringify(error) ?? "unknown error";
+    return JSON.stringify(error);
   } catch {
     return "unknown error";
   }

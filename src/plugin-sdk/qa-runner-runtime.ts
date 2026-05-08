@@ -91,7 +91,7 @@ function listDeclaredQaRunnerPlugins(
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }
 > {
-  return loadPluginManifestRegistry(env ? { env } : {})
+  return loadPluginManifestRegistry({ cache: true, ...(env ? { env } : {}) })
     .plugins.filter(
       (
         plugin,

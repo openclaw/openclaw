@@ -14,7 +14,7 @@ export type NormalizedAllowFrom = {
   invalidEntries: string[];
 };
 
-type AllowFromMatch = AllowlistMatch<"wildcard" | "id">;
+export type AllowFromMatch = AllowlistMatch<"wildcard" | "id">;
 
 const warnedInvalidEntries = new Set<string>();
 const log = createSubsystemLogger("telegram/bot-access");

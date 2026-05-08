@@ -5,15 +5,11 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
 } from "./auth-profiles/store.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
-import {
-  addEnvBackedPiCredentials,
-  type PiDiscoveryAuthLookupOptions,
-} from "./pi-auth-discovery-core.js";
+import { addEnvBackedPiCredentials } from "./pi-auth-discovery-core.js";
 
 export type DiscoverAuthStorageOptions = {
   readOnly?: boolean;
-  skipCredentials?: boolean;
-} & PiDiscoveryAuthLookupOptions;
+};
 
 export function resolvePiCredentialsForDiscovery(
   agentDir: string,
@@ -23,11 +19,7 @@ export function resolvePiCredentialsForDiscovery(
     options?.readOnly === true
       ? loadAuthProfileStoreForSecretsRuntime(agentDir)
       : ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const credentials = addEnvBackedPiCredentials(resolvePiCredentialMapFromStore(store), {
-    config: options?.config,
-    workspaceDir: options?.workspaceDir,
-    env: options?.env,
-  });
+  const credentials = addEnvBackedPiCredentials(resolvePiCredentialMapFromStore(store));
   for (const provider of resolveRuntimeSyntheticAuthProviderRefs()) {
     if (credentials[provider]) {
       continue;

@@ -32,14 +32,12 @@ type SessionActionContext = {
   updateAutocompleteProvider: () => void;
   setActivityStatus: (text: string) => void;
   clearLocalRunIds?: () => void;
-  rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
 };
 
 type SessionInfoDefaults = {
   model?: string | null;
   modelProvider?: string | null;
   contextTokens?: number | null;
-  thinkingLevels?: Array<{ id: string; label: string }>;
 };
 
 type SessionInfoEntry = SessionInfo & {
@@ -64,7 +62,6 @@ export function createSessionActions(context: SessionActionContext) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
-    rememberSessionKey,
   } = context;
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
@@ -170,9 +167,6 @@ export function createSessionActions(context: SessionActionContext) {
     const next = { ...state.sessionInfo };
     if (entry?.thinkingLevel !== undefined) {
       next.thinkingLevel = entry.thinkingLevel;
-    }
-    if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
-      next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
     }
     if (entry?.fastMode !== undefined) {
       next.fastMode = entry.fastMode;
@@ -364,7 +358,6 @@ export function createSessionActions(context: SessionActionContext) {
         }
       }
       state.historyLoaded = true;
-      void rememberSessionKey?.(state.currentSessionKey);
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
@@ -377,7 +370,6 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
-    state.pendingChatRunId = null;
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
@@ -392,8 +384,7 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const abortActive = async () => {
-    const runId = state.activeChatRunId ?? state.pendingChatRunId ?? null;
-    if (!runId) {
+    if (!state.activeChatRunId) {
       chatLog.addSystem("no active run");
       tui.requestRender();
       return;
@@ -401,9 +392,8 @@ export function createSessionActions(context: SessionActionContext) {
     try {
       await client.abortChat({
         sessionKey: state.currentSessionKey,
-        runId,
+        runId: state.activeChatRunId,
       });
-      state.pendingChatRunId = null;
       setActivityStatus("aborted");
     } catch (err) {
       chatLog.addSystem(`abort failed: ${String(err)}`);

@@ -1,64 +1,62 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { tryHandleRootHelpFastPath } from "./entry.js";
+
+const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("./cli/root-help-metadata.js", () => ({
+  outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
+}));
 
 describe("entry root help fast path", () => {
   it("prefers precomputed root help text when available", async () => {
-    let outputPrecomputedRootHelpTextCalls = 0;
+    outputPrecomputedRootHelpTextMock.mockReturnValueOnce(true);
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
       env: {},
-      outputPrecomputedRootHelpText: () => {
-        outputPrecomputedRootHelpTextCalls += 1;
-        return true;
-      },
     });
+    await vi.dynamicImportSettled();
 
     expect(handled).toBe(true);
-    expect(outputPrecomputedRootHelpTextCalls).toBe(1);
+    expect(outputPrecomputedRootHelpTextMock).toHaveBeenCalledTimes(1);
   });
 
   it("renders root help without importing the full program", async () => {
-    let outputRootHelpCalls = 0;
+    const outputRootHelpMock = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
-      outputRootHelp: () => {
-        outputRootHelpCalls += 1;
-      },
+    const handled = tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+      outputRootHelp: outputRootHelpMock,
       env: {},
     });
+    await Promise.resolve();
 
     expect(handled).toBe(true);
-    expect(outputRootHelpCalls).toBe(1);
+    expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores non-root help invocations", async () => {
-    let outputRootHelpCalls = 0;
+  it("ignores non-root help invocations", () => {
+    const outputRootHelpMock = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "status", "--help"], {
-      outputRootHelp: () => {
-        outputRootHelpCalls += 1;
-      },
+    const handled = tryHandleRootHelpFastPath(["node", "openclaw", "status", "--help"], {
+      outputRootHelp: outputRootHelpMock,
       env: {},
     });
 
     expect(handled).toBe(false);
-    expect(outputRootHelpCalls).toBe(0);
+    expect(outputRootHelpMock).not.toHaveBeenCalled();
   });
 
-  it("skips the host help fast path when a container target is active", async () => {
-    let outputRootHelpCalls = 0;
+  it("skips the host help fast path when a container target is active", () => {
+    const outputRootHelpMock = vi.fn();
 
-    const handled = await tryHandleRootHelpFastPath(
+    const handled = tryHandleRootHelpFastPath(
       ["node", "openclaw", "--container", "demo", "--help"],
       {
-        outputRootHelp: () => {
-          outputRootHelpCalls += 1;
-        },
+        outputRootHelp: outputRootHelpMock,
         env: {},
       },
     );
 
     expect(handled).toBe(false);
-    expect(outputRootHelpCalls).toBe(0);
+    expect(outputRootHelpMock).not.toHaveBeenCalled();
   });
 });

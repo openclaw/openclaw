@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-type RoleRef = {
+export type RoleRef = {
   role: string;
   name?: string;
   /** Index used only when role+name duplicates exist. */
@@ -10,7 +10,7 @@ type RoleRef = {
 
 export type RoleRefMap = Record<string, RoleRef>;
 
-type RoleSnapshotStats = {
+export type RoleSnapshotStats = {
   lines: number;
   chars: number;
   refs: number;
@@ -265,13 +265,7 @@ export function parseRoleRef(raw: string): string | null {
     : trimmed.startsWith("ref=")
       ? trimmed.slice(4)
       : trimmed;
-  if (/^e\d+$/i.test(normalized)) {
-    return normalized;
-  }
-  if (/^\d{1,9}$/.test(normalized)) {
-    return normalized;
-  }
-  return null;
+  return /^e\d+$/.test(normalized) ? normalized : null;
 }
 
 export function buildRoleSnapshotFromAriaSnapshot(
@@ -334,12 +328,8 @@ export function buildRoleSnapshotFromAriaSnapshot(
 }
 
 function parseAiSnapshotRef(suffix: string): string | null {
-  const eMatch = suffix.match(/\[ref=(e\d+)\]/i);
-  if (eMatch) {
-    return eMatch[1];
-  }
-  const numMatch = suffix.match(/\[ref=(\d{1,9})\]/);
-  return numMatch ? numMatch[1] : null;
+  const match = suffix.match(/\[ref=(e\d+)\]/i);
+  return match ? match[1] : null;
 }
 
 /**

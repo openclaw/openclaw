@@ -1,15 +1,15 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
   type ChunkMode,
-} from "openclaw/plugin-sdk/reply-chunking";
-import {
-  resolveSendableOutboundReplyParts,
+  isSilentReplyText,
+  loadWebMedia,
+  type MarkdownTableMode,
+  type MSTeamsReplyStyle,
   type ReplyPayload,
-} from "openclaw/plugin-sdk/reply-payload";
-import { normalizeOptionalLowercaseString, sleep } from "openclaw/plugin-sdk/text-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import type { MarkdownTableMode, MSTeamsReplyStyle, OpenClawConfig } from "../runtime-api.js";
+  resolveSendableOutboundReplyParts,
+  SILENT_REPLY_TOKEN,
+  sleep,
+} from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
@@ -44,7 +44,7 @@ type SendContext = {
   deleteActivity: (activityId: string) => Promise<void>;
 };
 
-type MSTeamsConversationReference = {
+export type MSTeamsConversationReference = {
   activityId?: string;
   user?: { id?: string; name?: string; aadObjectId?: string };
   agent?: { id?: string; name?: string; aadObjectId?: string } | null;
@@ -81,7 +81,7 @@ export type MSTeamsAdapter = {
   deleteActivity: (context: unknown, reference: { activityId?: string }) => Promise<void>;
 };
 
-type MSTeamsReplyRenderOptions = {
+export type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
   chunkText?: boolean;
   mediaMode?: "split" | "inline";
@@ -98,13 +98,13 @@ export type MSTeamsRenderedMessage = {
   mediaUrl?: string;
 };
 
-type MSTeamsSendRetryOptions = {
+export type MSTeamsSendRetryOptions = {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
 };
 
-type MSTeamsSendRetryEvent = {
+export type MSTeamsSendRetryEvent = {
   messageIndex: number;
   messageCount: number;
   nextAttempt: number;
@@ -238,7 +238,7 @@ export function renderReplyPayloadsToMessages(
   const tableMode =
     options.tableMode ??
     getMSTeamsRuntime().channel.text.resolveMarkdownTableMode({
-      cfg: getMSTeamsRuntime().config.current() as OpenClawConfig,
+      cfg: getMSTeamsRuntime().config.loadConfig(),
       channel: "msteams",
     });
 

@@ -370,7 +370,6 @@ export const zalouserOutboundAdapter = {
 };
 
 export const zalouserMessagingAdapter = {
-  targetPrefixes: ["zalouser", "zlu"],
   normalizeTarget: (raw: string) => normalizeZalouserTarget(raw),
   resolveOutboundSessionRoute: (
     params: Parameters<typeof resolveZalouserOutboundSessionRoute>[0],

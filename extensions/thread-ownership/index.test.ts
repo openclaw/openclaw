@@ -15,7 +15,7 @@ describe("thread-ownership plugin", () => {
     },
     runtime: {
       config: {
-        current: () => configFile,
+        loadConfig: () => configFile,
       },
     },
     id: "thread-ownership",

@@ -2,7 +2,6 @@ import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRich } from "../terminal/theme.js";
 import { inferSshTargetFromRemoteUrl, resolveSshTarget } from "./gateway-status/discovery.js";
 import {
@@ -19,20 +18,23 @@ import {
 } from "./gateway-status/output.js";
 import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
 
-const sshConfigModuleLoader = createLazyImportLoader(() => import("../infra/ssh-config.js"));
-const sshTunnelModuleLoader = createLazyImportLoader(() => import("../infra/ssh-tunnel.js"));
-const gatewayTlsModuleLoader = createLazyImportLoader(() => import("../infra/tls/gateway.js"));
+let sshConfigModulePromise: Promise<typeof import("../infra/ssh-config.js")> | undefined;
+let sshTunnelModulePromise: Promise<typeof import("../infra/ssh-tunnel.js")> | undefined;
+let gatewayTlsModulePromise: Promise<typeof import("../infra/tls/gateway.js")> | undefined;
 
 function loadSshConfigModule() {
-  return sshConfigModuleLoader.load();
+  sshConfigModulePromise ??= import("../infra/ssh-config.js");
+  return sshConfigModulePromise;
 }
 
 function loadSshTunnelModule() {
-  return sshTunnelModuleLoader.load();
+  sshTunnelModulePromise ??= import("../infra/ssh-tunnel.js");
+  return sshTunnelModulePromise;
 }
 
 function loadGatewayTlsModule() {
-  return gatewayTlsModuleLoader.load();
+  gatewayTlsModulePromise ??= import("../infra/tls/gateway.js");
+  return gatewayTlsModulePromise;
 }
 
 export async function gatewayStatusCommand(
@@ -51,8 +53,7 @@ export async function gatewayStatusCommand(
   const startedAt = Date.now();
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
-  const defaultTimeoutMs = Math.max(3000, cfg.gateway?.handshakeTimeoutMs ?? 0);
-  const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);
+  const overallTimeoutMs = parseTimeoutMs(opts.timeout, 3000);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
@@ -121,7 +122,6 @@ export async function gatewayStatusCommand(
     sshTarget: probePass.sshTarget,
     sshTunnelStarted: probePass.sshTunnelStarted,
     sshTunnelError: probePass.sshTunnelError,
-    discoveryCount: probePass.discovery.length,
     localTlsLoadError:
       localTlsRuntime && !localTlsRuntime.enabled && localTlsRuntime.required
         ? (localTlsRuntime.error ?? "gateway tls is enabled but local TLS runtime could not load")

@@ -1,12 +1,17 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { connectOverCdpMock, getChromeWebSocketUrlMock } from "./pw-session.mock-setup.js";
+
+vi.mock("playwright-core", () => ({
+  chromium: {
+    connectOverCDP: vi.fn(),
+  },
+}));
 
 type FakeSession = {
   send: ReturnType<typeof vi.fn>;
   detach: ReturnType<typeof vi.fn>;
 };
 
-function createPage(opts: { targetId: string; snapshotFull?: string; hasAriaSnapshot?: boolean }) {
+function createPage(opts: { targetId: string; snapshotFull?: string; hasSnapshotForAI?: boolean }) {
   const session: FakeSession = {
     send: vi.fn().mockResolvedValue({
       targetInfo: { targetId: opts.targetId },
@@ -28,10 +33,10 @@ function createPage(opts: { targetId: string; snapshotFull?: string; hasAriaSnap
     locator,
     on: vi.fn(),
     url: vi.fn(() => `https://example.test/${opts.targetId}`),
-    ...(opts.hasAriaSnapshot === false
+    ...(opts.hasSnapshotForAI === false
       ? {}
       : {
-          ariaSnapshot: vi.fn().mockResolvedValue(opts.snapshotFull ?? "SNAP"),
+          _snapshotForAI: vi.fn().mockResolvedValue({ full: opts.snapshotFull ?? "SNAP" }),
         }),
   };
 
@@ -50,12 +55,14 @@ function createBrowser(pages: unknown[]) {
   } as unknown as import("playwright-core").Browser;
 }
 
+let chromiumMock: typeof import("playwright-core").chromium;
 let snapshotAiViaPlaywright: typeof import("./pw-tools-core.snapshot.js").snapshotAiViaPlaywright;
 let clickViaPlaywright: typeof import("./pw-tools-core.interactions.js").clickViaPlaywright;
 let closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
 
 beforeAll(async () => {
-  getChromeWebSocketUrlMock.mockResolvedValue(null);
+  const pw = await import("playwright-core");
+  chromiumMock = pw.chromium;
   ({ snapshotAiViaPlaywright } = await import("./pw-tools-core.snapshot.js"));
   ({ clickViaPlaywright } = await import("./pw-tools-core.interactions.js"));
   ({ closePlaywrightBrowserConnection } = await import("./pw-session.js"));
@@ -72,7 +79,7 @@ describe("pw-ai", () => {
     const p2 = createPage({ targetId: "T2", snapshotFull: "TWO" });
     const browser = createBrowser([p1.page, p2.page]);
 
-    connectOverCdpMock.mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
     const res = await snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -89,7 +96,7 @@ describe("pw-ai", () => {
     const p1 = createPage({ targetId: "T1", snapshotFull: snapshot });
     const browser = createBrowser([p1.page]);
 
-    connectOverCdpMock.mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
     const res = await snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -116,7 +123,7 @@ describe("pw-ai", () => {
     const p1 = createPage({ targetId: "T1", snapshotFull: longSnapshot });
     const browser = createBrowser([p1.page]);
 
-    connectOverCdpMock.mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
     const res = await snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -129,38 +136,10 @@ describe("pw-ai", () => {
     expect(res.snapshot).toContain("TRUNCATED");
   });
 
-  it("returns numeric ai snapshot refs in the public snapshot output", async () => {
-    const snapshot = ['- button "OK" [ref=1]', '- link "Docs" [ref=2]'].join("\n");
-    const p1 = createPage({ targetId: "T1", snapshotFull: snapshot });
-    const browser = createBrowser([p1.page]);
-    connectOverCdpMock.mockResolvedValue(browser);
-
-    const res = await snapshotAiViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-    });
-
-    expect(res.snapshot).toContain("[ref=1]");
-    expect(res.snapshot).toContain("[ref=2]");
-    expect(res.refs).toMatchObject({
-      1: { role: "button", name: "OK" },
-      2: { role: "link", name: "Docs" },
-    });
-
-    await clickViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      ref: "1",
-    });
-
-    expect(p1.locator).toHaveBeenCalledWith("aria-ref=1");
-    expect(p1.click).toHaveBeenCalledTimes(1);
-  });
-
   it("clicks a ref using aria-ref locator", async () => {
     const p1 = createPage({ targetId: "T1" });
     const browser = createBrowser([p1.page]);
-    connectOverCdpMock.mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
     await clickViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -172,27 +151,24 @@ describe("pw-ai", () => {
     expect(p1.click).toHaveBeenCalledTimes(1);
   });
 
-  it("uses Playwright's public AI aria snapshot API", async () => {
-    const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
+  it("fails with a clear error when _snapshotForAI is missing", async () => {
+    const p1 = createPage({ targetId: "T1", hasSnapshotForAI: false });
     const browser = createBrowser([p1.page]);
-    connectOverCdpMock.mockResolvedValue(browser);
+    (chromiumMock.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
-    await snapshotAiViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      targetId: "T1",
-      timeoutMs: 1234,
-    });
-
-    expect("ariaSnapshot" in p1.page ? p1.page.ariaSnapshot : undefined).toHaveBeenCalledWith({
-      mode: "ai",
-      timeout: 1234,
-    });
+    await expect(
+      snapshotAiViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+      }),
+    ).rejects.toThrow(/_snapshotForAI/i);
   });
 
   it("reuses the CDP connection for repeated calls", async () => {
     const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
     const browser = createBrowser([p1.page]);
-    connectOverCdpMock.mockResolvedValue(browser);
+    const connect = vi.spyOn(chromiumMock, "connectOverCDP");
+    connect.mockResolvedValue(browser);
 
     await snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -204,6 +180,6 @@ describe("pw-ai", () => {
       ref: "1",
     });
 
-    expect(connectOverCdpMock).toHaveBeenCalledTimes(1);
+    expect(connect).toHaveBeenCalledTimes(1);
   });
 });

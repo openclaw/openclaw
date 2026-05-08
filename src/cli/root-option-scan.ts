@@ -1,7 +1,7 @@
 import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { forwardConsumedCliRootOption } from "./root-option-forward.js";
 
-type CliRootOptionScanResult = { ok: true; argv: string[] } | { ok: false; error: string };
+export type CliRootOptionScanResult = { ok: true; argv: string[] } | { ok: false; error: string };
 
 type CliRootOptionVisitResult =
   | { kind: "pass" }

@@ -1,8 +1,8 @@
+import { describe, expect, it } from "vitest";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
-import { describe, expect, it } from "vitest";
+} from "../../../test/helpers/plugins/contracts-testkit.js";
 import { buildPluginShapeSummary } from "../inspect-shape.js";
 
 describe("plugin shape compatibility matrix", () => {

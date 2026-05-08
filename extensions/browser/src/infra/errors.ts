@@ -1,1 +1,1 @@
-export { extractErrorCode, formatErrorMessage } from "../sdk-security-runtime.js";
+export { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/browser-security-runtime";

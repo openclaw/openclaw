@@ -1,137 +1,48 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { extractReadableContent } from "./web-fetch.js";
 
-const { resolvePluginWebContentExtractorsMock } = vi.hoisted(() => ({
-  resolvePluginWebContentExtractorsMock: vi.fn(),
-}));
-
-vi.mock("../../plugins/web-content-extractors.runtime.js", () => ({
-  resolvePluginWebContentExtractors: resolvePluginWebContentExtractorsMock,
-}));
-
-import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
+const SAMPLE_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Example Article</title>
+  </head>
+  <body>
+    <nav>
+      <ul>
+        <li><a href="/home">Home</a></li>
+        <li><a href="/about">About</a></li>
+      </ul>
+    </nav>
+    <main>
+      <article>
+        <h1>Example Article</h1>
+        <p>Main content starts here with enough words to satisfy readability.</p>
+        <p>Second paragraph for a bit more signal.</p>
+      </article>
+    </main>
+    <footer>Footer text</footer>
+  </body>
+</html>`;
 
 describe("web fetch readability", () => {
-  beforeEach(() => {
-    resolvePluginWebContentExtractorsMock.mockReset();
-  });
-
-  it("dispatches to enabled web content extractors", async () => {
-    resolvePluginWebContentExtractorsMock.mockReturnValue([
-      {
-        id: "readability",
-        pluginId: "web-readability",
-        label: "Readability",
-        extract: vi.fn().mockResolvedValue({
-          text: "extracted text",
-          title: "Extracted",
-        }),
-      },
-    ]);
-
+  it("extracts readable text", async () => {
     const result = await extractReadableContent({
-      html: "<article><p>raw html</p></article>",
+      html: SAMPLE_HTML,
       url: "https://example.com/article",
       extractMode: "text",
-      config: {},
     });
-    expect(result).toMatchObject({
-      extractor: "readability",
-      text: "extracted text",
-      title: "Extracted",
-    });
+    expect(result?.text).toContain("Main content starts here");
+    expect(result?.title).toBe("Example Article");
   });
 
-  it("reuses extractor resolution for repeated calls with the same config object", async () => {
-    const config = {};
-    resolvePluginWebContentExtractorsMock.mockReturnValue([
-      {
-        id: "readability",
-        pluginId: "web-readability",
-        label: "Readability",
-        extract: vi.fn().mockResolvedValue({
-          text: "cached resolver text",
-        }),
-      },
-    ]);
-
-    await extractReadableContent({
-      html: "<article><p>first</p></article>",
-      url: "https://example.com/first",
-      extractMode: "text",
-      config,
-    });
-    await extractReadableContent({
-      html: "<article><p>second</p></article>",
-      url: "https://example.com/second",
-      extractMode: "text",
-      config,
-    });
-
-    expect(resolvePluginWebContentExtractorsMock).toHaveBeenCalledTimes(1);
-    expect(resolvePluginWebContentExtractorsMock).toHaveBeenCalledWith({ config });
-  });
-
-  it("returns null when no extractor produces content", async () => {
-    resolvePluginWebContentExtractorsMock.mockReturnValue([
-      {
-        id: "readability",
-        pluginId: "web-readability",
-        label: "Readability",
-        extract: vi.fn().mockResolvedValue(null),
-      },
-    ]);
-
+  it("extracts readable markdown", async () => {
     const result = await extractReadableContent({
-      html: "<article><p>Main content starts here with enough words to satisfy readability.</p><p>Second paragraph for signal.</p></article>",
+      html: SAMPLE_HTML,
       url: "https://example.com/article",
-      extractMode: "text",
-      config: {},
+      extractMode: "markdown",
     });
-    expect(result).toBeNull();
-  });
-
-  it("continues when a plugin extractor throws", async () => {
-    resolvePluginWebContentExtractorsMock.mockReturnValue([
-      {
-        id: "broken",
-        pluginId: "broken-plugin",
-        label: "Broken",
-        extract: vi.fn().mockRejectedValue(new Error("boom")),
-      },
-      {
-        id: "readability",
-        pluginId: "web-readability",
-        label: "Readability",
-        extract: vi.fn().mockResolvedValue({
-          text: "fallback text",
-        }),
-      },
-    ]);
-
-    const result = await extractReadableContent({
-      html: "<article><p>raw html</p></article>",
-      url: "https://example.com/article",
-      extractMode: "text",
-      config: {},
-    });
-    expect(result).toMatchObject({
-      extractor: "readability",
-      text: "fallback text",
-    });
-  });
-
-  it("returns null when extractor loading throws", async () => {
-    resolvePluginWebContentExtractorsMock.mockImplementation(() => {
-      throw new Error("loader boom");
-    });
-
-    await expect(
-      extractReadableContent({
-        html: "<article><p>raw html</p></article>",
-        url: "https://example.com/article",
-        extractMode: "text",
-        config: {},
-      }),
-    ).resolves.toBeNull();
+    expect(result?.text).toContain("Main content starts here");
+    expect(result?.title).toBe("Example Article");
   });
 });

@@ -15,6 +15,7 @@ import {
   parseTelegramAllowFromId,
   TELEGRAM_TOKEN_HELP_LINES,
   TELEGRAM_USER_ID_HELP_LINES,
+  telegramSetupAdapter,
 } from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
@@ -108,3 +109,5 @@ export const telegramSetupWizard: ChannelSetupWizard = {
   dmPolicy: telegramSetupDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
+
+export { parseTelegramAllowFromId, telegramSetupAdapter };

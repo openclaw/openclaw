@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
+export const NODE_PENDING_WORK_TYPES = ["status.request", "location.request"] as const;
 export type NodePendingWorkType = (typeof NODE_PENDING_WORK_TYPES)[number];
 
-const NODE_PENDING_WORK_PRIORITIES = ["default", "normal", "high"] as const;
+export const NODE_PENDING_WORK_PRIORITIES = ["default", "normal", "high"] as const;
 export type NodePendingWorkPriority = (typeof NODE_PENDING_WORK_PRIORITIES)[number];
 
-type NodePendingWorkItem = {
+export type NodePendingWorkItem = {
   id: string;
   type: NodePendingWorkType;
   priority: NodePendingWorkPriority;

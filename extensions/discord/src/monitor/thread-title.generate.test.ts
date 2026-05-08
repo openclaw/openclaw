@@ -1,7 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as agentRuntimeModule from "openclaw/plugin-sdk/simple-completion-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 
 const completeWithPreparedSimpleCompletionModelMock =
   vi.fn<typeof agentRuntimeModule.completeWithPreparedSimpleCompletionModel>();
@@ -93,7 +92,7 @@ describe("generateThreadTitle", () => {
   });
 
   it("passes model override refs into shared model prep", async () => {
-    const cfg = EMPTY_DISCORD_TEST_CONFIG;
+    const cfg = {} as OpenClawConfig;
     await generateThreadTitle({
       cfg,
       agentId: "main",
@@ -115,7 +114,7 @@ describe("generateThreadTitle", () => {
     } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
 
     const result = await generateThreadTitle({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      cfg: {} as OpenClawConfig,
       agentId: "main",
       messageText: "Need a thread title.",
     });
@@ -135,7 +134,7 @@ describe("generateThreadTitle", () => {
     } as Awaited<ReturnType<typeof agentRuntimeModule.prepareSimpleCompletionModelForAgent>>);
 
     const result = await generateThreadTitle({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      cfg: {} as OpenClawConfig,
       agentId: "main",
       messageText: "Need a thread title.",
     });
@@ -146,7 +145,7 @@ describe("generateThreadTitle", () => {
 
   it("builds contextual prompt and forwards completion options", async () => {
     const result = await generateThreadTitle({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      cfg: {} as OpenClawConfig,
       agentId: "main",
       messageText: "Summarize deployment blockers and owner follow-ups.",
       channelName: "release-status",
@@ -187,7 +186,7 @@ describe("generateThreadTitle", () => {
     );
 
     const result = await generateThreadTitle({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      cfg: {} as OpenClawConfig,
       agentId: "main",
       messageText: "Generate title.",
     });

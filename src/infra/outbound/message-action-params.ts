@@ -22,7 +22,7 @@ import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export const readBooleanParam = readBooleanParamShared;
 
-const BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS = [
+export const BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS = [
   "media",
   "path",
   "filePath",

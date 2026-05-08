@@ -1,4 +1,4 @@
-const WHATSAPP_GROUP_INTRO_HINT =
+export const WHATSAPP_GROUP_INTRO_HINT =
   "WhatsApp IDs: SenderId is the participant JID (group participant id).";
 
 export function resolveWhatsAppGroupIntroHint(): string {

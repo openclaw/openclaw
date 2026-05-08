@@ -33,24 +33,23 @@ describe("cron main job passes heartbeat target=last", () => {
 
   function createCronWithSpies(params: { storePath: string; runHeartbeatOnce: RunHeartbeatOnce }) {
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const requestHeartbeatNow = vi.fn();
     const cron = new CronService({
       storePath: params.storePath,
       cronEnabled: true,
       log: logger,
       enqueueSystemEvent,
-      requestHeartbeat,
+      requestHeartbeatNow,
       runHeartbeatOnce: params.runHeartbeatOnce,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    return { cron, requestHeartbeat };
+    return { cron, requestHeartbeatNow };
   }
 
   async function runSingleTick(cron: CronService) {
-    const startPromise = cron.start();
+    await cron.start();
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.advanceTimersByTimeAsync(1_000);
-    await startPromise;
     cron.stop();
   }
 
@@ -89,7 +88,7 @@ describe("cron main job passes heartbeat target=last", () => {
     expect(callArgs?.heartbeat?.target).toBe("last");
   });
 
-  it("should preserve heartbeat.target=last when wakeMode=now falls back to requestHeartbeat", async () => {
+  it("should preserve heartbeat.target=last when wakeMode=now falls back to requestHeartbeatNow", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
 
@@ -103,10 +102,10 @@ describe("cron main job passes heartbeat target=last", () => {
 
     const runHeartbeatOnce = vi.fn<RunHeartbeatOnce>(async () => ({
       status: "skipped" as const,
-      reason: "cron-in-progress",
+      reason: "requests-in-flight",
     }));
 
-    const { cron, requestHeartbeat } = createCronWithSpies({
+    const { cron, requestHeartbeatNow } = createCronWithSpies({
       storePath,
       runHeartbeatOnce,
     });
@@ -114,10 +113,8 @@ describe("cron main job passes heartbeat target=last", () => {
     await runSingleTick(cron);
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
-    expect(requestHeartbeat).toHaveBeenCalledWith(
+    expect(requestHeartbeatNow).toHaveBeenCalledWith(
       expect.objectContaining({
-        source: "cron",
-        intent: "immediate",
         reason: "cron:test-main-delivery-busy",
         heartbeat: { target: "last" },
       }),
@@ -141,18 +138,16 @@ describe("cron main job passes heartbeat target=last", () => {
       durationMs: 50,
     }));
 
-    const { cron, requestHeartbeat } = createCronWithSpies({
+    const { cron, requestHeartbeatNow } = createCronWithSpies({
       storePath,
       runHeartbeatOnce,
     });
 
     await runSingleTick(cron);
 
-    expect(requestHeartbeat).toHaveBeenCalled();
-    expect(requestHeartbeat).toHaveBeenCalledWith(
+    expect(requestHeartbeatNow).toHaveBeenCalled();
+    expect(requestHeartbeatNow).toHaveBeenCalledWith(
       expect.objectContaining({
-        source: "cron",
-        intent: "event",
         reason: "cron:test-next-heartbeat",
         heartbeat: { target: "last" },
       }),

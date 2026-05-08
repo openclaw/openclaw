@@ -4,7 +4,6 @@ import {
   buildNetworkHints,
   extractConfigSummary,
   isProbeReachable,
-  isPostConnectProbeFailure,
   isScopeLimitedProbeFailure,
   renderProbeSummaryLine,
   resolveAuthForTarget,
@@ -189,8 +188,6 @@ describe("resolveAuthForTarget", () => {
   it("redacts resolver internals from unresolved SecretRef diagnostics", async () => {
     await withEnvAsync(
       {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
         MISSING_GATEWAY_TOKEN: undefined,
       },
       async () => {
@@ -251,7 +248,7 @@ describe("probe reachability classification", () => {
     expect(renderProbeSummaryLine(probe, false)).toContain("Read probe: limited");
   });
 
-  it("treats post-connect read failures as reachable with failed diagnostics", () => {
+  it("keeps non-scope RPC failures as unreachable", () => {
     const probe = {
       ok: false,
       url: "ws://127.0.0.1:18789",
@@ -270,32 +267,9 @@ describe("probe reachability classification", () => {
     };
 
     expect(isScopeLimitedProbeFailure(probe)).toBe(false);
-    expect(isPostConnectProbeFailure(probe)).toBe(true);
-    expect(isProbeReachable(probe)).toBe(true);
+    expect(isProbeReachable(probe)).toBe(false);
     expect(renderProbeSummaryLine(probe, false)).toContain("Capability: connect-only");
     expect(renderProbeSummaryLine(probe, false)).toContain("Read probe: failed");
-  });
-
-  it("keeps failed-before-connect probes unreachable", () => {
-    const probe = {
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown" as const,
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    };
-
-    expect(isPostConnectProbeFailure(probe)).toBe(false);
-    expect(isProbeReachable(probe)).toBe(false);
   });
 });
 describe("gateway-status local target scheme", () => {

@@ -5,20 +5,20 @@ import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 
-type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
+export type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
 
-type CanvasDocumentAsset = {
+export type CanvasDocumentAsset = {
   logicalPath: string;
   sourcePath: string;
   contentType?: string;
 };
 
-type CanvasDocumentEntrypoint =
+export type CanvasDocumentEntrypoint =
   | { type: "html"; value: string }
   | { type: "path"; value: string }
   | { type: "url"; value: string };
 
-type CanvasDocumentCreateInput = {
+export type CanvasDocumentCreateInput = {
   id?: string;
   kind: CanvasDocumentKind;
   title?: string;
@@ -28,7 +28,7 @@ type CanvasDocumentCreateInput = {
   surface?: "assistant_message" | "tool_card" | "sidebar";
 };
 
-type CanvasDocumentManifest = {
+export type CanvasDocumentManifest = {
   id: string;
   kind: CanvasDocumentKind;
   title?: string;
@@ -44,7 +44,7 @@ type CanvasDocumentManifest = {
   }>;
 };
 
-type CanvasDocumentResolvedAsset = {
+export type CanvasDocumentResolvedAsset = {
   logicalPath: string;
   contentType?: string;
   url: string;
@@ -97,12 +97,12 @@ function normalizeCanvasDocumentId(value: string): string {
   return normalized;
 }
 
-function resolveCanvasRootDir(rootDir?: string, stateDir = resolveStateDir()): string {
+export function resolveCanvasRootDir(rootDir?: string, stateDir = resolveStateDir()): string {
   const resolved = rootDir?.trim() ? resolveUserPath(rootDir) : path.join(stateDir, "canvas");
   return path.resolve(resolved);
 }
 
-function resolveCanvasDocumentsDir(rootDir?: string, stateDir = resolveStateDir()): string {
+export function resolveCanvasDocumentsDir(rootDir?: string, stateDir = resolveStateDir()): string {
   return path.join(resolveCanvasRootDir(rootDir, stateDir), CANVAS_DOCUMENTS_DIR_NAME);
 }
 
@@ -122,7 +122,7 @@ export function buildCanvasDocumentEntryUrl(documentId: string, entrypoint: stri
   return `${CANVAS_HOST_PATH}/${CANVAS_DOCUMENTS_DIR_NAME}/${encodeURIComponent(documentId)}/${encodedEntrypoint}`;
 }
 
-function buildCanvasDocumentAssetUrl(documentId: string, logicalPath: string): string {
+export function buildCanvasDocumentAssetUrl(documentId: string, logicalPath: string): string {
   return buildCanvasDocumentEntryUrl(documentId, logicalPath);
 }
 
@@ -302,6 +302,29 @@ export async function createCanvasDocument(
   };
   await writeManifest(rootDir, manifest);
   return manifest;
+}
+
+export async function loadCanvasDocumentManifest(
+  documentId: string,
+  options?: { stateDir?: string; canvasRootDir?: string },
+): Promise<CanvasDocumentManifest | null> {
+  const id = normalizeCanvasDocumentId(documentId);
+  const manifestPath = path.join(
+    resolveCanvasDocumentDir(id, {
+      stateDir: options?.stateDir,
+      rootDir: options?.canvasRootDir,
+    }),
+    "manifest.json",
+  );
+  try {
+    const raw = await fs.readFile(manifestPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as CanvasDocumentManifest)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function resolveCanvasDocumentAssets(

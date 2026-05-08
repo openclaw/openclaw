@@ -9,15 +9,8 @@ import {
   createChannelNativeOriginTargetResolver,
   resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import {
-  channelRouteTargetsMatchExact,
-  stringifyRouteThreadId,
-} from "openclaw/plugin-sdk/channel-route";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -73,7 +66,12 @@ function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOrig
   if (!parsed) {
     return null;
   }
-  const threadId = stringifyRouteThreadId(request.request.turnSourceThreadId);
+  const threadId =
+    typeof request.request.turnSourceThreadId === "string"
+      ? normalizeOptionalString(request.request.turnSourceThreadId)
+      : typeof request.request.turnSourceThreadId === "number"
+        ? String(request.request.turnSourceThreadId)
+        : undefined;
   return {
     to: `${parsed.kind}:${parsed.id}`,
     threadId,
@@ -86,7 +84,12 @@ function resolveSessionSlackOriginTarget(sessionTarget: {
 }): SlackOriginTarget {
   return {
     to: sessionTarget.to,
-    threadId: stringifyRouteThreadId(sessionTarget.threadId),
+    threadId:
+      typeof sessionTarget.threadId === "string"
+        ? normalizeOptionalString(sessionTarget.threadId)
+        : typeof sessionTarget.threadId === "number"
+          ? String(sessionTarget.threadId)
+          : undefined,
   };
 }
 
@@ -111,25 +114,10 @@ function resolveSlackFallbackOriginTarget(request: ApprovalRequest): SlackOrigin
   };
 }
 
-function normalizeSlackOriginTarget(target: SlackOriginTarget): SlackOriginTarget {
-  return {
-    ...target,
-    to: normalizeComparableTarget(target.to),
-  };
-}
-
 function slackTargetsMatch(a: SlackOriginTarget, b: SlackOriginTarget): boolean {
   return (
-    channelRouteTargetsMatchExact({
-      left: {
-        channel: "slack",
-        to: a.to,
-      },
-      right: {
-        channel: "slack",
-        to: b.to,
-      },
-    }) && normalizeSlackThreadMatchKey(a.threadId) === normalizeSlackThreadMatchKey(b.threadId)
+    normalizeComparableTarget(a.to) === normalizeComparableTarget(b.to) &&
+    normalizeSlackThreadMatchKey(a.threadId) === normalizeSlackThreadMatchKey(b.threadId)
   );
 }
 
@@ -143,7 +131,6 @@ const resolveSlackOriginTarget = createChannelNativeOriginTargetResolver({
     }),
   resolveTurnSourceTarget: resolveTurnSourceSlackOriginTarget,
   resolveSessionTarget: resolveSessionSlackOriginTarget,
-  normalizeTargetForMatch: normalizeSlackOriginTarget,
   targetsMatch: slackTargetsMatch,
   resolveFallbackTarget: resolveSlackFallbackOriginTarget,
 });

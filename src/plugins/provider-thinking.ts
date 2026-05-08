@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -9,7 +8,6 @@ import type {
 type ThinkingProviderPlugin = {
   id: string;
   aliases?: string[];
-  hookAliases?: string[];
   isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   resolveThinkingProfile?: (
@@ -38,9 +36,7 @@ function matchesProviderId(provider: ThinkingProviderPlugin, providerId: string)
   if (normalizeProviderId(provider.id) === normalized) {
     return true;
   }
-  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
-    (alias) => normalizeProviderId(alias) === normalized,
-  );
+  return (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
 }
 
 function resolveActiveThinkingProvider(providerId: string): ThinkingProviderPlugin | undefined {
@@ -76,15 +72,7 @@ export function resolveProviderXHighThinking(
 export function resolveProviderThinkingProfile(
   params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
 ) {
-  const activeProfile = resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(
-    params.context,
-  );
-  if (activeProfile) {
-    return activeProfile;
-  }
-  return resolveBundledProviderPolicySurface(params.provider)?.resolveThinkingProfile?.(
-    params.context,
-  );
+  return resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(params.context);
 }
 
 export function resolveProviderDefaultThinkingLevel(

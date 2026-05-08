@@ -1,8 +1,8 @@
-import type { Guild, Message, User } from "../internal/discord.js";
+import type { Guild, Message, User } from "@buape/carbon";
 import { resolveTimestampMs } from "./format.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
-type DiscordReplyContext = {
+export type DiscordReplyContext = {
   id: string;
   channelId: string;
   sender: string;

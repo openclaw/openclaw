@@ -16,7 +16,6 @@ import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
-  resolveSlackAccountAllowFrom,
   type ResolvedSlackAccount,
 } from "./accounts.js";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
@@ -71,8 +70,8 @@ async function promptSlackAllowFrom(params: {
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSlackAccountId(params.cfg),
     resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
-    resolveExisting: (account, cfg) =>
-      resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
+    resolveExisting: (_account, cfg) =>
+      cfg.channels?.slack?.allowFrom ?? cfg.channels?.slack?.dm?.allowFrom ?? [],
     resolveToken: (account) => account.userToken ?? account.botToken ?? "",
     noteTitle: "Slack allowlist",
     noteLines: [

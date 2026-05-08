@@ -2,13 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveRuntimePluginRegistryMock =
   vi.fn<typeof import("./loader.js").resolveRuntimePluginRegistry>();
-const getLoadedRuntimePluginRegistryMock =
-  vi.fn<typeof import("./active-runtime-registry.js").getLoadedRuntimePluginRegistry>();
-const ensureStandaloneRuntimePluginRegistryLoadedMock = vi.hoisted(() =>
-  vi.fn<
-    typeof import("./runtime/standalone-runtime-registry-loader.js").ensureStandaloneRuntimePluginRegistryLoaded
-  >(),
-);
 const applyPluginAutoEnableMock =
   vi.fn<typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable>();
 const getMemoryRuntimeMock = vi.fn<typeof import("./memory-state.js").getMemoryRuntime>();
@@ -29,14 +22,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("./loader.js", () => ({
   resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
-}));
-
-vi.mock("./active-runtime-registry.js", () => ({
-  getLoadedRuntimePluginRegistry: getLoadedRuntimePluginRegistryMock,
-}));
-
-vi.mock("./runtime/standalone-runtime-registry-loader.js", () => ({
-  ensureStandaloneRuntimePluginRegistryLoaded: ensureStandaloneRuntimePluginRegistryLoadedMock,
 }));
 
 vi.mock("./memory-state.js", () => ({
@@ -70,31 +55,20 @@ function createMemoryRuntimeFixture() {
   };
 }
 
-function expectMemoryRuntimeLoaded(
-  rawConfig: unknown,
-  autoEnabledConfig: unknown,
-  pluginIds: readonly string[] = ["memory-core"],
-) {
-  void rawConfig;
-  void autoEnabledConfig;
-  expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalledWith(
+function expectMemoryRuntimeLoaded(rawConfig: unknown, autoEnabledConfig: unknown) {
+  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
     expect.objectContaining({
-      requiredPluginIds: pluginIds,
-    }),
-  );
-  expect(ensureStandaloneRuntimePluginRegistryLoadedMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      requiredPluginIds: pluginIds,
-      loadOptions: expect.objectContaining({
-        onlyPluginIds: pluginIds,
-        workspaceDir: "/resolved-workspace",
-      }),
+      config: autoEnabledConfig,
+      activationSourceConfig: rawConfig,
     }),
   );
 }
 
 function expectMemoryAutoEnableApplied(rawConfig: unknown, autoEnabledConfig: unknown) {
-  expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
+  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
+    config: rawConfig,
+    env: process.env,
+  });
   expectMemoryRuntimeLoaded(rawConfig, autoEnabledConfig);
 }
 
@@ -106,18 +80,13 @@ function setAutoEnabledMemoryRuntime() {
     changes: [],
     autoEnabledReasons: {},
   });
-  getMemoryRuntimeMock
-    .mockReturnValueOnce(undefined)
-    .mockReturnValueOnce(undefined)
-    .mockReturnValue(runtime);
+  getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
   return { rawConfig, autoEnabledConfig, runtime };
 }
 
 function expectNoMemoryRuntimeBootstrap() {
   expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
   expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-  expect(getLoadedRuntimePluginRegistryMock).not.toHaveBeenCalled();
-  expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
 }
 
 async function expectAutoEnabledMemoryRuntimeCase(params: {
@@ -155,8 +124,6 @@ describe("memory runtime auto-enable loading", () => {
       closeActiveMemorySearchManagers,
     } = await import("./memory-runtime.js"));
     resolveRuntimePluginRegistryMock.mockReset();
-    getLoadedRuntimePluginRegistryMock.mockReset();
-    ensureStandaloneRuntimePluginRegistryLoadedMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     getMemoryRuntimeMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
@@ -190,134 +157,6 @@ describe("memory runtime auto-enable loading", () => {
     },
   ] as const)("$name", async ({ run, expectedResult }) => {
     await expectAutoEnabledMemoryRuntimeCase({ run, expectedResult });
-  });
-
-  it("loads only the configured memory slot plugin", async () => {
-    const rawConfig = {
-      plugins: {
-        slots: {
-          memory: "memory-lancedb",
-        },
-      },
-    };
-    const runtime = createMemoryRuntimeFixture();
-    applyPluginAutoEnableMock.mockReturnValue({
-      config: rawConfig,
-      changes: [],
-      autoEnabledReasons: {},
-    });
-    getMemoryRuntimeMock
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(undefined)
-      .mockReturnValue(runtime);
-
-    await getActiveMemorySearchManager({
-      cfg: rawConfig as never,
-      agentId: "main",
-    });
-
-    expectMemoryRuntimeLoaded(rawConfig, rawConfig, ["memory-lancedb"]);
-  });
-
-  it("does not fall back to broad plugin loading when the memory slot is disabled", async () => {
-    const rawConfig = {
-      plugins: {
-        slots: {
-          memory: "none",
-        },
-      },
-    };
-    applyPluginAutoEnableMock.mockReturnValue({
-      config: rawConfig,
-      changes: [],
-      autoEnabledReasons: {},
-    });
-    getMemoryRuntimeMock.mockReturnValue(undefined);
-
-    await expect(
-      getActiveMemorySearchManager({
-        cfg: rawConfig as never,
-        agentId: "main",
-      }),
-    ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });
-
-    expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-    expect(getLoadedRuntimePluginRegistryMock).not.toHaveBeenCalled();
-    expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
-  });
-
-  it("does not standalone-load the memory plugin when plugins are globally disabled", async () => {
-    const rawConfig = {
-      plugins: {
-        enabled: false,
-      },
-    };
-    getMemoryRuntimeMock.mockReturnValue(undefined);
-
-    await expect(
-      getActiveMemorySearchManager({
-        cfg: rawConfig as never,
-        agentId: "main",
-      }),
-    ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });
-
-    expectNoMemoryRuntimeBootstrap();
-  });
-
-  it.each([
-    {
-      name: "denied",
-      plugins: {
-        deny: ["memory-core"],
-        slots: {
-          memory: "memory-core",
-        },
-      },
-    },
-    {
-      name: "entry-disabled",
-      plugins: {
-        entries: {
-          "memory-core": { enabled: false },
-        },
-        slots: {
-          memory: "memory-core",
-        },
-      },
-    },
-  ] as const)("does not standalone-load a $name memory slot plugin", async ({ plugins }) => {
-    getMemoryRuntimeMock.mockReturnValue(undefined);
-
-    await expect(
-      getActiveMemorySearchManager({
-        cfg: { plugins } as never,
-        agentId: "main",
-      }),
-    ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });
-
-    expectNoMemoryRuntimeBootstrap();
-  });
-
-  it("does not standalone-load plugins when the memory runtime is already registered", () => {
-    const rawConfig = {
-      plugins: {
-        slots: {
-          memory: "memory-core",
-        },
-      },
-    };
-    const runtime = createMemoryRuntimeFixture();
-    getLoadedRuntimePluginRegistryMock.mockReturnValue({} as never);
-    getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
-
-    resolveActiveMemoryBackendConfig({
-      cfg: rawConfig as never,
-      agentId: "main",
-    });
-
-    expect(getLoadedRuntimePluginRegistryMock).toHaveBeenCalled();
-    expect(ensureStandaloneRuntimePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it.each([

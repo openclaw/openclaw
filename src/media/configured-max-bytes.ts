@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { maxBytesForKind, type MediaKind } from "./constants.js";
 
 const MB = 1024 * 1024;
 
@@ -9,10 +8,6 @@ export function resolveConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | u
     return Math.floor(configured * MB);
   }
   return undefined;
-}
-
-export function resolveGeneratedMediaMaxBytes(cfg: OpenClawConfig | undefined, kind: MediaKind) {
-  return resolveConfiguredMediaMaxBytes(cfg) ?? maxBytesForKind(kind);
 }
 
 export function resolveChannelAccountMediaMaxMb(params: {

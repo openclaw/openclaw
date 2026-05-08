@@ -5,17 +5,15 @@ import {
   type BackupCreateResult,
 } from "../infra/backup-create.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 export type { BackupCreateOptions, BackupCreateResult } from "../infra/backup-create.js";
 
 type BackupVerifyRuntime = typeof import("./backup-verify.js");
 
-const backupVerifyRuntimeLoader = createLazyImportLoader<BackupVerifyRuntime>(
-  () => import("./backup-verify.js"),
-);
+let backupVerifyRuntimePromise: Promise<BackupVerifyRuntime> | undefined;
 
 function loadBackupVerifyRuntime(): Promise<BackupVerifyRuntime> {
-  return backupVerifyRuntimeLoader.load();
+  backupVerifyRuntimePromise ??= import("./backup-verify.js");
+  return backupVerifyRuntimePromise;
 }
 
 export async function backupCreateCommand(

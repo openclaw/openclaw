@@ -50,7 +50,7 @@ function mockPairedIosOperator(scopes: string[]) {
 }
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({ gateway: {} }),
+  loadConfig: () => ({ gateway: {} }),
 }));
 
 vi.mock("../infra/device-pairing.js", async () => {

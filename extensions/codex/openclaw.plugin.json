@@ -4,8 +4,7 @@
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
   "contracts": {
-    "mediaUnderstandingProviders": ["codex"],
-    "migrationProviders": ["codex"]
+    "mediaUnderstandingProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
     "codex": {
@@ -19,7 +18,6 @@
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
-    "onStartup": false,
     "onAgentHarnesses": ["codex"]
   },
   "commandAliases": [
@@ -33,16 +31,6 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "codexDynamicToolsProfile": {
-        "type": "string",
-        "enum": ["native-first", "openclaw-compat"],
-        "default": "native-first"
-      },
-      "codexDynamicToolsExclude": {
-        "type": "array",
-        "items": { "type": "string" },
-        "default": []
-      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -52,42 +40,6 @@
             "type": "number",
             "minimum": 1,
             "default": 2500
-          }
-        }
-      },
-      "computerUse": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": false
-          },
-          "autoInstall": {
-            "type": "boolean",
-            "default": false
-          },
-          "marketplaceDiscoveryTimeoutMs": {
-            "type": "number",
-            "minimum": 1,
-            "default": 60000
-          },
-          "marketplaceSource": {
-            "type": "string"
-          },
-          "marketplacePath": {
-            "type": "string"
-          },
-          "marketplaceName": {
-            "type": "string"
-          },
-          "pluginName": {
-            "type": "string",
-            "default": "computer-use"
-          },
-          "mcpServerName": {
-            "type": "string",
-            "default": "computer-use"
           }
         }
       },
@@ -105,7 +57,10 @@
             "enum": ["stdio", "websocket"],
             "default": "stdio"
           },
-          "command": { "type": "string" },
+          "command": {
+            "type": "string",
+            "default": "codex"
+          },
           "args": {
             "oneOf": [
               {
@@ -120,10 +75,6 @@
           "headers": {
             "type": "object",
             "additionalProperties": { "type": "string" }
-          },
-          "clearEnv": {
-            "type": "array",
-            "items": { "type": "string" }
           },
           "requestTimeoutMs": {
             "type": "number",
@@ -151,16 +102,6 @@
     }
   },
   "uiHints": {
-    "codexDynamicToolsProfile": {
-      "label": "Dynamic Tools Profile",
-      "help": "Select which OpenClaw dynamic tools are exposed to Codex app-server. native-first omits tools Codex already owns.",
-      "advanced": true
-    },
-    "codexDynamicToolsExclude": {
-      "label": "Dynamic Tool Excludes",
-      "help": "Additional OpenClaw dynamic tool names to omit from Codex app-server turns.",
-      "advanced": true
-    },
     "discovery": {
       "label": "Model Discovery",
       "help": "Plugin-owned controls for discovering Codex app-server models."
@@ -172,51 +113,6 @@
     "discovery.timeoutMs": {
       "label": "Discovery Timeout",
       "help": "Maximum time to wait for Codex app-server model discovery before falling back to the bundled model list.",
-      "advanced": true
-    },
-    "computerUse": {
-      "label": "Computer Use",
-      "help": "Controls Codex app-server setup for the Computer Use plugin.",
-      "advanced": true
-    },
-    "computerUse.enabled": {
-      "label": "Enable Computer Use",
-      "help": "When true, Codex-mode turns require the configured Computer Use MCP server to be available.",
-      "advanced": true
-    },
-    "computerUse.autoInstall": {
-      "label": "Auto Install",
-      "help": "Install the configured Computer Use plugin when Codex-mode turns start.",
-      "advanced": true
-    },
-    "computerUse.marketplaceDiscoveryTimeoutMs": {
-      "label": "Marketplace Discovery Timeout",
-      "help": "Maximum time to wait for Codex app-server to finish loading marketplaces during Computer Use install.",
-      "advanced": true
-    },
-    "computerUse.marketplaceSource": {
-      "label": "Marketplace Source",
-      "help": "Optional Codex marketplace source to add before installing Computer Use.",
-      "advanced": true
-    },
-    "computerUse.marketplacePath": {
-      "label": "Marketplace Path",
-      "help": "Optional local Codex marketplace file path containing the Computer Use plugin.",
-      "advanced": true
-    },
-    "computerUse.marketplaceName": {
-      "label": "Marketplace Name",
-      "help": "Optional registered Codex marketplace name containing the Computer Use plugin.",
-      "advanced": true
-    },
-    "computerUse.pluginName": {
-      "label": "Plugin Name",
-      "help": "Codex marketplace plugin name for Computer Use.",
-      "advanced": true
-    },
-    "computerUse.mcpServerName": {
-      "label": "MCP Server Name",
-      "help": "MCP server name exposed by the Computer Use plugin.",
       "advanced": true
     },
     "appServer": {
@@ -236,7 +132,7 @@
     },
     "appServer.command": {
       "label": "Command",
-      "help": "Executable used for stdio transport. Leave unset to use OpenClaw's managed Codex binary.",
+      "help": "Executable used for stdio transport.",
       "advanced": true
     },
     "appServer.args": {
@@ -258,11 +154,6 @@
     "appServer.headers": {
       "label": "Headers",
       "help": "Additional headers sent to the WebSocket app-server.",
-      "advanced": true
-    },
-    "appServer.clearEnv": {
-      "label": "Clear Environment",
-      "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

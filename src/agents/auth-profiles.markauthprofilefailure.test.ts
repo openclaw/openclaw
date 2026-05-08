@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
 }));

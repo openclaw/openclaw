@@ -1,3 +1,4 @@
+import type { Command } from "commander";
 import {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
@@ -30,3 +31,7 @@ export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
     sutAccountHelp: "Temporary Telegram account id inside the QA gateway config",
     run: runQaTelegram,
   });
+
+export function registerTelegramQaCli(qa: Command) {
+  telegramQaCliRegistration.register(qa);
+}

@@ -9,6 +9,8 @@ import {
   type FeishuDirectoryPeer,
 } from "./directory.static.js";
 
+export { listFeishuDirectoryGroups, listFeishuDirectoryPeers } from "./directory.static.js";
+
 export async function listFeishuDirectoryPeersLive(params: {
   cfg: ClawdbotConfig;
   query?: string;

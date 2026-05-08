@@ -12,7 +12,6 @@ export async function runQaDiscordCommand(opts: LiveTransportQaCommandOptions) {
     report: result.reportPath,
     summary: result.summaryPath,
     "observed messages": result.observedMessagesPath,
-    ...(result.reactionTimelinesPath ? { "reaction timelines": result.reactionTimelinesPath } : {}),
     ...(result.gatewayDebugDirPath ? { "gateway debug logs": result.gatewayDebugDirPath } : {}),
   });
   if (

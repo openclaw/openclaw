@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
@@ -17,23 +16,16 @@ import {
 
 type WebGuardedFetchModule = Pick<
   typeof import("./web-guarded-fetch.js"),
-  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
+  "withTrustedWebToolsEndpoint"
 >;
 
-const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
-  () => import("./web-guarded-fetch.js"),
-);
+let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
 
 async function loadTrustedWebToolsEndpoint(): Promise<
   WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
 > {
-  return (await webGuardedFetchLoader.load()).withTrustedWebToolsEndpoint;
-}
-
-async function loadSelfHostedWebToolsEndpoint(): Promise<
-  WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
-> {
-  return (await webGuardedFetchLoader.load()).withSelfHostedWebToolsEndpoint;
+  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
+  return (await webGuardedFetchPromise).withTrustedWebToolsEndpoint;
 }
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -87,7 +79,6 @@ export async function withTrustedWebSearchEndpoint<T>(
     url: string;
     timeoutSeconds: number;
     init: RequestInit;
-    signal?: AbortSignal;
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -97,28 +88,6 @@ export async function withTrustedWebSearchEndpoint<T>(
       url: params.url,
       init: params.init,
       timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-    },
-    async ({ response }) => run(response),
-  );
-}
-
-export async function withSelfHostedWebSearchEndpoint<T>(
-  params: {
-    url: string;
-    timeoutSeconds: number;
-    init: RequestInit;
-    signal?: AbortSignal;
-  },
-  run: (response: Response) => Promise<T>,
-): Promise<T> {
-  const withSelfHostedWebToolsEndpoint = await loadSelfHostedWebToolsEndpoint();
-  return withSelfHostedWebToolsEndpoint(
-    {
-      url: params.url,
-      init: params.init,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
     },
     async ({ response }) => run(response),
   );
@@ -133,7 +102,6 @@ export async function postTrustedWebToolsJson<T>(
     errorLabel: string;
     maxErrorBytes?: number;
     extraHeaders?: Record<string, string>;
-    signal?: AbortSignal;
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -142,7 +110,6 @@ export async function postTrustedWebToolsJson<T>(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -195,7 +162,7 @@ export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pm: "month",
   py: "year",
 };
-const RECENCY_TO_FRESHNESS: Record<string, string> = {
+export const RECENCY_TO_FRESHNESS: Record<string, string> = {
   day: "pd",
   week: "pw",
   month: "pm",

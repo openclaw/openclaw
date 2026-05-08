@@ -5,16 +5,15 @@ import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pa
 import {
   createAsyncLock,
   pruneExpiredPending,
-  readDurableJsonFile,
+  readJsonFile,
   reconcilePendingPairingRequests,
-  coercePairingStateRecord,
   resolvePairingPaths,
   writeJsonAtomic,
 } from "./pairing-files.js";
 import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
-type NodeDeclaredSurface = {
+export type NodeDeclaredSurface = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -29,7 +28,7 @@ type NodeDeclaredSurface = {
   remoteIp?: string;
 };
 
-type NodeApprovedSurface = NodeDeclaredSurface;
+export type NodeApprovedSurface = NodeDeclaredSurface;
 
 export type NodePairingRequestInput = NodeDeclaredSurface & {
   silent?: boolean;
@@ -41,7 +40,7 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   ts: number;
 };
 
-type NodePairingPendingEntry = NodePairingPendingRequest & {
+export type NodePairingPendingEntry = NodePairingPendingRequest & {
   requiredApproveScopes: NodeApprovalScope[];
 };
 
@@ -51,11 +50,9 @@ export type NodePairingPairedNode = NodeApprovedSurface & {
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
-  lastSeenAtMs?: number;
-  lastSeenReason?: string;
 };
 
-type NodePairingList = {
+export type NodePairingList = {
   pending: NodePairingPendingEntry[];
   paired: NodePairingPairedNode[];
 };
@@ -137,12 +134,12 @@ type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairing
 async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
   const [pending, paired] = await Promise.all([
-    readDurableJsonFile<unknown>(pendingPath),
-    readDurableJsonFile<unknown>(pairedPath),
+    readJsonFile<Record<string, NodePairingPendingRequest>>(pendingPath),
+    readJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
   ]);
   const state: NodePairingStateFile = {
-    pendingById: coercePairingStateRecord<NodePairingPendingRequest>(pending),
-    pairedByNodeId: coercePairingStateRecord<NodePairingPairedNode>(paired),
+    pendingById: pending ?? {},
+    pairedByNodeId: paired ?? {},
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;
@@ -290,22 +287,6 @@ export async function rejectNodePairing(
   });
 }
 
-export async function removePairedNode(
-  nodeId: string,
-  baseDir?: string,
-): Promise<{ nodeId: string } | null> {
-  return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const normalized = normalizeNodeId(nodeId);
-    if (!normalized || !state.pairedByNodeId[normalized]) {
-      return null;
-    }
-    delete state.pairedByNodeId[normalized];
-    await persistState(state, baseDir);
-    return { nodeId: normalized };
-  });
-}
-
 export async function verifyNodeToken(
   nodeId: string,
   token: string,
@@ -324,13 +305,13 @@ export async function updatePairedNodeMetadata(
   nodeId: string,
   patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,
   baseDir?: string,
-): Promise<boolean> {
-  return await withLock(async () => {
+) {
+  await withLock(async () => {
     const state = await loadState(baseDir);
     const normalized = normalizeNodeId(nodeId);
     const existing = state.pairedByNodeId[normalized];
     if (!existing) {
-      return false;
+      return;
     }
 
     const next: NodePairingPairedNode = {
@@ -348,13 +329,10 @@ export async function updatePairedNodeMetadata(
       bins: patch.bins ?? existing.bins,
       permissions: patch.permissions ?? existing.permissions,
       lastConnectedAtMs: patch.lastConnectedAtMs ?? existing.lastConnectedAtMs,
-      lastSeenAtMs: patch.lastSeenAtMs ?? existing.lastSeenAtMs,
-      lastSeenReason: patch.lastSeenReason ?? existing.lastSeenReason,
     };
 
     state.pairedByNodeId[normalized] = next;
     await persistState(state, baseDir);
-    return true;
   });
 }
 

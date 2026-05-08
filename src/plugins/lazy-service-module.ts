@@ -1,5 +1,4 @@
 import { isTruthyEnvValue } from "../infra/env.js";
-import { toSafeImportPath } from "./import-specifier.js";
 
 type LazyServiceModule = Record<string, unknown>;
 
@@ -18,14 +17,6 @@ function resolveExport<T>(mod: LazyServiceModule, names: string[]): T | null {
   return null;
 }
 
-export async function defaultLoadOverrideModule(
-  specifier: string,
-  importModule: (specifier: string) => Promise<LazyServiceModule> = async (source: string) =>
-    await import(source),
-): Promise<LazyServiceModule> {
-  return importModule(toSafeImportPath(specifier));
-}
-
 export async function startLazyPluginServiceModule(params: {
   skipEnvVar?: string;
   overrideEnvVar?: string;
@@ -42,7 +33,8 @@ export async function startLazyPluginServiceModule(params: {
 
   const overrideEnvVar = params.overrideEnvVar?.trim();
   const override = overrideEnvVar ? process.env[overrideEnvVar]?.trim() : undefined;
-  const loadOverrideModule = params.loadOverrideModule ?? defaultLoadOverrideModule;
+  const loadOverrideModule =
+    params.loadOverrideModule ?? (async (specifier: string) => await import(specifier));
   const validatedOverride =
     override && params.validateOverrideSpecifier
       ? params.validateOverrideSpecifier(override)

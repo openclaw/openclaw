@@ -80,17 +80,7 @@ function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
   }
   try {
     if (process.platform === "win32") {
-      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      killer.once("error", () => {
-        try {
-          process.kill(pid, signal);
-        } catch {
-          // The process already exited.
-        }
-      });
+      process.kill(pid, signal);
       return;
     }
     process.kill(-pid, signal);

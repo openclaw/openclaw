@@ -1,1 +1,1 @@
-export { isLoopbackHost } from "../sdk-node-runtime.js";
+export { isLoopbackHost } from "openclaw/plugin-sdk/browser-config-support";

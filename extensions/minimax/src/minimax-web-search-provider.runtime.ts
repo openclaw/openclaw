@@ -1,8 +1,4 @@
 import {
-  createProviderHttpError,
-  formatProviderHttpErrorMessage,
-} from "openclaw/plugin-sdk/provider-http";
-import {
   DEFAULT_SEARCH_COUNT,
   buildSearchCacheKey,
   formatCliCommand,
@@ -26,11 +22,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const MINIMAX_SEARCH_ENDPOINT_GLOBAL = "https://api.minimax.io/v1/coding_plan/search";
 const MINIMAX_SEARCH_ENDPOINT_CN = "https://api.minimaxi.com/v1/coding_plan/search";
-const MINIMAX_TOKEN_PLAN_ENV_VARS = [
-  "MINIMAX_CODE_PLAN_KEY",
-  "MINIMAX_CODING_API_KEY",
-  "MINIMAX_OAUTH_TOKEN",
-] as const;
+const MINIMAX_CODING_PLAN_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"] as const;
 
 type MiniMaxSearchResult = {
   title?: string;
@@ -55,7 +47,7 @@ type MiniMaxSearchResponse = {
 function resolveMiniMaxApiKey(searchConfig?: SearchConfigRecord): string | undefined {
   return (
     readConfiguredSecretString(searchConfig?.apiKey, "tools.web.search.apiKey") ??
-    readProviderEnvValue([...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"])
+    readProviderEnvValue([...MINIMAX_CODING_PLAN_ENV_VARS, "MINIMAX_API_KEY"])
   );
 }
 
@@ -142,18 +134,15 @@ async function runMiniMaxSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        throw await createProviderHttpError(res, "MiniMax Search API error");
+        const detail = await res.text();
+        throw new Error(`MiniMax Search API error (${res.status}): ${detail || res.statusText}`);
       }
 
       const data = (await res.json()) as MiniMaxSearchResponse;
 
       if (data.base_resp?.status_code && data.base_resp.status_code !== 0) {
         throw new Error(
-          formatProviderHttpErrorMessage({
-            label: "MiniMax Search API error",
-            status: data.base_resp.status_code,
-            detail: data.base_resp.status_msg || "unknown error",
-          }),
+          `MiniMax Search API error (${data.base_resp.status_code}): ${data.base_resp.status_msg || "unknown error"}`,
         );
       }
 
@@ -186,7 +175,7 @@ async function runMiniMaxSearch(params: {
 function missingMiniMaxKeyPayload() {
   return {
     error: "missing_minimax_api_key",
-    message: `web_search (minimax) needs a MiniMax Token Plan key or OAuth token. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set MINIMAX_CODE_PLAN_KEY, MINIMAX_CODING_API_KEY, MINIMAX_OAUTH_TOKEN, or MINIMAX_API_KEY in the Gateway environment.`,
+    message: `web_search (minimax) needs a MiniMax Coding Plan key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set MINIMAX_CODE_PLAN_KEY, MINIMAX_CODING_API_KEY, or MINIMAX_API_KEY in the Gateway environment.`,
     docs: "https://docs.openclaw.ai/tools/web",
   };
 }

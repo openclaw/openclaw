@@ -1,10 +1,21 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebSearchProvidersMock: vi.fn(() => [
+    {
+      id: "brave",
+      pluginId: "brave",
+      envVars: ["BRAVE_API_KEY"],
+      getCredentialValue: (searchConfig: Record<string, unknown> | undefined) =>
+        searchConfig?.apiKey,
+    },
+  ]),
+}));
+
+vi.mock("./web-search-providers.runtime.js", () => ({
+  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
 
 let hasConfiguredWebSearchCredential: typeof import("./web-search-credential-presence.js").hasConfiguredWebSearchCredential;
 
@@ -12,17 +23,11 @@ beforeAll(async () => {
   ({ hasConfiguredWebSearchCredential } = await import("./web-search-credential-presence.js"));
 });
 
+beforeEach(() => {
+  resolvePluginWebSearchProvidersMock.mockClear();
+});
+
 describe("hasConfiguredWebSearchCredential", () => {
-  it("does not statically import web-search runtime providers", () => {
-    const source = fs.readFileSync(
-      path.join(repoRoot, "src/plugins/web-search-credential-presence.ts"),
-      "utf8",
-    );
-
-    expect(source).not.toMatch(/\bfrom\s+["'][^"']*web-search-providers\.runtime\.js["']/);
-    expect(source).not.toMatch(/\bfrom\s+["'][^"']*loader\.js["']/);
-  });
-
   it("keeps empty config and env on the manifest-only path", () => {
     expect(
       hasConfiguredWebSearchCredential({
@@ -32,9 +37,10 @@ describe("hasConfiguredWebSearchCredential", () => {
         bundledAllowlistCompat: true,
       }),
     ).toBe(false);
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("detects configured web search credential candidates without runtime loading", () => {
+  it("loads provider runtime only when a credential candidate exists", () => {
     expect(
       hasConfiguredWebSearchCredential({
         config: {
@@ -45,5 +51,6 @@ describe("hasConfiguredWebSearchCredential", () => {
         bundledAllowlistCompat: true,
       }),
     ).toBe(true);
+    expect(resolvePluginWebSearchProvidersMock).toHaveBeenCalledTimes(1);
   });
 });

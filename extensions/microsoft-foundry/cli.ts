@@ -53,7 +53,7 @@ export function execAz(args: string[]): string {
   );
 }
 
-async function execAzAsync(args: string[]): Promise<string> {
+export async function execAzAsync(args: string[]): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     execFile(
       "az",

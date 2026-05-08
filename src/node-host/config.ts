@@ -11,7 +11,7 @@ export type NodeHostGatewayConfig = {
   tlsFingerprint?: string;
 };
 
-type NodeHostConfig = {
+export type NodeHostConfig = {
   version: 1;
   nodeId: string;
   token?: string;

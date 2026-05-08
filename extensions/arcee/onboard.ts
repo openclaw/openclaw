@@ -34,6 +34,10 @@ const arceeOpenRouterPresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
+export function applyArceeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return arceePresetAppliers.applyProviderConfig(cfg);
+}
+
 export function applyArceeConfig(cfg: OpenClawConfig): OpenClawConfig {
   return arceePresetAppliers.applyConfig(cfg);
 }

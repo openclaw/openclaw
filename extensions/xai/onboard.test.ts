@@ -2,12 +2,12 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "openclaw/plugin-sdk/provider-onboard";
+import { describe, expect, it } from "vitest";
 import {
   createConfigWithFallbacks,
   createLegacyProviderConfig,
   EXPECTED_FALLBACKS,
-} from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it } from "vitest";
+} from "../../test/helpers/plugins/onboard-config.js";
 import { applyXaiConfig, applyXaiProviderConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 describe("xai onboard", () => {
@@ -36,7 +36,6 @@ describe("xai onboard", () => {
     expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(
       expect.arrayContaining([
         "custom-model",
-        "grok-4.3",
         "grok-4",
         "grok-4-1-fast",
         "grok-4.20-beta-latest-reasoning",

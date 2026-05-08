@@ -16,13 +16,13 @@
 // CAL-003 compliance: no mock of internal branches. Growth is driven through
 // the __test.loadCostUsageSummaryCached seam (same entry point usage.test.ts
 // already exercises) with distinct (startMs, endMs) pairs. Only the external
-// loadCostUsageSummaryFromCache dependency is stubbed.
+// loadCostUsageSummary dependency is stubbed.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const mocks = vi.hoisted(() => ({
-  loadCostUsageSummaryFromCache: vi.fn(),
+  loadCostUsageSummary: vi.fn(),
 }));
 
 function createSummary() {
@@ -48,7 +48,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   );
   return {
     ...actual,
-    loadCostUsageSummaryFromCache: mocks.loadCostUsageSummaryFromCache,
+    loadCostUsageSummary: mocks.loadCostUsageSummary,
   };
 });
 
@@ -61,7 +61,7 @@ describe("costUsageCache bounded growth", () => {
     __test.costUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
-    mocks.loadCostUsageSummaryFromCache.mockResolvedValue(createSummary());
+    mocks.loadCostUsageSummary.mockResolvedValue(createSummary());
   });
 
   it("does not grow without bound when (startMs, endMs) varies across day rollover and range switches", async () => {
@@ -100,7 +100,7 @@ describe("costUsageCache bounded growth", () => {
   it("evicts settled entries before in-flight entries when possible", async () => {
     const config = {} as OpenClawConfig;
     const pending = new Promise<ReturnType<typeof createSummary>>(() => {});
-    mocks.loadCostUsageSummaryFromCache.mockReturnValueOnce(pending);
+    mocks.loadCostUsageSummary.mockReturnValueOnce(pending);
 
     const inFlight = __test.loadCostUsageSummaryCached({
       startMs: 1,
@@ -126,7 +126,7 @@ describe("costUsageCache bounded growth", () => {
     await Promise.resolve();
 
     expect(__test.costUsageCache.has("1-2")).toBe(true);
-    expect(mocks.loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(257);
+    expect(mocks.loadCostUsageSummary).toHaveBeenCalledTimes(257);
     void inFlight.catch(() => {});
     void repeated.catch(() => {});
   });

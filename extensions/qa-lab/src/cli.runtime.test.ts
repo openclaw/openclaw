@@ -131,7 +131,7 @@ describe("qa cli runtime", () => {
       summaryPath: "/tmp/character-summary.json",
     });
     runQaManualLane.mockResolvedValue({
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.4",
       waited: { status: "ok" },
       reply: "done",
       watchUrl: "http://127.0.0.1:43124",
@@ -186,7 +186,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/frontier",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
       thinking: "medium",
@@ -198,53 +198,11 @@ describe("qa cli runtime", () => {
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
       thinkingDefault: "medium",
       scenarioIds: ["approval-turn-tool-followthrough"],
-    });
-  });
-
-  it("passes explicit suite plugin enablements into the host gateway run", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "mock-openai",
-      scenarioIds: ["channel-chat-baseline"],
-      enabledPluginIds: ["browser", "memory-core"],
-    });
-
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      outputDir: undefined,
-      transportId: "qa-channel",
-      providerMode: "mock-openai",
-      primaryModel: undefined,
-      alternateModel: undefined,
-      fastMode: undefined,
-      scenarioIds: ["channel-chat-baseline"],
-      enabledPluginIds: ["browser", "memory-core"],
-    });
-  });
-
-  it("drops blank suite model refs so provider defaults apply", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "mock-openai",
-      primaryModel: " ",
-      alternateModel: "",
-      scenarioIds: ["thread-memory-isolation"],
-    });
-
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      outputDir: undefined,
-      transportId: "qa-channel",
-      providerMode: "mock-openai",
-      primaryModel: undefined,
-      alternateModel: undefined,
-      fastMode: undefined,
-      scenarioIds: ["thread-memory-isolation"],
     });
   });
 
@@ -253,8 +211,8 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/telegram",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: true,
       scenarioIds: ["telegram-help-command"],
       sutAccountId: "sut-live",
@@ -264,8 +222,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/telegram"),
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: true,
       allowFailures: undefined,
       scenarioIds: ["telegram-help-command"],
@@ -548,23 +506,22 @@ describe("qa cli runtime", () => {
   });
 
   it("runs a host-only parity preflight against the sentinel scenario", async () => {
-    const repoRoot = path.resolve("/tmp/openclaw-repo");
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-opus-4-6",
       preflight: true,
     });
 
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
-      repoRoot,
-      outputDir: expect.stringContaining(
-        path.join(repoRoot, ".artifacts", "qa-e2e", "preflight", "suite-"),
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: expect.stringMatching(
+        /^\/tmp\/openclaw-repo\/\.artifacts\/qa-e2e\/preflight\/suite-/,
       ),
       transportId: "qa-channel",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-opus-4-6",
       scenarioIds: ["approval-turn-tool-followthrough"],
       concurrency: 1,
@@ -687,7 +644,6 @@ describe("qa cli runtime", () => {
           "compaction-retry-mutating-tool",
           "subagent-handoff",
           "subagent-fanout-synthesis",
-          "subagent-stale-child-links",
           "memory-recall",
           "thread-memory-isolation",
           "config-restart-capability-flip",
@@ -752,14 +708,14 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/character",
       model: [
-        "openai/gpt-5.5,thinking=xhigh,fast=false",
+        "openai/gpt-5.4,thinking=xhigh,fast=false",
         "codex-cli/test-model,thinking=high,fast",
       ],
       scenario: "character-vibes-gollum",
       fast: true,
       thinking: "medium",
       modelThinking: ["codex-cli/test-model=medium"],
-      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-6,thinking=high"],
+      judgeModel: ["openai/gpt-5.4,thinking=xhigh,fast", "anthropic/claude-opus-4-6,thinking=high"],
       judgeTimeoutMs: 180_000,
       blindJudgeModels: true,
       concurrency: 4,
@@ -769,18 +725,18 @@ describe("qa cli runtime", () => {
     expect(runQaCharacterEval).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/character"),
-      models: ["openai/gpt-5.5", "codex-cli/test-model"],
+      models: ["openai/gpt-5.4", "codex-cli/test-model"],
       scenarioId: "character-vibes-gollum",
       candidateFastMode: true,
       candidateThinkingDefault: "medium",
       candidateThinkingByModel: { "codex-cli/test-model": "medium" },
       candidateModelOptions: {
-        "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: false },
+        "openai/gpt-5.4": { thinkingDefault: "xhigh", fastMode: false },
         "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
       },
-      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
+      judgeModels: ["openai/gpt-5.4", "anthropic/claude-opus-4-6"],
       judgeModelOptions: {
-        "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
+        "openai/gpt-5.4": { thinkingDefault: "xhigh", fastMode: true },
         "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
       },
       judgeTimeoutMs: 180_000,
@@ -794,13 +750,13 @@ describe("qa cli runtime", () => {
   it("lets character eval auto-select candidate fast mode when --fast is omitted", async () => {
     await runQaCharacterEvalCommand({
       repoRoot: "/tmp/openclaw-repo",
-      model: ["openai/gpt-5.5"],
+      model: ["openai/gpt-5.4"],
     });
 
     expect(runQaCharacterEval).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
-      models: ["openai/gpt-5.5"],
+      models: ["openai/gpt-5.4"],
       scenarioId: undefined,
       candidateFastMode: undefined,
       candidateThinkingDefault: undefined,
@@ -820,7 +776,7 @@ describe("qa cli runtime", () => {
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.5"],
+        model: ["openai/gpt-5.4"],
         thinking: "enormous",
       }),
     ).rejects.toThrow("--thinking must be one of");
@@ -828,22 +784,22 @@ describe("qa cli runtime", () => {
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.5,thinking=galaxy"],
+        model: ["openai/gpt-5.4,thinking=galaxy"],
       }),
     ).rejects.toThrow("--model thinking must be one of");
 
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.5,warp"],
+        model: ["openai/gpt-5.4,warp"],
       }),
     ).rejects.toThrow("--model options must be thinking=<level>");
 
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.5"],
-        modelThinking: ["openai/gpt-5.5"],
+        model: ["openai/gpt-5.4"],
+        modelThinking: ["openai/gpt-5.4"],
       }),
     ).rejects.toThrow("--model-thinking must use provider/model=level");
   });
@@ -852,8 +808,8 @@ describe("qa cli runtime", () => {
     await runQaManualLaneCommand({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: true,
       message: "read qa kickoff and reply short",
       timeoutMs: 45_000,
@@ -863,8 +819,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: true,
       message: "read qa kickoff and reply short",
       timeoutMs: 45_000,
@@ -910,8 +866,8 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       runner: "multipass",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: true,
       allowFailures: true,
       scenarioIds: ["channel-chat-baseline"],
@@ -922,8 +878,8 @@ describe("qa cli runtime", () => {
         repoRoot: path.resolve("/tmp/openclaw-repo"),
         transportId: "qa-channel",
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.4",
+        alternateModel: "openai/gpt-5.4",
         fastMode: true,
         allowFailures: true,
         scenarioIds: ["channel-chat-baseline"],
@@ -1095,7 +1051,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
       parityPack: "agentic",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-opus-4-6",
     });
 
@@ -1104,7 +1060,7 @@ describe("qa cli runtime", () => {
       outputDir: undefined,
       transportId: "qa-channel",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-opus-4-6",
       fastMode: undefined,
       scenarioIds: [
@@ -1115,7 +1071,6 @@ describe("qa cli runtime", () => {
         "compaction-retry-mutating-tool",
         "subagent-handoff",
         "subagent-fanout-synthesis",
-        "subagent-stale-child-links",
         "memory-recall",
         "thread-memory-isolation",
         "config-restart-capability-flip",
@@ -1145,8 +1100,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
+      primaryModel: "mock-openai/gpt-5.4",
+      alternateModel: "mock-openai/gpt-5.4-alt",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
@@ -1164,8 +1119,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "aimock",
-      primaryModel: "aimock/gpt-5.5",
-      alternateModel: "aimock/gpt-5.5-alt",
+      primaryModel: "aimock/gpt-5.4",
+      alternateModel: "aimock/gpt-5.4-alt",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
@@ -1182,8 +1137,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
@@ -1213,7 +1168,7 @@ describe("qa cli runtime", () => {
   it("defaults manual frontier runs onto Codex OAuth when the runtime resolver prefers it", async () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"
-        ? "openai/gpt-5.5"
+        ? "openai/gpt-5.4"
         : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
 
@@ -1226,8 +1181,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,

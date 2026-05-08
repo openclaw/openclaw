@@ -94,10 +94,7 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
     const loggedOut = resolved.secretSource === "none";
 
     if (changed) {
-      await getNextcloudTalkRuntime().config.replaceConfigFile({
-        nextConfig: nextCfg,
-        afterWrite: { mode: "auto" },
-      });
+      await getNextcloudTalkRuntime().config.writeConfigFile(nextCfg);
     }
 
     return {

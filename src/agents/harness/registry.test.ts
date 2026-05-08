@@ -14,6 +14,7 @@ import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
+const originalHarnessFallback = process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
 
 afterEach(() => {
   clearAgentHarnesses();
@@ -21,6 +22,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_AGENT_RUNTIME;
   } else {
     process.env.OPENCLAW_AGENT_RUNTIME = originalRuntime;
+  }
+  if (originalHarnessFallback == null) {
+    delete process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
+  } else {
+    process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = originalHarnessFallback;
   }
 });
 

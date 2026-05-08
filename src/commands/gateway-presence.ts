@@ -1,6 +1,6 @@
 import { readStringValue } from "../shared/string-coerce.js";
 
-type GatewaySelfPresence = {
+export type GatewaySelfPresence = {
   host?: string;
   ip?: string;
   version?: string;

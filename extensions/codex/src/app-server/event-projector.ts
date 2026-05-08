@@ -1,22 +1,18 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
-  classifyAgentHarnessTerminalOutcome,
-  embeddedAgentLog,
-  emitAgentEvent as emitGlobalAgentEvent,
   formatErrorMessage,
-  formatToolAggregate,
   formatToolProgressOutput,
   inferToolMetaFromArgs,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
-  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
-  type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
-  type HeartbeatToolResponse,
+  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
+  formatToolAggregate,
   type MessagingToolSend,
-  type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
@@ -27,17 +23,12 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
-import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
-import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { attachCodexMirrorIdentity } from "./transcript-mirror.js";
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
@@ -65,13 +56,6 @@ const CURRENT_TOKEN_USAGE_KEYS = [
   "lastCallUsage",
   "lastTokenUsage",
   "last_token_usage",
-] as const;
-
-const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
-  "inputTokens",
-  "input_tokens",
-  "promptTokens",
-  "prompt_tokens",
 ] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
@@ -102,7 +86,6 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
-  private latestRateLimits: JsonValue | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -113,11 +96,6 @@ export class CodexAppServerEventProjector {
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
-      return;
-    }
-    if (notification.method === "account/rateLimits/updated") {
-      this.latestRateLimits = params;
-      rememberCodexRateLimits(params);
       return;
     }
     if (isHookNotificationMethod(notification.method)) {
@@ -172,10 +150,7 @@ export class CodexAppServerEventProjector {
         this.handleRawResponseItemCompleted(params);
         break;
       case "error":
-        if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
-          break;
-        }
-        this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
+        this.promptError = readString(params, "message") ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
       default:
@@ -194,71 +169,38 @@ export class CodexAppServerEventProjector {
       assistantTexts.length > 0
         ? this.createAssistantMessage(assistantTexts.join("\n\n"))
         : undefined;
-    // Each snapshot entry is tagged with a stable mirror identity of the
-    // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
-    // from this identity rather than from snapshot position or content
-    // hash, so:
-    //   - Re-mirror of the same turn (retry) → same identity → no-op.
-    //   - Re-emit of a prior turn's entry into a later turn's snapshot
-    //     (the cross-turn drift mode named in #77012) → original identity
-    //     is preserved → on-disk key still matches → also a no-op.
-    //   - Two distinct turns where the user repeats verbatim content →
-    //     distinct turnIds → distinct identities → both kept.
-    const turnId = this.turnId;
     const messagesSnapshot: AgentMessage[] = [
-      attachCodexMirrorIdentity(
-        {
-          role: "user",
-          content: this.params.prompt,
-          timestamp: Date.now(),
-        },
-        `${turnId}:prompt`,
-      ),
+      {
+        role: "user",
+        content: this.params.prompt,
+        timestamp: Date.now(),
+      },
     ];
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.
     if (reasoningText) {
-      messagesSnapshot.push(
-        attachCodexMirrorIdentity(
-          this.createAssistantMirrorMessage("Codex reasoning", reasoningText),
-          `${turnId}:reasoning`,
-        ),
-      );
+      messagesSnapshot.push(this.createAssistantMirrorMessage("Codex reasoning", reasoningText));
     }
     if (planText) {
-      messagesSnapshot.push(
-        attachCodexMirrorIdentity(
-          this.createAssistantMirrorMessage("Codex plan", planText),
-          `${turnId}:plan`,
-        ),
-      );
+      messagesSnapshot.push(this.createAssistantMirrorMessage("Codex plan", planText));
     }
     if (lastAssistant) {
-      messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
+      messagesSnapshot.push(lastAssistant);
     }
     const turnFailed = this.completedTurn?.status === "failed";
     const turnInterrupted = this.completedTurn?.status === "interrupted";
     const promptError =
       this.promptError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
-    const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
-      assistantTexts,
-      reasoningText,
-      planText,
-      promptError,
-      turnCompleted: Boolean(this.completedTurn),
-    });
     return {
       aborted: this.aborted || turnInterrupted,
       externalAbort: false,
       timedOut: false,
       idleTimedOut: false,
       timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
       promptError,
       promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
       sessionIdUsed: this.params.sessionId,
-      ...(agentHarnessResultClassification ? { agentHarnessResultClassification } : {}),
       bootstrapPromptWarningSignaturesSeen: this.params.bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature: this.params.bootstrapPromptWarningSignature,
       messagesSnapshot,
@@ -269,7 +211,6 @@ export class CodexAppServerEventProjector {
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
       messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
-      heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
       toolMediaUrls: toolTelemetry.toolMediaUrls,
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
@@ -372,7 +313,7 @@ export class CodexAppServerEventProjector {
       this.activeCompactionItemIds.add(itemId);
       await runAgentHarnessBeforeCompactionHook({
         sessionFile: this.params.sessionFile,
-        messages: await this.readMirroredSessionMessages(),
+        messages: this.readMirroredSessionMessages(),
         ctx: {
           runId: this.params.runId,
           agentId: this.params.agentId,
@@ -423,7 +364,7 @@ export class CodexAppServerEventProjector {
       this.completedCompactionCount += 1;
       await runAgentHarnessAfterCompactionHook({
         sessionFile: this.params.sessionFile,
-        messages: await this.readMirroredSessionMessages(),
+        messages: this.readMirroredSessionMessages(),
         compactedCount: -1,
         ctx: {
           runId: this.params.runId,
@@ -531,14 +472,7 @@ export class CodexAppServerEventProjector {
       this.aborted = true;
     }
     if (turn.status === "failed") {
-      this.promptError =
-        formatCodexUsageLimitErrorMessage({
-          message: turn.error?.message,
-          codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
-        }) ??
-        turn.error?.message ??
-        "codex app-server turn failed";
+      this.promptError = turn.error?.message ?? "codex app-server turn failed";
       this.promptErrorSource = "prompt";
     }
     for (const item of turn.items ?? []) {
@@ -655,7 +589,6 @@ export class CodexAppServerEventProjector {
     if (!kind) {
       return;
     }
-    const meta = itemMeta(item, this.toolProgressDetailMode());
     this.emitAgentEvent({
       stream: "item",
       data: {
@@ -665,7 +598,7 @@ export class CodexAppServerEventProjector {
         title: itemTitle(item),
         status: params.phase === "start" ? "running" : itemStatus(item),
         ...(itemName(item) ? { name: itemName(item) } : {}),
-        ...(meta ? { meta } : {}),
+        ...(itemMeta(item) ? { meta: itemMeta(item) } : {}),
       },
     });
   }
@@ -683,7 +616,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolResultSummaryItemIds.add(itemId);
-    const meta = itemMeta(item, this.toolProgressDetailMode());
+    const meta = itemMeta(item);
     this.emitToolResultMessage({
       itemId,
       text: formatToolSummary(toolName, meta),
@@ -708,7 +641,7 @@ export class CodexAppServerEventProjector {
     }
     this.emitToolResultMessage({
       itemId,
-      text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
+      text: formatToolOutput(toolName, itemMeta(item), output),
       finalOutput: true,
     });
   }
@@ -742,10 +675,6 @@ export class CodexAppServerEventProjector {
       : this.params.verboseLevel === "full";
   }
 
-  private toolProgressDetailMode(): ToolProgressDetailMode {
-    return this.params.toolProgressDetail === "raw" ? "raw" : "explain";
-  }
-
   private recordToolMeta(item: CodexThreadItem | undefined): void {
     if (!item) {
       return;
@@ -754,45 +683,19 @@ export class CodexAppServerEventProjector {
     if (!toolName) {
       return;
     }
-    const meta = itemMeta(item, this.toolProgressDetailMode());
     this.toolMetas.set(item.id, {
       toolName,
-      ...(meta ? { meta } : {}),
+      ...(itemMeta(item) ? { meta: itemMeta(item) } : {}),
     });
-  }
-
-  private formatCodexErrorMessage(params: JsonObject): string | undefined {
-    const error = isJsonObject(params.error) ? params.error : undefined;
-    return (
-      formatCodexUsageLimitErrorMessage({
-        message: error ? readString(error, "message") : undefined,
-        codexErrorInfo: error?.codexErrorInfo,
-        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
-      }) ?? readCodexErrorNotificationMessage(params)
-    );
   }
 
   private emitAgentEvent(
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
   ): void {
     try {
-      emitGlobalAgentEvent({
-        runId: this.params.runId,
-        stream: event.stream,
-        data: event.data,
-        ...(this.params.sessionKey ? { sessionKey: this.params.sessionKey } : {}),
-      });
-    } catch (error) {
-      embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
-    }
-    try {
-      const maybePromise = this.params.onAgentEvent?.(event);
-      void Promise.resolve(maybePromise).catch((error: unknown) => {
-        embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
-      });
-    } catch (error) {
+      this.params.onAgentEvent?.(event);
+    } catch {
       // Downstream event consumers must not corrupt the canonical Codex turn projection.
-      embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
     }
   }
 
@@ -822,8 +725,12 @@ export class CodexAppServerEventProjector {
     this.assistantItemOrder.push(itemId);
   }
 
-  private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
-    return (await readCodexMirroredSessionHistoryMessages(this.params.sessionFile)) ?? [];
+  private readMirroredSessionMessages(): AgentMessage[] {
+    try {
+      return SessionManager.open(this.params.sessionFile).buildSessionContext().messages;
+    } catch {
+      return [];
+    }
   }
 
   private createAssistantMessage(text: string): AssistantMessage {
@@ -912,29 +819,6 @@ function readNumber(record: JsonObject, key: string): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {
-  for (const key of keys) {
-    const value = readBoolean(record, key);
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
-  const error = record.error;
-  if (isJsonObject(error)) {
-    return readString(error, "message") ?? readString(error, "error");
-  }
-  return readString(record, "message");
-}
-
 function readHookOutputEntries(
   value: JsonValue | undefined,
 ): Array<{ kind?: string; text: string }> {
@@ -975,24 +859,17 @@ function readNumberAlias(record: JsonObject, keys: readonly string[]): number | 
 }
 
 function normalizeCodexTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
-  const promptTotalInput = readNumberAlias(record, CODEX_PROMPT_TOTAL_INPUT_KEYS);
-  const cacheRead = readNumberAlias(record, [
-    "cachedInputTokens",
-    "cached_input_tokens",
-    "cacheRead",
-    "cache_read",
-    "cache_read_input_tokens",
-    "cached_tokens",
-  ]);
-  const input =
-    promptTotalInput !== undefined && cacheRead !== undefined
-      ? Math.max(0, promptTotalInput - cacheRead)
-      : (promptTotalInput ?? readNumber(record, "input"));
-
   return normalizeUsage({
-    input,
+    input: readNumberAlias(record, ["inputTokens", "input_tokens", "input", "promptTokens"]),
     output: readNumberAlias(record, ["outputTokens", "output_tokens", "output"]),
-    cacheRead,
+    cacheRead: readNumberAlias(record, [
+      "cachedInputTokens",
+      "cached_input_tokens",
+      "cacheRead",
+      "cache_read",
+      "cache_read_input_tokens",
+      "cached_tokens",
+    ]),
     cacheWrite: readNumberAlias(record, [
       "cacheWrite",
       "cache_write",
@@ -1105,26 +982,19 @@ function itemName(item: CodexThreadItem): string | undefined {
   return undefined;
 }
 
-function itemMeta(
-  item: CodexThreadItem,
-  detailMode: ToolProgressDetailMode = "explain",
-): string | undefined {
+function itemMeta(item: CodexThreadItem): string | undefined {
   if (item.type === "commandExecution" && typeof item.command === "string") {
-    return inferToolMetaFromArgs(
-      "exec",
-      {
-        command: item.command,
-        cwd: typeof item.cwd === "string" ? item.cwd : undefined,
-      },
-      { detailMode },
-    );
+    return inferToolMetaFromArgs("exec", {
+      command: item.command,
+      cwd: typeof item.cwd === "string" ? item.cwd : undefined,
+    });
   }
   if (item.type === "webSearch" && typeof item.query === "string") {
     return item.query;
   }
   const toolName = itemName(item);
   if ((item.type === "dynamicToolCall" || item.type === "mcpToolCall") && toolName) {
-    return inferToolMetaFromArgs(toolName, item.arguments, { detailMode });
+    return inferToolMetaFromArgs(toolName, item.arguments);
   }
   return undefined;
 }

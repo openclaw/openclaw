@@ -97,11 +97,5 @@ export function buildToolsMessage(
   } else {
     lines.push("", "Use /tools verbose for descriptions.");
   }
-  if (result.notices?.length) {
-    lines.push("", "Notes");
-    for (const notice of result.notices) {
-      lines.push(`  ${notice.message}`);
-    }
-  }
   return lines.join("\n");
 }

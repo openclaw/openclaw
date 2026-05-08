@@ -2,7 +2,6 @@ import AVFoundation
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
-import OpenClawProtocol
 import OSLog
 import Speech
 
@@ -11,7 +10,6 @@ actor TalkModeRuntime {
 
     enum PlaybackPlan: Equatable {
         case elevenLabsThenSystemVoice(apiKey: String, voiceId: String)
-        case gatewayTalkSpeakThenSystemVoice
         case mlxThenSystemVoice
         case systemVoiceOnly
     }
@@ -71,7 +69,6 @@ actor TalkModeRuntime {
     private var defaultOutputFormat: String?
     private var interruptOnSpeech: Bool = true
     private var activeTalkProvider = TalkModeRuntime.defaultTalkProvider
-    private var speechLocaleID: String?
     private var lastInterruptedAtSeconds: Double?
     private var voiceAliases: [String: String] = [:]
     private var lastSpokenText: String?
@@ -188,23 +185,12 @@ actor TalkModeRuntime {
         self.recognitionGeneration &+= 1
         let generation = self.recognitionGeneration
 
-        let voiceWakeLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
-        let supportedLocaleIDs = Set(SFSpeechRecognizer.supportedLocales().map(\.identifier))
-        let localeID = TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
-            preferredLocaleIDs: [
-                self.speechLocaleID,
-                voiceWakeLocale,
-                Locale.autoupdatingCurrent.identifier,
-            ],
-            supportedLocaleIDs: supportedLocaleIDs)
-        self.recognizer = localeID
-            .map { SFSpeechRecognizer(locale: Locale(identifier: $0)) }
-            ?? SFSpeechRecognizer()
+        let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk recognizer unavailable")
             return
         }
-        self.logger.debug("talk recognizer locale=\(recognizer.locale.identifier, privacy: .public)")
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         Self.configureRecognitionRequest(request)
@@ -226,7 +212,7 @@ actor TalkModeRuntime {
         input.removeTap(onBus: 0)
         let meter = self.rmsMeter
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request, meter] buffer, _ in
-            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
+            request?.append(buffer)
             if let rms = Self.rmsLevel(buffer: buffer) {
                 meter.set(rms)
             }
@@ -489,30 +475,6 @@ actor TalkModeRuntime {
                 self.ttsLogger
                     .error(
                         "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
-                            "retrying gateway talk.speak")
-                do {
-                    try await self.playGatewayTalkSpeak(input: input)
-                    return
-                } catch {
-                    self.ttsLogger
-                        .error(
-                            "talk gateway TTS failed: \(error.localizedDescription, privacy: .public); " +
-                                "falling back to system voice")
-                }
-                do {
-                    try await self.playSystemVoice(input: input)
-                } catch {
-                    self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
-                }
-            }
-        case .gatewayTalkSpeakThenSystemVoice:
-            do {
-                try await self.playGatewayTalkSpeak(input: input)
-                return
-            } catch {
-                self.ttsLogger
-                    .error(
-                        "talk gateway TTS failed: \(error.localizedDescription, privacy: .public); " +
                             "falling back to system voice")
                 do {
                     try await self.playSystemVoice(input: input)
@@ -563,7 +525,7 @@ actor TalkModeRuntime {
         case self.systemTalkProvider:
             return .systemVoiceOnly
         default:
-            return .gatewayTalkSpeakThenSystemVoice
+            return .systemVoiceOnly
         }
     }
 
@@ -630,10 +592,8 @@ actor TalkModeRuntime {
 
         let voiceId: String? = if provider == Self.defaultTalkProvider, let apiKey, !apiKey.isEmpty {
             await self.resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
-        } else if provider == Self.mlxTalkProvider || provider == Self.systemTalkProvider {
-            nil
         } else {
-            preferredVoice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? preferredVoice : nil
+            nil
         }
 
         if provider == Self.defaultTalkProvider, apiKey?.isEmpty != false {
@@ -758,42 +718,6 @@ actor TalkModeRuntime {
         }
         self.lastPlaybackWasPCM = false
         return await self.playMP3(stream: stream)
-    }
-
-    private func playGatewayTalkSpeak(input: TalkPlaybackInput) async throws {
-        let params = Self.makeTalkSpeakParams(
-            text: input.cleanedText,
-            voiceId: input.voiceId,
-            modelId: self.currentModelId ?? self.defaultModelId,
-            outputFormat: self.defaultOutputFormat,
-            directive: input.directive)
-        let result: TalkSpeakResult = try await GatewayConnection.shared.requestDecoded(
-            method: .talkSpeak,
-            params: params,
-            timeoutMs: max(30000, input.synthTimeoutSeconds * 1000 + 5000))
-        guard let audioData = Data(base64Encoded: result.audiobase64), !audioData.isEmpty else {
-            throw NSError(domain: "TalkSpeak", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "gateway talk.speak returned empty audio",
-            ])
-        }
-        _ = await self.stopPCM()
-        _ = await self.stopMP3()
-        if self.interruptOnSpeech {
-            guard await self.prepareForPlayback(generation: input.generation) else { return }
-        }
-        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-        self.phase = .speaking
-        let playback = await self.playTalkAudio(data: audioData)
-        self.ttsLogger
-            .info(
-                "talk gateway audio provider=\(result.provider, privacy: .public) " +
-                    "format=\(result.outputformat ?? "unknown", privacy: .public) " +
-                    "finished=\(playback.finished, privacy: .public)")
-        if !playback.finished, playback.interruptedAt == nil {
-            throw NSError(domain: "TalkSpeak", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "gateway talk.speak audio playback failed",
-            ])
-        }
     }
 
     private func playSystemVoice(input: TalkPlaybackInput) async throws {
@@ -923,54 +847,6 @@ actor TalkModeRuntime {
 }
 
 extension TalkModeRuntime {
-    static func makeTalkSpeakParams(
-        text: String,
-        voiceId: String?,
-        modelId: String?,
-        outputFormat: String?,
-        directive: TalkDirective?) -> [String: AnyCodable]
-    {
-        var params: [String: AnyCodable] = ["text": AnyCodable(text)]
-
-        func addString(_ key: String, _ value: String?) {
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !trimmed.isEmpty else { return }
-            params[key] = AnyCodable(trimmed)
-        }
-
-        addString("voiceId", voiceId)
-        addString("modelId", directive?.modelId ?? modelId)
-        addString("outputFormat", directive?.outputFormat ?? outputFormat)
-        if let speed = directive?.speed {
-            params["speed"] = AnyCodable(speed)
-        }
-        if let rateWPM = directive?.rateWPM {
-            params["rateWpm"] = AnyCodable(rateWPM)
-        }
-        if let stability = directive?.stability {
-            params["stability"] = AnyCodable(stability)
-        }
-        if let similarity = directive?.similarity {
-            params["similarity"] = AnyCodable(similarity)
-        }
-        if let style = directive?.style {
-            params["style"] = AnyCodable(style)
-        }
-        if let speakerBoost = directive?.speakerBoost {
-            params["speakerBoost"] = AnyCodable(speakerBoost)
-        }
-        if let seed = directive?.seed {
-            params["seed"] = AnyCodable(seed)
-        }
-        addString("normalize", directive?.normalize)
-        addString("language", directive?.language)
-        if let latencyTier = directive?.latencyTier {
-            params["latencyTier"] = AnyCodable(latencyTier)
-        }
-
-        return params
-    }
-
     // MARK: - Audio playback (MainActor helpers)
 
     @MainActor
@@ -1039,22 +915,11 @@ extension TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.activeTalkProvider = cfg.activeProvider
-        let configuredSilenceMs = cfg.silenceTimeoutMs
-        let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
-        let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
-        let effectiveSilenceMs = isCJKLocale ? max(configuredSilenceMs, 2000) : configuredSilenceMs
-        if isCJKLocale, configuredSilenceMs < 2000 {
-            self.logger
-                .info(
-                    "talk CJK locale: silence timeout clamped " +
-                        "\(configuredSilenceMs, privacy: .public)ms -> 2000ms")
-        }
-        self.silenceWindow = TimeInterval(effectiveSilenceMs) / 1000
-        self.speechLocaleID = cfg.speechLocaleID
+        self.silenceWindow = TimeInterval(cfg.silenceTimeoutMs) / 1000
         self.apiKey = cfg.apiKey
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
-        let voiceLabel = cfg.voiceId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
-        let modelLabel = cfg.modelId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
+        let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
+        let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
         self.logger
             .info(
                 "talk config provider=\(cfg.activeProvider, privacy: .public) " +
@@ -1062,8 +927,7 @@ extension TalkModeRuntime {
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
-                    "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public) " +
-                    "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public)")
+                    "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public)")
     }
 
     static func selectTalkProviderConfig(
@@ -1111,7 +975,7 @@ extension TalkModeRuntime {
             } else {
                 self.ttsLogger
                     .info(
-                        "talk provider \(parsed.activeProvider, privacy: .public) uses gateway talk.speak with system voice fallback")
+                        "talk provider \(parsed.activeProvider, privacy: .public) unsupported; using system voice")
             }
             return parsed
         } catch {

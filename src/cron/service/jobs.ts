@@ -154,11 +154,6 @@ function resolveEveryAnchorMs(params: {
 }
 
 export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
-  if (typeof job.sessionTarget !== "string") {
-    throw new Error(
-      'cron job is missing sessionTarget; expected "main", "isolated", "current", or "session:<id>"',
-    );
-  }
   const isIsolatedLike =
     job.sessionTarget === "isolated" ||
     job.sessionTarget === "current" ||
@@ -343,9 +338,7 @@ export function recordScheduleComputeError(params: {
       sessionKey: job.sessionKey,
       contextKey: `cron:${job.id}:auto-disabled`,
     });
-    state.deps.requestHeartbeat({
-      source: "cron",
-      intent: "event",
+    state.deps.requestHeartbeatNow({
       reason: `cron:${job.id}:auto-disabled`,
       agentId: job.agentId,
       sessionKey: job.sessionKey,
@@ -861,10 +854,6 @@ function mergeCronFailureAlert(
         ? patch.cooldownMs
         : -1;
     next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
-  }
-  if ("includeSkipped" in patch) {
-    next.includeSkipped =
-      typeof patch.includeSkipped === "boolean" ? patch.includeSkipped : undefined;
   }
   if ("mode" in patch) {
     const mode = normalizeOptionalString(patch.mode) ?? "";

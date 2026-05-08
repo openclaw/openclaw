@@ -12,7 +12,7 @@ export type GatewayConnectionDetails = {
 };
 
 type GatewayConnectionDetailResolvers = {
-  getRuntimeConfig?: () => OpenClawConfig;
+  loadConfig?: () => OpenClawConfig;
   resolveConfigPath?: (env: NodeJS.ProcessEnv) => string;
   resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
 };
@@ -26,7 +26,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
-  const config = options.config ?? resolvers.getRuntimeConfig?.() ?? {};
+  const config = options.config ?? resolvers.loadConfig?.() ?? {};
   const configPath =
     options.configPath ??
     resolvers.resolveConfigPath?.(process.env) ??

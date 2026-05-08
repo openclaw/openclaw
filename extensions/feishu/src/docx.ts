@@ -1386,12 +1386,14 @@ async function listAppScopes(client: Lark.Client) {
 
 export function registerFeishuDocTools(api: OpenClawPluginApi) {
   if (!api.config) {
+    api.logger.debug?.("feishu_doc: No config available, skipping doc tools");
     return;
   }
 
   // Check if any account is configured
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
+    api.logger.debug?.("feishu_doc: No Feishu accounts configured, skipping doc tools");
     return;
   }
 
@@ -1612,5 +1614,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
       { name: "feishu_app_scopes" },
     );
     registered.push("feishu_app_scopes");
+  }
+
+  if (registered.length > 0) {
+    api.logger.debug?.(`feishu_doc: Registered ${registered.join(", ")}`);
   }
 }

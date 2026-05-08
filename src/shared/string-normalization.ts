@@ -51,27 +51,23 @@ export function normalizeCsvOrLooseStringList(value: unknown): string[] {
   return [];
 }
 
-function normalizeSlugInput(raw?: string | null) {
-  return (normalizeOptionalLowercaseString(raw) ?? "").normalize("NFC");
-}
-
 export function normalizeHyphenSlug(raw?: string | null) {
-  const trimmed = normalizeSlugInput(raw);
+  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
   const dashed = trimmed.replace(/\s+/g, "-");
-  const cleaned = dashed.replace(/[^\p{L}\p{M}\p{N}#@._+-]+/gu, "-");
+  const cleaned = dashed.replace(/[^a-z0-9#@._+-]+/g, "-");
   return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
 export function normalizeAtHashSlug(raw?: string | null) {
-  const trimmed = normalizeSlugInput(raw);
+  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
   const withoutPrefix = trimmed.replace(/^[@#]+/, "");
   const dashed = withoutPrefix.replace(/[\s_]+/g, "-");
-  const cleaned = dashed.replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-");
+  const cleaned = dashed.replace(/[^a-z0-9-]+/g, "-");
   return cleaned.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
 }

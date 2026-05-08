@@ -1,7 +1,7 @@
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 
-type StatusJsonCommandOptions = {
+export type StatusJsonCommandOptions = {
   deep?: boolean;
   usage?: boolean;
   timeoutMs?: number;

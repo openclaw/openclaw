@@ -5,12 +5,7 @@ enum GatewayLaunchAgentManager {
     private static let disableLaunchAgentMarker = ".openclaw/disable-launchagent"
 
     private static var disableLaunchAgentMarkerURL: URL {
-        #if DEBUG
-        if let testingDisableLaunchAgentMarkerURL {
-            return testingDisableLaunchAgentMarkerURL
-        }
-        #endif
-        return FileManager().homeDirectoryForCurrentUser
+        FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent(self.disableLaunchAgentMarker)
     }
 
@@ -22,10 +17,6 @@ enum GatewayLaunchAgentManager {
     static func isLaunchAgentWriteDisabled() -> Bool {
         if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
         return false
-    }
-
-    static func applyAttachOnlyRuntimeOverride() -> String? {
-        self.setLaunchAgentWriteDisabled(true)
     }
 
     static func setLaunchAgentWriteDisabled(_ disabled: Bool) -> String? {
@@ -153,15 +144,6 @@ extension GatewayLaunchAgentManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
-        #if DEBUG
-        if self.testingInterceptDaemonCommands {
-            self.testingDaemonCommandCalls.append(args)
-            return CommandResult(
-                success: true,
-                payload: Data("{\"ok\":true}".utf8),
-                message: nil)
-        }
-        #endif
         let command = CommandResolver.openclawCommand(
             subcommand: "gateway",
             extraArgs: self.withJsonFlag(args),
@@ -205,26 +187,4 @@ extension GatewayLaunchAgentManager {
     private static func summarize(_ text: String) -> String? {
         TextSummarySupport.summarizeLastLine(text)
     }
-
-    #if DEBUG
-    private nonisolated(unsafe) static var testingDisableLaunchAgentMarkerURL: URL?
-    private nonisolated(unsafe) static var testingInterceptDaemonCommands = false
-    private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
-
-    static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
-        self.testingDisableLaunchAgentMarkerURL = url
-    }
-
-    static func setTestingInterceptDaemonCommands(_ intercept: Bool) {
-        self.testingInterceptDaemonCommands = intercept
-    }
-
-    static func clearTestingDaemonCommandCalls() {
-        self.testingDaemonCommandCalls.removeAll(keepingCapacity: false)
-    }
-
-    static func testingDaemonCommandCallsSnapshot() -> [[String]] {
-        self.testingDaemonCommandCalls
-    }
-    #endif
 }

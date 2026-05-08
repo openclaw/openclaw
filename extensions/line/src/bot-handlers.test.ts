@@ -103,7 +103,7 @@ vi.mock("openclaw/plugin-sdk/command-auth", () => ({
       hasControlCommand && authorizers.some((entry) => entry.allowed || !entry.configured),
   }),
 }));
-vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   resolveAllowlistProviderRuntimeGroupPolicy: ({
     groupPolicy,
     defaultGroupPolicy,
@@ -292,7 +292,6 @@ function createLineWebhookTestContext(params: {
   const lineConfig = {
     ...(params.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
     ...(params.dmPolicy ? { dmPolicy: params.dmPolicy } : {}),
-    ...(params.dmPolicy === "open" ? { allowFrom: ["*"] } : {}),
   };
   return {
     cfg: { channels: { line: lineConfig } },
@@ -831,14 +830,14 @@ describe("handleLineWebhookEvents", () => {
     } as PostbackEvent;
 
     const context: Parameters<typeof handleLineWebhookEvents>[1] = {
-      cfg: { channels: { line: { dmPolicy: "open", allowFrom: ["*"] } } },
+      cfg: { channels: { line: { dmPolicy: "open" } } },
       account: {
         accountId: "default",
         enabled: true,
         channelAccessToken: "token",
         channelSecret: "secret",
         tokenSource: "config",
-        config: { dmPolicy: "open", allowFrom: ["*"] },
+        config: { dmPolicy: "open" },
       },
       runtime: createRuntime(),
       mediaMaxBytes: 1,

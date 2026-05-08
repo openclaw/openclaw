@@ -25,7 +25,6 @@ export type MemoryReadonlyRecoveryState = {
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
   openDatabase: () => DatabaseSync;
-  closeDatabase: (db: DatabaseSync) => void;
   resetVectorState: () => void;
   ensureSchema: () => void;
   readMeta: () => { vectorDims?: number } | undefined;
@@ -101,7 +100,7 @@ export async function runMemorySyncWithReadonlyRecovery(
     state.readonlyRecoveryLastError = reason;
     log.warn(`memory sync readonly handle detected; reopening sqlite connection`, { reason });
     try {
-      state.closeDatabase(state.db);
+      state.db.close();
     } catch {}
     const previousVectorDims = state.vector.dims;
     state.db = state.openDatabase();

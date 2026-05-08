@@ -8,6 +8,7 @@ import {
 export {
   hasGatewayPasswordEnvCandidate,
   hasGatewayTokenEnvCandidate,
+  trimCredentialToUndefined,
   trimToUndefined,
 } from "./credential-planner.js";
 
@@ -16,7 +17,7 @@ export type ExplicitGatewayAuth = {
   password?: string;
 };
 
-type ResolvedGatewayCredentials = {
+export type ResolvedGatewayCredentials = {
   token?: string;
   password?: string;
 };
@@ -109,9 +110,7 @@ function resolveLocalGatewayCredentials(params: {
     : params.plan.remoteToken.value;
   const fallbackPassword = params.plan.localPassword.configured
     ? params.plan.localPassword.value
-    : params.plan.authMode === "trusted-proxy"
-      ? undefined
-      : params.plan.remotePassword.value;
+    : params.plan.remotePassword.value;
   const localResolved = resolveGatewayCredentialsFromValues({
     configToken: fallbackToken,
     configPassword: fallbackPassword,
@@ -121,8 +120,10 @@ function resolveLocalGatewayCredentials(params: {
   });
   const localPasswordCanWin =
     params.plan.authMode === "password" ||
-    params.plan.authMode === "trusted-proxy" ||
-    (params.plan.authMode !== "token" && params.plan.authMode !== "none" && !localResolved.token);
+    (params.plan.authMode !== "token" &&
+      params.plan.authMode !== "none" &&
+      params.plan.authMode !== "trusted-proxy" &&
+      !localResolved.token);
   const localTokenCanWin =
     params.plan.authMode === "token" ||
     (params.plan.authMode !== "password" &&
@@ -320,5 +321,16 @@ export function resolveGatewayProbeCredentialsFromConfig(params: {
     explicitAuth: params.explicitAuth,
     modeOverride: params.mode,
     remoteTokenFallback: "remote-only",
+  });
+}
+
+export function resolveGatewayDriftCheckCredentialsFromConfig(params: {
+  cfg: OpenClawConfig;
+}): ResolvedGatewayCredentials {
+  return resolveGatewayCredentialsFromConfig({
+    cfg: params.cfg,
+    env: {} as NodeJS.ProcessEnv,
+    modeOverride: "local",
+    localTokenPrecedence: "config-first",
   });
 }

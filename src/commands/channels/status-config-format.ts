@@ -20,11 +20,6 @@ import {
   type ChatChannel,
 } from "./shared.js";
 
-type ChannelStatusPluginLabel = {
-  id: ChatChannel;
-  meta: { label?: string };
-};
-
 export async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
   meta: { path?: string; mode?: "local" | "remote" },
@@ -42,25 +37,19 @@ export async function formatConfigChannelsStatusLines(
     lines.push("");
   }
 
-  const accountLines = (
-    plugin: ChannelStatusPluginLabel,
-    accounts: Array<Record<string, unknown>>,
-  ) =>
+  const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
     accounts.map((account) => {
       const bits: string[] = [];
       appendEnabledConfiguredLinkedBits(bits, account);
       appendModeBit(bits, account);
       appendTokenSourceBits(bits, account);
       appendBaseUrlBit(bits, account);
-      return buildChannelAccountLine(plugin.id, account, bits, {
-        channelLabel: plugin.meta.label ?? plugin.id,
-      });
+      return buildChannelAccountLine(provider, account, bits);
     });
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
-    includeSetupFallbackPlugins: true,
   });
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(cfg);
@@ -89,7 +78,7 @@ export async function formatConfigChannelsStatusLines(
       );
     }
     if (snapshots.length > 0) {
-      lines.push(...accountLines(plugin, snapshots));
+      lines.push(...accountLines(plugin.id, snapshots));
     }
   }
 

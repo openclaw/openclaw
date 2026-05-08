@@ -1,10 +1,8 @@
 import { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
 
 export const MIN_HOST_VERSION_FORMAT =
-  'openclaw.install.minHostVersion must use a semver floor in the form ">=x.y.z[-prerelease][+build]"';
-const SEMVER_LABEL_RE = String.raw`\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?`;
-const MIN_HOST_VERSION_RE = new RegExp(`^>=(${SEMVER_LABEL_RE})$`);
-const LEGACY_MIN_HOST_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/;
+  'openclaw.install.minHostVersion must use a semver floor in the form ">=x.y.z"';
+const MIN_HOST_VERSION_RE = /^>=(\d+)\.(\d+)\.(\d+)$/;
 
 export type MinHostVersionRequirement = {
   raw: string;
@@ -24,10 +22,7 @@ export type MinHostVersionCheckResult =
       currentVersion: string;
     };
 
-export function parseMinHostVersionRequirement(
-  raw: unknown,
-  options: { allowLegacyBareSemver?: boolean } = {},
-): MinHostVersionRequirement | null {
+export function parseMinHostVersionRequirement(raw: unknown): MinHostVersionRequirement | null {
   if (typeof raw !== "string") {
     return null;
   }
@@ -35,13 +30,11 @@ export function parseMinHostVersionRequirement(
   if (!trimmed) {
     return null;
   }
-  const match =
-    trimmed.match(MIN_HOST_VERSION_RE) ??
-    (options.allowLegacyBareSemver ? trimmed.match(LEGACY_MIN_HOST_VERSION_RE) : null);
+  const match = trimmed.match(MIN_HOST_VERSION_RE);
   if (!match) {
     return null;
   }
-  const minimumLabel = match.length >= 4 ? `${match[1]}.${match[2]}.${match[3]}` : (match[1] ?? "");
+  const minimumLabel = `${match[1]}.${match[2]}.${match[3]}`;
   if (!parseSemver(minimumLabel)) {
     return null;
   }
@@ -61,14 +54,11 @@ export function validateMinHostVersion(raw: unknown): string | null {
 export function checkMinHostVersion(params: {
   currentVersion: string | undefined;
   minHostVersion: unknown;
-  allowLegacyBareSemver?: boolean;
 }): MinHostVersionCheckResult {
   if (params.minHostVersion === undefined) {
     return { ok: true, requirement: null };
   }
-  const requirement = parseMinHostVersionRequirement(params.minHostVersion, {
-    allowLegacyBareSemver: params.allowLegacyBareSemver,
-  });
+  const requirement = parseMinHostVersionRequirement(params.minHostVersion);
   if (!requirement) {
     return { ok: false, kind: "invalid", error: MIN_HOST_VERSION_FORMAT };
   }

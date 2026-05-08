@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 
 parallels_package_current_build_commit() {
-  node scripts/e2e/lib/parallels-package/build-info-commit.mjs
+  python3 - <<'PY'
+import json
+import pathlib
+
+path = pathlib.Path("dist/build-info.json")
+if not path.exists():
+    print("")
+else:
+    print(json.loads(path.read_text()).get("commit", ""))
+PY
 }
 
 parallels_package_acquire_build_lock() {
@@ -57,55 +66,35 @@ parallels_package_assert_no_generated_drift() {
 }
 
 parallels_log_progress_extract() {
-  local _python_bin="$1"
+  local python_bin="$1"
   local log_path="$2"
-  node scripts/e2e/lib/parallels-package/log-progress-extract.mjs "$log_path"
-}
+  "$python_bin" - "$log_path" <<'PY'
+import pathlib
+import sys
 
-parallels_bash_seed_workspace_snippet() {
-  local purpose="$1"
-  cat <<EOF
-workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
-mkdir -p "\$workspace/.openclaw"
-cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
-# Identity
+path = pathlib.Path(sys.argv[1])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
 
-- Name: OpenClaw
-- Purpose: $purpose
-IDENTITY_EOF
-cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-STATE_EOF
-rm -f "\$workspace/BOOTSTRAP.md"
-EOF
-}
+text = path.read_text(encoding="utf-8", errors="replace")
+lines = [line.strip() for line in text.splitlines() if line.strip()]
 
-parallels_powershell_seed_workspace_snippet() {
-  local purpose="$1"
-  cat <<EOF
-\$workspace = \$env:OPENCLAW_WORKSPACE_DIR
-if (-not \$workspace) {
-  \$workspace = Join-Path \$env:USERPROFILE '.openclaw\\workspace'
-}
-\$stateDir = Join-Path \$workspace '.openclaw'
-New-Item -ItemType Directory -Path \$stateDir -Force | Out-Null
-@'
-# Identity
+for line in reversed(lines):
+    if line.startswith("==> "):
+        print(line[4:].strip())
+        raise SystemExit(0)
 
-- Name: OpenClaw
-- Purpose: $purpose
-'@ | Set-Content -Path (Join-Path \$workspace 'IDENTITY.md') -Encoding UTF8
-@'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-'@ | Set-Content -Path (Join-Path \$stateDir 'workspace-state.json') -Encoding UTF8
-Remove-Item (Join-Path \$workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
-EOF
+for line in reversed(lines):
+    if line.startswith("warn:") or line.startswith("error:"):
+        print(line)
+        raise SystemExit(0)
+
+if lines:
+    print(lines[-1][:240])
+else:
+    print("")
+PY
 }
 
 parallels_child_job_running() {

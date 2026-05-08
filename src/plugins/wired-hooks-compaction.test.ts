@@ -59,8 +59,6 @@ describe("compaction hook wiring", () => {
       maybeResolveCompactionWait: vi.fn(),
       incrementCompactionCount: vi.fn(),
       getCompactionCount: () => params.compactionCount ?? 0,
-      noteCompactionTokensAfter: vi.fn(),
-      getLastCompactionTokensAfter: vi.fn(() => undefined),
       ...(params.withRetryHooks
         ? {
             noteCompactionRetry: vi.fn(),
@@ -109,7 +107,7 @@ describe("compaction hook wiring", () => {
     ctx: ReturnType<typeof createCompactionEndCtx> | Record<string, unknown>,
     event: {
       willRetry: boolean;
-      result?: { summary: string; tokensAfter?: number };
+      result?: { summary: string };
       aborted?: boolean;
     },
   ) {
@@ -186,7 +184,6 @@ describe("compaction hook wiring", () => {
       expectedSessionKey: "agent:main:web-xyz",
     });
     expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
-    expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(undefined);
     expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r2",
@@ -254,8 +251,6 @@ describe("compaction hook wiring", () => {
       maybeResolveCompactionWait: vi.fn(),
       getCompactionCount: () => 1,
       incrementCompactionCount: vi.fn(),
-      noteCompactionTokensAfter: vi.fn(),
-      getLastCompactionTokensAfter: vi.fn(() => undefined),
     };
 
     runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });

@@ -67,7 +67,9 @@ export function normalizeMatrixAllowList(list?: Array<string | number>) {
   return normalizeAllowList(list).map((entry) => normalizeMatrixAllowListEntry(entry));
 }
 
-type MatrixAllowListMatch = AllowlistMatch<"wildcard" | "id" | "prefixed-id" | "prefixed-user">;
+export type MatrixAllowListMatch = AllowlistMatch<
+  "wildcard" | "id" | "prefixed-id" | "prefixed-user"
+>;
 
 type MatrixAllowListMatchSource = NonNullable<MatrixAllowListMatch["matchSource"]>;
 

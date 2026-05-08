@@ -57,13 +57,6 @@ function parseSenderInfoPayload(text: string): Record<string, unknown> {
   return parseUntrustedJsonBlock(text, "Sender (untrusted metadata):") as Record<string, unknown>;
 }
 
-function parseReplyPayload(text: string): Record<string, unknown> {
-  return parseUntrustedJsonBlock(
-    text,
-    "Reply target of current user message (untrusted, for context):",
-  ) as Record<string, unknown>;
-}
-
 function parseHistoryPayload(text: string): Array<Record<string, unknown>> {
   return parseUntrustedJsonBlock(
     text,
@@ -466,17 +459,6 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["reply_to_id"]).toBe("msg-199");
-  });
-
-  it("labels reply context as the current message target", () => {
-    const text = buildInboundUserContextPrefix({
-      ReplyToSender: "Quoter",
-      ReplyToBody: "quoted body",
-    } as TemplateContext);
-
-    const reply = parseReplyPayload(text);
-    expect(reply["sender_label"]).toBe("Quoter");
-    expect(reply["body"]).toBe("quoted body");
   });
 
   it("includes sender_id in conversation info", () => {

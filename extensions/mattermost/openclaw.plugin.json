@@ -1,8 +1,5 @@
 {
   "id": "mattermost",
-  "activation": {
-    "onStartup": false
-  },
   "channels": ["mattermost"],
   "channelEnvVars": {
     "mattermost": ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]

@@ -1,12 +1,25 @@
+import { Button, type ButtonInteraction, type ComponentData } from "@buape/carbon";
 import { ButtonStyle } from "discord-api-types/v10";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
-import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { Button, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
+import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type {
+  ExecApprovalDecision,
+  ExecApprovalRequest,
+  ExecApprovalResolved,
+  PluginApprovalRequest,
+  PluginApprovalResolved,
+} from "openclaw/plugin-sdk/infra-runtime";
 export { buildExecApprovalCustomId } from "../approval-handler.runtime.js";
 import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
 
 export { extractDiscordChannelId } from "../approval-native.js";
+export type {
+  ExecApprovalRequest,
+  ExecApprovalResolved,
+  PluginApprovalRequest,
+  PluginApprovalResolved,
+} from "openclaw/plugin-sdk/infra-runtime";
+
 function decodeCustomIdValue(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -38,31 +51,10 @@ export function parseExecApprovalData(
   };
 }
 
-type ExecApprovalButtonContext = {
+export type ExecApprovalButtonContext = {
   getApprovers: () => string[];
-  resolveApproval: (
-    approvalId: string,
-    decision: ExecApprovalDecision,
-  ) => Promise<ExecApprovalResolveResult>;
+  resolveApproval: (approvalId: string, decision: ExecApprovalDecision) => Promise<boolean>;
 };
-
-type ExecApprovalResolveResult = { ok: true } | { ok: false; reason: "error" | "not-found" };
-
-function isStructuredApprovalNotFoundError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const record = err as {
-    gatewayCode?: unknown;
-    details?: { reason?: unknown } | null;
-  };
-  if (record.gatewayCode === "APPROVAL_NOT_FOUND") {
-    return true;
-  }
-  return (
-    record.gatewayCode === "INVALID_REQUEST" && record.details?.reason === "APPROVAL_NOT_FOUND"
-  );
-}
 
 export class ExecApprovalButton extends Button {
   label = "execapproval";
@@ -108,8 +100,8 @@ export class ExecApprovalButton extends Button {
       await interaction.acknowledge();
     } catch {}
 
-    const result = await this.ctx.resolveApproval(parsed.approvalId, parsed.action);
-    if (!result.ok && result.reason !== "not-found") {
+    const ok = await this.ctx.resolveApproval(parsed.approvalId, parsed.action);
+    if (!ok) {
       try {
         await interaction.followUp({
           content: `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
@@ -146,12 +138,9 @@ export function createDiscordExecApprovalButtonContext(params: {
           gatewayUrl: params.gatewayUrl,
           clientDisplayName: `Discord approval (${params.accountId})`,
         });
-        return { ok: true };
-      } catch (err) {
-        return {
-          ok: false,
-          reason: isStructuredApprovalNotFoundError(err) ? "not-found" : "error",
-        };
+        return true;
+      } catch {
+        return false;
       }
     },
   };

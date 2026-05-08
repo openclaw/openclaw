@@ -11,7 +11,7 @@ import type {
   MusicGenerationSourceImage,
 } from "./types.js";
 
-type ResolvedMusicGenerationOverrides = {
+export type ResolvedMusicGenerationOverrides = {
   lyrics?: string;
   instrumental?: boolean;
   durationSeconds?: number;

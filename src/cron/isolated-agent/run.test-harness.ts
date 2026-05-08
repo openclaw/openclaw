@@ -64,7 +64,6 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
-export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
 export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
@@ -74,15 +73,15 @@ export const retireSessionMcpRuntimeMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
-const resolveCronAgentLaneMock = createMock();
+const resolveNestedAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
 const deriveSessionTotalTokensMock = createMock();
 const hasNonzeroUsageMock = createMock();
 const ensureAgentWorkspaceMock = createMock();
 const normalizeThinkLevelMock = createMock();
 const normalizeVerboseLevelMock = createMock();
-export const isThinkingLevelSupportedMock = createMock();
-export const resolveSupportedThinkingLevelMock = createMock();
+const isThinkingLevelSupportedMock = createMock();
+const resolveSupportedThinkingLevelMock = createMock();
 const supportsXHighThinkingMock = createMock();
 const resolveSessionTranscriptPathMock = createMock();
 const setSessionRuntimeModelMock = createMock();
@@ -93,7 +92,7 @@ const mapHookExternalContentSourceMock = createMock();
 const isExternalHookSessionMock = createMock();
 const resolveHookExternalContentSourceMock = createMock();
 const getSkillsSnapshotVersionMock = createMock();
-export const loadModelCatalogMock = createMock();
+const loadModelCatalogMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
 
 vi.mock("./run.runtime.js", () => ({
@@ -166,7 +165,7 @@ vi.mock("./run-execution.runtime.js", () => ({
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
-  resolveCronAgentLane: resolveCronAgentLaneMock,
+  resolveNestedAgentLane: resolveNestedAgentLaneMock,
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
   isCliProvider: isCliProviderMock,
@@ -185,7 +184,7 @@ vi.mock("./run-auth-profile.runtime.js", () => ({
 
 vi.mock("./run-embedded.runtime.js", () => ({
   resolveFastModeState: resolveFastModeStateMock,
-  resolveCronAgentLane: resolveCronAgentLaneMock,
+  resolveNestedAgentLane: resolveNestedAgentLaneMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
 }));
 
@@ -220,10 +219,6 @@ vi.mock("./run-delivery.runtime.js", async () => {
     dispatchCronDelivery: dispatchCronDeliveryMock,
   };
 });
-
-vi.mock("./model-preflight.runtime.js", () => ({
-  preflightCronModelProvider: preflightCronModelProviderMock,
-}));
 
 vi.mock("./helpers.js", () => ({
   isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
@@ -298,15 +293,12 @@ function resetRunConfigMocks(): void {
   resolveAgentConfigMock.mockReturnValue(undefined);
   resolveEffectiveModelFallbacksMock.mockReset();
   resolveEffectiveModelFallbacksMock.mockImplementation(
-    ({ cfg, agentId, hasSessionModelOverride, modelOverrideSource }) => {
+    ({ cfg, agentId, hasSessionModelOverride }) => {
       const agentFallbacksOverride = resolveAgentModelFallbacksOverrideMock(cfg, agentId) as
         | string[]
         | undefined;
       if (!hasSessionModelOverride) {
         return agentFallbacksOverride;
-      }
-      if (modelOverrideSource !== "auto") {
-        return [];
       }
       const defaultFallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.model);
       return agentFallbacksOverride ?? defaultFallbacks;
@@ -347,7 +339,7 @@ function resetRunExecutionMocks(): void {
   isCliProviderMock.mockReturnValue(false);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
-  resolveCronAgentLaneMock.mockReturnValue(undefined);
+  resolveNestedAgentLaneMock.mockReturnValue(undefined);
   normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
   resolveSessionTranscriptPathMock.mockReturnValue("/tmp/transcript.jsonl");
   registerAgentRunContextMock.mockReturnValue(undefined);
@@ -370,70 +362,21 @@ function resetRunOutcomeMocks(): void {
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
   resolveCronPayloadOutcomeMock.mockReset();
   resolveCronPayloadOutcomeMock.mockImplementation(
-    ({
-      payloads,
-      failureSignal,
-      runLevelError,
-    }: {
-      payloads: Array<{ isError?: boolean }>;
-      failureSignal?: { fatalForCron?: boolean; message?: string };
-      runLevelError?: unknown;
-    }) => {
-      const runLevelErrorMessage =
-        typeof runLevelError === "string" && runLevelError.trim()
-          ? `cron isolated run failed: ${runLevelError.trim()}`
-          : runLevelError && typeof runLevelError === "object"
-            ? (() => {
-                const record = runLevelError as { message?: unknown; kind?: unknown };
-                const message =
-                  typeof record.message === "string" && record.message.trim()
-                    ? record.message.trim()
-                    : undefined;
-                if (message) {
-                  return `cron isolated run failed: ${message}`;
-                }
-                const kind =
-                  typeof record.kind === "string" && record.kind.trim()
-                    ? record.kind.trim()
-                    : undefined;
-                return kind ? `cron isolated run failed: ${kind}` : "cron isolated run failed";
-              })()
-            : undefined;
-      const failureMessage =
-        failureSignal?.fatalForCron === true
-          ? (failureSignal.message ?? "cron isolated run returned a fatal failure signal")
-          : undefined;
-      const errorPayloadMessage = payloads.some((payload) => payload?.isError === true)
-        ? "cron isolated run returned an error payload"
-        : undefined;
-      const outputText =
-        errorPayloadMessage ??
-        failureMessage ??
-        runLevelErrorMessage ??
-        pickLastNonEmptyTextFromPayloadsMock(payloads);
+    ({ payloads }: { payloads: Array<{ isError?: boolean }> }) => {
+      const outputText = pickLastNonEmptyTextFromPayloadsMock(payloads);
       const synthesizedText = outputText?.trim() || "summary";
-      const hasFatalErrorPayload =
-        errorPayloadMessage !== undefined ||
-        failureMessage !== undefined ||
-        runLevelErrorMessage !== undefined;
-      const deliveryPayload =
-        errorPayloadMessage || failureMessage || runLevelErrorMessage
-          ? { text: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage, isError: true }
-          : undefined;
+      const hasFatalErrorPayload = payloads.some((payload) => payload?.isError === true);
       return {
-        summary: errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? "summary",
+        summary: "summary",
         outputText,
         synthesizedText,
-        deliveryPayload,
-        deliveryPayloads: deliveryPayload
-          ? [deliveryPayload]
-          : synthesizedText
-            ? [{ text: synthesizedText }]
-            : [],
+        deliveryPayload: undefined,
+        deliveryPayloads: synthesizedText ? [{ text: synthesizedText }] : [],
         deliveryPayloadHasStructuredContent: false,
         hasFatalErrorPayload,
-        embeddedRunError:
-          errorPayloadMessage ?? failureMessage ?? runLevelErrorMessage ?? undefined,
+        embeddedRunError: hasFatalErrorPayload
+          ? "cron isolated run returned an error payload"
+          : undefined,
       };
     },
   );
@@ -482,8 +425,6 @@ function resetRunOutcomeMocks(): void {
       deliveryPayloads,
     }),
   );
-  preflightCronModelProviderMock.mockReset();
-  preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
   isHeartbeatOnlyResponseMock.mockReset();
   isHeartbeatOnlyResponseMock.mockReturnValue(false);
   resolveHeartbeatAckMaxCharsMock.mockReset();

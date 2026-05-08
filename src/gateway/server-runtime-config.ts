@@ -2,7 +2,7 @@ import type {
   GatewayAuthConfig,
   GatewayBindMode,
   GatewayTailscaleConfig,
-} from "../config/types.gateway.js";
+} from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertGatewayAuthConfigured,
@@ -10,7 +10,6 @@ import {
   resolveGatewayAuth,
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { warnLegacyOpenClawEnvVars } from "./env-deprecation.js";
 import { resolveHooksConfig } from "./hooks.js";
 import {
   defaultGatewayBindMode,
@@ -20,7 +19,7 @@ import {
 } from "./net.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
-type GatewayRuntimeConfig = {
+export type GatewayRuntimeConfig = {
   bindHost: string;
   controlUiEnabled: boolean;
   openAiChatCompletionsEnabled: boolean;
@@ -49,8 +48,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
-  warnLegacyOpenClawEnvVars();
-
   // Tailscale serve/funnel hard-requires loopback.  When bind is not
   // explicitly set, we must resolve Tailscale mode *before* choosing the
   // bind default so that container auto-detection does not override the
@@ -143,7 +140,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
     throw new Error(
-      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
+      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
     );
   }
   if (

@@ -62,9 +62,6 @@ describeLive("gemini live switch", () => {
         },
       );
 
-      if (modelId.includes("preview") && res.stopReason === "error") {
-        return;
-      }
       expect(res.stopReason).not.toBe("error");
     }, 20000);
   }

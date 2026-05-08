@@ -2,7 +2,7 @@ import {
   installChannelOutboundPayloadContractSuite,
   primeChannelOutboundSendMock,
   type OutboundPayloadHarnessParams,
-} from "openclaw/plugin-sdk/channel-contract-testing";
+} from "openclaw/plugin-sdk/testing";
 import { describe, vi } from "vitest";
 import { zaloPlugin } from "./channel.js";
 

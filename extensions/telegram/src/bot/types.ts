@@ -1,9 +1,9 @@
 import type { ChatFullInfo, Message, UserFromGetMe } from "@grammyjs/types";
 
 /** App-specific stream mode for Telegram stream previews. */
-export type TelegramStreamMode = "off" | "partial" | "block" | "progress";
+export type TelegramStreamMode = "off" | "partial" | "block";
 
-type TelegramGetFile = () => Promise<{ file_path?: string }>;
+export type TelegramGetFile = () => Promise<{ file_path?: string }>;
 export type TelegramChatDetails = {
   id?: number | string;
   available_reactions?: ChatFullInfo["available_reactions"] | null;
@@ -20,6 +20,10 @@ export type TelegramContext = {
   message: Message;
   me?: UserFromGetMe;
   getFile: TelegramGetFile;
+};
+
+export type TelegramSyntheticContextSource = Pick<TelegramContext, "me"> & {
+  getFile?: TelegramGetFile;
 };
 
 /** Telegram sticker metadata for context enrichment and caching. */

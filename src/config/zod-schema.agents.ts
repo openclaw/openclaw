@@ -35,26 +35,12 @@ const BindingMatchSchema = z
   })
   .strict();
 
-const BindingSessionSchema = z
-  .object({
-    dmScope: z
-      .union([
-        z.literal("main"),
-        z.literal("per-peer"),
-        z.literal("per-channel-peer"),
-        z.literal("per-account-channel-peer"),
-      ])
-      .optional(),
-  })
-  .strict();
-
 const RouteBindingSchema = z
   .object({
     type: z.literal("route").optional(),
     agentId: z.string(),
     comment: z.string().optional(),
     match: BindingMatchSchema,
-    session: BindingSessionSchema.optional(),
   })
   .strict();
 

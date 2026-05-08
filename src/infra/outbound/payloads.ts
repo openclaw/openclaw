@@ -31,8 +31,6 @@ export type NormalizedOutboundPayload = {
   delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
-  /** Hook-only content for audio-only TTS payloads. Never used as channel text/caption. */
-  hookContent?: string;
 };
 
 export type OutboundPayloadJson = {
@@ -67,7 +65,6 @@ type OutboundPayloadPlanContext = {
    * (see `pending-spawn-query.ts`).
    */
   hasPendingSpawnedChildren?: boolean;
-  extractMarkdownImages?: boolean;
 };
 
 export type OutboundPayloadMirror = {
@@ -132,14 +129,11 @@ type PreparedOutboundPayloadPlanEntry = {
 
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
-  context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
 ): PreparedOutboundPayloadPlanEntry | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(payload.text ?? "", {
-    extractMarkdownImages: context.extractMarkdownImages,
-  });
+  const parsed = parseReplyDirectives(payload.text ?? "");
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
   const mergedMedia = mergeMediaUrls(
@@ -197,9 +191,7 @@ export function createOutboundPayloadPlan(
     context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
   const prepared: PreparedOutboundPayloadPlanEntry[] = [];
   for (const payload of payloads) {
-    const entry = createOutboundPayloadPlanEntry(payload, {
-      extractMarkdownImages: context.extractMarkdownImages,
-    });
+    const entry = createOutboundPayloadPlanEntry(payload);
     if (!entry) {
       continue;
     }
@@ -251,18 +243,18 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    const visibleSilentPayload: ReplyPayload = {
+    const rewrittenPayload: ReplyPayload = {
       ...entry.payload,
       text: resolveSilentReplyRewriteText({
         seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${entry.payload.text ?? ""}`,
       }),
     };
-    if (!isRenderablePayload(visibleSilentPayload)) {
+    if (!isRenderablePayload(rewrittenPayload)) {
       continue;
     }
     plan.push({
-      payload: visibleSilentPayload,
-      parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
+      payload: rewrittenPayload,
+      parts: resolveSendableOutboundReplyParts(rewrittenPayload),
       hasPresentation: entry.hasPresentation,
       hasInteractive: entry.hasInteractive,
       hasChannelData: entry.hasChannelData,
@@ -341,7 +333,6 @@ export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
   const parts = resolveSendableOutboundReplyParts(payload);
-  const spokenText = payload.spokenText?.trim() ? payload.spokenText : undefined;
   return {
     text: parts.text,
     mediaUrls: parts.mediaUrls,
@@ -350,7 +341,6 @@ export function summarizeOutboundPayloadForTransport(
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
-    ...(parts.text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }
 

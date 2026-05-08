@@ -1,11 +1,7 @@
 import "./test-helpers.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createAcceptedWhatsAppSendResult,
-  installWebAutoReplyUnitTestHooks,
-  makeSessionStore,
-} from "./auto-reply.test-harness.js";
+import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
 let awaitBackgroundTasks: typeof import("./auto-reply/monitor/last-route.js").awaitBackgroundTasks;
@@ -96,8 +92,8 @@ function buildInboundMessage(params: {
     senderName: params.senderName,
     selfE164: params.selfE164,
     sendComposing: vi.fn().mockResolvedValue(undefined),
-    reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1")),
-    sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1")),
+    reply: vi.fn().mockResolvedValue(undefined),
+    sendMedia: vi.fn().mockResolvedValue(undefined),
   };
 }
 

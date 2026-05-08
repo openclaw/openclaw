@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  getRuntimeConfig,
   type OpenClawConfig,
   CONFIG_PATH,
+  loadConfig,
   readConfigFileSnapshot,
-  replaceConfigFile,
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
+  writeConfigFile,
 } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -237,10 +237,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   if (!validated.ok) {
     throw new Error(`Config validation failed: ${validated.issues[0]?.message ?? "invalid"}`);
   }
-  await replaceConfigFile({
-    nextConfig: validated.config,
-    afterWrite: { mode: "auto" },
-  });
+  await writeConfigFile(validated.config);
 
   const summary = {
     projectId,
@@ -274,7 +271,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
 export async function runGmailService(opts: GmailRunOptions) {
   await ensureDependency("gog", ["gogcli"]);
-  const config = getRuntimeConfig();
+  const config = loadConfig();
 
   const overrides: GmailHookOverrides = {
     account: opts.account,

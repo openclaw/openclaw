@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   auditDiscordChannelPermissionsWithFetcher,
@@ -56,7 +56,6 @@ describe("discord audit", () => {
     });
 
     const audit = await auditDiscordChannelPermissionsWithFetcher({
-      cfg,
       token: "t",
       accountId: "default",
       channelIds: collected.channelIds,

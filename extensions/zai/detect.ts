@@ -8,6 +8,10 @@ type DetectZaiEndpointFn = typeof detectZaiEndpointCore;
 
 let detectZaiEndpointImpl: DetectZaiEndpointFn = detectZaiEndpointCore;
 
+export function setDetectZaiEndpointForTesting(fn?: DetectZaiEndpointFn): void {
+  detectZaiEndpointImpl = fn ?? detectZaiEndpointCore;
+}
+
 export async function detectZaiEndpoint(
   ...args: Parameters<DetectZaiEndpointFn>
 ): ReturnType<DetectZaiEndpointFn> {

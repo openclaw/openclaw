@@ -145,7 +145,7 @@ export function loadBundledWebSearchProviderEntriesFromDir(params: {
   });
 }
 
-function loadBundledRuntimeWebSearchProviderEntriesFromDir(params: {
+export function loadBundledRuntimeWebSearchProviderEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
 }): PluginWebSearchProviderEntry[] | null {

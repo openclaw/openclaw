@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRecord } from "../utils.js";
 
-type ChannelDefaultAccountContext = {
+export type ChannelDefaultAccountContext = {
   accountIds: string[];
   defaultAccountId: string;
   account: unknown;
@@ -19,7 +19,7 @@ type ChannelDefaultAccountContext = {
   degraded: boolean;
 };
 
-type ChannelAccountContextMode = "strict" | "read_only";
+export type ChannelAccountContextMode = "strict" | "read_only";
 
 function getBooleanField(value: unknown, key: string): boolean | undefined {
   const record = isRecord(value) ? value : null;

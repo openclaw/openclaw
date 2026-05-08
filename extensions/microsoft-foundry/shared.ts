@@ -73,13 +73,13 @@ export type CachedTokenEntry = {
 
 export type FoundryProviderApi = typeof DEFAULT_API | typeof DEFAULT_GPT5_API;
 
-type FoundryDeploymentConfigInput = {
+export type FoundryDeploymentConfigInput = {
   name: string;
   modelName?: string;
   api?: FoundryProviderApi;
 };
 
-type FoundryModelCapabilities = {
+export type FoundryModelCapabilities = {
   modelName: string;
   api: FoundryProviderApi;
   input: Array<"text" | "image">;
@@ -114,7 +114,7 @@ type FoundryConfigShape = {
   };
 };
 
-function normalizeFoundryModelName(value?: string | null): string | undefined {
+export function normalizeFoundryModelName(value?: string | null): string | undefined {
   const trimmed = normalizeLowercaseStringOrEmpty(value);
   return trimmed || undefined;
 }
@@ -181,7 +181,7 @@ export function normalizeFoundryEndpoint(endpoint: string): string {
   }
 }
 
-function buildFoundryV1BaseUrl(endpoint: string): string {
+export function buildFoundryV1BaseUrl(endpoint: string): string {
   const base = normalizeFoundryEndpoint(endpoint);
   return base.endsWith("/openai/v1") ? base : `${base}/openai/v1`;
 }
@@ -218,7 +218,7 @@ export function extractFoundryEndpoint(baseUrl: string | null | undefined): stri
   }
 }
 
-function buildFoundryModelCompat(
+export function buildFoundryModelCompat(
   modelId: string,
   modelNameHint?: string | null,
   configuredApi?: ModelApi | null,
@@ -267,7 +267,7 @@ export function resolveConfiguredModelNameHint(
   return trimmedId ? trimmedId : undefined;
 }
 
-function buildFoundryProviderConfig(
+export function buildFoundryProviderConfig(
   endpoint: string,
   modelId: string,
   modelNameHint?: string | null,

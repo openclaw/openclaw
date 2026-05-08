@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-type SecurityPathCanonicalization = {
+export type SecurityPathCanonicalization = {
   canonicalPath: string;
   candidates: string[];
   decodePasses: number;
@@ -119,6 +119,11 @@ export function canonicalizePathForSecurity(pathname: string): SecurityPathCanon
     malformedEncoding,
     rawNormalizedPath: normalizePathSeparators(normalizeLowercaseStringOrEmpty(pathname)) || "/",
   };
+}
+
+export function hasSecurityPathCanonicalizationAnomaly(pathname: string): boolean {
+  const canonical = canonicalizePathForSecurity(pathname);
+  return canonical.malformedEncoding || canonical.decodePassLimitReached;
 }
 
 const normalizedPrefixesCache = new WeakMap<readonly string[], readonly string[]>();

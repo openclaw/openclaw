@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-function makeBaseReq(
+export function makeBaseReq(
   method: string,
   opts: { headers?: Record<string, string>; url?: string } = {},
 ): IncomingMessage & { destroyed: boolean } {

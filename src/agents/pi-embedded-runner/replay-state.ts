@@ -33,14 +33,8 @@ export function mergeEmbeddedRunReplayState(
 
 export function observeReplayMetadata(
   current: EmbeddedRunReplayState,
-  metadata?: EmbeddedRunReplayMetadata | null,
+  metadata: EmbeddedRunReplayMetadata,
 ): EmbeddedRunReplayState {
-  if (!metadata) {
-    return mergeEmbeddedRunReplayState(current, {
-      replayInvalid: true,
-      hadPotentialSideEffects: true,
-    });
-  }
   return mergeEmbeddedRunReplayState(current, {
     replayInvalid: !metadata.replaySafe,
     hadPotentialSideEffects: metadata.hadPotentialSideEffects,

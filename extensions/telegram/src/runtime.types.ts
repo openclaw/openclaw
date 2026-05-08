@@ -3,13 +3,13 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { TelegramMonitorFn } from "./monitor.types.js";
 
 export type TelegramProbeFn = typeof import("./probe.js").probeTelegram;
-type TelegramAuditCollectFn = typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
-type TelegramAuditMembershipFn = typeof import("./audit.js").auditTelegramGroupMembership;
-type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
-type TelegramResolveTokenFn = typeof import("./token.js").resolveTelegramToken;
+export type TelegramAuditCollectFn = typeof import("./audit.js").collectTelegramUnmentionedGroupIds;
+export type TelegramAuditMembershipFn = typeof import("./audit.js").auditTelegramGroupMembership;
+export type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
+export type TelegramResolveTokenFn = typeof import("./token.js").resolveTelegramToken;
 type BasePluginRuntimeChannel = PluginRuntime extends { channel: infer T } ? T : never;
 
-type TelegramChannelRuntime = {
+export type TelegramChannelRuntime = {
   probeTelegram?: TelegramProbeFn;
   collectTelegramUnmentionedGroupIds?: TelegramAuditCollectFn;
   auditTelegramGroupMembership?: TelegramAuditMembershipFn;
@@ -19,7 +19,7 @@ type TelegramChannelRuntime = {
   messageActions?: ChannelMessageActionAdapter;
 };
 
-interface TelegramRuntimeChannel extends BasePluginRuntimeChannel {
+export interface TelegramRuntimeChannel extends BasePluginRuntimeChannel {
   telegram?: TelegramChannelRuntime;
 }
 

@@ -35,7 +35,6 @@ type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> 
 
 type DiscoverModelsOptions = {
   providerFilter?: string;
-  normalizeModels?: boolean;
 };
 
 type InMemoryAuthStorageBackendLike = {
@@ -150,24 +149,17 @@ function createOpenClawModelRegistry(
   const providerFilter = options?.providerFilter ? normalizeProviderId(options.providerFilter) : "";
   const matchesProviderFilter = (entry: Model<Api>) =>
     !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
-  const shouldNormalize = options?.normalizeModels !== false;
 
-  registry.getAll = () => {
-    const entries = getAll().filter((entry: Model<Api>) => matchesProviderFilter(entry));
-    return shouldNormalize
-      ? entries.map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir))
-      : entries;
-  };
-  registry.getAvailable = () => {
-    const entries = getAvailable().filter((entry: Model<Api>) => matchesProviderFilter(entry));
-    return shouldNormalize
-      ? entries.map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir))
-      : entries;
-  };
+  registry.getAll = () =>
+    getAll()
+      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
+      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
+  registry.getAvailable = () =>
+    getAvailable()
+      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
+      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
   registry.find = (provider: string, modelId: string) =>
-    shouldNormalize
-      ? normalizeDiscoveredPiModel(find(provider, modelId), agentDir)
-      : find(provider, modelId);
+    normalizeDiscoveredPiModel(find(provider, modelId), agentDir);
 
   return registry;
 }
@@ -222,8 +214,7 @@ export function discoverAuthStorage(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
 ): PiAuthStorage {
-  const credentials =
-    options?.skipCredentials === true ? {} : resolvePiCredentialsForDiscovery(agentDir, options);
+  const credentials = resolvePiCredentialsForDiscovery(agentDir, options);
   const authPath = path.join(agentDir, "auth.json");
   if (options?.readOnly !== true) {
     scrubLegacyStaticAuthJsonEntriesForDiscovery(authPath);

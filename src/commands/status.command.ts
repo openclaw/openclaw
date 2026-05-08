@@ -6,7 +6,6 @@ import {
   type ConnectPairingRequiredReason,
 } from "../gateway/protocol/connect-error-details.js";
 import { type RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
@@ -21,41 +20,47 @@ import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
 
-const statusScanModuleLoader = createLazyImportLoader(() => import("./status.scan.js"));
-const statusScanFastJsonModuleLoader = createLazyImportLoader(
-  () => import("./status.scan.fast-json.js"),
-);
-const statusAllModuleLoader = createLazyImportLoader(() => import("./status-all.js"));
-const statusCommandTextRuntimeLoader = createLazyImportLoader(
-  () => import("./status.command.text-runtime.js"),
-);
-const statusGatewayConnectionRuntimeLoader = createLazyImportLoader(
-  () => import("./status.gateway-connection.runtime.js"),
-);
-const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
+let statusScanModulePromise: Promise<typeof import("./status.scan.js")> | undefined;
+let statusScanFastJsonModulePromise:
+  | Promise<typeof import("./status.scan.fast-json.js")>
+  | undefined;
+let statusAllModulePromise: Promise<typeof import("./status-all.js")> | undefined;
+let statusCommandTextRuntimePromise:
+  | Promise<typeof import("./status.command.text-runtime.js")>
+  | undefined;
+let statusGatewayConnectionRuntimePromise:
+  | Promise<typeof import("./status.gateway-connection.runtime.js")>
+  | undefined;
+let statusNodeModeModulePromise: Promise<typeof import("./status.node-mode.js")> | undefined;
 
 function loadStatusScanModule() {
-  return statusScanModuleLoader.load();
+  statusScanModulePromise ??= import("./status.scan.js");
+  return statusScanModulePromise;
 }
 
 function loadStatusScanFastJsonModule() {
-  return statusScanFastJsonModuleLoader.load();
+  statusScanFastJsonModulePromise ??= import("./status.scan.fast-json.js");
+  return statusScanFastJsonModulePromise;
 }
 
 function loadStatusAllModule() {
-  return statusAllModuleLoader.load();
+  statusAllModulePromise ??= import("./status-all.js");
+  return statusAllModulePromise;
 }
 
 function loadStatusCommandTextRuntime() {
-  return statusCommandTextRuntimeLoader.load();
+  statusCommandTextRuntimePromise ??= import("./status.command.text-runtime.js");
+  return statusCommandTextRuntimePromise;
 }
 
 function loadStatusGatewayConnectionRuntime() {
-  return statusGatewayConnectionRuntimeLoader.load();
+  statusGatewayConnectionRuntimePromise ??= import("./status.gateway-connection.runtime.js");
+  return statusGatewayConnectionRuntimePromise;
 }
 
 function loadStatusNodeModeModule() {
-  return statusNodeModeModuleLoader.load();
+  statusNodeModeModulePromise ??= import("./status.node-mode.js");
+  return statusNodeModeModulePromise;
 }
 
 export function resolvePairingRecoveryContext(params: {
@@ -125,7 +130,7 @@ export async function statusCommand(
   }
 
   const scan = await loadStatusScanModule().then(({ scanStatus }) =>
-    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all, deep: opts.deep }, runtime),
+    scanStatus({ json: false, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
   );
 
   const {
@@ -167,7 +172,7 @@ export async function statusCommand(
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,
-    includeSecurityAudit: opts.all === true || opts.deep === true,
+    includeSecurityAudit: true,
     resolveSecurityAudit: async (input) =>
       await withProgress(
         {

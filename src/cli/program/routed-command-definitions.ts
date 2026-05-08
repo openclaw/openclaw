@@ -1,5 +1,4 @@
 import { defaultRuntime } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   parseAgentsListRouteArgs,
   parseChannelsListRouteArgs,
@@ -12,16 +11,13 @@ import {
   parseModelsStatusRouteArgs,
   parseSessionsRouteArgs,
   parseStatusRouteArgs,
-  parseTasksAuditRouteArgs,
-  parseTasksListRouteArgs,
 } from "./route-args.js";
 
 type RouteArgParser<TArgs> = (argv: string[]) => TArgs | null;
 
 type ParsedRouteArgs<TParse extends RouteArgParser<unknown>> = Exclude<ReturnType<TParse>, null>;
 type ConfigCliModule = typeof import("../config-cli.js");
-type ModelsListCommandModule = typeof import("../../commands/models/list.list-command.js");
-type ModelsStatusCommandModule = typeof import("../../commands/models/list.status-command.js");
+type ModelsListModule = typeof import("../../commands/models/list.js");
 
 export type RoutedCommandDefinition<TParse extends RouteArgParser<unknown>> = {
   parseArgs: TParse;
@@ -39,24 +35,17 @@ function defineRoutedCommand<TParse extends RouteArgParser<unknown>>(
   return definition;
 }
 
-const configCliLoader = createLazyImportLoader<ConfigCliModule>(() => import("../config-cli.js"));
-const modelsListCommandLoader = createLazyImportLoader<ModelsListCommandModule>(
-  () => import("../../commands/models/list.list-command.js"),
-);
-const modelsStatusCommandLoader = createLazyImportLoader<ModelsStatusCommandModule>(
-  () => import("../../commands/models/list.status-command.js"),
-);
+let configCliPromise: Promise<ConfigCliModule> | undefined;
+let modelsListPromise: Promise<ModelsListModule> | undefined;
 
 function loadConfigCli(): Promise<ConfigCliModule> {
-  return configCliLoader.load();
+  configCliPromise ??= import("../config-cli.js");
+  return configCliPromise;
 }
 
-function loadModelsListCommand(): Promise<ModelsListCommandModule> {
-  return modelsListCommandLoader.load();
-}
-
-function loadModelsStatusCommand(): Promise<ModelsStatusCommandModule> {
-  return modelsStatusCommandLoader.load();
+function loadModelsList(): Promise<ModelsListModule> {
+  modelsListPromise ??= import("../../commands/models/list.js");
+  return modelsListPromise;
 }
 
 export const routedCommandDefinitions = {
@@ -125,29 +114,15 @@ export const routedCommandDefinitions = {
   "models-list": defineRoutedCommand({
     parseArgs: parseModelsListRouteArgs,
     runParsedArgs: async (args) => {
-      const { modelsListCommand } = await loadModelsListCommand();
+      const { modelsListCommand } = await loadModelsList();
       await modelsListCommand(args, defaultRuntime);
     },
   }),
   "models-status": defineRoutedCommand({
     parseArgs: parseModelsStatusRouteArgs,
     runParsedArgs: async (args) => {
-      const { modelsStatusCommand } = await loadModelsStatusCommand();
+      const { modelsStatusCommand } = await loadModelsList();
       await modelsStatusCommand(args, defaultRuntime);
-    },
-  }),
-  "tasks-list": defineRoutedCommand({
-    parseArgs: parseTasksListRouteArgs,
-    runParsedArgs: async (args) => {
-      const { tasksListJsonCommand } = await import("../../commands/tasks-json.js");
-      await tasksListJsonCommand(args, defaultRuntime);
-    },
-  }),
-  "tasks-audit": defineRoutedCommand({
-    parseArgs: parseTasksAuditRouteArgs,
-    runParsedArgs: async (args) => {
-      const { tasksAuditJsonCommand } = await import("../../commands/tasks-json.js");
-      await tasksAuditJsonCommand(args, defaultRuntime);
     },
   }),
   "channels-list": defineRoutedCommand({

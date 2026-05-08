@@ -1,8 +1,5 @@
 {
   "id": "anthropic-vertex",
-  "activation": {
-    "onStartup": false
-  },
   "enabledByDefault": true,
   "providers": ["anthropic-vertex"],
   "providerDiscoveryEntry": "./provider-discovery.ts",

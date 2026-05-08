@@ -1,9 +1,9 @@
+import { describe, expect, it } from "vitest";
+import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+} from "../../test/helpers/plugins/provider-registration.js";
 import plugin from "./index.js";
 
 const LIVE = isLiveTestEnabled();

@@ -100,7 +100,7 @@ export function createNativeCommandTestParams(
     counts: { block: 0, final: 0, tool: 0 },
   };
   const telegramDeps: TelegramNativeCommandDeps = {
-    getRuntimeConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["getRuntimeConfig"],
+    loadConfig: vi.fn(() => cfg) as TelegramNativeCommandDeps["loadConfig"],
     readChannelAllowFromStore: vi.fn(
       async () => [],
     ) as TelegramNativeCommandDeps["readChannelAllowFromStore"],

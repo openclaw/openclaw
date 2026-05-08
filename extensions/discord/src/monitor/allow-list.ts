@@ -1,3 +1,4 @@
+import type { Guild, User } from "@buape/carbon";
 import type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelKeyCandidates,
@@ -10,7 +11,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import type { Guild, User } from "../internal/discord.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {
@@ -19,7 +19,7 @@ export type DiscordAllowList = {
   names: Set<string>;
 };
 
-type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
+export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
 
 const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
@@ -94,16 +94,6 @@ export function normalizeDiscordSlug(value: string) {
     .replace(/^-+|-+$/g, "");
 }
 
-export function normalizeDiscordDisplaySlug(value: string) {
-  return normalizeLowercaseStringOrEmpty(value)
-    .normalize("NFC")
-    .replace(/^#/, "")
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 function resolveDiscordAllowListNameMatch(
   list: DiscordAllowList,
   candidate: { name?: string; tag?: string },
@@ -159,7 +149,7 @@ export function resolveDiscordAllowListMatch(params: {
   return { allowed: false };
 }
 
-function resolveDiscordUserAllowed(params: {
+export function resolveDiscordUserAllowed(params: {
   allowList?: string[];
   userId: string;
   userName?: string;
@@ -289,11 +279,8 @@ export function resolveDiscordOwnerAccess(params: {
   ownerAllowList: DiscordAllowList | null;
   ownerAllowed: boolean;
 } {
-  const ownerAllowFrom = params.allowFrom?.filter(
-    (entry) => (normalizeOptionalString(entry) ?? "") !== "*",
-  );
   const ownerAllowList = normalizeDiscordAllowList(
-    ownerAllowFrom && ownerAllowFrom.length > 0 ? ownerAllowFrom : undefined,
+    params.allowFrom,
     DISCORD_OWNER_ALLOWLIST_PREFIXES,
   );
   const ownerAllowed = ownerAllowList
@@ -510,7 +497,7 @@ export function resolveDiscordShouldRequireMention(params: {
   return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
 }
 
-function isDiscordAutoThreadOwnedByBot(params: {
+export function isDiscordAutoThreadOwnedByBot(params: {
   isThread: boolean;
   channelConfig?: DiscordChannelConfigResolved | null;
   botId?: string | null;

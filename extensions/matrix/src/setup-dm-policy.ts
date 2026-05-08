@@ -1,4 +1,4 @@
-import type { DmPolicy } from "openclaw/plugin-sdk/config-types";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { addWildcardAllowFrom, normalizeAllowFromEntries } from "openclaw/plugin-sdk/setup";
 import type { MatrixConfig } from "./types.js";
 

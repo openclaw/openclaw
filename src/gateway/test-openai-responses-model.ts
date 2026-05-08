@@ -1,6 +1,6 @@
-const MOCK_OPENAI_RESPONSES_PROVIDER_ID = "mock-openai";
+export const MOCK_OPENAI_RESPONSES_PROVIDER_ID = "mock-openai";
 
-function buildOpenAiResponsesTestModel(id = "gpt-5.4") {
+export function buildOpenAiResponsesTestModel(id = "gpt-5.4") {
   return {
     id,
     name: id,
@@ -13,7 +13,7 @@ function buildOpenAiResponsesTestModel(id = "gpt-5.4") {
   } as const;
 }
 
-function buildOpenAiResponsesProviderConfig(baseUrl: string, modelId = "gpt-5.4") {
+export function buildOpenAiResponsesProviderConfig(baseUrl: string, modelId = "gpt-5.4") {
   return {
     baseUrl,
     apiKey: "test",

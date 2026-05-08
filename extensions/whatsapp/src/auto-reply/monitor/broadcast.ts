@@ -1,5 +1,4 @@
-import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { buildAgentSessionKey, deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import {
@@ -14,7 +13,7 @@ import type { WebInboundMsg } from "../types.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 
 function buildBroadcastRouteKeys(params: {
-  cfg: OpenClawConfig;
+  cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
   route: ReturnType<typeof resolveAgentRoute>;
   peerId: string;
@@ -47,7 +46,7 @@ function buildBroadcastRouteKeys(params: {
 }
 
 export async function maybeBroadcastMessage(params: {
-  cfg: OpenClawConfig;
+  cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
   peerId: string;
   route: ReturnType<typeof resolveAgentRoute>;
@@ -60,14 +59,8 @@ export async function maybeBroadcastMessage(params: {
     opts?: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
-      preflightAudioTranscript?: string | null;
-      ackAlreadySent?: boolean;
-      ackReaction?: AckReactionHandle | null;
     },
   ) => Promise<boolean>;
-  preflightAudioTranscript?: string | null;
-  ackAlreadySent?: boolean;
-  ackReaction?: AckReactionHandle | null;
 }) {
   const broadcastAgents = params.cfg.broadcast?.[params.peerId];
   if (!broadcastAgents || !Array.isArray(broadcastAgents)) {
@@ -111,26 +104,10 @@ export async function maybeBroadcastMessage(params: {
         : baseAgentRoute;
 
     try {
-      const opts: {
-        groupHistory?: GroupHistoryEntry[];
-        suppressGroupHistoryClear: true;
-        preflightAudioTranscript?: string | null;
-        ackAlreadySent?: boolean;
-        ackReaction?: AckReactionHandle | null;
-      } = {
+      return await params.processMessage(params.msg, agentRoute, params.groupHistoryKey, {
         groupHistory: groupHistorySnapshot,
         suppressGroupHistoryClear: true,
-      };
-      if (params.preflightAudioTranscript !== undefined) {
-        opts.preflightAudioTranscript = params.preflightAudioTranscript;
-      }
-      if (params.ackAlreadySent === true) {
-        opts.ackAlreadySent = true;
-      }
-      if (params.ackReaction !== undefined) {
-        opts.ackReaction = params.ackReaction;
-      }
-      return await params.processMessage(params.msg, agentRoute, params.groupHistoryKey, opts);
+      });
     } catch (err) {
       whatsappInboundLog.error(`Broadcast agent ${agentId} failed: ${formatError(err)}`);
       return false;

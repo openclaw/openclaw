@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   buildWorkspaceSkillStatus: vi.fn(),
-  buildPluginRegistrySnapshotReport: vi.fn(),
+  buildPluginSnapshotReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
@@ -27,8 +27,7 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginRegistrySnapshotReport: (...args: unknown[]) =>
-    mocks.buildPluginRegistrySnapshotReport(...args),
+  buildPluginSnapshotReport: (...args: unknown[]) => mocks.buildPluginSnapshotReport(...args),
   buildPluginCompatibilityWarnings: (...args: unknown[]) =>
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
@@ -54,7 +53,7 @@ async function runNoteWorkspaceStatusForTest(
   mocks.buildWorkspaceSkillStatus.mockReturnValue({
     skills: [],
   });
-  mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+  mocks.buildPluginSnapshotReport.mockReturnValue({
     workspaceDir: "/workspace",
     ...loadResult,
   });
@@ -86,7 +85,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
+      expect(mocks.buildPluginSnapshotReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
       });
@@ -184,7 +183,7 @@ describe("noteWorkspaceStatus", () => {
       "legacy-plugin still uses legacy before_agent_start",
     ]);
     try {
-      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
+      expect(mocks.buildPluginSnapshotReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
       });

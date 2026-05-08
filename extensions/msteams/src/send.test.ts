@@ -19,11 +19,11 @@ const mockState = vi.hoisted(() => ({
   buildTeamsFileInfoCard: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
+vi.mock("openclaw/plugin-sdk/msteams", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
-vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
 }));
 

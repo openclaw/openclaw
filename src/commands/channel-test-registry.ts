@@ -23,7 +23,7 @@ function createChannelTestRuntime(): PluginRuntime {
   } as PluginRuntime;
 }
 
-function setChannelPluginRegistryForTests(onlyPluginIds?: readonly string[]): void {
+export function setChannelPluginRegistryForTests(onlyPluginIds?: readonly string[]): void {
   const plugins = resolveChannelPluginsForTests(onlyPluginIds);
   const runtime = createChannelTestRuntime();
   for (const plugin of plugins) {

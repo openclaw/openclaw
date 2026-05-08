@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.js";
 
-type ProviderModelRef = {
+export type ProviderModelRef = {
   provider: string;
   model: string;
 };

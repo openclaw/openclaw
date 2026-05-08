@@ -3,7 +3,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { expect, vi } from "vitest";
 import type { TranscriptPolicy } from "./transcript-policy.js";
 
-type SessionEntry = { type: string; customType: string; data: unknown };
+export type SessionEntry = { type: string; customType: string; data: unknown };
 export type SanitizeSessionHistoryFn = (params: {
   messages: AgentMessage[];
   modelApi: string;
@@ -14,7 +14,7 @@ export type SanitizeSessionHistoryFn = (params: {
   modelId?: string;
   policy?: TranscriptPolicy;
 }) => Promise<AgentMessage[]>;
-type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
+export type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
 export type SanitizeSessionHistoryHarness = {
   sanitizeSessionHistory: SanitizeSessionHistoryFn;
   mockedHelpers: SanitizeSessionHistoryMockedHelpers;
@@ -92,6 +92,8 @@ export function createSanitizeSessionHistoryProviderHookRuntimeMock(
     resolveProviderPluginsForHooks: vi.fn(() => []),
     prepareProviderExtraParams: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
+    clearProviderRuntimeHookCache: vi.fn(),
+    resetProviderRuntimeHookCacheForTest: vi.fn(),
     __testing: {},
     ...extra,
   };
@@ -111,29 +113,24 @@ export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<Saniti
 
 export function makeReasoningAssistantMessages(opts?: {
   thinkingSignature?: "object" | "json";
-  includeText?: boolean;
 }): AgentMessage[] {
   const thinkingSignature: unknown =
     opts?.thinkingSignature === "json"
       ? JSON.stringify({ id: "rs_test", type: "reasoning" })
       : { id: "rs_test", type: "reasoning" };
-  const content: Array<Record<string, unknown>> = [
-    {
-      type: "thinking",
-      thinking: "reasoning",
-      thinkingSignature,
-    },
-  ];
-  if (opts?.includeText) {
-    content.push({ type: "text", text: "answer" });
-  }
 
   // Intentional: we want to build message payloads that can carry non-string
   // signatures, but core typing currently expects a string.
   const messages = [
     {
       role: "assistant",
-      content,
+      content: [
+        {
+          type: "thinking",
+          thinking: "reasoning",
+          thinkingSignature,
+        },
+      ],
     },
   ];
 
@@ -171,7 +168,7 @@ export function expectOpenAIResponsesStrictSanitizeCall(
   );
 }
 
-function makeSnapshotChangedOpenAIReasoningScenario() {
+export function makeSnapshotChangedOpenAIReasoningScenario() {
   const sessionEntries = [
     makeModelSnapshotEntry({
       provider: "anthropic",
@@ -181,7 +178,7 @@ function makeSnapshotChangedOpenAIReasoningScenario() {
   ];
   return {
     sessionManager: makeInMemorySessionManager(sessionEntries),
-    messages: makeReasoningAssistantMessages({ thinkingSignature: "object", includeText: true }),
+    messages: makeReasoningAssistantMessages({ thinkingSignature: "object" }),
     modelId: "gpt-5.4",
   };
 }

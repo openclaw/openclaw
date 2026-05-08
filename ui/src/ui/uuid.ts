@@ -1,4 +1,4 @@
-type CryptoLike = {
+export type CryptoLike = {
   randomUUID?: (() => string) | undefined;
   getRandomValues?: (<T extends Exclude<BufferSource, ArrayBuffer>>(array: T) => T) | undefined;
 };

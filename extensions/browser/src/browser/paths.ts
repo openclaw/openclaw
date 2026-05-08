@@ -22,7 +22,7 @@ function canUseNodeFs(): boolean {
   }
 }
 
-const DEFAULT_BROWSER_TMP_DIR = canUseNodeFs()
+export const DEFAULT_BROWSER_TMP_DIR = canUseNodeFs()
   ? resolvePreferredOpenClawTmpDir()
   : DEFAULT_FALLBACK_BROWSER_TMP_DIR;
 export const DEFAULT_TRACE_DIR = DEFAULT_BROWSER_TMP_DIR;

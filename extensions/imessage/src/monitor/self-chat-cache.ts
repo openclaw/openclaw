@@ -8,7 +8,7 @@ type SelfChatCacheKeyParts = {
   chatId?: number;
 };
 
-type SelfChatLookup = SelfChatCacheKeyParts & {
+export type SelfChatLookup = SelfChatCacheKeyParts & {
   text?: string;
   createdAt?: number;
 };

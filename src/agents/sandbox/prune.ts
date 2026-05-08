@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getSandboxBackendManager } from "./backend.js";
@@ -63,7 +63,7 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
 }
 
 async function pruneSandboxContainers(cfg: SandboxConfig) {
-  const config = getRuntimeConfig();
+  const config = loadConfig();
   await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
     cfg,
     read: readRegistry,
@@ -79,7 +79,7 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
 }
 
 async function pruneSandboxBrowsers(cfg: SandboxConfig) {
-  const config = getRuntimeConfig();
+  const config = loadConfig();
   await pruneSandboxRegistryEntries<
     SandboxBrowserRegistryEntry & {
       backendId?: string;

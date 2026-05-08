@@ -52,7 +52,8 @@ enum GatewaySettingsStore {
     static func loadPreferredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
             service: self.gatewayService,
-            account: self.preferredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            account: self.preferredGatewayStableIDAccount
+        )?.trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         {
             return value
@@ -78,7 +79,8 @@ enum GatewaySettingsStore {
     static func loadLastDiscoveredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
             service: self.gatewayService,
-            account: self.lastDiscoveredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            account: self.lastDiscoveredGatewayStableIDAccount
+        )?.trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         {
             return value
@@ -158,18 +160,18 @@ enum GatewaySettingsStore {
         var stableID: String {
             switch self {
             case let .manual(_, _, _, stableID):
-                stableID
+                return stableID
             case let .discovered(stableID, _):
-                stableID
+                return stableID
             }
         }
 
         var useTLS: Bool {
             switch self {
             case let .manual(_, _, useTLS, _):
-                useTLS
+                return useTLS
             case let .discovered(_, useTLS):
-                useTLS
+                return useTLS
             }
         }
     }
@@ -444,6 +446,7 @@ enum GatewaySettingsStore {
             defaults.set(stored, forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
         }
     }
+
 }
 
 enum GatewayDiagnostics {
@@ -515,7 +518,7 @@ enum GatewayDiagnostics {
 
     static func bootstrap() {
         guard let url = fileURL else { return }
-        self.queue.async {
+        queue.async {
             self.truncateLogIfNeeded(url: url)
             let timestamp = self.isoTimestamp()
             let line = "[\(timestamp)] gateway diagnostics started\n"
@@ -529,10 +532,10 @@ enum GatewayDiagnostics {
     static func log(_ message: String) {
         let timestamp = self.isoTimestamp()
         let line = "[\(timestamp)] \(message)"
-        self.logger.info("\(line, privacy: .public)")
+        logger.info("\(line, privacy: .public)")
 
         guard let url = fileURL else { return }
-        self.queue.async {
+        queue.async {
             let shouldTruncate = self.logWritesSinceCheck.withLock { count in
                 count += 1
                 if count >= self.logSizeCheckEveryWrites {
@@ -553,7 +556,7 @@ enum GatewayDiagnostics {
 
     static func reset() {
         guard let url = fileURL else { return }
-        self.queue.async {
+        queue.async {
             try? FileManager.default.removeItem(at: url)
         }
     }

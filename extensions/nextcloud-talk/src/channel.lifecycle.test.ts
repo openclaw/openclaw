@@ -1,10 +1,10 @@
-import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({

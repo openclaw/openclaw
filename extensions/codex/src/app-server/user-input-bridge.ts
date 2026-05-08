@@ -2,7 +2,6 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -34,7 +33,7 @@ type UserInputOption = {
   description: string;
 };
 
-type CodexUserInputBridge = {
+export type CodexUserInputBridge = {
   handleRequest: (request: {
     id: number | string;
     params?: JsonValue;
@@ -70,9 +69,6 @@ export function createCodexUserInputBridge(params: {
       }
       if (requestParams.threadId !== params.threadId || requestParams.turnId !== params.turnId) {
         return undefined;
-      }
-      if (requestParams.questions.length === 0) {
-        return emptyUserInputResponse();
       }
 
       resolvePending(emptyUserInputResponse());
@@ -209,26 +205,16 @@ function formatUserInputPrompt(questions: UserInputQuestion[]): string {
   const lines = ["Codex needs input:"];
   questions.forEach((question, index) => {
     if (questions.length > 1) {
-      lines.push(
-        "",
-        `${index + 1}. ${formatCodexDisplayText(question.header)}`,
-        formatCodexDisplayText(question.question),
-      );
+      lines.push("", `${index + 1}. ${question.header}`, question.question);
     } else {
-      lines.push(
-        "",
-        formatCodexDisplayText(question.header),
-        formatCodexDisplayText(question.question),
-      );
+      lines.push("", question.header, question.question);
     }
     if (question.isSecret) {
       lines.push("This channel may show your reply to other participants.");
     }
     question.options?.forEach((option, optionIndex) => {
       lines.push(
-        `${optionIndex + 1}. ${formatCodexDisplayText(option.label)}${
-          option.description ? ` - ${formatCodexDisplayText(option.description)}` : ""
-        }`,
+        `${optionIndex + 1}. ${option.label}${option.description ? ` - ${option.description}` : ""}`,
       );
     });
     if (question.isOther) {
@@ -243,8 +229,7 @@ function buildUserInputResponse(questions: UserInputQuestion[], inputText: strin
   if (questions.length === 1) {
     const question = questions[0];
     if (question) {
-      const answer = normalizeAnswer(inputText, question);
-      answers[question.id] = { answers: answer ? [answer] : [] };
+      answers[question.id] = { answers: [normalizeAnswer(inputText, question)] };
     }
     return { answers };
   }
@@ -261,13 +246,12 @@ function buildUserInputResponse(questions: UserInputQuestion[], inputText: strin
       keyed.get(question.question.toLowerCase()) ??
       keyed.get(String(index + 1));
     const answer = key ?? fallbackLines[index] ?? "";
-    const normalized = answer ? normalizeAnswer(answer, question) : undefined;
-    answers[question.id] = { answers: normalized ? [normalized] : [] };
+    answers[question.id] = { answers: answer ? [normalizeAnswer(answer, question)] : [] };
   });
   return { answers };
 }
 
-function normalizeAnswer(answer: string, question: UserInputQuestion): string | undefined {
+function normalizeAnswer(answer: string, question: UserInputQuestion): string {
   const trimmed = answer.trim();
   const options = question.options ?? [];
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
@@ -276,13 +260,7 @@ function normalizeAnswer(answer: string, question: UserInputQuestion): string | 
     return indexed.label;
   }
   const exact = options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
-  if (exact) {
-    return exact.label;
-  }
-  if (options.length > 0 && !question.isOther) {
-    return undefined;
-  }
-  return trimmed || undefined;
+  return exact?.label ?? trimmed;
 }
 
 function parseKeyedAnswers(inputText: string): Map<string, string> {

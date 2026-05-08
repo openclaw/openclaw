@@ -4,7 +4,6 @@ import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import {
@@ -14,60 +13,65 @@ import {
 import { loadStatusScanCommandConfig } from "./status.scan.config-shared.js";
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
 
-const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
-  () => import("./status.scan.deps.runtime.js"),
-);
-const statusAgentLocalModuleLoader = createLazyImportLoader(
-  () => import("./status.agent-local.js"),
-);
-const statusUpdateModuleLoader = createLazyImportLoader(() => import("./status.update.js"));
-const statusScanRuntimeModuleLoader = createLazyImportLoader(
-  () => import("./status.scan.runtime.js"),
-);
-const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
-const statusSummaryModuleLoader = createLazyImportLoader(() => import("./status.summary.js"));
-const configModuleLoader = createLazyImportLoader(() => import("../config/config.js"));
-const commandConfigResolutionModuleLoader = createLazyImportLoader(
-  () => import("../cli/command-config-resolution.js"),
-);
-const commandSecretTargetsModuleLoader = createLazyImportLoader(
-  () => import("../cli/command-secret-targets.js"),
-);
+let statusScanDepsRuntimeModulePromise:
+  | Promise<typeof import("./status.scan.deps.runtime.js")>
+  | undefined;
+let statusAgentLocalModulePromise: Promise<typeof import("./status.agent-local.js")> | undefined;
+let statusUpdateModulePromise: Promise<typeof import("./status.update.js")> | undefined;
+let statusScanRuntimeModulePromise: Promise<typeof import("./status.scan.runtime.js")> | undefined;
+let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
+let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
+let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
+let commandConfigResolutionModulePromise:
+  | Promise<typeof import("../cli/command-config-resolution.js")>
+  | undefined;
+let commandSecretTargetsModulePromise:
+  | Promise<typeof import("../cli/command-secret-targets.js")>
+  | undefined;
 
 function loadStatusScanDepsRuntimeModule() {
-  return statusScanDepsRuntimeModuleLoader.load();
+  statusScanDepsRuntimeModulePromise ??= import("./status.scan.deps.runtime.js");
+  return statusScanDepsRuntimeModulePromise;
 }
 
 function loadStatusAgentLocalModule() {
-  return statusAgentLocalModuleLoader.load();
+  statusAgentLocalModulePromise ??= import("./status.agent-local.js");
+  return statusAgentLocalModulePromise;
 }
 
 function loadStatusUpdateModule() {
-  return statusUpdateModuleLoader.load();
+  statusUpdateModulePromise ??= import("./status.update.js");
+  return statusUpdateModulePromise;
 }
 
 function loadStatusScanRuntimeModule() {
-  return statusScanRuntimeModuleLoader.load();
+  statusScanRuntimeModulePromise ??= import("./status.scan.runtime.js");
+  return statusScanRuntimeModulePromise;
 }
 
 function loadGatewayCallModule() {
-  return gatewayCallModuleLoader.load();
+  gatewayCallModulePromise ??= import("../gateway/call.js");
+  return gatewayCallModulePromise;
 }
 
 function loadStatusSummaryModule() {
-  return statusSummaryModuleLoader.load();
+  statusSummaryModulePromise ??= import("./status.summary.js");
+  return statusSummaryModulePromise;
 }
 
 function loadConfigModule() {
-  return configModuleLoader.load();
+  configModulePromise ??= import("../config/config.js");
+  return configModulePromise;
 }
 
 function loadCommandConfigResolutionModule() {
-  return commandConfigResolutionModuleLoader.load();
+  commandConfigResolutionModulePromise ??= import("../cli/command-config-resolution.js");
+  return commandConfigResolutionModulePromise;
 }
 
 function loadCommandSecretTargetsModule() {
-  return commandSecretTargetsModuleLoader.load();
+  commandSecretTargetsModulePromise ??= import("../cli/command-secret-targets.js");
+  return commandSecretTargetsModulePromise;
 }
 
 async function resolveStatusChannelsStatus(params: {
@@ -131,8 +135,6 @@ export async function collectStatusScanOverview(params: {
   allowMissingConfigFastPath?: boolean;
   resolveHasConfiguredChannels?: (cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => boolean;
   includeChannelsData?: boolean;
-  includeLiveChannelStatus?: boolean;
-  includeChannelSetupRuntimeFallback?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   progress?: {
     setLabel(label: string): void;
@@ -225,21 +227,18 @@ export async function collectStatusScanOverview(params: {
 
   const tailscaleHttpsUrl = await bootstrap.resolveTailscaleHttpsUrl();
   const includeChannelsData = params.includeChannelsData !== false;
-  const includeLiveChannelStatus = params.includeLiveChannelStatus !== false;
   const { channelsStatus, channelIssues, channels } = includeChannelsData
     ? await (async () => {
         if (params.labels?.queryingChannelStatus) {
           params.progress?.setLabel(params.labels.queryingChannelStatus);
         }
-        const channelsStatus = includeLiveChannelStatus
-          ? await resolveStatusChannelsStatus({
-              cfg,
-              gatewayReachable: gatewaySnapshot.gatewayReachable,
-              opts: params.opts,
-              gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
-              useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,
-            })
-          : null;
+        const channelsStatus = await resolveStatusChannelsStatus({
+          cfg,
+          gatewayReachable: gatewaySnapshot.gatewayReachable,
+          opts: params.opts,
+          gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
+          useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,
+        });
         params.progress?.tick();
         const { collectChannelStatusIssues, buildChannelsTable } =
           await loadStatusScanRuntimeModule().then(({ statusScanRuntime }) => statusScanRuntime);
@@ -250,8 +249,6 @@ export async function collectStatusScanOverview(params: {
         const channels = await buildChannelsTable(cfg, {
           showSecrets: params.showSecrets,
           sourceConfig,
-          includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
-          liveChannelStatus: channelsStatus,
         });
         params.progress?.tick();
         return { channelsStatus, channelIssues, channels };

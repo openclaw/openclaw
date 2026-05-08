@@ -3,7 +3,7 @@ import { sameFileIdentity as hasSameFileIdentity } from "./file-identity.js";
 
 export type SafeOpenSyncFailureReason = "path" | "validation" | "io";
 
-type SafeOpenSyncResult =
+export type SafeOpenSyncResult =
   | { ok: true; path: string; fd: number; stat: fs.Stats }
   | { ok: false; reason: SafeOpenSyncFailureReason; error?: unknown };
 
@@ -20,7 +20,7 @@ function isExpectedPathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
-function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
+export function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
   return hasSameFileIdentity(left, right);
 }
 

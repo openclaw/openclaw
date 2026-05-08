@@ -12,7 +12,7 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-const collectSlackMutableAllowlistWarnings =
+export const collectSlackMutableAllowlistWarnings =
   createDangerousNameMatchingMutableAllowlistWarningCollector({
     channel: "slack",
     detector: isSlackMutableAllowEntry,
@@ -48,7 +48,7 @@ const collectSlackMutableAllowlistWarnings =
   });
 
 export const slackDoctor: ChannelDoctorAdapter = {
-  dmAllowFromMode: "topOnly",
+  dmAllowFromMode: "topOrNested",
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,

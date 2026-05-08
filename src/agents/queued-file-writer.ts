@@ -2,18 +2,14 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-export type QueuedFileWriteResult = "queued" | "dropped";
-
 export type QueuedFileWriter = {
   filePath: string;
-  write: (line: string) => unknown;
+  write: (line: string) => void;
   flush: () => Promise<void>;
 };
 
-type QueuedFileWriterOptions = {
+export type QueuedFileWriterOptions = {
   maxFileBytes?: number;
-  maxQueuedBytes?: number;
-  yieldBeforeWrite?: boolean;
 };
 
 type QueuedFileAppendFlagConstants = Pick<
@@ -115,12 +111,6 @@ async function safeAppendFile(
   }
 }
 
-function waitForImmediate(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 export function getQueuedFileWriter(
   writers: Map<string, QueuedFileWriter>,
   filePath: string,
@@ -133,29 +123,15 @@ export function getQueuedFileWriter(
 
   const dir = path.dirname(filePath);
   const ready = fs.mkdir(dir, { recursive: true, mode: 0o700 }).catch(() => undefined);
-  let queue: Promise<unknown> = Promise.resolve();
-  let queuedBytes = 0;
+  let queue = Promise.resolve();
 
   const writer: QueuedFileWriter = {
     filePath,
     write: (line: string) => {
-      const lineBytes = Buffer.byteLength(line, "utf8");
-      if (
-        options.maxQueuedBytes !== undefined &&
-        queuedBytes + lineBytes > options.maxQueuedBytes
-      ) {
-        return "dropped";
-      }
-      queuedBytes += lineBytes;
       queue = queue
         .then(() => ready)
-        .then(() => (options.yieldBeforeWrite ? waitForImmediate() : undefined))
         .then(() => safeAppendFile(filePath, line, options))
-        .catch(() => undefined)
-        .finally(() => {
-          queuedBytes = Math.max(0, queuedBytes - lineBytes);
-        });
-      return "queued";
+        .catch(() => undefined);
     },
     flush: async () => {
       await queue;

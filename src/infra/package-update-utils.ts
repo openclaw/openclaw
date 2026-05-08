@@ -24,11 +24,7 @@ export function expectedIntegrityForUpdate(
   return integrity;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
+export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
   const manifestPath = path.join(dir, "package.json");
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
@@ -39,32 +35,12 @@ function readInstalledPackageManifest(dir: string): Record<string, unknown> | un
     return undefined;
   }
   try {
-    const parsed = JSON.parse(fsSync.readFileSync(opened.fd, "utf-8")) as unknown;
-    return isRecord(parsed) ? parsed : undefined;
+    const raw = fsSync.readFileSync(opened.fd, "utf-8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : undefined;
   } catch {
     return undefined;
   } finally {
     fsSync.closeSync(opened.fd);
-  }
-}
-
-export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  const manifest = readInstalledPackageManifest(dir);
-  return typeof manifest?.version === "string" ? manifest.version : undefined;
-}
-
-export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
-  const manifest = readInstalledPackageManifest(dir);
-  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
-  if (!Object.hasOwn(peerDependencies, "openclaw")) {
-    return false;
-  }
-
-  try {
-    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
-    return false;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === "ENOENT" || code === "ENOTDIR";
   }
 }

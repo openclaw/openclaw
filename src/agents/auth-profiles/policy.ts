@@ -95,7 +95,7 @@ function collectOAuthModeSecretRefViolations(params: {
   }
 }
 
-function collectOAuthSecretRefPolicyViolations(params: {
+export function collectOAuthSecretRefPolicyViolations(params: {
   store: AuthProfileStore;
   cfg?: OpenClawConfig;
   profileIds?: Iterable<string>;

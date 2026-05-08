@@ -30,7 +30,6 @@ export type { PairingChannel } from "./pairing-store.types.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const PAIRING_CODE_MAX_ATTEMPTS = 500;
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_PENDING_MAX = 3;
 const PAIRING_STORE_LOCK_OPTIONS = {
@@ -202,15 +201,13 @@ function randomCode(): string {
 }
 
 function generateUniqueCode(existing: Set<string>): string {
-  for (let attempt = 0; attempt < PAIRING_CODE_MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     const code = randomCode();
     if (!existing.has(code)) {
       return code;
     }
   }
-  throw new Error(
-    `failed to generate unique pairing code after ${PAIRING_CODE_MAX_ATTEMPTS} attempts; existing code count: ${existing.size}`,
-  );
+  throw new Error("failed to generate unique pairing code");
 }
 
 function normalizePairingAccountId(accountId?: string): string {
@@ -305,12 +302,7 @@ async function writeAllowFromState(filePath: string, allowFrom: string[]): Promi
   let stat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
   try {
     stat = await fs.promises.stat(filePath);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== "ENOENT") {
-      throw err;
-    }
-  }
+  } catch {}
   setAllowFromFileReadCache({
     cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
     filePath,

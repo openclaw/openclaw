@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
   registerSessionBindingAdapter,
@@ -6,14 +6,7 @@ import {
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
-import {
-  ensureConfiguredBindingRouteReady,
-  resolveRuntimeConversationBindingRoute,
-} from "./binding-routing.js";
-import {
-  registerStatefulBindingTargetDriver,
-  unregisterStatefulBindingTargetDriver,
-} from "./stateful-target-drivers.js";
+import { resolveRuntimeConversationBindingRoute } from "./binding-routing.js";
 
 function createRoute(): ResolvedAgentRoute {
   return {
@@ -117,37 +110,5 @@ describe("runtime conversation binding route", () => {
     expect(result.bindingRecord).toBe(binding);
     expect(result.boundSessionKey).toBeUndefined();
     expect(result.route).toBe(route);
-  });
-});
-
-describe("ensureConfiguredBindingRouteReady", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    unregisterStatefulBindingTargetDriver("slow");
-  });
-
-  it("returns a bounded failure when target readiness never settles", async () => {
-    vi.useFakeTimers();
-    registerStatefulBindingTargetDriver({
-      id: "slow",
-      ensureReady: async () => await new Promise<never>(() => {}),
-      ensureSession: async () => ({
-        ok: false,
-        sessionKey: "agent:slow:binding",
-        error: "not used",
-      }),
-    });
-
-    const resultPromise = ensureConfiguredBindingRouteReady({
-      cfg: {} as never,
-      bindingResolution: { statefulTarget: { driverId: "slow" } } as never,
-    });
-
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    await expect(resultPromise).resolves.toEqual({
-      ok: false,
-      error: "Configured binding route ready check timed out",
-    });
   });
 });

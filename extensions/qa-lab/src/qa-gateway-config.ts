@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   defaultQaModelForMode,
@@ -29,11 +29,6 @@ export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   return [...new Set([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra])];
 }
 
-function normalizeQaGatewayModelRef(input: string | undefined, fallback: string) {
-  const model = input?.trim();
-  return model && model.length > 0 ? model : fallback;
-}
-
 export function buildQaGatewayConfig(params: {
   bind: "loopback" | "lan";
   gatewayPort: number;
@@ -58,14 +53,9 @@ export function buildQaGatewayConfig(params: {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const provider = getQaProvider(providerMode);
-  const primaryModel = normalizeQaGatewayModelRef(
-    params.primaryModel,
-    defaultQaModelForMode(providerMode),
-  );
-  const alternateModel = normalizeQaGatewayModelRef(
-    params.alternateModel,
-    defaultQaModelForMode(providerMode, { alternate: true }),
-  );
+  const primaryModel = params.primaryModel ?? defaultQaModelForMode(providerMode);
+  const alternateModel =
+    params.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
     .filter((provider): provider is string => Boolean(provider));

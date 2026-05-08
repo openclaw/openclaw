@@ -1,5 +1,4 @@
 import { logVerbose } from "../../globals.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   resolveHandledPrefix,
   resolveRequesterSessionKey,
@@ -9,80 +8,79 @@ import {
 } from "./commands-subagents-dispatch.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const actionAgentsLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-agents.js"),
-);
-const actionFocusLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-focus.js"),
-);
-const actionHelpLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-help.js"),
-);
-const actionInfoLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-info.js"),
-);
-const actionKillLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-kill.js"),
-);
-const actionListLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-list.js"),
-);
-const actionLogLoader = createLazyImportLoader(() => import("./commands-subagents/action-log.js"));
-const actionSendLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-send.js"),
-);
-const actionSpawnLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-spawn.js"),
-);
-const actionUnfocusLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-unfocus.js"),
-);
-const controlRuntimeLoader = createLazyImportLoader(
-  () => import("./commands-subagents-control.runtime.js"),
-);
+export { extractMessageText } from "./commands-subagents-text.js";
+
+let actionAgentsPromise: Promise<typeof import("./commands-subagents/action-agents.js")> | null =
+  null;
+let actionFocusPromise: Promise<typeof import("./commands-subagents/action-focus.js")> | null =
+  null;
+let actionHelpPromise: Promise<typeof import("./commands-subagents/action-help.js")> | null = null;
+let actionInfoPromise: Promise<typeof import("./commands-subagents/action-info.js")> | null = null;
+let actionKillPromise: Promise<typeof import("./commands-subagents/action-kill.js")> | null = null;
+let actionListPromise: Promise<typeof import("./commands-subagents/action-list.js")> | null = null;
+let actionLogPromise: Promise<typeof import("./commands-subagents/action-log.js")> | null = null;
+let actionSendPromise: Promise<typeof import("./commands-subagents/action-send.js")> | null = null;
+let actionSpawnPromise: Promise<typeof import("./commands-subagents/action-spawn.js")> | null =
+  null;
+let actionUnfocusPromise: Promise<typeof import("./commands-subagents/action-unfocus.js")> | null =
+  null;
+let controlRuntimePromise: Promise<
+  typeof import("./commands-subagents-control.runtime.js")
+> | null = null;
 
 function loadAgentsAction() {
-  return actionAgentsLoader.load();
+  actionAgentsPromise ??= import("./commands-subagents/action-agents.js");
+  return actionAgentsPromise;
 }
 
 function loadFocusAction() {
-  return actionFocusLoader.load();
+  actionFocusPromise ??= import("./commands-subagents/action-focus.js");
+  return actionFocusPromise;
 }
 
 function loadHelpAction() {
-  return actionHelpLoader.load();
+  actionHelpPromise ??= import("./commands-subagents/action-help.js");
+  return actionHelpPromise;
 }
 
 function loadInfoAction() {
-  return actionInfoLoader.load();
+  actionInfoPromise ??= import("./commands-subagents/action-info.js");
+  return actionInfoPromise;
 }
 
 function loadKillAction() {
-  return actionKillLoader.load();
+  actionKillPromise ??= import("./commands-subagents/action-kill.js");
+  return actionKillPromise;
 }
 
 function loadListAction() {
-  return actionListLoader.load();
+  actionListPromise ??= import("./commands-subagents/action-list.js");
+  return actionListPromise;
 }
 
 function loadLogAction() {
-  return actionLogLoader.load();
+  actionLogPromise ??= import("./commands-subagents/action-log.js");
+  return actionLogPromise;
 }
 
 function loadSendAction() {
-  return actionSendLoader.load();
+  actionSendPromise ??= import("./commands-subagents/action-send.js");
+  return actionSendPromise;
 }
 
 function loadSpawnAction() {
-  return actionSpawnLoader.load();
+  actionSpawnPromise ??= import("./commands-subagents/action-spawn.js");
+  return actionSpawnPromise;
 }
 
 function loadUnfocusAction() {
-  return actionUnfocusLoader.load();
+  actionUnfocusPromise ??= import("./commands-subagents/action-unfocus.js");
+  return actionUnfocusPromise;
 }
 
 function loadControlRuntime() {
-  return controlRuntimeLoader.load();
+  controlRuntimePromise ??= import("./commands-subagents-control.runtime.js");
+  return controlRuntimePromise;
 }
 
 export const handleSubagentsCommand: CommandHandler = async (params, allowTextCommands) => {

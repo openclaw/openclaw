@@ -1,8 +1,8 @@
 import type { SlackAccountConfig } from "./runtime-api.js";
 
-type SlackReplyToMode = "off" | "first" | "all" | "batched";
+export type SlackReplyToMode = "off" | "first" | "all" | "batched";
 
-type SlackReplyToModeAccount = {
+export type SlackReplyToModeAccount = {
   replyToMode?: SlackReplyToMode;
   replyToModeByChatType?: SlackAccountConfig["replyToModeByChatType"];
   dm?: { replyToMode?: SlackReplyToMode };

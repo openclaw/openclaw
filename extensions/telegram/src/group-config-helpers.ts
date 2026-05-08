@@ -2,7 +2,7 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-runtime";
 import { firstDefined } from "./bot-access.js";
 
 export function resolveTelegramGroupPromptSettings(params: {

@@ -21,17 +21,17 @@ afterEach(() => {
 });
 
 describe("plugin loader git path regression", () => {
-  it("loads git-style package extension entries when they import plugin-sdk subpaths (#49806)", async () => {
+  it("loads git-style package extension entries when they import plugin-sdk infra-runtime (#49806)", async () => {
     const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
     mkdirSafe(copiedSourceDir);
     mkdirSafe(copiedPluginSdkDir);
-    const sourceLoaderBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
-    fs.writeFileSync(sourceLoaderBaseFile, "export {};\n", "utf-8");
+    const jitiBaseFile = path.join(copiedSourceDir, "__jiti-base__.mjs");
+    fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
+      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
 import { PAIRING_APPROVED_MESSAGE } from "../runtime-api.js";
 
 export const copiedRuntimeMarker = {
@@ -47,7 +47,7 @@ export const copiedRuntimeMarker = {
 `,
       "utf-8",
     );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "outbound-send-deps.ts");
+    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "infra-runtime.ts");
     fs.writeFileSync(
       copiedChannelRuntimeShim,
       `export function resolveOutboundSendDep() {
@@ -59,7 +59,7 @@ export const copiedRuntimeMarker = {
     const copiedChannelRuntime = path.join(copiedExtensionRoot, "src", "channel.runtime.ts");
     const script = `
       import { createJiti } from "jiti";
-      const withoutAlias = createJiti(${JSON.stringify(sourceLoaderBaseFile)}, {
+      const withoutAlias = createJiti(${JSON.stringify(jitiBaseFile)}, {
         interopDefault: true,
         tryNative: false,
         extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
@@ -70,12 +70,12 @@ export const copiedRuntimeMarker = {
       } catch {
         withoutAliasThrew = true;
       }
-      const withAlias = createJiti(${JSON.stringify(sourceLoaderBaseFile)}, {
+      const withAlias = createJiti(${JSON.stringify(jitiBaseFile)}, {
         interopDefault: true,
         tryNative: false,
         extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
         alias: {
-          "openclaw/plugin-sdk/outbound-send-deps": ${JSON.stringify(copiedChannelRuntimeShim)},
+          "openclaw/plugin-sdk/infra-runtime": ${JSON.stringify(copiedChannelRuntimeShim)},
         },
       });
       const mod = withAlias(${JSON.stringify(copiedChannelRuntime)});

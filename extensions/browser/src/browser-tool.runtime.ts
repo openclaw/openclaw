@@ -1,4 +1,4 @@
-export { getRuntimeConfig } from "./sdk-config.js";
+export { loadConfig } from "openclaw/plugin-sdk/browser-config-runtime";
 export {
   callGatewayTool,
   imageResultFromFile,
@@ -7,9 +7,9 @@ export {
   readStringParam,
   resolveNodeIdFromList,
   selectDefaultNodeFromList,
-} from "./sdk-setup-tools.js";
-export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
-export { wrapExternalContent } from "./sdk-security-runtime.js";
+} from "openclaw/plugin-sdk/browser-setup-tools";
+export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/browser-setup-tools";
+export { wrapExternalContent } from "openclaw/plugin-sdk/browser-security-runtime";
 export { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 export { BrowserToolSchema } from "./browser-tool.schema.js";
 export {
@@ -23,7 +23,6 @@ export {
 } from "./browser/client-actions.js";
 export {
   browserCloseTab,
-  browserDoctor,
   browserFocusTab,
   browserOpenTab,
   browserProfiles,
@@ -39,7 +38,6 @@ export { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./browser/pa
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
 export {
-  touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser/session-tab-registry.js";

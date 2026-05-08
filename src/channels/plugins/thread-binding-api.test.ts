@@ -35,12 +35,14 @@ vi.mock("../../plugins/public-surface-loader.js", () => ({
 }));
 
 import {
+  __testing,
   resolveBundledChannelThreadBindingDefaultPlacement,
   resolveBundledChannelThreadBindingInboundConversation,
 } from "./thread-binding-api.js";
 
 describe("bundled channel thread binding fast path", () => {
   beforeEach(() => {
+    __testing.clearThreadBindingApiCache();
     loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
   });
 

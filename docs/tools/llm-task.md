@@ -26,17 +26,20 @@ without writing custom OpenClaw code for each workflow.
 }
 ```
 
-2. Allow the optional tool:
+2. Allowlist the tool (it is registered with `optional: true`):
 
 ```json
 {
-  "tools": {
-    "alsoAllow": ["llm-task"]
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "tools": { "allow": ["llm-task"] }
+      }
+    ]
   }
 }
 ```
-
-Use `tools.allow` only when you want restrictive allowlist mode.
 
 ## Config (optional)
 

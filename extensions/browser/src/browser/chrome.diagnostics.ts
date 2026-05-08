@@ -7,9 +7,7 @@ import {
   appendCdpPath,
   assertCdpEndpointAllowed,
   fetchCdpChecked,
-  isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
-  normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
   redactCdpUrl,
 } from "./cdp.helpers.js";
@@ -268,7 +266,7 @@ export async function diagnoseChromeCdp(
     });
   }
 
-  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+  if (isWebSocketUrl(cdpUrl)) {
     const health = await diagnoseCdpHealthCommand(cdpUrl, handshakeTimeoutMs);
     if (!health.ok) {
       return failureDiagnostic({
@@ -287,31 +285,10 @@ export async function diagnoseChromeCdp(
     };
   }
 
-  const discoveryUrl = isWebSocketUrl(cdpUrl)
-    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
-    : cdpUrl;
   let version: ChromeVersion;
   try {
-    version = await readChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+    version = await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
   } catch (err) {
-    if (isWebSocketUrl(cdpUrl)) {
-      const health = await diagnoseCdpHealthCommand(cdpUrl, handshakeTimeoutMs);
-      if (!health.ok) {
-        return failureDiagnostic({
-          cdpUrl,
-          wsUrl: cdpUrl,
-          code: health.code,
-          message: health.message,
-          startedAt,
-        });
-      }
-      return {
-        ok: true,
-        cdpUrl,
-        wsUrl: cdpUrl,
-        elapsedMs: elapsedSince(startedAt),
-      };
-    }
     const classified = classifyChromeVersionError(err);
     return failureDiagnostic({
       cdpUrl,
@@ -323,26 +300,6 @@ export async function diagnoseChromeCdp(
 
   const wsUrlRaw = normalizeOptionalString(version.webSocketDebuggerUrl) ?? "";
   if (!wsUrlRaw) {
-    if (isWebSocketUrl(cdpUrl)) {
-      const health = await diagnoseCdpHealthCommand(cdpUrl, handshakeTimeoutMs);
-      if (!health.ok) {
-        return failureDiagnostic({
-          cdpUrl,
-          wsUrl: cdpUrl,
-          code: health.code,
-          message: health.message,
-          startedAt,
-        });
-      }
-      return {
-        ok: true,
-        cdpUrl,
-        wsUrl: cdpUrl,
-        browser: version.Browser,
-        userAgent: version["User-Agent"],
-        elapsedMs: elapsedSince(startedAt),
-      };
-    }
     return failureDiagnostic({
       cdpUrl,
       code: "missing_websocket_debugger_url",
@@ -350,7 +307,7 @@ export async function diagnoseChromeCdp(
       startedAt,
     });
   }
-  const wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
+  const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpUrl);
   try {
     await assertCdpEndpointAllowed(wsUrl, ssrfPolicy);
   } catch (err) {
@@ -365,19 +322,6 @@ export async function diagnoseChromeCdp(
 
   const health = await diagnoseCdpHealthCommand(wsUrl, handshakeTimeoutMs);
   if (!health.ok) {
-    if (isWebSocketUrl(cdpUrl) && wsUrl !== cdpUrl) {
-      const directHealth = await diagnoseCdpHealthCommand(cdpUrl, handshakeTimeoutMs);
-      if (directHealth.ok) {
-        return {
-          ok: true,
-          cdpUrl,
-          wsUrl: cdpUrl,
-          browser: version.Browser,
-          userAgent: version["User-Agent"],
-          elapsedMs: elapsedSince(startedAt),
-        };
-      }
-    }
     return failureDiagnostic({
       cdpUrl,
       wsUrl,

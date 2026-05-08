@@ -1,6 +1,4 @@
-import { getModel, type Api, type Model } from "@mariozechner/pi-ai";
 import OpenAI from "openai";
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
@@ -17,10 +15,6 @@ type LiveModelCase = {
   contextWindow: number;
   maxTokens: number;
 };
-
-function findOpenAIModel(modelId: string): Model<Api> | null {
-  return (getModel("openai", modelId as never) as Model<Api> | undefined) ?? null;
-}
 
 function resolveLiveModelCase(modelId: string): LiveModelCase {
   switch (modelId) {
@@ -102,10 +96,6 @@ describeLive("buildOpenAIProvider live", () => {
           if (providerId !== "openai") {
             return null;
           }
-          const exactModel = findOpenAIModel(id);
-          if (exactModel) {
-            return exactModel;
-          }
           if (id === liveCase.templateId) {
             return {
               id: liveCase.templateId,
@@ -118,19 +108,17 @@ describeLive("buildOpenAIProvider live", () => {
               cost: liveCase.cost,
               contextWindow: liveCase.contextWindow,
               maxTokens: liveCase.maxTokens,
-            } satisfies ProviderRuntimeModel;
+            };
           }
           return null;
         },
       };
 
-      const resolved =
-        registry.find("openai", liveCase.modelId) ??
-        provider.resolveDynamicModel?.({
-          provider: "openai",
-          modelId: liveCase.modelId,
-          modelRegistry: registry as never,
-        });
+      const resolved = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: liveCase.modelId,
+        modelRegistry: registry as never,
+      });
       if (!resolved) {
         throw new Error(`openai provider did not resolve ${liveCase.modelId}`);
       }
@@ -155,11 +143,8 @@ describeLive("buildOpenAIProvider live", () => {
 
       const response = await client.responses.create({
         model: normalized?.id ?? liveCase.modelId,
-        instructions: "Return exactly OK and no other text.",
-        input: "Return exactly OK.",
-        max_output_tokens: 64,
-        reasoning: { effort: "none" },
-        text: { verbosity: "low" },
+        input: "Reply with exactly OK.",
+        max_output_tokens: 16,
       });
 
       expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);

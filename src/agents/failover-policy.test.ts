@@ -39,24 +39,6 @@ const CASES: ReasonCase[] = [
     preserveTransientProbeSlot: false,
   },
   {
-    reason: "empty_response",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: "no_error_details",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
-    reason: "unclassified",
-    allowCooldownProbe: true,
-    useTransientProbeSlot: true,
-    preserveTransientProbeSlot: false,
-  },
-  {
     reason: "model_not_found",
     allowCooldownProbe: false,
     useTransientProbeSlot: false,

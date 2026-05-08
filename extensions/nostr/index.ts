@@ -2,7 +2,7 @@ import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
-import type { OpenClawConfig, PluginRuntime, ResolvedNostrAccount } from "./api.js";
+import type { PluginRuntime, ResolvedNostrAccount } from "./api.js";
 
 function createNostrProfileHttpHandler() {
   return loadBundledEntryExportSync<
@@ -46,34 +46,31 @@ export default defineBundledChannelEntry({
     const httpHandler = createNostrProfileHttpHandler()({
       getConfigProfile: (accountId: string) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.current() as OpenClawConfig;
+        const cfg = runtime.config.loadConfig();
         const account = resolveNostrAccount({ cfg, accountId });
         return account.profile;
       },
       updateConfigProfile: async (accountId: string, profile: unknown) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.current() as OpenClawConfig;
+        const cfg = runtime.config.loadConfig();
 
         const channels = (cfg.channels ?? {}) as Record<string, unknown>;
         const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
 
-        await runtime.config.replaceConfigFile({
-          nextConfig: {
-            ...cfg,
-            channels: {
-              ...channels,
-              nostr: {
-                ...nostrConfig,
-                profile,
-              },
+        await runtime.config.writeConfigFile({
+          ...cfg,
+          channels: {
+            ...channels,
+            nostr: {
+              ...nostrConfig,
+              profile,
             },
           },
-          afterWrite: { mode: "auto" },
         });
       },
       getAccountInfo: (accountId: string) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.current() as OpenClawConfig;
+        const cfg = runtime.config.loadConfig();
         const account = resolveNostrAccount({ cfg, accountId });
         if (!account.configured || !account.publicKey) {
           return null;

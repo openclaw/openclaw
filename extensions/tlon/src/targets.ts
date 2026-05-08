@@ -1,4 +1,4 @@
-type TlonTarget =
+export type TlonTarget =
   | { kind: "dm"; ship: string }
   | { kind: "group"; nest: string; hostShip: string; channelName: string };
 

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
@@ -8,7 +8,6 @@ import {
 } from "../../image-generation/runtime.js";
 import type {
   ImageGenerationIgnoredOverride,
-  ImageGenerationBackground,
   ImageGenerationOpenAIBackground,
   ImageGenerationOpenAIModeration,
   ImageGenerationOpenAIOptions,
@@ -19,42 +18,27 @@ import type {
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import {
-  resolveConfiguredMediaMaxBytes,
-  resolveGeneratedMediaMaxBytes,
-} from "../../media/configured-max-bytes.js";
+import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/image-ops.js";
-import {
-  classifyMediaReferenceSource,
-  normalizeMediaReferenceSource,
-} from "../../media/media-reference.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   applyImageGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
-  hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
-  resolveRemoteMediaSsrfPolicy,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import {
-  coerceToolModelConfig,
-  hasToolModelConfig,
-  type ToolModelConfig,
-} from "./model-config.helpers.js";
+import { type ToolModelConfig } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -69,7 +53,7 @@ const MAX_INPUT_IMAGES = 5;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const SUPPORTED_QUALITIES = ["low", "medium", "high", "auto"] as const;
 const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
-const SUPPORTED_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const SUPPORTED_OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const SUPPORTED_OPENAI_MODERATIONS = ["low", "auto"] as const;
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
@@ -103,10 +87,7 @@ const ImageGenerateToolSchema = Type.Object({
     }),
   ),
   model: Type.Optional(
-    Type.String({
-      description:
-        "Optional provider/model override, e.g. openai/gpt-image-2; use openai/gpt-image-1.5 for transparent OpenAI backgrounds.",
-    }),
+    Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-2." }),
   ),
   filename: Type.Optional(
     Type.String({
@@ -138,15 +119,10 @@ const ImageGenerateToolSchema = Type.Object({
   outputFormat: optionalStringEnum(SUPPORTED_OUTPUT_FORMATS, {
     description: "Optional output format hint: png, jpeg, or webp when the provider supports it.",
   }),
-  background: optionalStringEnum(SUPPORTED_BACKGROUNDS, {
-    description:
-      "Optional background hint: transparent, opaque, or auto when the provider supports it. For transparent output use outputFormat png or webp.",
-  }),
   openai: Type.Optional(
     Type.Object({
-      background: optionalStringEnum(SUPPORTED_BACKGROUNDS, {
-        description:
-          "OpenAI-only background hint: transparent, opaque, or auto. For transparent output use outputFormat png or webp; OpenClaw routes the default OpenAI image model to gpt-image-1.5 for this mode.",
+      background: optionalStringEnum(SUPPORTED_OPENAI_BACKGROUNDS, {
+        description: "OpenAI-only background hint: transparent, opaque, or auto.",
       }),
       moderation: optionalStringEnum(SUPPORTED_OPENAI_MODERATIONS, {
         description: "OpenAI-only moderation hint: low or auto.",
@@ -184,35 +160,16 @@ function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
   return getProviderEnvVars(providerId);
 }
 
-function formatImageGenerationAuthHint(provider: {
-  id: string;
-  authEnvVars: readonly string[];
-}): string | undefined {
-  if (provider.id === "openai") {
-    return "set OPENAI_API_KEY or configure OpenAI Codex OAuth for openai/gpt-image-2";
-  }
-  if (provider.authEnvVars.length === 0) {
-    return undefined;
-  }
-  return `set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`;
-}
-
 export function resolveImageGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
-  authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
-    authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
-    providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
+    providers: listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
-}
-
-function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.imageGenerationModel));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" {
@@ -287,21 +244,10 @@ function normalizeOpenAIBackground(
   if (!normalized) {
     return undefined;
   }
-  if ((SUPPORTED_BACKGROUNDS as readonly string[]).includes(normalized)) {
+  if ((SUPPORTED_OPENAI_BACKGROUNDS as readonly string[]).includes(normalized)) {
     return normalized as ImageGenerationOpenAIBackground;
   }
   throw new ToolInputError("openai.background must be one of transparent, opaque, or auto");
-}
-
-function normalizeBackground(raw: string | undefined): ImageGenerationBackground | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if ((SUPPORTED_BACKGROUNDS as readonly string[]).includes(normalized)) {
-    return normalized as ImageGenerationBackground;
-  }
-  throw new ToolInputError("background must be one of transparent, opaque, or auto");
 }
 
 function normalizeOpenAIModeration(
@@ -452,7 +398,6 @@ async function loadReferenceImages(params: {
   maxBytes?: number;
   workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
-  ssrfPolicy?: SsrFPolicy;
 }): Promise<
   Array<{
     sourceImage: ImageGenerationSourceImage;
@@ -468,15 +413,16 @@ async function loadReferenceImages(params: {
 
   for (const imageRawInput of params.imageInputs) {
     const trimmed = imageRawInput.trim();
-    const imageRaw = normalizeMediaReferenceSource(
-      trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
-    );
+    const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
     if (!imageRaw) {
       throw new ToolInputError("image required (empty string in array)");
     }
-    const refInfo = classifyMediaReferenceSource(imageRaw);
-    const { isDataUrl, isHttpUrl } = refInfo;
-    if (refInfo.hasUnsupportedScheme) {
+    const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
+    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
+    const isFileUrl = /^file:/i.test(imageRaw);
+    const isHttpUrl = /^https?:\/\//i.test(imageRaw);
+    const isDataUrl = /^data:/i.test(imageRaw);
+    if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
       throw new ToolInputError(
         `Unsupported image reference: ${imageRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
       );
@@ -529,7 +475,6 @@ async function loadReferenceImages(params: {
         : await loadWebMedia(resolvedPath ?? resolvedImage, {
             maxBytes: params.maxBytes,
             localRoots,
-            ssrfPolicy: params.ssrfPolicy,
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
@@ -574,24 +519,20 @@ async function inferResolutionFromInputImages(
 export function createImageGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
-  authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   sandbox?: ImageGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
 }): AnyAgentTool | null {
-  const cfg = options?.config ?? getRuntimeConfig();
-  if (
-    !hasGenerationToolAvailability({
-      cfg,
-      agentDir: options?.agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.imageGenerationModel,
-      providerKey: "imageGenerationProviders",
-    })
-  ) {
+  const cfg = options?.config ?? loadConfig();
+  const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
+    cfg,
+    agentDir: options?.agentDir,
+  });
+  if (!imageGenerationModelConfig) {
     return null;
   }
+  const effectiveCfg =
+    applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
@@ -605,13 +546,13 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured or inferred image-generation model. For transparent backgrounds, use outputFormat="png" or "webp" and background="transparent"; OpenAI also accepts openai.background and OpenClaw routes the default OpenAI image model to gpt-image-1.5 for that mode. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. Providers declare their own auth/readiness; use action="list" to inspect registered providers, models, readiness, and auth hints. Generated images are delivered automatically from the tool result as MEDIA paths.',
+      'Generate new images or edit reference images with the configured or inferred image-generation model. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. Providers declare their own auth/readiness; use action="list" to inspect registered providers, models, readiness, and auth hints. Generated images are delivered automatically from the tool result as MEDIA paths.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = resolveAction(params);
       if (action === "list") {
-        const runtimeProviders = listRuntimeImageGenerationProviders({ config: cfg });
+        const runtimeProviders = listRuntimeImageGenerationProviders({ config: effectiveCfg });
         const providers = runtimeProviders.map((provider) =>
           Object.assign(
             { id: provider.id },
@@ -622,9 +563,8 @@ export function createImageGenerateTool(options?: {
               configured: isCapabilityProviderConfigured({
                 providers: runtimeProviders,
                 provider,
-                cfg,
+                cfg: effectiveCfg,
                 agentDir: options?.agentDir,
-                authStore: options?.authProfileStore,
               }),
               authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
               capabilities: provider.capabilities,
@@ -648,22 +588,17 @@ export function createImageGenerateTool(options?: {
           if ((provider.capabilities.geometry?.aspectRatios?.length ?? 0) > 0) {
             caps.push(`aspect ratios ${provider.capabilities.geometry?.aspectRatios?.join(", ")}`);
           }
-          if ((provider.capabilities.output?.formats?.length ?? 0) > 0) {
-            caps.push(`formats ${provider.capabilities.output?.formats?.join("/")}`);
-          }
-          if ((provider.capabilities.output?.backgrounds?.length ?? 0) > 0) {
-            caps.push(`backgrounds ${provider.capabilities.output?.backgrounds?.join("/")}`);
-          }
           const modelLine =
             provider.models.length > 0
               ? `models: ${provider.models.join(", ")}`
               : "models: unknown";
-          const authHint = formatImageGenerationAuthHint(provider);
           return [
             `${provider.id}${provider.defaultModel ? ` (default ${provider.defaultModel})` : ""}`,
             `  ${modelLine}`,
             `  configured: ${provider.configured ? "yes" : "no"}`,
-            ...(authHint ? [`  auth: ${authHint}`] : []),
+            ...(provider.authEnvVars.length > 0
+              ? [`  auth: set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`]
+              : []),
             ...(caps.length > 0 ? [`  capabilities: ${caps.join("; ")}`] : []),
           ];
         });
@@ -673,18 +608,6 @@ export function createImageGenerateTool(options?: {
         };
       }
 
-      const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
-        cfg,
-        agentDir: options?.agentDir,
-        authStore: options?.authProfileStore,
-      });
-      if (!imageGenerationModelConfig) {
-        throw new ToolInputError("No image-generation model configured.");
-      }
-      const explicitModelConfig = hasExplicitImageGenerationModelConfig(cfg);
-      const effectiveCfg =
-        applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
-      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const prompt = readStringParam(params, "prompt", { required: true });
       const imageInputs = normalizeReferenceImages(params);
       const model = readStringParam(params, "model");
@@ -692,10 +615,9 @@ export function createImageGenerateTool(options?: {
       const size = readStringParam(params, "size");
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
-      const timeoutMs = readGenerationTimeoutMs(params) ?? imageGenerationModelConfig.timeoutMs;
+      const timeoutMs = readGenerationTimeoutMs(params);
       const quality = normalizeQuality(readStringParam(params, "quality"));
       const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
-      const background = normalizeBackground(readStringParam(params, "background"));
       const providerOptions = normalizeProviderOptions(params);
       const selectedProvider = resolveSelectedImageGenerationProvider({
         config: effectiveCfg,
@@ -704,13 +626,11 @@ export function createImageGenerateTool(options?: {
       });
       const count = resolveRequestedCount(params);
       const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(effectiveCfg);
-      const mediaMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
         maxBytes: configuredMediaMaxBytes,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
-        ssrfPolicy: remoteMediaSsrfPolicy,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
       const modeCaps =
@@ -739,13 +659,11 @@ export function createImageGenerateTool(options?: {
         prompt,
         agentDir: options?.agentDir,
         modelOverride: model,
-        autoProviderFallback: explicitModelConfig ? false : undefined,
         size,
         aspectRatio,
         resolution,
         quality,
         outputFormat,
-        background,
         count,
         inputImages,
         timeoutMs,
@@ -789,7 +707,7 @@ export function createImageGenerateTool(options?: {
             image.buffer,
             image.mimeType,
             "tool-image-generation",
-            mediaMaxBytes,
+            configuredMediaMaxBytes,
             filename || image.fileName,
           ),
         ),
@@ -833,7 +751,6 @@ export function createImageGenerateTool(options?: {
             : {}),
           ...(quality ? { quality } : {}),
           ...(outputFormat ? { outputFormat } : {}),
-          ...(background ? { background } : {}),
           ...(filename ? { filename } : {}),
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           attempts: result.attempts,

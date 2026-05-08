@@ -31,7 +31,6 @@ export type UsageDataState = {
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
-  cacheStatus: SessionsUsageResult["cacheStatus"];
 };
 
 export type UsageFilterState = {

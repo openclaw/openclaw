@@ -19,7 +19,7 @@ Perfect for:
 - Home automation hub
 - Low-power, always-available Telegram/WhatsApp bot
 
-## Hardware requirements
+## Hardware Requirements
 
 | Pi Model        | RAM     | Works?   | Notes                              |
 | --------------- | ------- | -------- | ---------------------------------- |
@@ -109,13 +109,13 @@ sudo sysctl -p
 
 ## 6) Install OpenClaw
 
-### Option A: standard install (recommended)
+### Option A: Standard Install (Recommended)
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-### Option B: hackable install (for tinkering)
+### Option B: Hackable Install (For tinkering)
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -183,7 +183,7 @@ For always-on remote access, see [Tailscale](/gateway/tailscale).
 
 ---
 
-## Performance optimizations
+## Performance Optimizations
 
 ### Use a USB SSD (Huge Improvement)
 
@@ -254,7 +254,7 @@ sudo loginctl enable-linger "$(whoami)"
 How `Restart=` policies help automated recovery:
 [systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
 
-### Reduce memory usage
+### Reduce Memory Usage
 
 ```bash
 # Disable GPU memory allocation (headless)
@@ -264,7 +264,7 @@ echo 'gpu_mem=16' | sudo tee -a /boot/config.txt
 sudo systemctl disable bluetooth
 ```
 
-### Monitor resources
+### Monitor Resources
 
 ```bash
 # Check memory
@@ -281,7 +281,7 @@ htop
 
 ## ARM-Specific Notes
 
-### Binary compatibility
+### Binary Compatibility
 
 Most OpenClaw features work on ARM64, but some external binaries may need ARM builds:
 
@@ -306,7 +306,7 @@ uname -m
 
 ---
 
-## Recommended model setup
+## Recommended Model Setup
 
 Since the Pi is just the Gateway (models run in the cloud), use API-based models:
 
@@ -356,7 +356,7 @@ free -h
 # Or reduce services running on the Pi
 ```
 
-### Slow performance
+### Slow Performance
 
 - Use USB SSD instead of SD card
 - Disable unused services: `sudo systemctl disable cups bluetooth avahi-daemon`
@@ -396,7 +396,7 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ---
 
-## Cost comparison
+## Cost Comparison
 
 | Setup          | One-Time Cost | Monthly Cost | Notes                     |
 | -------------- | ------------- | ------------ | ------------------------- |

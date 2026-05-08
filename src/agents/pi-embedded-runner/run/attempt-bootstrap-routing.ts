@@ -1,6 +1,6 @@
 import type { BootstrapMode } from "../../bootstrap-mode.js";
 import { resolveBootstrapMode } from "../../bootstrap-mode.js";
-import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
+import { buildAgentUserPromptPrefix } from "../../system-prompt.js";
 
 export type AttemptBootstrapRoutingInput = {
   workspaceBootstrapPending: boolean;
@@ -16,8 +16,8 @@ export type AttemptBootstrapRoutingInput = {
 
 export type AttemptBootstrapRouting = {
   bootstrapMode: BootstrapMode;
-  includeBootstrapInSystemContext: boolean;
-  includeBootstrapInRuntimeContext: boolean;
+  shouldStripBootstrapFromContext: boolean;
+  userPromptPrefixText?: string;
 };
 
 export type AttemptWorkspaceBootstrapRoutingInput = Omit<
@@ -25,22 +25,15 @@ export type AttemptWorkspaceBootstrapRoutingInput = Omit<
   "workspaceBootstrapPending"
 > & {
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
-  bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
 
-export function resolveBootstrapContextTargets(params: {
+export function shouldStripBootstrapFromEmbeddedContext(_params: {
   bootstrapMode: BootstrapMode;
-}): Pick<
-  AttemptBootstrapRouting,
-  "includeBootstrapInSystemContext" | "includeBootstrapInRuntimeContext"
-> {
-  return {
-    includeBootstrapInSystemContext: params.bootstrapMode === "full",
-    includeBootstrapInRuntimeContext: false,
-  };
+}): boolean {
+  return true;
 }
 
-function resolveAttemptBootstrapRouting(
+export function resolveAttemptBootstrapRouting(
   params: AttemptBootstrapRoutingInput,
 ): AttemptBootstrapRouting {
   const bootstrapMode = resolveBootstrapMode({
@@ -56,20 +49,13 @@ function resolveAttemptBootstrapRouting(
 
   return {
     bootstrapMode,
-    ...resolveBootstrapContextTargets({ bootstrapMode }),
+    shouldStripBootstrapFromContext: shouldStripBootstrapFromEmbeddedContext({
+      bootstrapMode,
+    }),
+    userPromptPrefixText: buildAgentUserPromptPrefix({
+      bootstrapMode,
+    }),
   };
-}
-
-export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[]): boolean {
-  return (
-    files?.some(
-      (file) =>
-        file.name === DEFAULT_BOOTSTRAP_FILENAME &&
-        !file.missing &&
-        typeof file.content === "string" &&
-        file.content.trim().length > 0,
-    ) ?? false
-  );
 }
 
 export async function resolveAttemptWorkspaceBootstrapRouting(
@@ -78,10 +64,8 @@ export async function resolveAttemptWorkspaceBootstrapRouting(
   const workspaceBootstrapPending = await params.isWorkspaceBootstrapPending(
     params.resolvedWorkspace,
   );
-  const hasHookBootstrapContent = hasBootstrapFileContent(params.bootstrapFiles);
   return resolveAttemptBootstrapRouting({
     ...params,
-    workspaceBootstrapPending: workspaceBootstrapPending || hasHookBootstrapContent,
-    hasBootstrapFileAccess: params.hasBootstrapFileAccess || hasHookBootstrapContent,
+    workspaceBootstrapPending,
   });
 }

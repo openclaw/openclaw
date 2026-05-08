@@ -5,9 +5,15 @@
  * this barrel to keep the internal module layout opaque.
  */
 
-export { resolveQQBotAccess } from "./access-control.js";
-export { createQQBotSenderMatcher, normalizeQQBotAllowFrom } from "./sender-match.js";
+export { resolveQQBotAccess, type QQBotAccessInput } from "./access-control.js";
 export {
+  createQQBotSenderMatcher,
+  normalizeQQBotAllowFrom,
+  normalizeQQBotSenderId,
+} from "./sender-match.js";
+export { resolveQQBotEffectivePolicies, type EffectivePolicyInput } from "./resolve-policy.js";
+export {
+  QQBOT_ACCESS_REASON,
   type QQBotAccessDecision,
   type QQBotAccessReasonCode,
   type QQBotAccessResult,

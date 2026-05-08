@@ -23,7 +23,7 @@ describe("thread binding config keys", () => {
     );
   });
 
-  it("accepts channel-level thread binding ttlHours compatibility", () => {
+  it("rejects legacy channels.<id>.threadBindings.ttlHours", () => {
     const result = validateConfigObjectRaw({
       channels: {
         demo: {
@@ -34,10 +34,19 @@ describe("thread binding config keys", () => {
       },
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        path: "channels",
+        message: expect.stringContaining("ttlHours"),
+      }),
+    );
   });
 
-  it("accepts account-level thread binding ttlHours compatibility", () => {
+  it("rejects legacy channels.<id>.accounts.<id>.threadBindings.ttlHours", () => {
     const result = validateConfigObjectRaw({
       channels: {
         demo: {
@@ -52,6 +61,15 @@ describe("thread binding config keys", () => {
       },
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        path: "channels",
+        message: expect.stringContaining("ttlHours"),
+      }),
+    );
   });
 });

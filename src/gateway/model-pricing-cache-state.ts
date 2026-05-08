@@ -23,6 +23,13 @@ export type CachedModelPricing = {
 let cachedPricing = new Map<string, CachedModelPricing>();
 let cachedAt = 0;
 
+const WRAPPER_PROVIDERS = new Set([
+  "cloudflare-ai-gateway",
+  "kilocode",
+  "openrouter",
+  "vercel-ai-gateway",
+]);
+
 function modelPricingCacheKey(provider: string, model: string): string {
   const providerId = normalizeProviderId(provider);
   const modelId = model.trim();
@@ -34,6 +41,16 @@ function modelPricingCacheKey(provider: string, model: string): string {
   )
     ? modelId
     : `${providerId}/${modelId}`;
+}
+
+function shouldNormalizeCachedPricingLookup(provider: string): boolean {
+  const normalized = normalizeProviderId(provider);
+  return (
+    normalized === "anthropic" ||
+    normalized === "openrouter" ||
+    normalized === "xai" ||
+    WRAPPER_PROVIDERS.has(normalized)
+  );
 }
 
 export function replaceGatewayModelPricingCache(
@@ -63,11 +80,11 @@ export function getCachedGatewayModelPricing(params: {
   if (direct) {
     return direct;
   }
-  const normalized = normalizeModelRef(provider, model);
-  const normalizedKey = modelPricingCacheKey(normalized.provider, normalized.model);
-  if (normalizedKey === key) {
+  if (!shouldNormalizeCachedPricingLookup(provider)) {
     return undefined;
   }
+  const normalized = normalizeModelRef(provider, model);
+  const normalizedKey = modelPricingCacheKey(normalized.provider, normalized.model);
   return normalizedKey ? cachedPricing.get(normalizedKey) : undefined;
 }
 
@@ -81,29 +98,6 @@ export function getGatewayModelPricingCacheMeta(): {
     ttlMs: 0,
     size: cachedPricing.size,
   };
-}
-
-function stablePricingValue(value: unknown): string {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? JSON.stringify(value) : JSON.stringify(String(value));
-  }
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stablePricingValue(entry)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .filter((key) => record[key] !== undefined)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${stablePricingValue(record[key])}`)
-    .join(",")}}`;
-}
-
-export function getGatewayModelPricingCacheFingerprint(): string {
-  const entries = Array.from(cachedPricing.entries()).toSorted(([a], [b]) => a.localeCompare(b));
-  return stablePricingValue(entries);
 }
 
 export function __resetGatewayModelPricingCacheForTest(): void {

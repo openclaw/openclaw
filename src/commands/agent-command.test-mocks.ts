@@ -22,24 +22,13 @@ vi.mock("../cli/deps.js", () => ({
   createDefaultDeps: vi.fn(() => ({})),
 }));
 
-const acpManagerMock = vi.hoisted(() => ({
-  current: {
-    resolveSession: vi.fn(() => null),
-  } as unknown,
-}));
-
 vi.mock("../acp/control-plane/manager.js", () => ({
   __testing: {
-    resetAcpSessionManagerForTests: vi.fn(() => {
-      acpManagerMock.current = {
-        resolveSession: vi.fn(() => null),
-      };
-    }),
-    setAcpSessionManagerForTests: vi.fn((manager: unknown) => {
-      acpManagerMock.current = manager;
-    }),
+    resetAcpSessionManagerForTests: vi.fn(),
   },
-  getAcpSessionManager: vi.fn(() => acpManagerMock.current),
+  getAcpSessionManager: vi.fn(() => ({
+    resolveSession: vi.fn(() => null),
+  })),
 }));
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -49,7 +38,6 @@ vi.mock("../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
-  loadManifestModelCatalog: vi.fn(() => []),
   loadModelCatalog: vi.fn(),
 }));
 
@@ -131,7 +119,6 @@ vi.mock("../agents/model-selection.js", () => {
         allowAny: Object.keys(modelConfig).length === 0,
       };
     }),
-    buildConfiguredModelCatalog: vi.fn(() => []),
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,

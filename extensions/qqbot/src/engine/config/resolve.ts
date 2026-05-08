@@ -41,7 +41,7 @@ interface QQBotChannelConfig {
  *
  * The outer config.ts layer extends this with clientSecret / secretSource.
  */
-interface ResolvedAccountBase {
+export interface ResolvedAccountBase {
   accountId: string;
   name?: string;
   enabled: boolean;
@@ -171,7 +171,7 @@ export function resolveAccountBase(
 
 // ---- Account config apply ----
 
-interface ApplyAccountInput {
+export interface ApplyAccountInput {
   appId?: string;
   clientSecret?: string;
   clientSecretFile?: string;
@@ -239,7 +239,7 @@ export function applyAccountConfig(
 // ---- Account status helpers ----
 
 /** Resolved account shape expected by isAccountConfigured / describeAccount. */
-interface AccountSnapshot {
+export interface AccountSnapshot {
   accountId: string;
   name?: string;
   enabled: boolean;

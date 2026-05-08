@@ -1,1 +1,1 @@
-export type { ChannelDmAllowFromMode as AllowFromMode } from "../../../channels/plugins/dm-access.js";
+export type AllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";

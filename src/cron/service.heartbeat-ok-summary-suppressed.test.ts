@@ -32,14 +32,14 @@ function createCronServiceForSummary(params: {
   storePath: string;
   summary: string;
   enqueueSystemEvent: CronServiceParams["enqueueSystemEvent"];
-  requestHeartbeat: CronServiceParams["requestHeartbeat"];
+  requestHeartbeatNow: CronServiceParams["requestHeartbeatNow"];
 }) {
   return new CronService({
     storePath: params.storePath,
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: params.enqueueSystemEvent,
-    requestHeartbeat: params.requestHeartbeat,
+    requestHeartbeatNow: params.requestHeartbeatNow,
     runHeartbeatOnce: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
@@ -71,19 +71,19 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
 
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const requestHeartbeatNow = vi.fn();
     const cron = createCronServiceForSummary({
       storePath,
       summary: "HEARTBEAT_OK",
       enqueueSystemEvent,
-      requestHeartbeat,
+      requestHeartbeatNow,
     });
 
     await runScheduledCron(cron);
 
     // HEARTBEAT_OK should NOT leak into the main session as a system event.
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
   });
 
   it("does not revive legacy main-session relay for real cron summaries", async () => {
@@ -99,17 +99,17 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
 
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const requestHeartbeatNow = vi.fn();
     const cron = createCronServiceForSummary({
       storePath,
       summary: "Weather update: sunny, 72°F",
       enqueueSystemEvent,
-      requestHeartbeat,
+      requestHeartbeatNow,
     });
 
     await runScheduledCron(cron);
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
   });
 });

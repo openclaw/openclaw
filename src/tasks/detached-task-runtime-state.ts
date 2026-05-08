@@ -49,3 +49,6 @@ export function restoreDetachedTaskLifecycleRuntimeRegistration(
 export function clearDetachedTaskLifecycleRuntimeRegistration(): void {
   detachedTaskLifecycleRuntimeRegistration = undefined;
 }
+
+export const _resetDetachedTaskLifecycleRuntimeRegistration =
+  clearDetachedTaskLifecycleRuntimeRegistration;

@@ -36,12 +36,11 @@ export async function recordInboundSession(params: {
   createIfMissing?: boolean;
   updateLastRoute?: InboundLastRouteUpdate;
   onRecordError: (err: unknown) => void;
-  trackSessionMetaTask?: (task: Promise<unknown>) => void;
 }): Promise<void> {
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
   const canonicalSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
   const runtime = await loadInboundSessionRuntime();
-  const metaTask = runtime
+  void runtime
     .recordSessionMetaFromInbound({
       storePath,
       sessionKey: canonicalSessionKey,
@@ -50,8 +49,6 @@ export async function recordInboundSession(params: {
       createIfMissing,
     })
     .catch(params.onRecordError);
-  params.trackSessionMetaTask?.(metaTask);
-  void metaTask;
 
   const update = params.updateLastRoute;
   if (!update) {
@@ -73,6 +70,5 @@ export async function recordInboundSession(params: {
     // Avoid leaking inbound origin metadata into a different target session.
     ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,
     groupResolution,
-    createIfMissing,
   });
 }

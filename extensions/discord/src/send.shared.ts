@@ -1,28 +1,28 @@
+import {
+  Embed,
+  RequestClient,
+  serializePayload,
+  type MessagePayloadFile,
+  type MessagePayloadObject,
+  type TopLevelComponents,
+} from "@buape/carbon";
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
-import type { APIChannel } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizePollDurationHours,
   normalizePollInput,
-  type OutboundMediaAccess,
   type PollInput,
 } from "openclaw/plugin-sdk/media-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from "./client.js";
-import {
-  createChannelMessage,
-  createUserDmChannel,
-  getChannel,
-  RequestClient,
-} from "./internal/discord.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
@@ -36,25 +36,9 @@ const DISCORD_CANNOT_DM = 50007;
 
 type DiscordRequest = RetryRunner;
 
-export {
-  buildDiscordMessagePayload,
-  buildDiscordMessageRequest,
-  resolveDiscordSendComponents,
-  resolveDiscordSendEmbeds,
-  stripUndefinedFields,
-  SUPPRESS_NOTIFICATIONS_FLAG,
-  type DiscordSendComponentFactory,
-  type DiscordSendComponents,
-  type DiscordSendEmbeds,
-} from "./send.message-request.js";
-import {
-  buildDiscordMessageRequest,
-  resolveDiscordSendComponents,
-  resolveDiscordSendEmbeds,
-  SUPPRESS_NOTIFICATIONS_FLAG,
-  type DiscordSendComponents,
-  type DiscordSendEmbeds,
-} from "./send.message-request.js";
+export type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
+export type DiscordSendComponents = TopLevelComponents[] | DiscordSendComponentFactory;
+export type DiscordSendEmbeds = Array<APIEmbed | Embed>;
 type DiscordRecipient =
   | {
       kind: "user";
@@ -233,7 +217,10 @@ async function resolveChannelId(
     return { channelId: recipient.id };
   }
   const dmChannel = (await request(
-    () => createUserDmChannel(rest, recipient.id),
+    () =>
+      rest.post(Routes.userChannels(), {
+        body: { recipient_id: recipient.id },
+      }) as Promise<{ id: string }>,
     "dm-channel",
   )) as { id: string };
   if (!dmChannel?.id) {
@@ -247,10 +234,10 @@ async function resolveDiscordTargetChannelId(
   opts: DiscordClientOpts & { cfg: OpenClawConfig },
 ): Promise<{ channelId: string; dm?: boolean }> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord target channel resolution");
-  const recipient = await parseAndResolveRecipient(raw, cfg, opts.accountId, {
+  const recipient = await parseAndResolveRecipient(raw, opts.accountId, cfg, {
     defaultKind: "channel",
   });
-  const { rest, request } = createDiscordClient(opts);
+  const { rest, request } = createDiscordClient(opts, cfg);
   return await resolveChannelId(rest, recipient, request);
 }
 
@@ -259,12 +246,15 @@ export async function resolveDiscordChannelType(
   channelId: string,
 ): Promise<number | undefined> {
   try {
-    const channel = (await getChannel(rest, channelId)) as APIChannel | undefined;
+    const channel = (await rest.get(Routes.channel(channelId))) as APIChannel | undefined;
     return channel?.type;
   } catch {
     return undefined;
   }
 }
+
+// Discord message flag for silent/suppress notifications
+export const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 
 export function buildDiscordTextChunks(
   text: string,
@@ -279,6 +269,72 @@ export function buildDiscordTextChunks(
     chunkMode: opts.chunkMode,
   });
   return resolveTextChunksWithFallback(text, chunks);
+}
+
+function hasV2Components(components?: TopLevelComponents[]): boolean {
+  return Boolean(components?.some((component) => "isV2" in component && component.isV2));
+}
+
+export function resolveDiscordSendComponents(params: {
+  components?: DiscordSendComponents;
+  text: string;
+  isFirst: boolean;
+}): TopLevelComponents[] | undefined {
+  if (!params.components || !params.isFirst) {
+    return undefined;
+  }
+  return typeof params.components === "function"
+    ? params.components(params.text)
+    : params.components;
+}
+
+function normalizeDiscordEmbeds(embeds?: DiscordSendEmbeds): Embed[] | undefined {
+  if (!embeds?.length) {
+    return undefined;
+  }
+  return embeds.map((embed) => (embed instanceof Embed ? embed : new Embed(embed)));
+}
+
+export function resolveDiscordSendEmbeds(params: {
+  embeds?: DiscordSendEmbeds;
+  isFirst: boolean;
+}): Embed[] | undefined {
+  if (!params.embeds || !params.isFirst) {
+    return undefined;
+  }
+  return normalizeDiscordEmbeds(params.embeds);
+}
+
+export function buildDiscordMessagePayload(params: {
+  text: string;
+  components?: TopLevelComponents[];
+  embeds?: Embed[];
+  flags?: number;
+  files?: MessagePayloadFile[];
+}): MessagePayloadObject {
+  const payload: MessagePayloadObject = {};
+  const hasV2 = hasV2Components(params.components);
+  const trimmed = params.text.trim();
+  if (!hasV2 && trimmed) {
+    payload.content = params.text;
+  }
+  if (params.components?.length) {
+    payload.components = params.components;
+  }
+  if (!hasV2 && params.embeds?.length) {
+    payload.embeds = params.embeds;
+  }
+  if (params.flags !== undefined) {
+    payload.flags = params.flags;
+  }
+  if (params.files?.length) {
+    payload.files = params.files;
+  }
+  return payload;
+}
+
+export function stripUndefinedFields<T extends object>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
 export function toDiscordFileBlob(data: Blob | Uint8Array): Blob {
@@ -301,13 +357,13 @@ async function sendDiscordText(
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
   silent?: boolean,
-  maxChars?: number,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
   }
+  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
-  const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars });
+  const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode });
   const sendChunk = async (chunk: string, isFirst: boolean) => {
     const chunkComponents = resolveDiscordSendComponents({
       components,
@@ -315,15 +371,21 @@ async function sendDiscordText(
       isFirst,
     });
     const chunkEmbeds = resolveDiscordSendEmbeds({ embeds, isFirst });
-    const body = buildDiscordMessageRequest({
+    const payload = buildDiscordMessagePayload({
       text: chunk,
       components: chunkComponents,
       embeds: chunkEmbeds,
       flags,
-      replyTo,
+    });
+    const body = stripUndefinedFields({
+      ...serializePayload(payload),
+      ...(messageReference ? { message_reference: messageReference } : {}),
     });
     return (await request(
-      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      () =>
+        rest.post(Routes.channelMessages(channelId), {
+          body,
+        }) as Promise<{ id: string; channel_id: string }>,
       "text",
     )) as { id: string; channel_id: string };
   };
@@ -346,7 +408,6 @@ async function sendDiscordMedia(
   text: string,
   mediaUrl: string,
   filename: string | undefined,
-  mediaAccess: OutboundMediaAccess | undefined,
   mediaLocalRoots: readonly string[] | undefined,
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
@@ -357,11 +418,10 @@ async function sendDiscordMedia(
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
   silent?: boolean,
-  maxChars?: number,
 ) {
   const media = await loadWebMedia(
     mediaUrl,
-    buildOutboundMediaLoadOptions({ maxBytes, mediaAccess, mediaLocalRoots, mediaReadFile }),
+    buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots, mediaReadFile }),
   );
   const requestedFileName = filename?.trim();
   const resolvedFileName =
@@ -369,10 +429,9 @@ async function sendDiscordMedia(
     media.fileName ||
     (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
     "upload";
-  const chunks = text
-    ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars })
-    : [];
+  const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
   const caption = chunks[0] ?? "";
+  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const fileData = toDiscordFileBlob(media.buffer);
   const captionComponents = resolveDiscordSendComponents({
@@ -381,12 +440,11 @@ async function sendDiscordMedia(
     isFirst: true,
   });
   const captionEmbeds = resolveDiscordSendEmbeds({ embeds, isFirst: true });
-  const body = buildDiscordMessageRequest({
+  const payload = buildDiscordMessagePayload({
     text: caption,
     components: captionComponents,
     embeds: captionEmbeds,
     flags,
-    replyTo,
     files: [
       {
         data: fileData,
@@ -395,7 +453,13 @@ async function sendDiscordMedia(
     ],
   });
   const res = (await request(
-    () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+    () =>
+      rest.post(Routes.channelMessages(channelId), {
+        body: stripUndefinedFields({
+          ...serializePayload(payload),
+          ...(messageReference ? { message_reference: messageReference } : {}),
+        }),
+      }) as Promise<{ id: string; channel_id: string }>,
     "media",
   )) as { id: string; channel_id: string };
   for (const chunk of chunks.slice(1)) {
@@ -413,7 +477,6 @@ async function sendDiscordMedia(
       undefined,
       chunkMode,
       silent,
-      maxChars,
     );
   }
   return res;

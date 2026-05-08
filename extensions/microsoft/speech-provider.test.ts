@@ -1,12 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import {
-  finalizeDebugProxyCapture,
-  getDebugProxyCaptureStore,
-  initializeDebugProxyCapture,
-} from "openclaw/plugin-sdk/proxy-capture";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 
@@ -86,6 +81,7 @@ describe("listMicrosoftVoices", () => {
         new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
       ) as unknown as typeof globalThis.fetch;
 
+    const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
     const store = getDebugProxyCaptureStore(
       process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
       process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
@@ -126,6 +122,9 @@ describe("listMicrosoftVoices", () => {
       async () => new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
     ) as unknown as typeof globalThis.fetch;
 
+    const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+    const { finalizeDebugProxyCapture, initializeDebugProxyCapture } =
+      await import("../../src/proxy-capture/runtime.js");
     const store = getDebugProxyCaptureStore(
       process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
       process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,

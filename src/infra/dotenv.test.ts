@@ -5,14 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
-const loggerMocks = vi.hoisted(() => ({
-  warn: vi.fn(),
-}));
-
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: vi.fn(() => loggerMocks),
-}));
-
 const CREDENTIAL_AND_GATEWAY_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_SECONDARY",
@@ -40,21 +32,6 @@ const BUNDLED_TRUST_ROOT_ENV_LINES = [
 const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
   (line) => line.split("=")[0] ?? "",
 );
-
-const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
-  "ComSpec",
-  "COMSPEC",
-  "LocalAppData",
-  "LOCALAPPDATA",
-  "ProgramFiles",
-  "PROGRAMFILES",
-  "ProgramW6432",
-  "PROGRAMW6432",
-  "SystemRoot",
-  "SYSTEMROOT",
-  "windir",
-  "WINDIR",
-] as const;
 
 async function writeEnvFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -175,18 +152,14 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.FOO;
         delete process.env.BAR;
-        loggerMocks.warn.mockClear();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
-        expect(loggerMocks.warn).toHaveBeenCalledWith(
-          expect.stringContaining("Conflicting values in"),
-          expect.objectContaining({
-            ignoredPath: expect.stringContaining("gateway.env"),
-          }),
-        );
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Conflicting values in"));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.env"));
       });
     });
   });
@@ -203,12 +176,12 @@ describe("loadDotEnv", () => {
         );
 
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-        loggerMocks.warn.mockClear();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-shell");
-        expect(loggerMocks.warn).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
       });
     });
   });
@@ -224,16 +197,11 @@ describe("loadDotEnv", () => {
             "OPENCLAW_STATE_DIR=./evil-state",
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
-            "CLOUDSDK_PYTHON=./attacker-python",
             "EXAMPLE_API_HOST=https://evil-api.example.com",
             "MINIMAX_API_HOST=https://evil.example.com",
             "HTTP_PROXY=http://evil-proxy:8080",
-            "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
-            "HOMEBREW_PREFIX=./evil-brew",
-            "SystemRoot=.\\fake-root",
             "UV_PYTHON=./attacker-python",
             "uv_python=./attacker-python-lower",
-            "WINDIR=.\\fake-windir",
           ].join("\n"),
         );
         await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
@@ -243,16 +211,11 @@ describe("loadDotEnv", () => {
         delete process.env.NODE_OPTIONS;
         delete process.env.OPENCLAW_CONFIG_PATH;
         delete process.env.ANTHROPIC_BASE_URL;
-        delete process.env.CLOUDSDK_PYTHON;
         delete process.env.EXAMPLE_API_HOST;
         delete process.env.MINIMAX_API_HOST;
         delete process.env.HTTP_PROXY;
-        delete process.env.HOMEBREW_BREW_FILE;
-        delete process.env.HOMEBREW_PREFIX;
-        delete process.env.SystemRoot;
         delete process.env.UV_PYTHON;
         delete process.env.uv_python;
-        delete process.env.WINDIR;
 
         loadDotEnv({ quiet: true });
 
@@ -262,16 +225,11 @@ describe("loadDotEnv", () => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
-        expect(process.env.CLOUDSDK_PYTHON).toBeUndefined();
         expect(process.env.EXAMPLE_API_HOST).toBeUndefined();
         expect(process.env.MINIMAX_API_HOST).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
-        expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
-        expect(process.env.HOMEBREW_PREFIX).toBeUndefined();
-        expect(process.env.SystemRoot).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
         expect(process.env.uv_python).toBeUndefined();
-        expect(process.env.WINDIR).toBeUndefined();
       });
     });
   });
@@ -307,57 +265,21 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks state-directory controls from workspace .env even when unset in process env", async () => {
+  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
-          [
-            "OPENCLAW_STATE_DIR=./evil-state",
-            "STATE_DIRECTORY=./evil-systemd-state",
-            "OPENCLAW_CONFIG_PATH=./evil-config.json",
-          ].join("\n"),
+          "OPENCLAW_STATE_DIR=./evil-state\nOPENCLAW_CONFIG_PATH=./evil-config.json\n",
         );
 
         delete process.env.OPENCLAW_STATE_DIR;
-        delete process.env.STATE_DIRECTORY;
         delete process.env.OPENCLAW_CONFIG_PATH;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
-        expect(process.env.STATE_DIRECTORY).toBeUndefined();
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-      });
-    });
-  });
-
-  it("blocks Windows shell trust-root vars from workspace .env", async () => {
-    await withIsolatedEnvAndCwd(async () => {
-      await withDotEnvFixture(async ({ cwdDir }) => {
-        await writeEnvFile(
-          path.join(cwdDir, ".env"),
-          [
-            "ComSpec=.\\evil-comspec",
-            "COMSPEC=.\\evil-comspec-upper",
-            "LocalAppData=.\\evil-local-app-data",
-            "LOCALAPPDATA=.\\evil-local-app-data-upper",
-            "ProgramFiles=.\\evil-pfiles",
-            "PROGRAMFILES=.\\evil-pfiles-upper",
-            "ProgramW6432=.\\evil-pw6432",
-            "PROGRAMW6432=.\\evil-pw6432-upper",
-            "SystemRoot=.\\fake-root",
-            "SYSTEMROOT=.\\fake-root-upper",
-            "windir=.\\fake-windir",
-            "WINDIR=.\\fake-windir-upper",
-          ].join("\n"),
-        );
-
-        clearEnv(WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS);
-
-        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
-
-        expectEnvUndefined(WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS);
       });
     });
   });
@@ -440,20 +362,6 @@ describe("loadDotEnv", () => {
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expectEnvUndefined(BUNDLED_TRUST_ROOT_ENV_KEYS);
-      });
-    });
-  });
-
-  it.each(["npm_execpath", "NPM_EXECPATH"])("blocks %s from workspace .env", async (key) => {
-    await withIsolatedEnvAndCwd(async () => {
-      await withDotEnvFixture(async ({ cwdDir }) => {
-        await writeEnvFile(path.join(cwdDir, ".env"), `${key}=./evil/npm-cli.js\n`);
-
-        delete process.env[key];
-
-        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
-
-        expect(process.env[key]).toBeUndefined();
       });
     });
   });
@@ -716,10 +624,7 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
           "OPENCLAW_BROWSER_EXECUTABLE_PATH",
           "EXAMPLE_API_HOST",
-          "HOMEBREW_BREW_FILE",
-          "HOMEBREW_PREFIX",
           "IRC_HOST",
-          "LOCALAPPDATA",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
@@ -741,15 +646,6 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_NODE_EXEC_HOST",
           "OPENCLAW_NODE_EXEC_FALLBACK",
           "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
-          "PATH",
-          "HOMEBREW_BREW_FILE",
-          "HOMEBREW_PREFIX",
-          "SystemRoot",
-          "WINDIR",
-          "ProgramFiles",
-          "ProgramFiles(x86)",
-          "ProgramW6432",
-          "STATE_DIRECTORY",
           "SYNOLOGY_CHAT_INCOMING_URL",
           "SYNOLOGY_NAS_HOST",
         ];

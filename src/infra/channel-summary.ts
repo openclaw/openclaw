@@ -9,7 +9,6 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { theme } from "../terminal/theme.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
 
@@ -45,8 +44,8 @@ const accountLine = (label: string, details: string[]) =>
   `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
 
 async function loadChannelSummaryConfig(): Promise<OpenClawConfig> {
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig();
+  const { loadConfig } = await import("../config/config.js");
+  return loadConfig();
 }
 
 async function listChannelSummaryPlugins(params: {
@@ -56,7 +55,6 @@ async function listChannelSummaryPlugins(params: {
   const { listReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
   return listReadOnlyChannelPluginsForConfig(params.cfg, {
     activationSourceConfig: params.sourceConfig,
-    includeSetupFallbackPlugins: false,
   });
 }
 
@@ -201,7 +199,7 @@ export async function buildChannelSummary(
         : status === "not linked" || status === "auth stabilizing"
           ? theme.error
           : theme.muted;
-    const baseLabel = sanitizeForLog(plugin.meta.label ?? plugin.id).trim() || plugin.id;
+    const baseLabel = plugin.meta.label ?? plugin.id;
     let line = `${baseLabel}: ${status}`;
 
     const authAgeMs =

@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.node.JpegSizeLimiter
 import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -8,6 +7,7 @@ import android.net.Uri
 import android.util.Base64
 import android.util.LruCache
 import androidx.core.graphics.scale
+import ai.openclaw.app.node.JpegSizeLimiter
 import java.io.ByteArrayOutputStream
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -20,16 +20,10 @@ private const val CHAT_IMAGE_CACHE_BYTES = 16 * 1024 * 1024
 
 private val decodedBitmapCache =
   object : LruCache<String, Bitmap>(CHAT_IMAGE_CACHE_BYTES) {
-    override fun sizeOf(
-      key: String,
-      value: Bitmap,
-    ): Int = value.byteCount.coerceAtLeast(1)
+    override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount.coerceAtLeast(1)
   }
 
-internal fun loadSizedImageAttachment(
-  resolver: ContentResolver,
-  uri: Uri,
-): PendingImageAttachment {
+internal fun loadSizedImageAttachment(resolver: ContentResolver, uri: Uri): PendingImageAttachment {
   val fileName = normalizeAttachmentFileName((uri.lastPathSegment ?: "image").substringAfterLast('/'))
   val bitmap = decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
   if (bitmap == null) {
@@ -72,10 +66,7 @@ internal fun loadSizedImageAttachment(
   )
 }
 
-internal fun decodeBase64Bitmap(
-  base64: String,
-  maxDimension: Int = CHAT_DECODE_MAX_DIMENSION,
-): Bitmap? {
+internal fun decodeBase64Bitmap(base64: String, maxDimension: Int = CHAT_DECODE_MAX_DIMENSION): Bitmap? {
   val cacheKey = "$maxDimension:${base64.length}:${base64.hashCode()}"
   decodedBitmapCache.get(cacheKey)?.let { return it }
 
@@ -101,11 +92,7 @@ internal fun decodeBase64Bitmap(
   return bitmap
 }
 
-internal fun computeInSampleSize(
-  width: Int,
-  height: Int,
-  maxDimension: Int,
-): Int {
+internal fun computeInSampleSize(width: Int, height: Int, maxDimension: Int): Int {
   if (width <= 0 || height <= 0 || maxDimension <= 0) return 1
 
   var sample = 1

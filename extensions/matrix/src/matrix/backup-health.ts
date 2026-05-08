@@ -1,4 +1,4 @@
-type MatrixRoomKeyBackupStatusLike = {
+export type MatrixRoomKeyBackupStatusLike = {
   serverVersion: string | null;
   activeVersion: string | null;
   trusted: boolean | null;
@@ -8,7 +8,7 @@ type MatrixRoomKeyBackupStatusLike = {
   keyLoadError: string | null;
 };
 
-type MatrixRoomKeyBackupIssueCode =
+export type MatrixRoomKeyBackupIssueCode =
   | "missing-server-backup"
   | "key-load-failed"
   | "key-not-loaded"
@@ -18,7 +18,7 @@ type MatrixRoomKeyBackupIssueCode =
   | "indeterminate"
   | "ok";
 
-type MatrixRoomKeyBackupIssue = {
+export type MatrixRoomKeyBackupIssue = {
   code: MatrixRoomKeyBackupIssueCode;
   summary: string;
   message: string | null;

@@ -8,8 +8,8 @@ import {
 } from "../../config/config-paths.js";
 import {
   readConfigFileSnapshot,
-  replaceConfigFile,
   validateConfigObjectWithPlugins,
+  writeConfigFile,
 } from "../../config/config.js";
 import {
   getConfigOverrides,
@@ -159,10 +159,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await replaceConfigFile({
-      nextConfig: validated.config,
-      afterWrite: { mode: "auto" },
-    });
+    await writeConfigFile(validated.config);
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config updated: ${configCommand.path} removed.` },
@@ -181,10 +178,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await replaceConfigFile({
-      nextConfig: validated.config,
-      afterWrite: { mode: "auto" },
-    });
+    await writeConfigFile(validated.config);
     const valueLabel =
       typeof configCommand.value === "string"
         ? `"${configCommand.value}"`

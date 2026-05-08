@@ -1,5 +1,5 @@
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   coerceSecretRef,
@@ -32,6 +32,7 @@ import {
   resolveGlobalMatrixEnvConfig,
   resolveMatrixEnvAuthReadiness,
   resolveScopedMatrixEnvConfig,
+  type MatrixEnvConfig,
 } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
@@ -448,8 +449,10 @@ function buildMatrixNetworkFields(params: {
 export { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 export {
   hasReadyMatrixEnvAuth,
+  resolveGlobalMatrixEnvConfig,
   resolveMatrixEnvAuthReadiness,
   resolveScopedMatrixEnvConfig,
+  type MatrixEnvConfig,
 } from "./env-auth.js";
 export {
   resolveValidatedMatrixHomeserverUrl,

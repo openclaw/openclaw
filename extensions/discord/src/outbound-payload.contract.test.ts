@@ -2,7 +2,7 @@ import {
   installChannelOutboundPayloadContractSuite,
   primeChannelOutboundSendMock,
   type OutboundPayloadHarnessParams,
-} from "openclaw/plugin-sdk/channel-contract-testing";
+} from "openclaw/plugin-sdk/testing";
 import { describe, vi } from "vitest";
 import { discordOutbound } from "./outbound-adapter.js";
 
@@ -32,7 +32,7 @@ function createDiscordHarness(params: OutboundPayloadHarnessParams) {
 describe("Discord outbound payload contract", () => {
   installChannelOutboundPayloadContractSuite({
     channel: "discord",
-    chunking: { mode: "split", longTextLength: 3000, maxChunkLength: 2000 },
+    chunking: { mode: "passthrough", longTextLength: 3000 },
     createHarness: createDiscordHarness,
   });
 });

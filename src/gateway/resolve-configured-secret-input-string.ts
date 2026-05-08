@@ -5,7 +5,7 @@ import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type SecretInputUnresolvedReasonStyle = "generic" | "detailed"; // pragma: allowlist secret
-type ConfiguredSecretInputSource =
+export type ConfiguredSecretInputSource =
   | "config"
   | "secretRef" // pragma: allowlist secret
   | "fallback";

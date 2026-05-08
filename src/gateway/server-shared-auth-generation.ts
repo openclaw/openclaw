@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
+import { resolveGatewayReloadSettings } from "./config-reload.js";
 
 export type SharedGatewayAuthClient = {
   usesSharedGatewayAuth?: boolean;

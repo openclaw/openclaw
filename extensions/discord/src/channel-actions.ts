@@ -1,14 +1,20 @@
-import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
+import {
+  createUnionActionGate,
+  listTokenSourcedAccounts,
+} from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { inspectDiscordAccount } from "./account-inspect.js";
-import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
+import {
+  createDiscordActionGate,
+  listEnabledDiscordAccounts,
+  resolveDiscordAccount,
+} from "./accounts.js";
 
 let discordChannelActionsRuntimePromise:
   | Promise<typeof import("./channel-actions.runtime.js")>
@@ -19,14 +25,8 @@ async function loadDiscordChannelActionsRuntime() {
   return await discordChannelActionsRuntimePromise;
 }
 
-function listDiscoverableDiscordAccounts(cfg: OpenClawConfig) {
-  return listDiscordAccountIds(cfg)
-    .map((accountId) => inspectDiscordAccount({ cfg, accountId }))
-    .filter((account) => account.enabled && account.configured);
-}
-
-function resolveDiscordActionDiscovery(cfg: OpenClawConfig) {
-  const accounts = listDiscoverableDiscordAccounts(cfg);
+function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscordAccounts>[0]) {
+  const accounts = listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg));
   if (accounts.length === 0) {
     return null;
   }
@@ -43,14 +43,14 @@ function resolveDiscordActionDiscovery(cfg: OpenClawConfig) {
 }
 
 function resolveScopedDiscordActionDiscovery(params: {
-  cfg: OpenClawConfig;
+  cfg: Parameters<typeof listEnabledDiscordAccounts>[0];
   accountId?: string | null;
 }) {
   if (!params.accountId) {
     return resolveDiscordActionDiscovery(params.cfg);
   }
-  const account = inspectDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.enabled || !account.configured) {
+  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.enabled || !account.token.trim()) {
     return null;
   }
   const gate = createDiscordActionGate({
@@ -86,7 +86,6 @@ function describeDiscordMessageTool({
     actions.add("emoji-list");
   }
   if (discovery.isEnabled("messages")) {
-    actions.add("upload-file");
     actions.add("read");
     actions.add("edit");
     actions.add("delete");
@@ -161,8 +160,6 @@ function describeDiscordMessageTool({
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
-  resolveExecutionMode: ({ action }) =>
-    action === "read" || action === "search" ? "gateway" : "local",
   describeMessageTool: describeDiscordMessageTool,
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
@@ -182,9 +179,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     accountId,
     requesterSenderId,
     toolContext,
-    mediaAccess,
     mediaLocalRoots,
-    mediaReadFile,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -195,9 +190,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       accountId,
       requesterSenderId,
       toolContext,
-      mediaAccess,
       mediaLocalRoots,
-      mediaReadFile,
     });
   },
 };

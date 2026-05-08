@@ -20,22 +20,7 @@ export function isLocalCheckEnabled(env) {
   return raw !== "0" && raw !== "false";
 }
 
-function isCiLikeEnv(env = process.env) {
-  return env.CI === "true" || env.GITHUB_ACTIONS === "true";
-}
-
-export function resolveLocalHeavyCheckEnv(env = process.env) {
-  if (isCiLikeEnv(env) || isLocalCheckEnabled(env)) {
-    return env;
-  }
-
-  return {
-    ...env,
-    OPENCLAW_LOCAL_CHECK: "1",
-  };
-}
-
-function hasFlag(args, name) {
+export function hasFlag(args, name) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 
@@ -84,8 +69,7 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
   const nextArgs = [...args];
 
   insertBeforeSeparator(nextArgs, "--type-aware");
-  insertBeforeSeparator(nextArgs, "--tsconfig", "config/tsconfig/oxlint.json");
-  insertBeforeSeparator(nextArgs, "--allow", "eslint/no-underscore-dangle");
+  insertBeforeSeparator(nextArgs, "--tsconfig", "tsconfig.oxlint.json");
   if (
     !hasFlag(nextArgs, "--report-unused-disable-directives") &&
     !hasFlag(nextArgs, "--report-unused-disable-directives-severity")
@@ -93,7 +77,7 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
     insertBeforeSeparator(nextArgs, "--report-unused-disable-directives-severity", "error");
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources) && !hasFlag(nextArgs, "--threads")) {
+  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
     insertBeforeSeparator(nextArgs, "--threads=1");
   }
 
@@ -161,7 +145,7 @@ export function shouldAcquireLocalHeavyCheckLockForTsgo(args, env = process.env)
   );
 }
 
-function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throttled") {
+export function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throttled") {
   if (!isLocalCheckEnabled(env)) {
     return false;
   }
@@ -273,7 +257,7 @@ export function acquireLocalHeavyCheckLockSync(params) {
   }
 }
 
-function resolveGitCommonDir(cwd) {
+export function resolveGitCommonDir(cwd) {
   const result = spawnSync("git", ["rev-parse", "--git-common-dir"], {
     cwd,
     encoding: "utf8",

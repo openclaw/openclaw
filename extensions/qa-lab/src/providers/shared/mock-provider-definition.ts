@@ -1,7 +1,7 @@
 import { createMockProviderMap } from "./mock-model-config.js";
 import type { QaProviderDefinition, QaProviderMode } from "./types.js";
 
-type MockQaProviderDefinitionParams = {
+export type MockQaProviderDefinitionParams = {
   mode: Extract<QaProviderMode, "aimock" | "mock-openai">;
   commandName: string;
   commandDescription: string;
@@ -10,7 +10,7 @@ type MockQaProviderDefinitionParams = {
 };
 
 function mockModelRef(providerId: string, alternate?: boolean) {
-  return `${providerId}/${alternate ? "gpt-5.5-alt" : "gpt-5.5"}`;
+  return `${providerId}/${alternate ? "gpt-5.4-alt" : "gpt-5.4"}`;
 }
 
 export function createMockQaProviderDefinition(
@@ -25,9 +25,8 @@ export function createMockQaProviderDefinition(
       serverLabel: params.serverLabel,
     },
     defaultModel: (options) => mockModelRef(params.mode, options?.alternate),
-    defaultImageGenerationProviderIds: ["openai"],
-    defaultImageGenerationModel: ({ modelProviderIds }) =>
-      modelProviderIds.includes("openai") ? "openai/gpt-image-1" : null,
+    defaultImageGenerationProviderIds: [],
+    defaultImageGenerationModel: () => `${params.mode}/gpt-image-1`,
     usesFastModeByDefault: () => false,
     resolveModelParams: () => ({
       transport: "sse",

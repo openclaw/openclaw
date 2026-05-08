@@ -1,4 +1,3 @@
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { defaultQaRuntimeModelForMode } = vi.hoisted(() => ({
@@ -46,8 +45,8 @@ describe("qa run config", () => {
   it("creates a live-by-default selection that arms every scenario", () => {
     expect(createDefaultQaRunSelection(scenarios)).toEqual({
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: true,
       scenarioIds: ["dm-chat-baseline", "thread-lifecycle"],
     });
@@ -58,7 +57,7 @@ describe("qa run config", () => {
       normalizeQaRunSelection(
         {
           providerMode: "live-frontier",
-          primaryModel: "openai/gpt-5.5",
+          primaryModel: "openai/gpt-5.4",
           alternateModel: "",
           fastMode: false,
           scenarioIds: ["thread-lifecycle", "missing", "thread-lifecycle"],
@@ -67,8 +66,8 @@ describe("qa run config", () => {
       ),
     ).toEqual({
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: true,
       scenarioIds: ["thread-lifecycle"],
     });
@@ -100,13 +99,13 @@ describe("qa run config", () => {
   });
 
   it("keeps idle snapshots on static defaults so startup does not inspect auth profiles", () => {
-    defaultQaRuntimeModelForMode.mockReturnValue("openai/gpt-5.5");
+    defaultQaRuntimeModelForMode.mockReturnValue("openai/gpt-5.4");
     defaultQaRuntimeModelForMode.mockClear();
 
     expect(createIdleQaRunnerSnapshot(scenarios).selection).toMatchObject({
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
     });
     expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
   });
@@ -124,30 +123,29 @@ describe("qa run config", () => {
       ),
     ).toEqual({
       providerMode: "aimock",
-      primaryModel: "aimock/gpt-5.5",
-      alternateModel: "aimock/gpt-5.5-alt",
+      primaryModel: "aimock/gpt-5.4",
+      alternateModel: "aimock/gpt-5.4-alt",
       fastMode: false,
       scenarioIds: ["dm-chat-baseline"],
     });
   });
 
   it("anchors generated run output dirs under the provided repo root", () => {
-    const repoRoot = path.resolve("/tmp/openclaw-repo");
-    const outputDir = createQaRunOutputDir(repoRoot);
-    expect(outputDir.startsWith(path.join(repoRoot, ".artifacts", "qa-e2e", "lab-"))).toBe(true);
+    const outputDir = createQaRunOutputDir("/tmp/openclaw-repo");
+    expect(outputDir.startsWith("/tmp/openclaw-repo/.artifacts/qa-e2e/lab-")).toBe(true);
   });
 
   it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"
-        ? "openai/gpt-5.5"
+        ? "openai/gpt-5.4"
         : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
 
     expect(createDefaultQaRunSelection(scenarios)).toEqual({
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: true,
       scenarioIds: ["dm-chat-baseline", "thread-lifecycle"],
     });

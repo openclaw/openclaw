@@ -1,1 +1,5 @@
-export { resolveMattermostAccount, type ResolvedMattermostAccount } from "./mattermost/accounts.js";
+export {
+  listMattermostAccountIds,
+  resolveMattermostAccount,
+  type ResolvedMattermostAccount,
+} from "./mattermost/accounts.js";

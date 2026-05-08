@@ -8,7 +8,6 @@ type MockPluginRecord = {
   providerIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
-  migrationProviderIds: string[];
 };
 
 type MockRuntimeRegistry = {
@@ -53,7 +52,6 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
-            migrationProviderIds: [],
           },
           diagnostics: [{ pluginId: "arcee", message: "transient arcee load failure" }],
         }),
@@ -66,7 +64,6 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: ["arcee"],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
-            migrationProviderIds: [],
           },
           providers: [
             {
@@ -109,7 +106,6 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
-            migrationProviderIds: [],
           },
           diagnostics: [{ pluginId: "searxng", message: "transient searxng load failure" }],
         }),
@@ -122,7 +118,6 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: ["searxng"],
-            migrationProviderIds: [],
           },
           webSearchProviders: [
             {
@@ -175,7 +170,6 @@ describe("plugin contract registry scoped retries", () => {
           providerIds: ["byteplus"],
           webFetchProviderIds: [],
           webSearchProviderIds: [],
-          migrationProviderIds: [],
         },
         providers: [
           {
@@ -317,7 +311,6 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
-            migrationProviderIds: [],
           },
           diagnostics: [
             { pluginId: "firecrawl", message: "transient firecrawl fetch load failure" },
@@ -332,7 +325,6 @@ describe("plugin contract registry scoped retries", () => {
             providerIds: [],
             webFetchProviderIds: ["firecrawl"],
             webSearchProviderIds: ["firecrawl"],
-            migrationProviderIds: [],
           },
           webFetchProviders: [
             {

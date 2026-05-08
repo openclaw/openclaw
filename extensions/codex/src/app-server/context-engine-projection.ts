@@ -1,6 +1,6 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-type CodexContextProjection = {
+export type CodexContextProjection = {
   developerInstructionAddition?: string;
   promptText: string;
   assembledMessages: AgentMessage[];

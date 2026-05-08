@@ -1,13 +1,13 @@
-type FlowDocsLink = {
+export type FlowDocsLink = {
   path: string;
   label?: string;
 };
 
-type FlowContributionKind = "channel" | "core" | "provider" | "search";
+export type FlowContributionKind = "channel" | "core" | "provider" | "search";
 
-type FlowContributionSurface = "auth-choice" | "health" | "model-picker" | "setup";
+export type FlowContributionSurface = "auth-choice" | "health" | "model-picker" | "setup";
 
-type FlowOptionGroup = {
+export type FlowOptionGroup = {
   id: string;
   label: string;
   hint?: string;

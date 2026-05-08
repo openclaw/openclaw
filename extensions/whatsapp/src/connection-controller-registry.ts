@@ -1,6 +1,6 @@
 import type { ActiveWebListener } from "./inbound/types.js";
 
-type WhatsAppConnectionControllerHandle = {
+export type WhatsAppConnectionControllerHandle = {
   getActiveListener(): ActiveWebListener | null;
 };
 

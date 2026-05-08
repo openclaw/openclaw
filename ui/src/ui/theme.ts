@@ -1,4 +1,4 @@
-export type ThemeName = "claw" | "knot" | "dash" | "custom";
+export type ThemeName = "claw" | "knot" | "dash";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme =
   | "dark"
@@ -6,12 +6,10 @@ export type ResolvedTheme =
   | "openknot"
   | "openknot-light"
   | "dash"
-  | "dash-light"
-  | "custom"
-  | "custom-light";
+  | "dash-light";
 
-export const VALID_THEME_NAMES = new Set<ThemeName>(["claw", "knot", "dash", "custom"]);
-const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
+export const VALID_THEME_NAMES = new Set<ThemeName>(["claw", "knot", "dash"]);
+export const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
 
 type ThemeSelection = { theme: ThemeName; mode: ThemeMode };
 
@@ -29,7 +27,7 @@ const LEGACY_MAP: Record<string, ThemeSelection> = {
   system: { theme: "claw", mode: "system" },
 };
 
-function prefersLightScheme(): boolean {
+export function prefersLightScheme(): boolean {
   if (typeof globalThis.matchMedia !== "function") {
     return false;
   }
@@ -72,8 +70,5 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   if (theme === "knot") {
     return resolvedMode === "light" ? "openknot-light" : "openknot";
   }
-  if (theme === "dash") {
-    return resolvedMode === "light" ? "dash-light" : "dash";
-  }
-  return resolvedMode === "light" ? "custom-light" : "custom";
+  return resolvedMode === "light" ? "dash-light" : "dash";
 }

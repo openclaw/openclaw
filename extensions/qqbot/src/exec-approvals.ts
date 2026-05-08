@@ -5,11 +5,8 @@ import {
   matchesApprovalRequestFilters,
 } from "openclaw/plugin-sdk/approval-client-runtime";
 import { resolveApprovalRequestChannelAccountId } from "openclaw/plugin-sdk/approval-native-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -38,7 +35,7 @@ export function resolveQQBotExecApprovalConfig(params: {
   };
 }
 
-function getQQBotExecApprovalApprovers(params: {
+export function getQQBotExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
@@ -215,4 +212,15 @@ const qqbotExecApprovalProfile = createChannelExecApprovalProfile({
 export const isQQBotExecApprovalClientEnabled = qqbotExecApprovalProfile.isClientEnabled;
 export const isQQBotExecApprovalApprover = qqbotExecApprovalProfile.isApprover;
 export const isQQBotExecApprovalAuthorizedSender = qqbotExecApprovalProfile.isAuthorizedSender;
+export const resolveQQBotExecApprovalTarget = qqbotExecApprovalProfile.resolveTarget;
 export const shouldHandleQQBotExecApprovalRequest = qqbotExecApprovalProfile.shouldHandleRequest;
+
+export function isQQBotExecApprovalHandlerConfigured(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): boolean {
+  return isChannelExecApprovalClientEnabledFromConfig({
+    enabled: resolveQQBotExecApprovalConfig(params)?.enabled,
+    approverCount: getQQBotExecApprovalApprovers(params).length,
+  });
+}

@@ -13,7 +13,7 @@ export {
   withProgressTotals,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 export {
-  getRuntimeConfig,
+  loadConfig,
   resolveDefaultAgentId,
   resolveSessionTranscriptsDirForAgent,
   resolveStateDir,

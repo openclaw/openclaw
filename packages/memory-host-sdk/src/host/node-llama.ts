@@ -7,9 +7,7 @@ export type LlamaEmbeddingContext = {
 };
 
 export type LlamaModel = {
-  createEmbeddingContext: (options?: {
-    contextSize?: number | "auto";
-  }) => Promise<LlamaEmbeddingContext>;
+  createEmbeddingContext: () => Promise<LlamaEmbeddingContext>;
 };
 
 export type Llama = {

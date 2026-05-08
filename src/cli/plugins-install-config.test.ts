@@ -1,5 +1,5 @@
-import { bundledPluginRootAt, repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { bundledPluginRootAt, repoInstallSpec } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import {
@@ -9,15 +9,18 @@ import {
 import { loadConfigForInstall } from "./plugins-install-command.js";
 
 const hoisted = vi.hoisted(() => ({
+  loadConfigMock: vi.fn<() => OpenClawConfig>(),
   readConfigFileSnapshotMock: vi.fn<() => Promise<ConfigFileSnapshot>>(),
   collectChannelDoctorStaleConfigMutationsMock: vi.fn(),
 }));
 
+const loadConfigMock = hoisted.loadConfigMock;
 const readConfigFileSnapshotMock = hoisted.readConfigFileSnapshotMock;
 const collectChannelDoctorStaleConfigMutationsMock =
   hoisted.collectChannelDoctorStaleConfigMutationsMock;
 
 vi.mock("../config/config.js", () => ({
+  loadConfig: () => loadConfigMock(),
   readConfigFileSnapshot: () => readConfigFileSnapshotMock(),
 }));
 
@@ -26,7 +29,7 @@ vi.mock("../commands/doctor/shared/channel-doctor.js", () => ({
     collectChannelDoctorStaleConfigMutationsMock(cfg),
 }));
 
-const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
+const MATRIX_REPO_INSTALL_SPEC = repoInstallSpec("matrix");
 
 function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
   return {
@@ -40,7 +43,7 @@ function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSn
     runtimeConfig: { plugins: {} } as ConfigFileSnapshot["runtimeConfig"],
     config: { plugins: {} } as OpenClawConfig,
     hash: "abc",
-    issues: [{ path: "plugins.installs.discord", message: "stale path" }],
+    issues: [{ path: "plugins.installs.matrix", message: "stale path" }],
     warnings: [],
     legacyIssues: [],
     ...overrides,
@@ -48,14 +51,15 @@ function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSn
 }
 
 describe("loadConfigForInstall", () => {
-  const discordNpmRequest = {
-    rawSpec: "@openclaw/discord",
-    normalizedSpec: "@openclaw/discord",
-    bundledPluginId: "discord",
+  const matrixNpmRequest = {
+    rawSpec: "@openclaw/matrix",
+    normalizedSpec: "@openclaw/matrix",
+    bundledPluginId: "matrix",
     allowInvalidConfigRecovery: true,
   } satisfies PluginInstallRequestContext;
 
   beforeEach(() => {
+    loadConfigMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     collectChannelDoctorStaleConfigMutationsMock.mockReset();
 
@@ -67,131 +71,68 @@ describe("loadConfigForInstall", () => {
     ]);
   });
 
-  it("returns the source config and base hash when the snapshot is valid", async () => {
-    const cfg = { plugins: { entries: { discord: { enabled: true } } } } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        valid: true,
-        sourceConfig: cfg,
-        config: { plugins: { entries: { discord: { enabled: true } }, enabled: true } },
-        hash: "config-1",
-        issues: [],
-      }),
-    );
+  it("returns the config directly when loadConfig succeeds", async () => {
+    const cfg = { plugins: { entries: { matrix: { enabled: true } } } } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
 
-    const result = await loadConfigForInstall(discordNpmRequest);
-    expect(result).toEqual({ config: cfg, baseHash: "config-1" });
+    const result = await loadConfigForInstall(matrixNpmRequest);
+    expect(result).toBe(cfg);
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
   });
 
-  it("does not run stale Discord cleanup on the happy path", async () => {
+  it("does not run stale Matrix cleanup on the happy path", async () => {
     const cfg = { plugins: {} } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        valid: true,
-        sourceConfig: cfg,
-        config: cfg,
-        issues: [],
-      }),
-    );
+    loadConfigMock.mockReturnValue(cfg);
 
-    const result = await loadConfigForInstall(discordNpmRequest);
+    const result = await loadConfigForInstall(matrixNpmRequest);
     expect(collectChannelDoctorStaleConfigMutationsMock).not.toHaveBeenCalled();
-    expect(result.config).toBe(cfg);
+    expect(result).toBe(cfg);
   });
 
   it("falls back to snapshot config for explicit bundled-plugin reinstall when issues match the known upgrade failure", async () => {
+    const invalidConfigErr = new Error("config invalid");
+    (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";
+    loadConfigMock.mockImplementation(() => {
+      throw invalidConfigErr;
+    });
+
     const snapshotCfg = {
-      plugins: { installs: { discord: { source: "path", installPath: "/gone" } } },
+      plugins: { installs: { matrix: { source: "path", installPath: "/gone" } } },
     } as unknown as OpenClawConfig;
     readConfigFileSnapshotMock.mockResolvedValue(
       makeSnapshot({
-        parsed: { plugins: { installs: { discord: {} } } },
+        parsed: { plugins: { installs: { matrix: {} } } },
         config: snapshotCfg,
         issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
+          { path: "channels.matrix", message: "unknown channel id: matrix" },
           { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
         ],
       }),
     );
 
-    const result = await loadConfigForInstall(discordNpmRequest);
+    const result = await loadConfigForInstall(matrixNpmRequest);
     expect(readConfigFileSnapshotMock).toHaveBeenCalled();
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
-    expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
-  });
-
-  it("allows npm:-prefixed bundled-plugin reinstall recovery", async () => {
-    const snapshotCfg = {
-      plugins: { installs: { discord: { source: "path", installPath: "/gone" } } },
-    } as unknown as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { installs: { discord: {} } } },
-        config: snapshotCfg,
-        issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
-          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
-        ],
-      }),
-    );
-
-    const request = resolvePluginInstallRequestContext({
-      rawSpec: "npm:@openclaw/discord",
-    });
-    if (!request.ok) {
-      throw new Error(request.error);
-    }
-
-    expect(request.request).toMatchObject({
-      bundledPluginId: "discord",
-      allowInvalidConfigRecovery: true,
-    });
-    const result = await loadConfigForInstall(request.request);
-    expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
-    expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
-  });
-
-  it("allows official plugin reinstall recovery from source-only runtime shadows", async () => {
-    const snapshotCfg = {
-      plugins: { installs: { discord: { source: "npm", installPath: "/bad/discord" } } },
-    } as unknown as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { installs: { discord: {} } } },
-        config: snapshotCfg,
-        issues: [
-          {
-            path: "plugins",
-            message:
-              "plugin: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, index.js, index.mjs, index.cjs",
-          },
-        ],
-      }),
-    );
-
-    const request = resolvePluginInstallRequestContext({
-      rawSpec: "npm:@openclaw/discord",
-    });
-    if (!request.ok) {
-      throw new Error(request.error);
-    }
-
-    const result = await loadConfigForInstall(request.request);
-    expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
-    expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
+    expect(result).toBe(snapshotCfg);
   });
 
   it("allows explicit repo-checkout bundled-plugin reinstall recovery", async () => {
+    const invalidConfigErr = new Error("config invalid");
+    (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";
+    loadConfigMock.mockImplementation(() => {
+      throw invalidConfigErr;
+    });
+
     const snapshotCfg = { plugins: {} } as OpenClawConfig;
     readConfigFileSnapshotMock.mockResolvedValue(
       makeSnapshot({
         config: snapshotCfg,
-        issues: [{ path: "channels.discord", message: "unknown channel id: discord" }],
+        issues: [{ path: "channels.matrix", message: "unknown channel id: matrix" }],
       }),
     );
 
     const repoRequest = resolvePluginInstallRequestContext({
-      rawSpec: DISCORD_REPO_INSTALL_SPEC,
+      rawSpec: MATRIX_REPO_INSTALL_SPEC,
     });
     if (!repoRequest.ok) {
       throw new Error(repoRequest.error);
@@ -199,25 +140,35 @@ describe("loadConfigForInstall", () => {
 
     const result = await loadConfigForInstall({
       ...repoRequest.request,
-      resolvedPath: bundledPluginRootAt("/tmp/repo", "discord"),
+      resolvedPath: bundledPluginRootAt("/tmp/repo", "matrix"),
     });
-    expect(result.config).toBe(snapshotCfg);
+    expect(result).toBe(snapshotCfg);
   });
 
   it("rejects unrelated invalid config even during bundled-plugin reinstall recovery", async () => {
+    const invalidConfigErr = new Error("config invalid");
+    (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";
+    loadConfigMock.mockImplementation(() => {
+      throw invalidConfigErr;
+    });
+
     readConfigFileSnapshotMock.mockResolvedValue(
       makeSnapshot({
         issues: [{ path: "models.default", message: "invalid model ref" }],
       }),
     );
 
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-      "Config invalid outside the plugin recovery path for discord",
+    await expect(loadConfigForInstall(matrixNpmRequest)).rejects.toThrow(
+      "Config invalid outside the bundled recovery path for matrix",
     );
   });
 
-  it("rejects non-Discord install requests when config is invalid", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
+  it("rejects non-Matrix install requests when config is invalid", async () => {
+    const invalidConfigErr = new Error("config invalid");
+    (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";
+    loadConfigMock.mockImplementation(() => {
+      throw invalidConfigErr;
+    });
 
     await expect(
       loadConfigForInstall({
@@ -225,9 +176,16 @@ describe("loadConfigForInstall", () => {
         normalizedSpec: "alpha",
       }),
     ).rejects.toThrow("Config invalid; run `openclaw doctor --fix` before installing plugins.");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
   });
 
-  it("throws when invalid snapshot parsed is empty", async () => {
+  it("throws when loadConfig fails with INVALID_CONFIG and snapshot parsed is empty", async () => {
+    const invalidConfigErr = new Error("config invalid");
+    (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";
+    loadConfigMock.mockImplementation(() => {
+      throw invalidConfigErr;
+    });
+
     readConfigFileSnapshotMock.mockResolvedValue(
       makeSnapshot({
         parsed: {},
@@ -235,16 +193,35 @@ describe("loadConfigForInstall", () => {
       }),
     );
 
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+    await expect(loadConfigForInstall(matrixNpmRequest)).rejects.toThrow(
       "Config file could not be parsed; run `openclaw doctor` to repair it.",
     );
   });
 
-  it("throws when invalid snapshot config file does not exist", async () => {
+  it("throws when loadConfig fails with INVALID_CONFIG and config file does not exist", async () => {
+    const invalidConfigErr = new Error("config invalid");
+    (invalidConfigErr as { code?: string }).code = "INVALID_CONFIG";
+    loadConfigMock.mockImplementation(() => {
+      throw invalidConfigErr;
+    });
+
     readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot({ exists: false, parsed: {} }));
 
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+    await expect(loadConfigForInstall(matrixNpmRequest)).rejects.toThrow(
       "Config file could not be parsed; run `openclaw doctor` to repair it.",
     );
+  });
+
+  it("re-throws non-config errors from loadConfig", async () => {
+    const fsErr = new Error("EACCES: permission denied");
+    (fsErr as { code?: string }).code = "EACCES";
+    loadConfigMock.mockImplementation(() => {
+      throw fsErr;
+    });
+
+    await expect(loadConfigForInstall(matrixNpmRequest)).rejects.toThrow(
+      "EACCES: permission denied",
+    );
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
   });
 });

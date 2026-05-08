@@ -5,7 +5,7 @@ import {
   type GatewayDiscoveryResolvedEndpoint,
 } from "./bonjour-discovery.js";
 
-type GatewayDiscoveryTarget = {
+export type GatewayDiscoveryTarget = {
   title: string;
   domain: string;
   endpoint: GatewayDiscoveryResolvedEndpoint | null;

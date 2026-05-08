@@ -71,7 +71,7 @@ export function getPluginInteractiveHandlersState() {
   return getState().interactiveHandlers;
 }
 
-function getPluginInteractiveCallbackDedupeState() {
+export function getPluginInteractiveCallbackDedupeState() {
   return getState().callbackDedupe;
 }
 
@@ -110,11 +110,7 @@ export function releasePluginInteractiveCallbackDedupe(dedupeKey: string | undef
 }
 
 export function clearPluginInteractiveHandlersState(): void {
-  clearPluginInteractiveHandlerRegistrationsState();
+  getPluginInteractiveHandlersState().clear();
   getPluginInteractiveCallbackDedupeState().clear();
   getState().inflightCallbackDedupe.clear();
-}
-
-export function clearPluginInteractiveHandlerRegistrationsState(): void {
-  getPluginInteractiveHandlersState().clear();
 }

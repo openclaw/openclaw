@@ -1,31 +1,29 @@
 export function resolveWhatsAppGroupSystemPrompt(params: {
-  accountConfig?: { groups?: Record<string, { systemPrompt?: string | null }> } | null;
+  accountConfig?: { groups?: Record<string, { systemPrompt?: string }> } | null;
   groupId?: string | null;
 }): string | undefined {
   if (!params.groupId) {
     return undefined;
   }
   const groups = params.accountConfig?.groups;
-  const specific = groups?.[params.groupId];
-  if (specific != null && specific.systemPrompt != null) {
-    return specific.systemPrompt.trim() || undefined;
-  }
-  const wildcard = groups?.["*"]?.systemPrompt;
-  return wildcard != null ? wildcard.trim() || undefined : undefined;
+  return (
+    groups?.[params.groupId]?.systemPrompt?.trim() ||
+    groups?.["*"]?.systemPrompt?.trim() ||
+    undefined
+  );
 }
 
 export function resolveWhatsAppDirectSystemPrompt(params: {
-  accountConfig?: { direct?: Record<string, { systemPrompt?: string | null }> } | null;
+  accountConfig?: { direct?: Record<string, { systemPrompt?: string }> } | null;
   peerId?: string | null;
 }): string | undefined {
   if (!params.peerId) {
     return undefined;
   }
   const direct = params.accountConfig?.direct;
-  const specific = direct?.[params.peerId];
-  if (specific != null && specific.systemPrompt != null) {
-    return specific.systemPrompt.trim() || undefined;
-  }
-  const wildcard = direct?.["*"]?.systemPrompt;
-  return wildcard != null ? wildcard.trim() || undefined : undefined;
+  return (
+    direct?.[params.peerId]?.systemPrompt?.trim() ||
+    direct?.["*"]?.systemPrompt?.trim() ||
+    undefined
+  );
 }

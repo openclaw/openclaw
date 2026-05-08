@@ -1,4 +1,3 @@
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
@@ -45,29 +44,14 @@ vi.mock("./probe.js", () => ({
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
 }));
 
-const { bluebubblesMessageActions } = await importFreshModule<typeof import("./actions.js")>(
-  import.meta.url,
-  "./actions.js?actions-test",
-);
-
-function requireDefined<T>(value: T | undefined, name: string): T {
-  if (value === undefined) {
-    throw new Error(`${name} is not registered`);
-  }
-  return value;
-}
+const freshActionsModulePath = "./actions.js?actions-test";
+const { bluebubblesMessageActions } = await import(freshActionsModulePath);
 
 describe("bluebubblesMessageActions", () => {
-  const describeMessageTool = requireDefined(
-    bluebubblesMessageActions.describeMessageTool,
-    "describeMessageTool",
-  );
-  const supportsAction = requireDefined(bluebubblesMessageActions.supportsAction, "supportsAction");
-  const extractToolSend = requireDefined(
-    bluebubblesMessageActions.extractToolSend,
-    "extractToolSend",
-  );
-  const handleAction = requireDefined(bluebubblesMessageActions.handleAction, "handleAction");
+  const describeMessageTool = bluebubblesMessageActions.describeMessageTool!;
+  const supportsAction = bluebubblesMessageActions.supportsAction!;
+  const extractToolSend = bluebubblesMessageActions.extractToolSend!;
+  const handleAction = bluebubblesMessageActions.handleAction!;
   const callHandleAction = (ctx: Omit<Parameters<typeof handleAction>[0], "channel">) =>
     handleAction({ channel: "bluebubbles", ...ctx });
   const blueBubblesConfig = (): OpenClawConfig => ({
@@ -530,15 +514,7 @@ describe("bluebubblesMessageActions", () => {
         accountId: null,
       });
 
-      expect(resolveBlueBubblesMessageId).toHaveBeenCalledWith(
-        "1",
-        expect.objectContaining({
-          requireKnownShortId: true,
-          chatContext: expect.objectContaining({
-            chatGuid: "iMessage;-;+15551234567",
-          }),
-        }),
-      );
+      expect(resolveBlueBubblesMessageId).toHaveBeenCalledWith("1", { requireKnownShortId: true });
       expect(sendBlueBubblesReaction).toHaveBeenCalledWith(
         expect.objectContaining({
           messageGuid: "resolved-uuid",

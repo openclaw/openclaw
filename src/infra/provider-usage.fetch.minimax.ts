@@ -19,13 +19,6 @@ type MinimaxUsageResponse = {
   [key: string]: unknown;
 };
 
-type FetchMinimaxUsageOptions = {
-  baseUrl?: string;
-};
-
-const DEFAULT_MINIMAX_USAGE_ORIGIN = "https://api.minimaxi.com";
-const MINIMAX_USAGE_PATH = "/v1/token_plan/remains";
-
 const RESET_KEYS = [
   "reset_at",
   "resetAt",
@@ -144,7 +137,7 @@ const REMAINING_KEYS = [
   "prompts_left",
   "promptsLeft",
   "left",
-  // MiniMax usage endpoints misname these: values are remaining quota, not consumed.
+  // MiniMax `/coding_plan/remains` misnames these: values are remaining quota, not consumed.
   // See https://github.com/MiniMax-AI/MiniMax-M2/issues/99
   "current_interval_usage_count",
   "currentIntervalUsageCount",
@@ -373,32 +366,13 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
   });
 }
 
-function resolveMinimaxUsageUrl(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return `${DEFAULT_MINIMAX_USAGE_ORIGIN}${MINIMAX_USAGE_PATH}`;
-  }
-
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      return `${parsed.origin}${MINIMAX_USAGE_PATH}`;
-    }
-  } catch {
-    // Fall through to the stable CN default for malformed config values.
-  }
-
-  return `${DEFAULT_MINIMAX_USAGE_ORIGIN}${MINIMAX_USAGE_PATH}`;
-}
-
 export async function fetchMinimaxUsage(
   apiKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
-  options?: FetchMinimaxUsageOptions,
 ): Promise<ProviderUsageSnapshot> {
   const res = await fetchJson(
-    resolveMinimaxUsageUrl(options?.baseUrl),
+    "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
     {
       method: "GET",
       headers: {

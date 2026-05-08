@@ -1,7 +1,7 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-function resolveDebugProxyRootDir(env: NodeJS.ProcessEnv = process.env): string {
+export function resolveDebugProxyRootDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "debug-proxy");
 }
 

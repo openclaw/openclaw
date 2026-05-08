@@ -1,12 +1,12 @@
-type InstallMode = "install" | "update";
+export type InstallMode = "install" | "update";
 
-type InstallModeOptions<TLogger> = {
+export type InstallModeOptions<TLogger> = {
   logger?: TLogger;
   mode?: InstallMode;
   dryRun?: boolean;
 };
 
-type TimedInstallModeOptions<TLogger> = InstallModeOptions<TLogger> & {
+export type TimedInstallModeOptions<TLogger> = InstallModeOptions<TLogger> & {
   timeoutMs?: number;
 };
 

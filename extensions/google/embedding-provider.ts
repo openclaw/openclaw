@@ -15,7 +15,6 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
@@ -37,7 +36,7 @@ const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "gemini-embedding-2-preview": 8192,
 };
 
-type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
+export type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
 
 // --- gemini-embedding-2-preview support ---
 
@@ -49,13 +48,12 @@ export const GEMINI_EMBEDDING_2_MODELS = new Set([
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
 const GEMINI_EMBEDDING_2_VALID_DIMENSIONS = [768, 1536, 3072] as const;
 
-type GeminiTextPart = { text: string };
-type GeminiInlinePart = {
+export type GeminiTextPart = { text: string };
+export type GeminiInlinePart = {
   inlineData: { mimeType: string; data: string };
 };
-type GeminiPart = GeminiTextPart | GeminiInlinePart;
-type GeminiEmbeddingInputPart = NonNullable<EmbeddingInput["parts"]>[number];
-type GeminiEmbeddingRequest = {
+export type GeminiPart = GeminiTextPart | GeminiInlinePart;
+export type GeminiEmbeddingRequest = {
   content: { parts: GeminiPart[] };
   taskType: GeminiTaskType;
   outputDimensionality?: number;
@@ -86,7 +84,7 @@ export function buildGeminiEmbeddingRequest(params: {
 }): GeminiEmbeddingRequest {
   const request: GeminiEmbeddingRequest = {
     content: {
-      parts: params.input.parts?.map((part: GeminiEmbeddingInputPart) =>
+      parts: params.input.parts?.map((part) =>
         part.type === "text"
           ? ({ text: part.text } satisfies GeminiTextPart)
           : ({
@@ -191,7 +189,8 @@ async function fetchGeminiEmbeddingPayload(params: {
         },
         onResponse: async (res) => {
           if (!res.ok) {
-            throw await createProviderHttpError(res, "gemini embeddings failed");
+            const text = await res.text();
+            throw new Error(`gemini embeddings failed: ${res.status} ${text}`);
           }
           return (await res.json()) as {
             embedding?: { values?: number[] };
@@ -306,7 +305,7 @@ export async function createGeminiEmbeddingProvider(
   };
 }
 
-async function resolveGeminiEmbeddingClient(
+export async function resolveGeminiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<GeminiEmbeddingClient> {
   const remote = options.remote;

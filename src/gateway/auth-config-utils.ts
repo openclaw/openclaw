@@ -8,12 +8,12 @@ import {
   type SupportedGatewaySecretInputPath,
 } from "./secret-input-paths.js";
 
-type GatewayAuthSecretInputPath = Extract<
+export type GatewayAuthSecretInputPath = Extract<
   SupportedGatewaySecretInputPath,
   "gateway.auth.token" | "gateway.auth.password"
 >;
 
-type GatewayAuthSecretRefResolutionParams = {
+export type GatewayAuthSecretRefResolutionParams = {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   mode?: GatewayAuthConfig["mode"];
@@ -28,7 +28,7 @@ export function hasConfiguredGatewayAuthSecretInput(
   return hasConfiguredSecretInput(readGatewaySecretInputValue(cfg, path), cfg.secrets?.defaults);
 }
 
-function shouldResolveGatewayAuthSecretRef(params: {
+export function shouldResolveGatewayAuthSecretRef(params: {
   mode?: GatewayAuthConfig["mode"];
   path: GatewayAuthSecretInputPath;
   hasPasswordCandidate: boolean;
@@ -51,7 +51,7 @@ function shouldResolveGatewayAuthSecretRef(params: {
   return isTokenPath ? !params.hasPasswordCandidate : !params.hasTokenCandidate;
 }
 
-function shouldResolveGatewayTokenSecretRef(
+export function shouldResolveGatewayTokenSecretRef(
   params: Omit<GatewayAuthSecretRefResolutionParams, "cfg" | "env">,
 ): boolean {
   return shouldResolveGatewayAuthSecretRef({
@@ -62,7 +62,7 @@ function shouldResolveGatewayTokenSecretRef(
   });
 }
 
-function shouldResolveGatewayPasswordSecretRef(
+export function shouldResolveGatewayPasswordSecretRef(
   params: Omit<GatewayAuthSecretRefResolutionParams, "cfg" | "env">,
 ): boolean {
   return shouldResolveGatewayAuthSecretRef({
@@ -73,7 +73,7 @@ function shouldResolveGatewayPasswordSecretRef(
   });
 }
 
-async function resolveGatewayAuthSecretRefValue(params: {
+export async function resolveGatewayAuthSecretRefValue(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   path: GatewayAuthSecretInputPath;
@@ -116,7 +116,7 @@ export async function resolveGatewayPasswordSecretRefValue(
   });
 }
 
-async function resolveGatewayAuthSecretRef(params: {
+export async function resolveGatewayAuthSecretRef(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   path: GatewayAuthSecretInputPath;
@@ -137,7 +137,7 @@ async function resolveGatewayAuthSecretRef(params: {
   return nextConfig;
 }
 
-async function resolveGatewayPasswordSecretRef(params: {
+export async function resolveGatewayPasswordSecretRef(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   mode?: GatewayAuthConfig["mode"];

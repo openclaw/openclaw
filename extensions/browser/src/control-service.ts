@@ -1,32 +1,36 @@
-import {
-  createBrowserControlContext,
-  ensureBrowserControlRuntime,
-  getBrowserControlState,
-  stopBrowserControlRuntime,
-} from "./browser-control-state.js";
-import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
-import type { BrowserServerState } from "./browser/server-context.js";
-import { getRuntimeConfig } from "./config/config.js";
+import { createBrowserRuntimeState, stopBrowserRuntime } from "./browser/runtime-lifecycle.js";
+import { type BrowserServerState, createBrowserRouteContext } from "./browser/server-context.js";
+import { loadConfig } from "./config/config.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 
+let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
 const logService = log.child("service");
 
+export function getBrowserControlState(): BrowserServerState | null {
+  return state;
+}
+
+export function createBrowserControlContext() {
+  return createBrowserRouteContext({
+    getState: () => state,
+    refreshConfigFromDisk: true,
+  });
+}
+
 export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
-  const current = getBrowserControlState();
-  if (current) {
-    return current;
+  if (state) {
+    return state;
   }
 
-  const cfg = getRuntimeConfig();
-  const browserCfg = loadBrowserConfigForRuntimeRefresh();
-  if (!isDefaultBrowserPluginEnabled(browserCfg)) {
+  const cfg = loadConfig();
+  if (!isDefaultBrowserPluginEnabled(cfg)) {
     return null;
   }
-  const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
   if (!resolved.enabled) {
     return null;
   }
@@ -39,11 +43,10 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
     logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
   }
 
-  const state = await ensureBrowserControlRuntime({
+  state = await createBrowserRuntimeState({
     server: null,
     port: resolved.controlPort,
     resolved,
-    owner: "service",
     onWarn: (message) => logService.warn(message),
   });
 
@@ -54,10 +57,13 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
 }
 
 export async function stopBrowserControlService(): Promise<void> {
-  await stopBrowserControlRuntime({
-    requestedBy: "service",
+  const current = state;
+  await stopBrowserRuntime({
+    current,
+    getState: () => state,
+    clearState: () => {
+      state = null;
+    },
     onWarn: (message) => logService.warn(message),
   });
 }
-
-export { createBrowserControlContext, getBrowserControlState };

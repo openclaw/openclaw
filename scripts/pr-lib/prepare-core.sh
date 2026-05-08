@@ -163,12 +163,9 @@ prepare_push() {
   if [ -z "$contrib" ]; then
     contrib=$(gh pr view "$pr" --json author --jq .author.login)
   fi
-  local coauthor_email=""
-  if coauthor_email=$(resolve_contributor_coauthor_email "$contrib"); then
-    :
-  else
-    coauthor_email=""
-  fi
+  local contrib_id
+  contrib_id=$(gh api "users/$contrib" --jq .id)
+  local coauthor_email="${contrib_id}+${contrib}@users.noreply.github.com"
 
   cat >> .local/prep.md <<EOF_PREP
 - Gates passed and push succeeded to branch $PR_HEAD.
@@ -240,12 +237,9 @@ prepare_sync_head() {
   if [ -z "$contrib" ]; then
     contrib=$(gh pr view "$pr" --json author --jq .author.login)
   fi
-  local coauthor_email=""
-  if coauthor_email=$(resolve_contributor_coauthor_email "$contrib"); then
-    :
-  else
-    coauthor_email=""
-  fi
+  local contrib_id
+  contrib_id=$(gh api "users/$contrib" --jq .id)
+  local coauthor_email="${contrib_id}+${contrib}@users.noreply.github.com"
 
   cat >> .local/prep.md <<EOF_PREP
 - Prep head sync completed to branch $PR_HEAD.

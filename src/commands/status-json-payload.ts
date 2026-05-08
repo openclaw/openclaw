@@ -4,6 +4,8 @@ import {
   type StatusOverviewSurface,
 } from "./status-overview-surface.ts";
 
+export { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
+
 export function buildStatusJsonPayload(params: {
   summary: Record<string, unknown>;
   surface: StatusOverviewSurface;

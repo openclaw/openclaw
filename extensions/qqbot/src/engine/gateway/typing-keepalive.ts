@@ -8,7 +8,7 @@
 import { formatErrorMessage } from "../utils/format.js";
 
 /** Function that sends a typing indicator to one user. */
-type SendInputNotifyFn = (
+export type SendInputNotifyFn = (
   token: string,
   openid: string,
   msgId: string | undefined,
@@ -16,7 +16,7 @@ type SendInputNotifyFn = (
 ) => Promise<unknown>;
 
 /** Refresh every 50s for the QQ API's 60s input-notify window. */
-const TYPING_INTERVAL_MS = 50_000;
+export const TYPING_INTERVAL_MS = 50_000;
 export const TYPING_INPUT_SECOND = 60;
 
 export class TypingKeepAlive {

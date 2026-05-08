@@ -2,10 +2,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
+import { resolveExecDetail } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
-type ToolDisplayActionSpec = {
+export type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
 };
@@ -17,7 +17,7 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-type CoerceDisplayValueOptions = {
+export type CoerceDisplayValueOptions = {
   includeFalse?: boolean;
   includeZero?: boolean;
   includeNonFinite?: boolean;
@@ -44,7 +44,7 @@ export function defaultTitle(name: string): string {
     .join(" ");
 }
 
-function normalizeVerb(value?: string): string | undefined {
+export function normalizeVerb(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
@@ -52,7 +52,7 @@ function normalizeVerb(value?: string): string | undefined {
   return trimmed.replace(/_/g, " ");
 }
 
-function resolveActionArg(args: unknown): string | undefined {
+export function resolveActionArg(args: unknown): string | undefined {
   if (!args || typeof args !== "object") {
     return undefined;
   }
@@ -71,7 +71,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
-  toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
@@ -84,14 +83,13 @@ export function resolveToolVerbAndDetailForArgs(params: {
     spec: params.spec,
     fallbackDetailKeys: params.fallbackDetailKeys,
     detailMode: params.detailMode,
-    toolDetailMode: params.toolDetailMode,
     detailCoerce: params.detailCoerce,
     detailMaxEntries: params.detailMaxEntries,
     detailFormatKey: params.detailFormatKey,
   });
 }
 
-function coerceDisplayValue(
+export function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
 ): string | undefined {
@@ -143,7 +141,7 @@ function coerceDisplayValue(
   return undefined;
 }
 
-function lookupValueByPath(args: unknown, path: string): unknown {
+export function lookupValueByPath(args: unknown, path: string): unknown {
   if (!args || typeof args !== "object") {
     return undefined;
   }
@@ -173,7 +171,7 @@ export function formatDetailKey(raw: string, overrides: Record<string, string> =
   return normalizeLowercaseStringOrEmpty(spaced) || normalizeLowercaseStringOrEmpty(last);
 }
 
-function resolvePathArg(args: unknown): string | undefined {
+export function resolvePathArg(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -190,7 +188,7 @@ function resolvePathArg(args: unknown): string | undefined {
   return undefined;
 }
 
-function resolveReadDetail(args: unknown): string | undefined {
+export function resolveReadDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -227,7 +225,7 @@ function resolveReadDetail(args: unknown): string | undefined {
   return `from ${path}`;
 }
 
-function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
+export function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -259,7 +257,7 @@ function resolveWriteDetail(toolKey: string, args: unknown): string | undefined 
   return `${destinationPrefix} ${path}`;
 }
 
-function resolveWebSearchDetail(args: unknown): string | undefined {
+export function resolveWebSearchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -278,7 +276,7 @@ function resolveWebSearchDetail(args: unknown): string | undefined {
   return count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
 }
 
-function resolveWebFetchDetail(args: unknown): string | undefined {
+export function resolveWebFetchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -305,7 +303,9 @@ function resolveWebFetchDetail(args: unknown): string | undefined {
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
-function resolveActionSpec(
+export { resolveExecDetail };
+
+export function resolveActionSpec(
   spec: ToolDisplaySpec | undefined,
   action: string | undefined,
 ): ToolDisplayActionSpec | undefined {
@@ -315,7 +315,7 @@ function resolveActionSpec(
   return spec.actions?.[action] ?? undefined;
 }
 
-function resolveDetailFromKeys(
+export function resolveDetailFromKeys(
   args: unknown,
   keys: string[],
   opts: {
@@ -372,7 +372,7 @@ function resolveDetailFromKeys(
     .join(" · ");
 }
 
-function resolveToolVerbAndDetail(params: {
+export function resolveToolVerbAndDetail(params: {
   toolKey: string;
   args?: unknown;
   meta?: string;
@@ -380,7 +380,6 @@ function resolveToolVerbAndDetail(params: {
   spec?: ToolDisplaySpec;
   fallbackDetailKeys?: string[];
   detailMode: "first" | "summary";
-  toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
@@ -396,7 +395,7 @@ function resolveToolVerbAndDetail(params: {
 
   let detail: string | undefined;
   if (params.toolKey === "exec") {
-    detail = resolveExecDetail(params.args, { detailMode: params.toolDetailMode });
+    detail = resolveExecDetail(params.args);
   }
   if (!detail && params.toolKey === "read") {
     detail = resolveReadDetail(params.args);

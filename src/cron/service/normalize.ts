@@ -63,12 +63,7 @@ export function inferLegacyName(job: {
 
 export function normalizePayloadToSystemText(payload: CronPayload) {
   if (payload.kind === "systemEvent") {
-    const text = (payload as { text?: unknown }).text;
-    if (typeof text === "string") {
-      return text.trim();
-    }
-    const legacyMessage = (payload as { message?: unknown }).message;
-    return typeof legacyMessage === "string" ? legacyMessage.trim() : "";
+    return payload.text.trim();
   }
-  return typeof payload.message === "string" ? payload.message.trim() : "";
+  return payload.message.trim();
 }

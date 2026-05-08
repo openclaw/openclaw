@@ -1,4 +1,4 @@
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { CoreConfig } from "../types.js";
 import { getActiveMatrixClient } from "./active-client.js";
 import { isBunRuntime } from "./client/runtime.js";
@@ -11,7 +11,7 @@ type ResolvedRuntimeMatrixClient = {
 };
 
 type MatrixRuntimeClientReadiness = "none" | "prepared" | "started";
-type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist" | "discard";
+type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist";
 
 type MatrixResolvedClientHook = (
   client: MatrixClient,
@@ -144,10 +144,6 @@ export async function stopResolvedRuntimeMatrixClient(
   }
   if (mode === "persist") {
     await resolved.client.stopAndPersist();
-    return;
-  }
-  if (mode === "discard") {
-    resolved.client.stopWithoutPersist();
     return;
   }
   resolved.client.stop();

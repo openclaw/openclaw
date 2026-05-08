@@ -49,14 +49,14 @@ function createHealthzPluginHandler() {
   });
 }
 
-async function expectHealthzProbeReserved(params: {
+async function expectHealthzPluginShadow(params: {
   server: Parameters<typeof sendRequest>[0];
   handlePluginRequest: ReturnType<typeof createHealthzPluginHandler>;
 }) {
   const response = await sendRequest(params.server, { path: "/healthz" });
   expect(response.res.statusCode).toBe(200);
-  expect(response.getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
-  expect(params.handlePluginRequest).not.toHaveBeenCalled();
+  expect(response.getBody()).toBe(JSON.stringify({ ok: true, route: "plugin-health" }));
+  expect(params.handlePluginRequest).toHaveBeenCalledTimes(1);
 }
 
 function createMattermostCallbackConfig(callbackPath: string) {
@@ -197,7 +197,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("reserves gateway probe routes ahead of plugin routes", async () => {
+  test("does not shadow plugin routes mounted on probe paths", async () => {
     const handlePluginRequest = createHealthzPluginHandler();
 
     await withGatewayServer({
@@ -205,7 +205,7 @@ describe("gateway plugin HTTP auth boundary", () => {
       resolvedAuth: AUTH_NONE,
       overrides: { handlePluginRequest },
       run: async (server) => {
-        await expectHealthzProbeReserved({ server, handlePluginRequest });
+        await expectHealthzPluginShadow({ server, handlePluginRequest });
       },
     });
   });
@@ -697,19 +697,19 @@ describe("gateway plugin HTTP auth boundary", () => {
       handlePluginRequest,
       run: async (server) => {
         await expectProbeRoutesHealthy(server);
-        expect(handlePluginRequest).not.toHaveBeenCalled();
+        expect(handlePluginRequest).toHaveBeenCalledTimes(PROBE_CASES.length);
       },
     });
   });
 
-  test("root-mounted control ui keeps gateway probe routes reserved ahead of plugins", async () => {
+  test("root-mounted control ui still lets plugins claim probe paths first", async () => {
     const handlePluginRequest = createHealthzPluginHandler();
 
     await withRootMountedControlUiServer({
       prefix: "openclaw-plugin-http-control-ui-probe-shadow-test-",
       handlePluginRequest,
       run: async (server) => {
-        await expectHealthzProbeReserved({ server, handlePluginRequest });
+        await expectHealthzPluginShadow({ server, handlePluginRequest });
       },
     });
   });

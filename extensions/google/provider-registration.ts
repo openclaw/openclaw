@@ -9,11 +9,7 @@ import {
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
-import {
-  createGoogleGenerativeAiTransportStreamFn,
-  createGoogleVertexTransportStreamFn,
-} from "./transport-stream.js";
-import { hasGoogleVertexAuthorizedUserAdcSync } from "./vertex-adc.js";
+import { createGoogleGenerativeAiTransportStreamFn } from "./transport-stream.js";
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -53,15 +49,10 @@ export function buildGoogleProvider(): ProviderPlugin {
         providerId: ctx.provider,
         ctx,
       }),
-    createStreamFn: ({ model }) => {
-      if (model.api === "google-generative-ai") {
-        return createGoogleGenerativeAiTransportStreamFn();
-      }
-      if (model.api === "google-vertex" && hasGoogleVertexAuthorizedUserAdcSync()) {
-        return createGoogleVertexTransportStreamFn();
-      }
-      return undefined;
-    },
+    createStreamFn: ({ model }) =>
+      model.api === "google-generative-ai"
+        ? createGoogleGenerativeAiTransportStreamFn()
+        : undefined,
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
   };

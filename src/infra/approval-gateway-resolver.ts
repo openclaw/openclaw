@@ -3,7 +3,7 @@ import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approval
 import { isApprovalNotFoundError } from "./approval-errors.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
-type ResolveApprovalOverGatewayParams = {
+export type ResolveApprovalOverGatewayParams = {
   cfg: OpenClawConfig;
   approvalId: string;
   decision: ExecApprovalDecision;

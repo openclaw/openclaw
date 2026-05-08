@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import {
-  getRuntimeConfig,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-} from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -46,9 +42,11 @@ function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
   const envSnapshot = captureEnv([
     "OPENCLAW_BUNDLED_PLUGINS_DIR",
     "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    "OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE",
     "OPENCLAW_VERSION",
   ]);
   delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  process.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE = "1";
   delete process.env.OPENCLAW_VERSION;
   return envSnapshot;
 }
@@ -80,6 +78,7 @@ describe("secrets runtime snapshot core lanes", () => {
     return withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
         OPENCLAW_VERSION: undefined,
       },
       async () =>
@@ -278,7 +277,7 @@ describe("secrets runtime snapshot core lanes", () => {
     const prepared = await prepareOpenAiRuntimeSnapshot({ includeAuthStoreRefs: false });
     activateSecretsRuntimeSnapshot(prepared);
 
-    expect(getRuntimeConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
+    expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
   });
 
   it("activates runtime snapshots for ensureAuthProfileStore", async () => {

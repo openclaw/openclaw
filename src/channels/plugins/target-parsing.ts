@@ -1,8 +1,11 @@
-import { resolveChannelRouteTargetWithParser } from "../../plugin-sdk/channel-route.js";
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../../shared/string-coerce.js";
 import { normalizeChatChannelId } from "../registry.js";
 import { getChannelPlugin, normalizeChannelId } from "./index.js";
 import type {
-  ChannelRouteParsedTarget,
+  ComparableChannelTarget,
   ParsedChannelExplicitTarget,
 } from "./target-parsing-loaded.js";
 export {
@@ -10,11 +13,9 @@ export {
   comparableChannelTargetsShareRoute,
   parseExplicitTargetForLoadedChannel,
   resolveComparableTargetForLoadedChannel,
-  resolveRouteTargetForLoadedChannel,
 } from "./target-parsing-loaded.js";
 export type {
   ComparableChannelTarget,
-  ChannelRouteParsedTarget,
   ParsedChannelExplicitTarget,
 } from "./target-parsing-loaded.js";
 
@@ -37,22 +38,21 @@ export function parseExplicitTargetForChannel(
   return parseWithPlugin(getChannelPlugin, channel, rawTarget);
 }
 
-export function resolveRouteTargetForChannel(params: {
-  channel: string;
-  rawTarget?: string | null;
-  fallbackThreadId?: string | number | null;
-}): ChannelRouteParsedTarget | null {
-  return resolveChannelRouteTargetWithParser({
-    ...params,
-    parseExplicitTarget: parseExplicitTargetForChannel,
-  });
-}
-
-/** @deprecated Use `resolveRouteTargetForChannel`. */
 export function resolveComparableTargetForChannel(params: {
   channel: string;
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;
-}): ChannelRouteParsedTarget | null {
-  return resolveRouteTargetForChannel(params);
+}): ComparableChannelTarget | null {
+  const rawTo = normalizeOptionalString(params.rawTarget);
+  if (!rawTo) {
+    return null;
+  }
+  const parsed = parseExplicitTargetForChannel(params.channel, rawTo);
+  const fallbackThreadId = normalizeOptionalThreadValue(params.fallbackThreadId);
+  return {
+    rawTo,
+    to: parsed?.to ?? rawTo,
+    threadId: normalizeOptionalThreadValue(parsed?.threadId ?? fallbackThreadId),
+    chatType: parsed?.chatType,
+  };
 }

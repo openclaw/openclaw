@@ -319,6 +319,7 @@ final class ScreenRecordService: @unchecked Sendable {
             }
         }
     }
+
 }
 
 @MainActor

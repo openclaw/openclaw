@@ -1,7 +1,7 @@
 import type { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import type { MatrixRawEvent } from "./types.js";
 
-type MatrixEventContentMode = "current" | "original";
+export type MatrixEventContentMode = "current" | "original";
 
 export function matrixEventToRaw(
   event: MatrixEvent,

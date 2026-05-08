@@ -895,8 +895,6 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer codex-access-token",
           "ChatGPT-Account-Id": "acct_test_123",
-          originator: "openclaw",
-          "User-Agent": expect.stringMatching(/^openclaw\//),
         }),
       }),
     );

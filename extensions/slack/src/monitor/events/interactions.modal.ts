@@ -1,4 +1,4 @@
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -25,7 +25,7 @@ export type ModalInputSummary = {
   richTextPreview?: string;
 };
 
-type SlackModalBody = {
+export type SlackModalBody = {
   user?: { id?: string };
   team?: { id?: string };
   view?: {
@@ -65,8 +65,8 @@ type SlackModalEventBase = {
   };
 };
 
-type SlackModalInteractionKind = "view_submission" | "view_closed";
-type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown };
+export type SlackModalInteractionKind = "view_submission" | "view_closed";
+export type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown };
 export type RegisterSlackModalHandler = (
   matcher: RegExp,
   handler: (args: SlackModalEventHandlerArgs) => Promise<void>,
@@ -169,7 +169,7 @@ function resolveSlackModalEventBase(params: {
   };
 }
 
-async function emitSlackModalLifecycleEvent(params: {
+export async function emitSlackModalLifecycleEvent(params: {
   ctx: SlackMonitorContext;
   body: SlackModalBody;
   interactionType: SlackModalInteractionKind;

@@ -23,7 +23,6 @@ export function resolveVideoGenerationSupportedDurations(params: {
 }): number[] | undefined {
   const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
     provider: params.provider,
-    model: params.model,
     inputImageCount: params.inputImageCount,
     inputVideoCount: params.inputVideoCount,
   });

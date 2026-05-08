@@ -1,5 +1,4 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { requireRuntimeConfig, resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import type { IrcClient } from "./client.js";
@@ -18,7 +17,7 @@ type SendIrcOptions = {
   client?: IrcClient;
 };
 
-type SendIrcResult = {
+export type SendIrcResult = {
   messageId: string;
   target: string;
 };

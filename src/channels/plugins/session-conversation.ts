@@ -1,5 +1,6 @@
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
+import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -57,6 +58,16 @@ type SessionConversationResolutionOptions = {
 type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
   hasExplicitParentConversationCandidates: boolean;
 };
+
+type BundledSessionConversationFallbackCacheEntry = {
+  version: number;
+  resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"] | null;
+};
+
+const bundledSessionConversationFallbackCache = new Map<
+  string,
+  BundledSessionConversationFallbackCacheEntry
+>();
 
 function normalizeResolvedChannel(channel: string): string {
   return (
@@ -148,22 +159,35 @@ function resolveBundledSessionConversationFallback(params: {
     return null;
   }
   const dirName = normalizeResolvedChannel(params.channel);
-  let loaded: BundledSessionKeyModule | null = null;
-  try {
-    loaded = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
-      dirName,
-      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-    });
-  } catch {
-    return null;
+  const version = getActivePluginChannelRegistryVersion();
+  let cached = bundledSessionConversationFallbackCache.get(dirName);
+  if (!cached || cached.version !== version) {
+    let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"] | null =
+      null;
+    try {
+      const loaded = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+        dirName,
+        artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+      });
+      resolveSessionConversation =
+        typeof loaded?.resolveSessionConversation === "function"
+          ? loaded.resolveSessionConversation
+          : null;
+    } catch {
+      resolveSessionConversation = null;
+    }
+    cached = {
+      version,
+      resolveSessionConversation,
+    };
+    bundledSessionConversationFallbackCache.set(dirName, cached);
   }
-  const resolveSessionConversation = loaded?.resolveSessionConversation;
-  if (typeof resolveSessionConversation !== "function") {
+  if (typeof cached.resolveSessionConversation !== "function") {
     return null;
   }
 
   return normalizeSessionConversationResolution(
-    resolveSessionConversation({
+    cached.resolveSessionConversation({
       kind: params.kind,
       rawId: params.rawId,
     }),

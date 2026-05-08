@@ -231,7 +231,6 @@ describe("dreaming controller", () => {
     state.hello = {
       type: "hello-ok",
       protocol: 3,
-      auth: { role: "operator", scopes: [] },
       features: { methods: ["wiki.importInsights"] },
     };
     state.configSnapshot = {
@@ -367,7 +366,6 @@ describe("dreaming controller", () => {
     state.hello = {
       type: "hello-ok",
       protocol: 3,
-      auth: { role: "operator", scopes: [] },
       features: { methods: ["doctor.memory.status"] },
     };
     state.configSnapshot = {
@@ -403,7 +401,6 @@ describe("dreaming controller", () => {
     state.hello = {
       type: "hello-ok",
       protocol: 3,
-      auth: { role: "operator", scopes: [] },
       features: { methods: ["wiki.palace"] },
     };
     state.configSnapshot = {
@@ -539,7 +536,6 @@ describe("dreaming controller", () => {
     state.hello = {
       type: "hello-ok",
       protocol: 3,
-      auth: { role: "operator", scopes: [] },
       features: { methods: ["doctor.memory.status"] },
     };
     state.configSnapshot = {

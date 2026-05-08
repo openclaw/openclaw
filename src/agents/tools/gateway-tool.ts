@@ -34,14 +34,12 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "agents.defaults.promptOverlays",
   "agents.defaults.model",
   "agents.defaults.thinkingDefault",
-  "agents.defaults.subagents.thinking",
   "agents.defaults.reasoningDefault",
   "agents.defaults.fastModeDefault",
   "agents.list[].id",
   "agents.list[].systemPromptOverride",
   "agents.list[].model",
   "agents.list[].thinkingDefault",
-  "agents.list[].subagents.thinking",
   "agents.list[].reasoningDefault",
   "agents.list[].fastModeDefault",
   // Mention gating is an agent-facing scope knob across channel adapters.
@@ -53,10 +51,6 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "channels.*.*.*.requireMention",
   "channels.*.*.*.*.requireMention",
   "channels.*.*.*.*.*.requireMention",
-  // Visible reply delivery mode is a bounded message UX setting, not a secret
-  // or privilege boundary. Let agents repair silent group/channel rooms.
-  "messages.visibleReplies",
-  "messages.groupChat.visibleReplies",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
@@ -93,17 +87,6 @@ function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
     throw new Error("config.get response is missing a config object.");
   }
   return config as Record<string, unknown>;
-}
-
-// Direct RPC callers need the validated config echoed after writes; the
-// agent-facing gateway tool does not, and replaying it bloats transcripts.
-function stripConfigWriteResultPayload(result: unknown): unknown {
-  if (!isPlainObject(result) || !Object.hasOwn(result, "config")) {
-    return result;
-  }
-  const stripped = { ...result };
-  delete stripped.config;
-  return stripped;
 }
 
 function parseGatewayConfigMutationRaw(
@@ -498,7 +481,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
+        return jsonResult({ ok: true, result });
       }
       if (action === "config.patch") {
         const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =
@@ -515,11 +498,10 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
+        return jsonResult({ ok: true, result });
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
-        const continuationMessage = normalizeOptionalString(params.continuationMessage);
         const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
@@ -528,7 +510,6 @@ export function createGatewayTool(opts?: {
         const result = await callGatewayTool("update.run", updateGatewayOpts, {
           sessionKey,
           note,
-          continuationMessage,
           restartDelayMs,
           timeoutMs: updateTimeoutMs,
         });

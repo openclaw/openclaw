@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { captureEnv } from "../test-utils/env.js";
 
 const note = vi.hoisted(() => vi.fn());
 
@@ -15,22 +13,23 @@ vi.mock("../terminal/note.js", () => ({
 import { noteSessionLockHealth } from "./doctor-session-locks.js";
 
 describe("noteSessionLockHealth", () => {
-  let state: OpenClawTestState;
+  let root: string;
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(async () => {
     note.mockClear();
-    state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-doctor-locks-",
-    });
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-locks-"));
+    process.env.OPENCLAW_STATE_DIR = root;
   });
 
   afterEach(async () => {
-    await state.cleanup();
+    envSnapshot.restore();
+    await fs.rm(root, { recursive: true, force: true });
   });
 
   it("reports existing lock files with pid status and age", async () => {
-    const sessionsDir = state.sessionsDir();
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const lockPath = path.join(sessionsDir, "active.jsonl.lock");
     await fs.writeFile(
@@ -51,7 +50,7 @@ describe("noteSessionLockHealth", () => {
   });
 
   it("removes stale locks in repair mode", async () => {
-    const sessionsDir = state.sessionsDir();
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
     const staleLock = path.join(sessionsDir, "stale.jsonl.lock");

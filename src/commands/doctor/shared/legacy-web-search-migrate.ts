@@ -1,4 +1,9 @@
 import { mergeMissing } from "../../../config/legacy.shared.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  loadPluginManifestRegistry,
+  resolveManifestContractOwnerPluginId,
+} from "../../../plugins/manifest-registry.js";
 import {
   cloneRecord,
   ensureRecord,
@@ -9,40 +14,25 @@ import {
 
 const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
 
-const BUNDLED_LEGACY_WEB_SEARCH_OWNERS = new Map<string, string>([
-  ["brave", "brave"],
-  ["duckduckgo", "duckduckgo"],
-  ["exa", "exa"],
-  ["firecrawl", "firecrawl"],
-  ["gemini", "google"],
-  ["grok", "xai"],
-  ["kimi", "moonshot"],
-  ["minimax", "minimax"],
-  ["ollama", "ollama"],
-  ["perplexity", "perplexity"],
-  ["searxng", "searxng"],
-  ["tavily", "tavily"],
-]);
-
 // Tavily only ever used the plugin-owned config path, so there is no legacy
 // `tools.web.search.tavily.*` shape to migrate.
 const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["tavily"]);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
+let legacyWebSearchProviderIdsCache: string[] | undefined;
+let legacyWebSearchProviderIdSetCache: Set<string> | undefined;
 
-function getBundledLegacyWebSearchOwners(): ReadonlyMap<string, string> {
-  return BUNDLED_LEGACY_WEB_SEARCH_OWNERS;
-}
-
-function getLegacyWebSearchProviderIds(
-  owners: ReadonlyMap<string, string> = getBundledLegacyWebSearchOwners(),
-): string[] {
-  return [...owners.keys()]
+function getLegacyWebSearchProviderIds(): string[] {
+  legacyWebSearchProviderIdsCache ??= loadPluginManifestRegistry({ cache: true })
+    .plugins.filter((plugin) => plugin.origin === "bundled")
+    .flatMap((plugin) => plugin.contracts?.webSearchProviders ?? [])
     .filter((providerId) => !NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS.has(providerId))
     .toSorted((left, right) => left.localeCompare(right));
+  return legacyWebSearchProviderIdsCache;
 }
 
-function getLegacyWebSearchProviderIdSet(owners: ReadonlyMap<string, string>): Set<string> {
-  return new Set(getLegacyWebSearchProviderIds(owners));
+function getLegacyWebSearchProviderIdSet(): Set<string> {
+  legacyWebSearchProviderIdSetCache ??= new Set(getLegacyWebSearchProviderIds());
+  return legacyWebSearchProviderIdSetCache;
 }
 
 function resolveLegacySearchConfig(raw: unknown): JsonRecord | undefined {
@@ -59,10 +49,7 @@ function copyLegacyProviderConfig(search: JsonRecord, providerKey: string): Json
   return isRecord(current) ? cloneRecord(current) : undefined;
 }
 
-function hasMappedLegacyWebSearchConfig(
-  raw: unknown,
-  owners: ReadonlyMap<string, string>,
-): boolean {
+function hasMappedLegacyWebSearchConfig(raw: unknown): boolean {
   const search = resolveLegacySearchConfig(raw);
   if (!search) {
     return false;
@@ -70,13 +57,10 @@ function hasMappedLegacyWebSearchConfig(
   if (hasOwnKey(search, "apiKey")) {
     return true;
   }
-  return getLegacyWebSearchProviderIds(owners).some((providerId) => isRecord(search[providerId]));
+  return getLegacyWebSearchProviderIds().some((providerId) => isRecord(search[providerId]));
 }
 
-function resolveLegacyGlobalWebSearchMigration(
-  search: JsonRecord,
-  owners: ReadonlyMap<string, string>,
-): {
+function resolveLegacyGlobalWebSearchMigration(search: JsonRecord): {
   pluginId: string;
   payload: JsonRecord;
   legacyPath: string;
@@ -95,7 +79,11 @@ function resolveLegacyGlobalWebSearchMigration(
     return null;
   }
   const pluginId =
-    owners.get(LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID) ?? LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID;
+    resolveManifestContractOwnerPluginId({
+      contract: "webSearchProviders",
+      value: LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID,
+      origin: "bundled",
+    }) ?? LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID;
   return {
     pluginId,
     payload,
@@ -149,7 +137,6 @@ function migratePluginWebSearchConfig(params: {
 }
 
 export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
-  const owners = getBundledLegacyWebSearchOwners();
   const search = resolveLegacySearchConfig(raw);
   if (!search) {
     return [];
@@ -159,7 +146,7 @@ export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
   if ("apiKey" in search) {
     paths.push("tools.web.search.apiKey");
   }
-  for (const providerId of getLegacyWebSearchProviderIds(owners)) {
+  for (const providerId of getLegacyWebSearchProviderIds()) {
     const scoped = search[providerId];
     if (isRecord(scoped)) {
       for (const key of Object.keys(scoped)) {
@@ -170,22 +157,33 @@ export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
   return paths;
 }
 
+export function normalizeLegacyWebSearchConfig<T>(raw: T): T {
+  if (!isRecord(raw)) {
+    return raw;
+  }
+
+  const search = resolveLegacySearchConfig(raw);
+  if (!search) {
+    return raw;
+  }
+
+  return normalizeLegacyWebSearchConfigRecord(raw).config;
+}
+
 export function migrateLegacyWebSearchConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw)) {
     return { config: raw, changes: [] };
   }
 
-  const owners = getBundledLegacyWebSearchOwners();
-  if (!hasMappedLegacyWebSearchConfig(raw, owners)) {
+  if (!hasMappedLegacyWebSearchConfig(raw)) {
     return { config: raw, changes: [] };
   }
 
-  return normalizeLegacyWebSearchConfigRecord(raw, owners);
+  return normalizeLegacyWebSearchConfigRecord(raw);
 }
 
 function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
   raw: T,
-  owners: ReadonlyMap<string, string>,
 ): {
   config: T;
   changes: string[];
@@ -204,7 +202,7 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     if (key === "apiKey") {
       continue;
     }
-    if (getLegacyWebSearchProviderIdSet(owners).has(key) && isRecord(value)) {
+    if (getLegacyWebSearchProviderIdSet().has(key) && isRecord(value)) {
       continue;
     }
     if (MODERN_SCOPED_WEB_SEARCH_KEYS.has(key) || !isRecord(value)) {
@@ -213,7 +211,7 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
   }
   web.search = nextSearch;
 
-  const globalSearchMigration = resolveLegacyGlobalWebSearchMigration(search, owners);
+  const globalSearchMigration = resolveLegacyGlobalWebSearchMigration(search);
   if (globalSearchMigration) {
     migratePluginWebSearchConfig({
       root: nextRoot,
@@ -225,7 +223,7 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     });
   }
 
-  for (const providerId of getLegacyWebSearchProviderIds(owners)) {
+  for (const providerId of getLegacyWebSearchProviderIds()) {
     if (providerId === LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID) {
       continue;
     }
@@ -233,7 +231,11 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
     if (!scoped || Object.keys(scoped).length === 0) {
       continue;
     }
-    const pluginId = owners.get(providerId);
+    const pluginId = resolveManifestContractOwnerPluginId({
+      contract: "webSearchProviders",
+      value: providerId,
+      origin: "bundled",
+    });
     if (!pluginId) {
       continue;
     }
@@ -248,4 +250,16 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
   }
 
   return { config: nextRoot, changes };
+}
+
+export function resolvePluginWebSearchConfig(
+  config: OpenClawConfig | undefined,
+  pluginId: string,
+): Record<string, unknown> | undefined {
+  const pluginConfig = config?.plugins?.entries?.[pluginId]?.config;
+  if (!isRecord(pluginConfig)) {
+    return undefined;
+  }
+  const webSearch = pluginConfig.webSearch;
+  return isRecord(webSearch) ? webSearch : undefined;
 }

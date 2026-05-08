@@ -4,6 +4,7 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
@@ -51,12 +52,16 @@ export type {
   PluginApprovalResolvedView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
+export { resolveApprovalOverGateway };
 export {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
 };
 export type {
+  ApprovalRequest,
+  ApprovalResolved,
   ChannelApprovalCapabilityHandlerContext,
+  ChannelApprovalKind,
   ChannelApprovalNativeAvailabilityAdapter,
   ChannelApprovalNativeFinalAction,
   ChannelApprovalNativeInteractionAdapter,
@@ -300,7 +305,7 @@ export function createChannelApprovalNativeRuntimeAdapter<
   };
 }
 
-type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
+export type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   label: string;
   clientDisplayName: string;
   cfg: OpenClawConfig;
@@ -316,7 +321,7 @@ type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   nowMs?: () => number;
 };
 
-type ChannelApprovalHandlerContentSpec<
+export type ChannelApprovalHandlerContentSpec<
   TPendingContent,
   TRequest extends ApprovalRequest = ApprovalRequest,
 > = {
@@ -327,14 +332,14 @@ type ChannelApprovalHandlerContentSpec<
   }) => TPendingContent | Promise<TPendingContent>;
 };
 
-type ChannelApprovalHandlerTransportSpec<
+export type ChannelApprovalHandlerTransportSpec<
   TPendingEntry,
   TPreparedTarget,
   TPendingContent,
   TRequest extends ApprovalRequest = ApprovalRequest,
 > = ChannelNativeApprovalTransportSpec<TPendingEntry, TPreparedTarget, TPendingContent, TRequest>;
 
-type ChannelApprovalHandlerLifecycleSpec<
+export type ChannelApprovalHandlerLifecycleSpec<
   TPendingEntry,
   TPreparedTarget,
   TPendingContent,

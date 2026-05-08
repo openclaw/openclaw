@@ -1,20 +1,16 @@
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
-  RealtimeVoiceAudioFormat,
-  RealtimeVoiceBargeInOptions,
   RealtimeVoiceCloseReason,
-  RealtimeVoiceBridgeEvent,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
-  RealtimeVoiceToolResultOptions,
 } from "./provider-types.js";
 
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
-  sendAudio: (audio: Buffer) => void;
+  sendAudio: (muLaw: Buffer) => void;
   clearAudio?: () => void;
   sendMark?: (markName: string) => void;
 };
@@ -28,25 +24,21 @@ export type RealtimeVoiceBridgeSession = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
-  handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   setMediaTimestamp(ts: number): void;
-  submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;
+  submitToolResult(callId: string, result: unknown): void;
   triggerGreeting(instructions?: string): void;
 };
 
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
-  audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
   instructions?: string;
   initialGreetingInstructions?: string;
-  autoRespondToAudio?: boolean;
   markStrategy?: RealtimeVoiceMarkStrategy;
   triggerGreetingOnReady?: boolean;
   tools?: RealtimeVoiceTool[];
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
-  onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onToolCall?: (event: RealtimeVoiceToolCallEvent, session: RealtimeVoiceBridgeSession) => void;
   onReady?: (session: RealtimeVoiceBridgeSession) => void;
   onError?: (error: Error) => void;
@@ -72,22 +64,18 @@ export function createRealtimeVoiceBridgeSession(
     connect: () => requireBridge().connect(),
     sendAudio: (audio) => requireBridge().sendAudio(audio),
     sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
-    handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
-    submitToolResult: (callId, result, options) =>
-      requireBridge().submitToolResult(callId, result, options),
+    submitToolResult: (callId, result) => requireBridge().submitToolResult(callId, result),
     triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
   };
   const canSendAudio = () => params.audioSink.isOpen?.() ?? true;
   bridge = params.provider.createBridge({
     providerConfig: params.providerConfig,
-    audioFormat: params.audioFormat,
     instructions: params.instructions,
-    autoRespondToAudio: params.autoRespondToAudio,
     tools: params.tools,
-    onAudio: (audio) => {
+    onAudio: (muLaw) => {
       if (canSendAudio()) {
-        params.audioSink.sendAudio(audio);
+        params.audioSink.sendAudio(muLaw);
       }
     },
     onClearAudio: () => {
@@ -108,7 +96,6 @@ export function createRealtimeVoiceBridgeSession(
       }
     },
     onTranscript: params.onTranscript,
-    onEvent: params.onEvent,
     onToolCall: (event) => {
       if (!bridge) {
         return;

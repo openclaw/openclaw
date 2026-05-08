@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
-  getRuntimeConfigSourceSnapshot: vi.fn(),
+  readSourceConfigSnapshotForWrite: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
   getModelsCommandSecretTargetIds: vi.fn(),
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
-  getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
+  readSourceConfigSnapshotForWrite: mocks.readSourceConfigSnapshotForWrite,
   setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
 }));
 
@@ -35,7 +35,10 @@ describe("models load-config", () => {
 
   function mockResolvedConfigFlow(params: { sourceConfig: unknown; diagnostics: string[] }) {
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(params.sourceConfig);
+    mocks.readSourceConfigSnapshotForWrite.mockResolvedValue({
+      snapshot: { valid: true, sourceConfig: params.sourceConfig, resolved: params.sourceConfig },
+      writeOptions: {},
+    });
     mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig,
@@ -84,20 +87,5 @@ describe("models load-config", () => {
 
     await expect(loadModelsConfig({ commandName: "models list" })).resolves.toBe(resolvedConfig);
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-  });
-
-  it("does not reread config when no source snapshot is pinned", async () => {
-    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
-    mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig,
-      diagnostics: [],
-    });
-
-    const result = await loadModelsConfigWithSource({ commandName: "models list" });
-
-    expect(result.sourceConfig).toBe(runtimeConfig);
-    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig);
   });
 });

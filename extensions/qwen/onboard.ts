@@ -11,6 +11,14 @@ import {
 } from "./models.js";
 import { buildQwenProvider } from "./provider-catalog.js";
 
+export {
+  QWEN_CN_BASE_URL,
+  QWEN_DEFAULT_MODEL_REF,
+  QWEN_GLOBAL_BASE_URL,
+  QWEN_STANDARD_CN_BASE_URL,
+  QWEN_STANDARD_GLOBAL_BASE_URL,
+};
+
 const qwenPresetAppliers = createModelCatalogPresetAppliers<[string]>({
   primaryModelRef: QWEN_DEFAULT_MODEL_REF,
   resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
@@ -31,11 +39,11 @@ const qwenPresetAppliers = createModelCatalogPresetAppliers<[string]>({
   },
 });
 
-function applyQwenProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyQwenProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   return qwenPresetAppliers.applyProviderConfig(cfg, QWEN_GLOBAL_BASE_URL);
 }
 
-function applyQwenProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+export function applyQwenProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   return qwenPresetAppliers.applyProviderConfig(cfg, QWEN_CN_BASE_URL);
 }
 
@@ -47,11 +55,11 @@ export function applyQwenConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   return qwenPresetAppliers.applyConfig(cfg, QWEN_CN_BASE_URL);
 }
 
-function applyQwenStandardProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyQwenStandardProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   return qwenPresetAppliers.applyProviderConfig(cfg, QWEN_STANDARD_GLOBAL_BASE_URL);
 }
 
-function applyQwenStandardProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+export function applyQwenStandardProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   return qwenPresetAppliers.applyProviderConfig(cfg, QWEN_STANDARD_CN_BASE_URL);
 }
 

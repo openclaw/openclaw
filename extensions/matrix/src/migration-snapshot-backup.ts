@@ -14,7 +14,7 @@ type MatrixMigrationSnapshotMarker = {
   includeWorkspace: boolean;
 };
 
-type MatrixMigrationSnapshotResult = {
+export type MatrixMigrationSnapshotResult = {
   created: boolean;
   archivePath: string;
   markerPath: string;

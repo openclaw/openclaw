@@ -1,18 +1,15 @@
-import crypto from "node:crypto";
-import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
 const {
   createLineBotMock,
   createLineNodeWebhookHandlerMock,
-  registerWebhookTargetWithPluginRouteMock,
+  registerPluginHttpRouteMock,
   unregisterHttpMock,
 } = vi.hoisted(() => ({
   createLineBotMock: vi.fn(() => ({
@@ -22,7 +19,7 @@ const {
   createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
     vi.fn<LineNodeWebhookHandler>(async () => {}),
   ),
-  registerWebhookTargetWithPluginRouteMock: vi.fn(),
+  registerPluginHttpRouteMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
 }));
 
@@ -56,24 +53,14 @@ vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
   createChannelReplyPipeline: vi.fn(() => ({})),
 }));
 
-vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-ingress")>(
-    "openclaw/plugin-sdk/webhook-ingress",
-  );
-  return {
-    ...actual,
-    normalizePluginHttpPath: (path: string | undefined, fallback: string) => path ?? fallback,
-    registerWebhookTargetWithPluginRoute: registerWebhookTargetWithPluginRouteMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
+  normalizePluginHttpPath: (_path: string | undefined, fallback: string) => fallback,
+  registerPluginHttpRoute: registerPluginHttpRouteMock,
+}));
 
-vi.mock("./webhook-node.js", async () => {
-  const actual = await vi.importActual<typeof import("./webhook-node.js")>("./webhook-node.js");
-  return {
-    ...actual,
-    createLineNodeWebhookHandler: createLineNodeWebhookHandlerMock,
-  };
-});
+vi.mock("./webhook-node.js", () => ({
+  createLineNodeWebhookHandler: createLineNodeWebhookHandlerMock,
+}));
 
 vi.mock("./auto-reply-delivery.js", () => ({
   deliverLineAutoReply: vi.fn(),
@@ -114,37 +101,16 @@ describe("monitorLineProvider lifecycle", () => {
   beforeEach(() => {
     clearLineRuntimeStateForTests();
     createLineBotMock.mockReset();
-    createLineBotMock.mockImplementation(() => ({
+    createLineBotMock.mockReturnValue({
       account: { accountId: "default" },
       handleWebhook: vi.fn(),
-    }));
+    });
     innerLineWebhookHandlerMock = vi.fn<LineNodeWebhookHandler>(async () => {});
     createLineNodeWebhookHandlerMock
       .mockReset()
       .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
-    registerWebhookTargetWithPluginRouteMock.mockReset().mockImplementation((params) => {
-      const key = params.target.path.startsWith("/")
-        ? params.target.path
-        : `/${params.target.path}`;
-      const normalizedTarget = { ...params.target, path: key };
-      const existing = params.targetsByPath.get(key) ?? [];
-      params.targetsByPath.set(key, [...existing, normalizedTarget]);
-      return {
-        target: normalizedTarget,
-        unregister: () => {
-          unregisterHttpMock();
-          const updated = (params.targetsByPath.get(key) ?? []).filter(
-            (entry: unknown) => entry !== normalizedTarget,
-          );
-          if (updated.length > 0) {
-            params.targetsByPath.set(key, updated);
-          } else {
-            params.targetsByPath.delete(key);
-          }
-        },
-      };
-    });
+    registerPluginHttpRouteMock.mockReset().mockReturnValue(unregisterHttpMock);
   });
 
   const createRouteResponse = () => {
@@ -174,40 +140,15 @@ describe("monitorLineProvider lifecycle", () => {
       return monitor;
     });
 
-    expect(registerWebhookTargetWithPluginRouteMock).toHaveBeenCalledTimes(1);
-    expect(registerWebhookTargetWithPluginRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({ route: expect.objectContaining({ auth: "plugin" }) }),
+    expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
+    expect(registerPluginHttpRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({ auth: "plugin" }),
     );
     expect(resolved).toBe(false);
 
     abort.abort();
     await task;
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("registers an account target without replacing existing route ownership", async () => {
-    const monitor = await monitorLineProvider({
-      channelAccessToken: "token",
-      channelSecret: "secret", // pragma: allowlist secret
-      accountId: "work",
-      config: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-    });
-
-    const registration = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0];
-    expect(registration).toEqual(
-      expect.objectContaining({
-        target: expect.objectContaining({ accountId: "work", path: "/line/webhook" }),
-        route: expect.objectContaining({
-          accountId: "work",
-          auth: "plugin",
-          pluginId: "line",
-        }),
-      }),
-    );
-    expect(registration?.route).not.toHaveProperty("path");
-    expect(registration?.route).not.toHaveProperty("replaceExisting");
-    monitor.stop();
   });
 
   it("stops immediately when signal is already aborted", async () => {
@@ -269,100 +210,26 @@ describe("monitorLineProvider lifecycle", () => {
     monitor.stop();
   });
 
-  it("dispatches shared-path webhook posts to the account matching the signature", async () => {
-    const firstMonitor = await monitorLineProvider({
-      channelAccessToken: "first-token",
-      channelSecret: "first-secret", // pragma: allowlist secret
-      accountId: "first",
-      config: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-    });
-    const secondMonitor = await monitorLineProvider({
-      channelAccessToken: "second-token",
-      channelSecret: "second-secret", // pragma: allowlist secret
-      accountId: "second",
-      config: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-    });
-
-    const route = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0]?.route as
-      | { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }
-      | undefined;
-    expect(route).toBeDefined();
-
-    const payload = JSON.stringify({ events: [{ type: "message" }] });
-    const signature = crypto.createHmac("SHA256", "second-secret").update(payload).digest("base64");
-    const req = Object.assign(createMockIncomingRequest([payload]), {
-      method: "POST",
-      headers: { "x-line-signature": signature },
-    }) as unknown as IncomingMessage;
-    const res = createRouteResponse();
-
-    await route!.handler(req, res);
-
-    const firstBot = createLineBotMock.mock.results[0]?.value as {
-      handleWebhook: ReturnType<typeof vi.fn>;
-    };
-    const secondBot = createLineBotMock.mock.results[1]?.value as {
-      handleWebhook: ReturnType<typeof vi.fn>;
-    };
-    expect(res.statusCode).toBe(200);
-    expect(firstBot.handleWebhook).not.toHaveBeenCalled();
-    expect(secondBot.handleWebhook).toHaveBeenCalledTimes(1);
-
-    firstMonitor.stop();
-    secondMonitor.stop();
-  });
-
-  it("rejects ambiguous shared-path webhook signatures", async () => {
-    const firstMonitor = await monitorLineProvider({
-      channelAccessToken: "first-token",
-      channelSecret: "shared-secret", // pragma: allowlist secret
-      accountId: "first",
-      config: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-    });
-    const secondMonitor = await monitorLineProvider({
-      channelAccessToken: "second-token",
-      channelSecret: "shared-secret", // pragma: allowlist secret
-      accountId: "second",
-      config: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-    });
-
-    const route = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0]?.route as
-      | { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }
-      | undefined;
-    expect(route).toBeDefined();
-
-    const payload = JSON.stringify({ events: [{ type: "message" }] });
-    const signature = crypto.createHmac("SHA256", "shared-secret").update(payload).digest("base64");
-    const req = Object.assign(createMockIncomingRequest([payload]), {
-      method: "POST",
-      headers: { "x-line-signature": signature },
-    }) as unknown as IncomingMessage;
-    const res = createRouteResponse();
-
-    await route!.handler(req, res);
-
-    const firstBot = createLineBotMock.mock.results[0]?.value as {
-      handleWebhook: ReturnType<typeof vi.fn>;
-    };
-    const secondBot = createLineBotMock.mock.results[1]?.value as {
-      handleWebhook: ReturnType<typeof vi.fn>;
-    };
-    expect(res.statusCode).toBe(401);
-    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ error: "Ambiguous webhook target" }));
-    expect(firstBot.handleWebhook).not.toHaveBeenCalled();
-    expect(secondBot.handleWebhook).not.toHaveBeenCalled();
-
-    firstMonitor.stop();
-    secondMonitor.stop();
-  });
-
   it("rejects webhook requests above the shared in-flight limit before body handling", async () => {
     const limit = WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey;
-    const heldRequests: Array<EventEmitter & { destroy: () => void }> = [];
+    const releaseRequests: Array<() => void> = [];
+    let reachLimit!: () => void;
+    const reachedLimit = new Promise<void>((resolve) => {
+      reachLimit = resolve;
+    });
+
+    innerLineWebhookHandlerMock.mockImplementation(
+      async (_req: IncomingMessage, res: ServerResponse) => {
+        if (releaseRequests.length === limit - 1) {
+          reachLimit();
+        }
+        await new Promise<void>((resolve) => {
+          releaseRequests.push(resolve);
+        });
+        res.statusCode = 200;
+        res.end();
+      },
+    );
 
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
@@ -371,51 +238,30 @@ describe("monitorLineProvider lifecycle", () => {
       runtime: {} as RuntimeEnv,
     });
 
-    const route = registerWebhookTargetWithPluginRouteMock.mock.calls[0]?.[0]?.route as
+    const route = registerPluginHttpRouteMock.mock.calls[0]?.[0] as
       | { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }
       | undefined;
     expect(route).toBeDefined();
-    const createHeldPostRequest = () => {
-      const req = Object.assign(new EventEmitter(), {
-        destroyed: false,
-        destroy(this: EventEmitter & { destroyed: boolean }) {
-          this.destroyed = true;
-          this.emit("close");
-        },
-      });
-      heldRequests.push(req);
-      return Object.assign(req, {
+    const createPostRequest = () =>
+      ({
         method: "POST",
-        headers: { "x-line-signature": "pending" },
-      }) as unknown as IncomingMessage;
-    };
-    const createSignedPostRequest = () => {
-      const payload = JSON.stringify({ events: [{ type: "message" }] });
-      const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
-      const req = createMockIncomingRequest([payload]);
-      return Object.assign(req, {
-        method: "POST",
-        headers: { "x-line-signature": signature },
-      }) as unknown as IncomingMessage;
-    };
+        headers: {},
+      }) as IncomingMessage;
 
     const firstRequests = Array.from({ length: limit }, () =>
-      route!.handler(createHeldPostRequest(), createRouteResponse()),
+      route!.handler(createPostRequest(), createRouteResponse()),
     );
-    await new Promise((resolve) => setImmediate(resolve));
+    await reachedLimit;
 
     const overflowResponse = createRouteResponse();
-    await route!.handler(createSignedPostRequest(), overflowResponse);
+    await route!.handler(createPostRequest(), overflowResponse);
 
-    const bot = createLineBotMock.mock.results[0]?.value as {
-      handleWebhook: ReturnType<typeof vi.fn>;
-    };
-    expect(bot.handleWebhook).not.toHaveBeenCalled();
+    expect(innerLineWebhookHandlerMock).toHaveBeenCalledTimes(limit);
     expect(overflowResponse.statusCode).toBe(429);
     expect(overflowResponse.end).toHaveBeenCalledWith("Too Many Requests");
 
-    heldRequests.splice(0).forEach((req) => req.destroy());
-    await Promise.allSettled(firstRequests);
+    releaseRequests.splice(0).forEach((release) => release());
+    await Promise.all(firstRequests);
     monitor.stop();
   });
 });

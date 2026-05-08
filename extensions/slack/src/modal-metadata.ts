@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
-type SlackModalPrivateMetadata = {
+export type SlackModalPrivateMetadata = {
   sessionKey?: string;
   channelId?: string;
   channelType?: string;

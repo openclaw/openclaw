@@ -26,7 +26,6 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
-  getAgentRunContext: vi.fn(() => undefined),
   onAgentEvent: vi.fn((_handler: unknown) => noop),
 }));
 
@@ -34,7 +33,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    getRuntimeConfig: loadConfigMock,
+    loadConfig: loadConfigMock,
   };
 });
 
@@ -151,21 +150,18 @@ describe("subagent registry archive behavior", () => {
       resolveContextEngine: vi.fn(async () => ({ onSubagentEnded }) as never),
     });
 
-    mod.addSubagentRunForTests({
+    mod.registerSubagentRun({
       runId: "run-delete-retry",
       childSessionKey: "agent:main:subagent:delete-retry",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "retry delete",
       cleanup: "delete",
-      createdAt: Date.now() - 60_000,
-      endedAt: Date.now() - 1,
-      archiveAtMs: Date.now(),
       attachmentsDir,
       attachmentsRootDir,
     });
 
-    await mod.__testing.sweepOnceForTests();
+    vi.advanceTimersByTime(60_000);
     await flushSweepMicrotasks();
 
     expect(deleteAttempts).toBe(1);
@@ -173,7 +169,7 @@ describe("subagent registry archive behavior", () => {
     expect(onSubagentEnded).not.toHaveBeenCalled();
     await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
 
-    await mod.__testing.sweepOnceForTests();
+    vi.advanceTimersByTime(60_000);
     await flushSweepMicrotasks();
 
     expect(deleteAttempts).toBe(2);
@@ -199,19 +195,16 @@ describe("subagent registry archive behavior", () => {
       return {};
     });
 
-    mod.addSubagentRunForTests({
+    mod.registerSubagentRun({
       runId: "run-delete-inflight",
       childSessionKey: "agent:main:subagent:delete-inflight",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "inflight delete",
       cleanup: "delete",
-      createdAt: Date.now() - 60_000,
-      endedAt: Date.now() - 1,
-      archiveAtMs: Date.now(),
     });
 
-    const firstSweep = mod.__testing.sweepOnceForTests();
+    vi.advanceTimersByTime(60_000);
     await flushSweepMicrotasks();
     expect(
       vi
@@ -221,7 +214,8 @@ describe("subagent registry archive behavior", () => {
         ),
     ).toHaveLength(1);
 
-    await mod.__testing.sweepOnceForTests();
+    vi.advanceTimersByTime(60_000);
+    await flushSweepMicrotasks();
     expect(
       vi
         .mocked(callGateway)
@@ -235,7 +229,6 @@ describe("subagent registry archive behavior", () => {
       throw new Error("expected delete resolver");
     }
     resolveDelete();
-    await firstSweep;
     await flushSweepMicrotasks();
     await vi.waitFor(() => {
       expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);

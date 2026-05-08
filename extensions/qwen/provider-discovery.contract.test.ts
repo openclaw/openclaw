@@ -1,3 +1,3 @@
-import { describeModelStudioProviderDiscoveryContract } from "openclaw/plugin-sdk/provider-test-contracts";
+import { describeModelStudioProviderDiscoveryContract } from "../../test/helpers/plugins/provider-discovery-contract.js";
 
 describeModelStudioProviderDiscoveryContract(() => import("./index.js"));

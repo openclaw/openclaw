@@ -1,17 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn>;
-type GetRuntimeConfigFn =
-  typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;
-type LoadSessionStoreFn =
-  typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore;
-type ResolveStorePathFn =
-  typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
+type LoadConfigFn = typeof import("openclaw/plugin-sdk/config-runtime").loadConfig;
+type LoadSessionStoreFn = typeof import("openclaw/plugin-sdk/config-runtime").loadSessionStore;
+type ResolveStorePathFn = typeof import("openclaw/plugin-sdk/config-runtime").resolveStorePath;
 type SessionStore = ReturnType<LoadSessionStoreFn>;
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
@@ -45,27 +42,26 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
-const { getRuntimeConfig, loadSessionStoreMock, resolveStorePathMock, sessionStoreEntries } =
-  vi.hoisted(
-    (): {
-      getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
-      loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
-      resolveStorePathMock: MockFn<ResolveStorePathFn>;
-      sessionStoreEntries: { value: SessionStore };
-    } => ({
-      getRuntimeConfig: vi.fn<GetRuntimeConfigFn>(() => ({})),
-      loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
-        (_storePath, _opts) => sessionStoreEntries.value,
-      ),
-      resolveStorePathMock: vi.fn<ResolveStorePathFn>(
-        (storePath?: string) => storePath ?? sessionStorePath,
-      ),
-      sessionStoreEntries: { value: {} as SessionStore },
-    }),
-  );
+const { loadConfig, loadSessionStoreMock, resolveStorePathMock, sessionStoreEntries } = vi.hoisted(
+  (): {
+    loadConfig: MockFn<LoadConfigFn>;
+    loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
+    resolveStorePathMock: MockFn<ResolveStorePathFn>;
+    sessionStoreEntries: { value: SessionStore };
+  } => ({
+    loadConfig: vi.fn<LoadConfigFn>(() => ({})),
+    loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
+      (_storePath, _opts) => sessionStoreEntries.value,
+    ),
+    resolveStorePathMock: vi.fn<ResolveStorePathFn>(
+      (storePath?: string) => storePath ?? sessionStorePath,
+    ),
+    sessionStoreEntries: { value: {} as SessionStore },
+  }),
+);
 
 export function getLoadConfigMock(): AnyMock {
-  return getRuntimeConfig;
+  return loadConfig;
 }
 
 export function getLoadSessionStoreMock(): AnyMock {
@@ -266,13 +262,12 @@ const grammySpies = vi.hoisted(() => ({
   onSpy: vi.fn(),
   stopSpy: vi.fn(),
   commandSpy: vi.fn(),
-  botCtorSpy: vi.fn(
-    (_: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
-  ),
+  botCtorSpy: vi.fn((_: string, __?: { client?: { fetch?: typeof fetch } }) => undefined),
   answerCallbackQuerySpy: vi.fn(async () => undefined) as AnyAsyncMock,
   sendChatActionSpy: vi.fn(),
   editMessageTextSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
   editMessageReplyMarkupSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
+  sendMessageDraftSpy: vi.fn(async () => true) as AnyAsyncMock,
   setMessageReactionSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   setMyCommandsSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   getMeSpy: vi.fn(async () => ({
@@ -292,12 +287,13 @@ export const onSpy: AnyMock = grammySpies.onSpy;
 export const stopSpy: AnyMock = grammySpies.stopSpy;
 export const commandSpy: AnyMock = grammySpies.commandSpy;
 export const botCtorSpy: MockFn<
-  (token: string, options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => void
+  (token: string, options?: { client?: { fetch?: typeof fetch } }) => void
 > = grammySpies.botCtorSpy;
 export const answerCallbackQuerySpy: AnyAsyncMock = grammySpies.answerCallbackQuerySpy;
 export const sendChatActionSpy: AnyMock = grammySpies.sendChatActionSpy;
 export const editMessageTextSpy: AnyAsyncMock = grammySpies.editMessageTextSpy;
 export const editMessageReplyMarkupSpy: AnyAsyncMock = grammySpies.editMessageReplyMarkupSpy;
+export const sendMessageDraftSpy: AnyAsyncMock = grammySpies.sendMessageDraftSpy;
 export const setMessageReactionSpy: AnyAsyncMock = grammySpies.setMessageReactionSpy;
 export const setMyCommandsSpy: AnyAsyncMock = grammySpies.setMyCommandsSpy;
 export const getMeSpy: AnyAsyncMock = grammySpies.getMeSpy;
@@ -327,6 +323,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
       sendChatAction: grammySpies.sendChatActionSpy,
       editMessageText: grammySpies.editMessageTextSpy,
       editMessageReplyMarkup: grammySpies.editMessageReplyMarkupSpy,
+      sendMessageDraft: grammySpies.sendMessageDraftSpy,
       setMessageReaction: grammySpies.setMessageReactionSpy,
       setMyCommands: grammySpies.setMyCommandsSpy,
       getMe: grammySpies.getMeSpy,
@@ -343,7 +340,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     catch = vi.fn();
     constructor(
       public token: string,
-      public options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown },
+      public options?: { client?: { fetch?: typeof fetch } },
     ) {
       (grammySpies.botCtorSpy as unknown as (token: string, options?: unknown) => void)(
         token,
@@ -365,7 +362,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
-  getRuntimeConfig,
+  loadConfig,
   loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
   readChannelAllowFromStore:
@@ -457,8 +454,8 @@ export function makeForumGroupMessageCtx(params?: {
 }
 
 beforeEach(() => {
-  getRuntimeConfig.mockReset();
-  getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
+  loadConfig.mockReset();
+  loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
   loadSessionStoreMock.mockReset();
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);
@@ -520,6 +517,8 @@ beforeEach(() => {
   editMessageTextSpy.mockResolvedValue({ message_id: 88 });
   editMessageReplyMarkupSpy.mockReset();
   editMessageReplyMarkupSpy.mockResolvedValue({ message_id: 88 });
+  sendMessageDraftSpy.mockReset();
+  sendMessageDraftSpy.mockResolvedValue(true);
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);

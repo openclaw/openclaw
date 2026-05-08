@@ -1,14 +1,14 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { matchesSkillFilter } from "../../agents/skills/filter.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
-const skillsSnapshotRuntimeLoader = createLazyImportLoader(
-  () => import("./skills-snapshot.runtime.js"),
-);
+let skillsSnapshotRuntimePromise:
+  | Promise<typeof import("./skills-snapshot.runtime.js")>
+  | undefined;
 
 async function loadSkillsSnapshotRuntime() {
-  return await skillsSnapshotRuntimeLoader.load();
+  skillsSnapshotRuntimePromise ??= import("./skills-snapshot.runtime.js");
+  return await skillsSnapshotRuntimePromise;
 }
 
 export async function resolveCronSkillsSnapshot(params: {

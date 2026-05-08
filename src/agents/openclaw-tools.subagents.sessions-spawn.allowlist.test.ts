@@ -71,7 +71,7 @@ async function spawn(params: {
 beforeAll(async () => {
   ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
     callGatewayMock: hoisted.callGatewayMock,
-    getRuntimeConfig: () => hoisted.configOverride,
+    loadConfig: () => hoisted.configOverride,
     resolveAgentConfig: (cfg, agentId) => resolveAgentConfigFromList(cfg, agentId),
     resolveSandboxRuntimeStatus: (params: { cfg?: Record<string, unknown>; sessionKey?: string }) =>
       resolveSandboxRuntimeStatusFromConfig(params),

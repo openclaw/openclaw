@@ -72,7 +72,6 @@ describe("resolveRunFailoverDecision", () => {
         failoverReason: "rate_limit",
         timedOut: false,
         timedOutDuringCompaction: false,
-        timedOutDuringToolExecution: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -92,7 +91,6 @@ describe("resolveRunFailoverDecision", () => {
         failoverReason: "rate_limit",
         timedOut: false,
         timedOutDuringCompaction: false,
-        timedOutDuringToolExecution: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -112,7 +110,6 @@ describe("resolveRunFailoverDecision", () => {
         failoverReason: null,
         timedOut: false,
         timedOutDuringCompaction: false,
-        timedOutDuringToolExecution: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -137,64 +134,6 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("does not rotate or fallback assistant timeouts that fired during tool execution (#52147)", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        aborted: true,
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        timedOut: true,
-        timedOutDuringCompaction: false,
-        timedOutDuringToolExecution: true,
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "continue_normal",
-    });
-  });
-
-  it("does not fallback assistant tool-execution timeouts even after profile rotation exhausted (#52147)", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        aborted: true,
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        timedOut: true,
-        timedOutDuringCompaction: false,
-        timedOutDuringToolExecution: true,
-        profileRotated: true,
-      }),
-    ).toEqual({
-      action: "continue_normal",
-    });
-  });
-
-  it("still rotates assistant timeouts that fired during LLM phase (no active tool execution)", () => {
-    expect(
-      resolveRunFailoverDecision({
-        stage: "assistant",
-        aborted: true,
-        externalAbort: false,
-        fallbackConfigured: true,
-        failoverFailure: false,
-        failoverReason: null,
-        timedOut: true,
-        timedOutDuringCompaction: false,
-        timedOutDuringToolExecution: false,
-        profileRotated: false,
-      }),
-    ).toEqual({
-      action: "rotate_profile",
-      reason: null,
-    });
-  });
-
   it("does not rotate or fallback assistant timeouts after an external abort", () => {
     expect(
       resolveRunFailoverDecision({
@@ -206,7 +145,6 @@ describe("resolveRunFailoverDecision", () => {
         failoverReason: null,
         timedOut: true,
         timedOutDuringCompaction: false,
-        timedOutDuringToolExecution: false,
         profileRotated: false,
       }),
     ).toEqual({

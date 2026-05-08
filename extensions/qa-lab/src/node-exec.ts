@@ -63,3 +63,7 @@ export async function resolveQaNodeExecPath(params?: {
   }
   return resolved;
 }
+
+export const __testing = {
+  isNodeExecPath,
+};

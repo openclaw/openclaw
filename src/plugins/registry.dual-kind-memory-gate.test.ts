@@ -1,9 +1,9 @@
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
   registerVirtualTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+} from "../../test/helpers/plugins/contracts-testkit.js";
 import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
 import {
   _resetMemoryPluginState,

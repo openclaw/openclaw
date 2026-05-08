@@ -130,9 +130,7 @@ vi.mock("./send.js", () => ({
   sendSingleTextMessageMatrix: sendModuleMocks.sendSingleTextMessageMatrix,
 }));
 const runtimeStub = {
-  config: {
-    current: () => loadConfigMock(),
-  },
+  config: { loadConfig: () => loadConfigMock() },
   channel: {
     text: {
       resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>

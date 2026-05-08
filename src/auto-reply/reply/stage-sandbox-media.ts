@@ -19,31 +19,18 @@ import type { MsgContext, TemplateContext } from "../templating.js";
 
 const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
 
-// `staged` maps every absolute source path that was copied into the sandbox
-// (or remote cache) to its rewritten ctx path. Callers like chat.send's
-// prestage use this to detect partial failures: unstaged sources keep their
-// original absolute path in ctx.MediaPaths, so a length check against the
-// input cannot distinguish "everything staged" from "silently skipped some"
-// (e.g. the 5MB cap in STAGED_MEDIA_MAX_BYTES rejecting files that the
-// chat.send RPC already admitted under its 20MB cap).
-export type StageSandboxMediaResult = {
-  staged: ReadonlyMap<string, string>;
-};
-
-const EMPTY_STAGE_RESULT: StageSandboxMediaResult = { staged: new Map() };
-
 export async function stageSandboxMedia(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: OpenClawConfig;
   sessionKey?: string;
   workspaceDir: string;
-}): Promise<StageSandboxMediaResult> {
+}) {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
   const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
   const rawPaths = resolveRawPaths(ctx);
   if (rawPaths.length === 0 || !sessionKey) {
-    return EMPTY_STAGE_RESULT;
+    return;
   }
 
   const sandbox = await ensureSandboxWorkspaceForSession({
@@ -58,7 +45,7 @@ export async function stageSandboxMedia(params: {
     : null;
   const effectiveWorkspaceDir = sandbox?.workspaceDir ?? remoteMediaCacheDir;
   if (!effectiveWorkspaceDir) {
-    return EMPTY_STAGE_RESULT;
+    return;
   }
 
   await fs.mkdir(effectiveWorkspaceDir, { recursive: true });
@@ -129,8 +116,6 @@ export async function stageSandboxMedia(params: {
     staged,
     hasPathsArray,
   });
-
-  return { staged };
 }
 
 async function stageLocalFileIntoRoot(params: {

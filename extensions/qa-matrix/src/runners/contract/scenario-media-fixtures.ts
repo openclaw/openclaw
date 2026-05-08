@@ -1,6 +1,6 @@
 export const MATRIX_QA_IMAGE_ATTACHMENT_FILENAME = "red-top-blue-bottom.png";
 
-type MatrixQaMediaTypeCoverageCase = {
+export type MatrixQaMediaTypeCoverageCase = {
   contentType: string;
   createBuffer: () => Buffer;
   expectedAttachmentKind: "audio" | "file" | "image" | "video";

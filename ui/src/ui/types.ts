@@ -2,7 +2,6 @@ export type UpdateAvailable = import("../../../src/infra/update-startup.js").Upd
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {
-  GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
   SessionsListResultBase,
   SessionsPatchResultBase,
@@ -320,14 +319,6 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-};
-
-export type GatewayThinkingLevelOption = {
-  id: string;
-  label: string;
 };
 
 export type ChatModelOverride = import("./chat-model-ref.types.ts").ChatModelOverride;
@@ -345,9 +336,6 @@ export type AgentIdentityResult = {
   agentId: string;
   name: string;
   avatar: string;
-  avatarSource?: string | null;
-  avatarStatus?: "none" | "local" | "remote" | "data" | null;
-  avatarReason?: string | null;
   emoji?: string;
 };
 
@@ -380,7 +368,6 @@ export type AgentsFilesSetResult = {
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
-export type SubagentRunState = "active" | "interrupted" | "historical";
 
 export type SessionCompactionCheckpointReason =
   | "manual"
@@ -409,15 +396,10 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
-export type SessionCompactionCheckpointPreview = Pick<
-  SessionCompactionCheckpoint,
-  "checkpointId" | "createdAt" | "reason"
->;
-
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
-  kind: "cron" | "direct" | "group" | "global" | "unknown";
+  kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
   surface?: string;
@@ -429,7 +411,6 @@ export type GatewaySessionRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
-  thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: boolean;
@@ -441,20 +422,15 @@ export type GatewaySessionRow = {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   status?: SessionRunStatus;
-  archived?: boolean;
-  hasActiveRun?: boolean;
-  subagentRunState?: SubagentRunState;
-  hasActiveSubagentRun?: boolean;
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
   childSessions?: string[];
   model?: string;
   modelProvider?: string;
-  agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   compactionCheckpointCount?: number;
-  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
+  latestCompactionCheckpoint?: SessionCompactionCheckpoint;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
@@ -506,7 +482,6 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   resolved?: {
     modelProvider?: string;
     model?: string;
-    agentRuntime?: GatewayAgentRuntime;
   };
 };
 

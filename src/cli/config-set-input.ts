@@ -7,7 +7,6 @@ import {
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
-  /** @deprecated Use strictJson. */
   json?: boolean;
   dryRun?: boolean;
   allowExec?: boolean;

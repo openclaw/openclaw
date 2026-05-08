@@ -1,3 +1,4 @@
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -146,7 +147,8 @@ export const formatHealthChannelLines = (
     if (!channelSummary) {
       continue;
     }
-    const label = summary.channelLabels?.[channelId] ?? channelId;
+    const plugin = getChannelPlugin(channelId as never);
+    const label = summary.channelLabels?.[channelId] ?? plugin?.meta.label ?? channelId;
     const accountSummaries = channelSummary.accounts ?? {};
     const accountIds = opts.accountIdsByChannel?.[channelId];
     const filteredSummaries =

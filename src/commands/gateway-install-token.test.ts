@@ -4,7 +4,7 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotForWriteMock = vi.hoisted(() => vi.fn());
-const replaceConfigFileMock = vi.hoisted(() => vi.fn());
+const writeConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveSecretInputRefMock = vi.hoisted(() =>
   vi.fn((): { ref: unknown } => ({ ref: undefined })),
 );
@@ -30,8 +30,9 @@ const secretRefKeyMock = vi.hoisted(() => vi.fn(() => "env:default:OPENCLAW_GATE
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 
 vi.mock("./gateway-install-token.persist.runtime.js", () => ({
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
   readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
-  replaceConfigFile: replaceConfigFileMock,
+  writeConfigFile: writeConfigFileMock,
 }));
 
 vi.mock("../config/types.secrets.js", () => ({
@@ -157,7 +158,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.unavailableReason).toContain("gateway.auth.mode is unset");
     expect(result.unavailableReason).toContain("openclaw config set gateway.auth.mode token");
     expect(result.unavailableReason).toContain("openclaw config set gateway.auth.mode password");
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(resolveSecretRefValuesMock).not.toHaveBeenCalled();
   });
 
@@ -175,7 +176,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(
       result.warnings.some((message) => message.includes("without saving to config")),
     ).toBeTruthy();
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("persists auto-generated token when requested", async () => {
@@ -189,21 +190,18 @@ describe("resolveGatewayInstallToken", () => {
     });
 
     expect(result.warnings.some((message) => message.includes("saving to config"))).toBeTruthy();
-    expect(replaceConfigFileMock).toHaveBeenCalledWith(
+    expect(writeConfigFileMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          gateway: {
-            auth: {
-              mode: "token",
-              token: "generated-token",
-            },
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "generated-token",
           },
-        }),
-        writeOptions: expect.objectContaining({
-          baseSnapshot: expect.any(Object),
-          skipRuntimeSnapshotRefresh: true,
-        }),
-        afterWrite: { mode: "auto" },
+        },
+      }),
+      expect.objectContaining({
+        baseSnapshot: expect.any(Object),
+        skipRuntimeSnapshotRefresh: true,
       }),
     );
   });
@@ -238,7 +236,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(
       result.warnings.some((message) => message.includes("skipping plaintext token persistence")),
     ).toBeTruthy();
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("does not auto-generate when inferred mode has password SecretRef configured", async () => {
@@ -265,7 +263,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.token).toBeUndefined();
     expect(result.unavailableReason).toBeUndefined();
     expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("passes the install env through to gateway auth resolution", async () => {
@@ -297,7 +295,7 @@ describe("resolveGatewayInstallToken", () => {
     expect(result.token).toBeUndefined();
     expect(result.unavailableReason).toBeUndefined();
     expect(result.warnings.some((message) => message.includes("Auto-generated"))).toBe(false);
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("skips token SecretRef resolution when token auth is not required", async () => {

@@ -3,16 +3,16 @@ import path from "node:path";
 import {
   resolveAgentContextLimits,
   resolveAgentWorkspaceDir,
-  resolveMemorySearchConfig,
-  type OpenClawConfig,
-} from "./config-utils.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+} from "../../../../src/agents/agent-scope.js";
+import { resolveMemorySearchConfig } from "../../../../src/agents/memory-search.js";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
 import {
   buildMemoryReadResult,
   DEFAULT_MEMORY_READ_LINES,
   type MemoryReadResult,
-} from "./read-file-shared.js";
+} from "../../../../src/memory-host-sdk/host/read-file-shared.js";
+import { isFileMissingError, statRegularFile } from "./fs-utils.js";
+import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 
 export async function readMemoryFile(params: {
   workspaceDir: string;

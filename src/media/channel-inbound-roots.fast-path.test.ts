@@ -68,9 +68,6 @@ describe("channel inbound roots fast path", () => {
         ctx: createContext("localchat"),
       }),
     ).toEqual(["/remote/work"]);
-    expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledOnce();
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
         dirName: "localchat",
@@ -110,36 +107,5 @@ describe("channel inbound roots fast path", () => {
       dirName: "mobilechat",
       artifactBasename: "index.js",
     });
-  });
-
-  it("preserves partial media contract modules when a missing resolver is checked first", () => {
-    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
-      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-        if (dirName === "partialchat" && artifactBasename === "media-contract-api.js") {
-          return {
-            resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
-              `/partial/${accountId}`,
-            ],
-          };
-        }
-        throw unableToResolve(dirName, artifactBasename);
-      },
-    );
-
-    expect(
-      resolveChannelRemoteInboundAttachmentRoots({
-        cfg,
-        ctx: createContext("partialchat"),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveChannelInboundAttachmentRoots({
-        cfg,
-        ctx: createContext("partialchat"),
-      }),
-    ).toEqual(["/partial/work"]);
-    expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledOnce();
   });
 });

@@ -27,7 +27,6 @@ import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
-let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
@@ -129,12 +128,10 @@ describe("dispatchReplyFromConfig ACP abort", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
-    ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   });
 
   beforeEach(() => {
     setDiscordTestRegistry();
-    resetInboundDedupe();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
     hookMocks.runner.hasHooks.mockReset();
@@ -178,7 +175,6 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     diagnosticMocks.logMessageQueued.mockReset();
     diagnosticMocks.logMessageProcessed.mockReset();
     diagnosticMocks.logSessionStateChange.mockReset();
-    diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     agentEventMocks.emitAgentEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset().mockImplementation(() => () => {});
     setNoAbort();
@@ -247,9 +243,6 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         acp: {
           enabled: true,
           dispatch: { enabled: true },
-        },
-        session: {
-          sendPolicy: { default: "allow" },
         },
       } as OpenClawConfig,
       dispatcher,

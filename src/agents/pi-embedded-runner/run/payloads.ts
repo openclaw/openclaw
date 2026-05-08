@@ -1,11 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import {
-  createHeartbeatToolResponsePayload,
-  type HeartbeatToolResponse,
-} from "../../../auto-reply/heartbeat-tool-response.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -48,52 +44,9 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
   "requires",
 ] as const;
 
-const MUTATING_FAILURE_ACTION_PATTERN =
-  "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|tool|action|operation)";
-
-const MUTATING_FAILURE_INABILITY_PATTERN = new RegExp(
-  `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
-const MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN = new RegExp(
-  `\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b.{0,100}\\b(?:failed|failure|errored)\\b`,
-  "u",
-);
-const MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN = new RegExp(
-  `\\b(?:failed|failure)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
-const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
-  `\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
-const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
-const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
-
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
-}
-
-function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
-  const normalizedText = normalizeTextForComparison(text);
-  if (!normalizedText) {
-    return false;
-  }
-  if (DID_NOT_FAIL_PATTERN.test(normalizedText)) {
-    return false;
-  }
-  if (MUTATING_FAILURE_INABILITY_PATTERN.test(normalizedText)) {
-    return true;
-  }
-  if (NEGATED_FAILURE_PATTERN.test(normalizedText)) {
-    return false;
-  }
-  return (
-    MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN.test(normalizedText) ||
-    MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN.test(normalizedText) ||
-    MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN.test(normalizedText)
-  );
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
@@ -131,8 +84,6 @@ function shouldIncludeToolErrorDetails(params: {
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
-  hasUserFacingErrorReply: boolean;
-  hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean;
   isCronTrigger?: boolean;
@@ -156,10 +107,7 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
-    return {
-      showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
-      includeDetails,
-    };
+    return { showWarning: true, includeDetails };
   }
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
@@ -182,13 +130,11 @@ export function buildEmbeddedRunPayloads(params: {
   model?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
-  thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
-  heartbeatToolResponse?: HeartbeatToolResponse;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -199,12 +145,7 @@ export function buildEmbeddedRunPayloads(params: {
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
-  channelData?: Record<string, unknown>;
 }> {
-  if (params.heartbeatToolResponse) {
-    return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
-  }
-
   const replyItems: Array<{
     text: string;
     media?: string[];
@@ -282,7 +223,7 @@ export function buildEmbeddedRunPayloads(params: {
 
   const reasoningText = suppressAssistantArtifacts
     ? ""
-    : params.lastAssistant && params.reasoningLevel === "on" && params.thinkingLevel !== "off"
+    : params.lastAssistant && params.reasoningLevel === "on"
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
@@ -352,30 +293,26 @@ export function buildEmbeddedRunPayloads(params: {
     const parsed = parseReplyDirectives(text);
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
   });
-  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
-  const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
+  const normalizedAssistantTexts = normalizeTextForComparison(params.assistantTexts.join("\n\n"));
   const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
   const shouldPreferRawAnswerText =
     rawAnswerHasMedia &&
-    (!nonEmptyAssistantTexts.length ||
+    (!params.assistantTexts.length ||
       (!assistantTextsHaveMedia &&
         normalizedAssistantTexts.length > 0 &&
         normalizedAssistantTexts === normalizedRawAnswerText));
-  const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts = suppressAssistantArtifacts
     ? []
     : (shouldPreferRawAnswerText && fallbackRawAnswerText
         ? [fallbackRawAnswerText]
-        : hasAssistantTextPayload
-          ? nonEmptyAssistantTexts
+        : params.assistantTexts.length
+          ? params.assistantTexts
           : fallbackAnswerText
             ? [fallbackAnswerText]
             : []
       ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
-  const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
-  let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -397,17 +334,12 @@ export function buildEmbeddedRunPayloads(params: {
       replyToCurrent,
     });
     hasUserFacingAssistantReply = true;
-    if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
-      hasUserFacingFailureAcknowledgement = true;
-    }
   }
 
   if (params.lastToolError) {
     const warningPolicy = resolveToolErrorWarningPolicy({
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
-      hasUserFacingErrorReply,
-      hasUserFacingFailureAcknowledgement,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       isCronTrigger: params.isCronTrigger,
@@ -415,7 +347,7 @@ export function buildEmbeddedRunPayloads(params: {
       verboseLevel: params.verboseLevel,
     });
 
-    // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
+    // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (warningPolicy.showWarning) {
       const toolSummary = formatToolAggregate(
@@ -449,27 +381,16 @@ export function buildEmbeddedRunPayloads(params: {
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
-    .map((item) => {
-      const payload = {
-        text: normalizeOptionalString(item.text),
-        mediaUrls: item.media?.length ? item.media : undefined,
-        mediaUrl: item.media?.[0],
-        isError: item.isError,
-        replyToId: item.replyToId,
-        replyToTag: item.replyToTag,
-        replyToCurrent: item.replyToCurrent,
-        audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
-      };
-      if (payload.text && isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN)) {
-        const silentText = payload.text;
-        payload.text = undefined;
-        if (hasOutboundReplyContent(payload)) {
-          return payload;
-        }
-        payload.text = silentText;
-      }
-      return payload;
-    })
+    .map((item) => ({
+      text: normalizeOptionalString(item.text),
+      mediaUrls: item.media?.length ? item.media : undefined,
+      mediaUrl: item.media?.[0],
+      isError: item.isError,
+      replyToId: item.replyToId,
+      replyToTag: item.replyToTag,
+      replyToCurrent: item.replyToCurrent,
+      audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+    }))
     .filter((p) => {
       if (!hasOutboundReplyContent(p)) {
         return false;

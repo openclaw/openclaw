@@ -7,7 +7,7 @@ export const formatDirectiveAck = (text: string): string => {
   return prefixSystemMessage(text);
 };
 
-const formatOptionsLine = (options: string) => `Options: ${options}.`;
+export const formatOptionsLine = (options: string) => `Options: ${options}.`;
 export const withOptions = (line: string, options: string) =>
   `${line}\n${formatOptionsLine(options)}`;
 
@@ -41,7 +41,7 @@ function canPersistInternalDirective(params: {
 export const canPersistInternalExecDirective = canPersistInternalDirective;
 export const canPersistInternalVerboseDirective = canPersistInternalDirective;
 
-const formatElevatedEvent = (level: ElevatedLevel) => {
+export const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {
     return "Elevated FULL - exec runs on host with auto-approval.";
   }
@@ -51,7 +51,7 @@ const formatElevatedEvent = (level: ElevatedLevel) => {
   return "Elevated OFF - exec stays in sandbox.";
 };
 
-const formatReasoningEvent = (level: ReasoningLevel) => {
+export const formatReasoningEvent = (level: ReasoningLevel) => {
   if (level === "stream") {
     return "Reasoning STREAM - emit live <think>.";
   }

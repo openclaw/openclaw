@@ -13,7 +13,6 @@ afterEach(async () => {
 });
 
 async function createRealtimeServer(params?: {
-  closeOnConnection?: boolean;
   initialEvent?: unknown;
   onBinary?: (payload: Buffer) => void;
   onText?: (payload: unknown) => void;
@@ -26,10 +25,6 @@ async function createRealtimeServer(params?: {
     wss.handleUpgrade(request, socket, head, (ws) => {
       clients.add(ws);
       ws.on("close", () => clients.delete(ws));
-      if (params?.closeOnConnection) {
-        ws.close(1011, "setup failed");
-        return;
-      }
       if (params?.initialEvent) {
         ws.send(JSON.stringify(params.initialEvent));
       }
@@ -157,28 +152,5 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await expect(session.connect()).rejects.toThrow("nope");
     expect(session.isConnected()).toBe(false);
     expect(onError).toHaveBeenCalledWith(expect.any(Error));
-  });
-
-  it("reports pre-ready closes separately from connection timeouts", async () => {
-    const server = await createRealtimeServer({ closeOnConnection: true });
-    const onError = vi.fn();
-    const session = createRealtimeTranscriptionWebSocketSession({
-      providerId: "test",
-      callbacks: { onError },
-      url: server.url,
-      connectTimeoutMessage: "test realtime transcription connection timeout",
-      connectClosedBeforeReadyMessage: "test realtime transcription connection closed before ready",
-      sendAudio: (audio, transport) => {
-        transport.sendBinary(audio);
-      },
-    });
-
-    await expect(session.connect()).rejects.toThrow(
-      "test realtime transcription connection closed before ready",
-    );
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
-    expect(onError.mock.calls[0]?.[0]).toMatchObject({
-      message: "test realtime transcription connection closed before ready",
-    });
   });
 });

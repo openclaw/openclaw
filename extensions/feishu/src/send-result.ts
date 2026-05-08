@@ -1,4 +1,4 @@
-type FeishuMessageApiResponse = {
+export type FeishuMessageApiResponse = {
   code?: number;
   msg?: string;
   data?: {

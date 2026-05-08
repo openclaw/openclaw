@@ -1,7 +1,7 @@
 import process from "node:process";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
-type RuntimeKind = "node" | "unknown";
+export type RuntimeKind = "node" | "unknown";
 
 type Semver = {
   major: number;

@@ -61,7 +61,7 @@ struct GatewayEndpointStoreTests {
         #expect(token == nil)
     }
 
-    @Test func `resolve gateway token uses remote config token`() {
+    @Test func resolveGatewayTokenUsesRemoteConfigToken() {
         let token = GatewayEndpointStore._testResolveGatewayToken(
             isRemote: true,
             root: [
@@ -76,7 +76,7 @@ struct GatewayEndpointStoreTests {
         #expect(token == "remote-token")
     }
 
-    @Test func `resolve gateway password falls back to launchd`() {
+    @Test func resolveGatewayPasswordFallsBackToLaunchd() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
             token: nil,
@@ -214,7 +214,7 @@ struct GatewayEndpointStoreTests {
             launchdSnapshot: snapshot,
             tailscaleIP: "100.64.1.8")
 
-        #expect(config.url.absoluteString == "wss://100.64.1.8:\(GatewayEnvironment.gatewayPort())")
+        #expect(config.url.absoluteString == "wss://100.64.1.8:18789")
         #expect(config.token == "launchd-token")
         #expect(config.password == "launchd-pass")
     }

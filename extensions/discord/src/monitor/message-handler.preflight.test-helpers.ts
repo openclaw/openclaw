@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { ChannelType } from "../internal/discord.js";
+import { ChannelType } from "@buape/carbon";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
-export type DiscordClient = import("../internal/discord.js").Client;
+export type DiscordClient = import("@buape/carbon").Client;
 
 export const DEFAULT_PREFLIGHT_CFG = {
   session: {
@@ -32,8 +32,8 @@ export function createGuildTextClient(channelId: string): DiscordClient {
 export function createGuildEvent(params: {
   channelId: string;
   guildId: string;
-  author: import("../internal/discord.js").Message["author"];
-  message: import("../internal/discord.js").Message;
+  author: import("@buape/carbon").Message["author"];
+  message: import("@buape/carbon").Message;
   includeGuildObject?: boolean;
 }): DiscordMessageEvent {
   return {
@@ -64,20 +64,18 @@ export function createDiscordMessage(params: {
   mentionedUsers?: Array<{ id: string }>;
   mentionedEveryone?: boolean;
   attachments?: Array<Record<string, unknown>>;
-  webhookId?: string;
-}): import("../internal/discord.js").Message {
+}): import("@buape/carbon").Message {
   return {
     id: params.id,
     content: params.content,
     timestamp: new Date().toISOString(),
     channelId: params.channelId,
-    webhookId: params.webhookId,
     attachments: params.attachments ?? [],
     mentionedUsers: params.mentionedUsers ?? [],
     mentionedRoles: [],
     mentionedEveryone: params.mentionedEveryone ?? false,
     author: params.author,
-  } as unknown as import("../internal/discord.js").Message;
+  } as unknown as import("@buape/carbon").Message;
 }
 
 export function createDiscordPreflightArgs(params: {
@@ -101,7 +99,6 @@ export function createDiscordPreflightArgs(params: {
     replyToMode: "all",
     dmEnabled: true,
     groupDmEnabled: true,
-    dmPolicy: params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing",
     ackReactionScope: "direct",
     groupPolicy: "open",
     threadBindings: createNoopThreadBindingManager("default"),

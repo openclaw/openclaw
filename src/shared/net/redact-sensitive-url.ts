@@ -70,7 +70,7 @@ export function redactSensitiveUrlLikeString(value: string): string {
     return redactedUrl;
   }
   return value
-    .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
+    .replace(/\/\/([^@/?#]+)@/, "//***:***@")
     .replace(/([?&])([^=&]+)=([^&]*)/g, (match, prefix: string, key: string) =>
       isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
     );

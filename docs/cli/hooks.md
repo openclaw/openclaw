@@ -15,9 +15,9 @@ Running `openclaw hooks` with no subcommand is equivalent to `openclaw hooks lis
 Related:
 
 - Hooks: [Hooks](/automation/hooks)
-- Plugin hooks: [Plugin hooks](/plugins/hooks)
+- Plugin hooks: [Plugin hooks](/plugins/architecture-internals#provider-runtime-hooks)
 
-## List all hooks
+## List All Hooks
 
 ```bash
 openclaw hooks list
@@ -60,7 +60,7 @@ openclaw hooks list --json
 
 Returns structured JSON for programmatic use.
 
-## Get hook information
+## Get Hook Information
 
 ```bash
 openclaw hooks info <name>
@@ -100,7 +100,7 @@ Requirements:
   Config: ✓ workspace.dir
 ```
 
-## Check hooks eligibility
+## Check Hooks Eligibility
 
 ```bash
 openclaw hooks check
@@ -194,11 +194,10 @@ openclaw hooks disable command-logger
 - `openclaw hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
 - Plugin-managed hooks cannot be enabled or disabled here; enable or disable the owning plugin instead.
 
-## Install hook packs
+## Install Hook Packs
 
 ```bash
-openclaw plugins install <package>        # npm by default
-openclaw plugins install npm:<package>    # npm only
+openclaw plugins install <package>        # ClawHub first, then npm
 openclaw plugins install <package> --pin  # pin version
 openclaw plugins install <path>           # local path
 ```
@@ -210,8 +209,7 @@ deprecation warning and forwards to `openclaw plugins install`.
 
 Npm specs are **registry-only** (package name + optional **exact version** or
 **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
-installs run project-local with `--ignore-scripts` for safety, even when your
-shell has global npm install settings.
+installs run with `--ignore-scripts` for safety.
 
 Bare specs and `@latest` stay on the stable track. If npm resolves either of
 those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
@@ -249,7 +247,7 @@ openclaw plugins install -l ./my-hook-pack
 Linked hook packs are treated as managed hooks from an operator-configured
 directory, not as workspace hooks.
 
-## Update hook packs
+## Update Hook Packs
 
 ```bash
 openclaw plugins update <id>
@@ -270,7 +268,7 @@ When a stored integrity hash exists and the fetched artifact hash changes,
 OpenClaw prints a warning and asks for confirmation before proceeding. Use
 global `--yes` to bypass prompts in CI/non-interactive runs.
 
-## Bundled hooks
+## Bundled Hooks
 
 ### session-memory
 

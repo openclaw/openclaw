@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
+  type OpenClawConfig,
+} from "../../config/config.js";
+import {
+  buildEmbeddedRunBaseParams,
+  resolveProviderScopedAuthProfile,
+} from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 
 function makeRun(config: OpenClawConfig): FollowupRun["run"] {
@@ -70,7 +73,10 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
       provider: "openai",
       model: "gpt-4.1-mini",
       runId: "run-1",
-      authProfile: {},
+      authProfile: resolveProviderScopedAuthProfile({
+        provider: "openai",
+        primaryProvider: "openai",
+      }),
     });
 
     expect(resolved.config).toBe(resolvedRunConfig);

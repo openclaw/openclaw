@@ -1,5 +1,10 @@
-import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  clearActiveMcpLoopbackRuntimeByOwnerToken,
+  createMcpLoopbackServerConfig,
+  getActiveMcpLoopbackRuntime,
+  setActiveMcpLoopbackRuntime,
+} from "./mcp-http.loopback-runtime.js";
 import {
   buildMcpToolSchema,
   type McpLoopbackTool,
@@ -11,7 +16,6 @@ const TOOL_CACHE_TTL_MS = 30_000;
 const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
 
 type CachedScopedTools = {
-  agentId: string | undefined;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
   configRef: OpenClawConfig;
@@ -32,7 +36,7 @@ export class McpLoopbackToolCache {
       params.sessionKey,
       params.messageProvider ?? "",
       params.accountId ?? "",
-      params.senderIsOwner === true ? "owner" : "non-owner",
+      params.senderIsOwner === true ? "owner" : params.senderIsOwner === false ? "non-owner" : "",
     ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
@@ -49,11 +53,9 @@ export class McpLoopbackToolCache {
       surface: "loopback",
       excludeToolNames: NATIVE_TOOL_EXCLUDE,
     });
-    const tools = applyOwnerOnlyToolPolicy(next.tools, params.senderIsOwner === true);
     const nextEntry: CachedScopedTools = {
-      agentId: next.agentId,
-      tools,
-      toolSchema: buildMcpToolSchema(tools),
+      tools: next.tools,
+      toolSchema: buildMcpToolSchema(next.tools),
       configRef: params.cfg,
       time: now,
     };
@@ -66,3 +68,10 @@ export class McpLoopbackToolCache {
     return nextEntry;
   }
 }
+
+export {
+  clearActiveMcpLoopbackRuntimeByOwnerToken,
+  createMcpLoopbackServerConfig,
+  getActiveMcpLoopbackRuntime,
+  setActiveMcpLoopbackRuntime,
+};

@@ -8,22 +8,16 @@ function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatC
   if (!skillCommands || skillCommands.length === 0) {
     return [];
   }
-  return skillCommands.map((spec) => {
-    const command: ChatCommandDefinition = {
-      key: `skill:${spec.skillName}`,
-      nativeName: spec.name,
-      description: spec.description,
-      textAliases: [`/${spec.name}`],
-      acceptsArgs: true,
-      argsParsing: "none",
-      scope: "both",
-      category: "tools",
-    };
-    if (spec.descriptionLocalizations) {
-      command.descriptionLocalizations = spec.descriptionLocalizations;
-    }
-    return command;
-  });
+  return skillCommands.map((spec) => ({
+    key: `skill:${spec.skillName}`,
+    nativeName: spec.name,
+    description: spec.description,
+    textAliases: [`/${spec.name}`],
+    acceptsArgs: true,
+    argsParsing: "none",
+    scope: "both",
+    category: "tools",
+  }));
 }
 
 export function listChatCommands(params?: {

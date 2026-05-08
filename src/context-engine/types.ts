@@ -8,20 +8,6 @@ export type AssembleResult = {
   messages: AgentMessage[];
   /** Estimated total tokens in assembled context */
   estimatedTokens: number;
-  /**
-   * Controls which token estimate the runner treats as authoritative for
-   * preemptive overflow prechecks. The returned `messages` are always the
-   * prompt sent to the model; this only affects the precheck's token comparison.
-   *
-   * - "assembled": the precheck uses only the assembled prompt's estimate.
-   * - "preassembly_may_overflow": the precheck takes the maximum of the
-   *   assembled estimate and the pre-assembly (unwindowed) session-history
-   *   estimate. Engines opt into this when their assembled view can hide an
-   *   overflow that would still affect the underlying transcript.
-   *
-   * Defaults to "assembled".
-   */
-  promptAuthority?: "assembled" | "preassembly_may_overflow";
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */
   systemPromptAddition?: string;
 };
@@ -36,10 +22,6 @@ export type CompactResult = {
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;
-    /** Session id after compaction, when the runtime rotated transcripts. */
-    sessionId?: string;
-    /** Session file after compaction, when the runtime rotated transcripts. */
-    sessionFile?: string;
   };
 };
 
@@ -109,9 +91,9 @@ export type TranscriptRewriteResult = {
 
 export type ContextEngineMaintenanceResult = TranscriptRewriteResult;
 
-type ContextEnginePromptCacheRetention = "none" | "short" | "long" | "in_memory" | "24h";
+export type ContextEnginePromptCacheRetention = "none" | "short" | "long" | "in_memory" | "24h";
 
-type ContextEnginePromptCacheUsage = {
+export type ContextEnginePromptCacheUsage = {
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -119,7 +101,7 @@ type ContextEnginePromptCacheUsage = {
   total?: number;
 };
 
-type ContextEnginePromptCacheObservationChangeCode =
+export type ContextEnginePromptCacheObservationChangeCode =
   | "cacheRetention"
   | "model"
   | "streamStrategy"
@@ -127,12 +109,12 @@ type ContextEnginePromptCacheObservationChangeCode =
   | "tools"
   | "transport";
 
-type ContextEnginePromptCacheObservationChange = {
+export type ContextEnginePromptCacheObservationChange = {
   code: ContextEnginePromptCacheObservationChangeCode;
   detail: string;
 };
 
-type ContextEnginePromptCacheObservation = {
+export type ContextEnginePromptCacheObservation = {
   broke: boolean;
   previousCacheRead?: number;
   cacheRead?: number;

@@ -9,10 +9,12 @@ vi.mock("./plugin-registry.js", () => ({
 describe("plugin-registry-loader", () => {
   let originalForceStderr: boolean;
   let ensureCliPluginRegistryLoaded: typeof import("./plugin-registry-loader.js").ensureCliPluginRegistryLoaded;
+  let resolvePluginRegistryScopeForCommandPath: typeof import("./plugin-registry-loader.js").resolvePluginRegistryScopeForCommandPath;
   let loggingState: typeof import("../logging/state.js").loggingState;
 
   beforeAll(async () => {
-    ({ ensureCliPluginRegistryLoaded } = await import("./plugin-registry-loader.js"));
+    ({ ensureCliPluginRegistryLoaded, resolvePluginRegistryScopeForCommandPath } =
+      await import("./plugin-registry-loader.js"));
     ({ loggingState } = await import("../logging/state.js"));
   });
 
@@ -75,13 +77,9 @@ describe("plugin-registry-loader", () => {
     });
   });
 
-  it("forwards configured-channel load scope without startup dependency repair", async () => {
-    await ensureCliPluginRegistryLoaded({
-      scope: "configured-channels",
-    });
-
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "configured-channels",
-    });
+  it("maps command paths to plugin registry scopes", () => {
+    expect(resolvePluginRegistryScopeForCommandPath(["status"])).toBe("channels");
+    expect(resolvePluginRegistryScopeForCommandPath(["health"])).toBe("channels");
+    expect(resolvePluginRegistryScopeForCommandPath(["agents"])).toBe("all");
   });
 });

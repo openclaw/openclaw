@@ -6,15 +6,15 @@ import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
-type PendingPromptHarness = {
+export type PendingPromptHarness = {
   agent: AcpGatewayAgent;
   promptPromise: ReturnType<AcpGatewayAgent["prompt"]>;
   runId: string;
 };
 
-const DEFAULT_SESSION_ID = "session-1";
+export const DEFAULT_SESSION_ID = "session-1";
 export const DEFAULT_SESSION_KEY = "agent:main:main";
-const DEFAULT_PROMPT_TEXT = "hello";
+export const DEFAULT_PROMPT_TEXT = "hello";
 
 export function createSessionAgentHarness(
   request: GatewayClient["request"],

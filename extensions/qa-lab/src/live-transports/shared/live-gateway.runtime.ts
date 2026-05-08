@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   startQaGatewayChild,
   type QaCliBackendAuthMode,
@@ -32,52 +32,6 @@ async function stopQaLiveLaneResources(
   if (errors.length > 0) {
     throw new Error(`failed to stop QA live lane resources:\n${errors.join("\n")}`);
   }
-}
-
-function omitMemoryCoreEntry<T extends Record<string, unknown> | undefined>(entries: T): T {
-  if (!entries || !Object.prototype.hasOwnProperty.call(entries, "memory-core")) {
-    return entries;
-  }
-  const { "memory-core": _memoryCore, ...rest } = entries;
-  return rest as T;
-}
-
-function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const defaults = cfg.agents?.defaults ?? {};
-  return {
-    ...cfg,
-    plugins: cfg.plugins
-      ? {
-          ...cfg.plugins,
-          allow: cfg.plugins.allow?.filter((pluginId) => pluginId !== "memory-core"),
-          entries: omitMemoryCoreEntry(cfg.plugins.entries),
-          slots: {
-            ...cfg.plugins.slots,
-            memory: "none",
-          },
-        }
-      : {
-          slots: {
-            memory: "none",
-          },
-        },
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        memorySearch: {
-          ...defaults.memorySearch,
-          enabled: false,
-          sync: {
-            ...defaults.memorySearch?.sync,
-            onSearch: false,
-            onSessionStart: false,
-            watch: false,
-          },
-        },
-      },
-    },
-  };
 }
 
 export async function startQaLiveLaneGateway(params: {
@@ -116,8 +70,7 @@ export async function startQaLiveLaneGateway(params: {
       thinkingDefault: params.thinkingDefault,
       claudeCliAuthMode: params.claudeCliAuthMode,
       controlUiEnabled: params.controlUiEnabled,
-      mutateConfig: (cfg) =>
-        prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
+      mutateConfig: params.mutateConfig,
     });
     return {
       gateway,

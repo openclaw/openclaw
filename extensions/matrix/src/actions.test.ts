@@ -8,7 +8,7 @@ const profileAction = "set-profile" as const;
 
 const runtimeStub = {
   config: {
-    current: () => ({}),
+    loadConfig: () => ({}),
   },
   media: {
     loadWebMedia: async () => {

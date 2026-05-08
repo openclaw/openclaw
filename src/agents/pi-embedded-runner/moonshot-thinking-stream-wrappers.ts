@@ -1,16 +1,16 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type MoonshotThinkingType = "enabled" | "disabled";
 type MoonshotThinkingKeep = "all";
 const MOONSHOT_THINKING_KEEP_MODEL_ID = "kimi-k2.6";
-const piAiRuntimeLoader = createLazyImportLoader(() => import("@mariozechner/pi-ai"));
+let piAiRuntimePromise: Promise<typeof import("@mariozechner/pi-ai")> | undefined;
 
 async function loadDefaultStreamFn(): Promise<StreamFn> {
-  const runtime = await piAiRuntimeLoader.load();
+  piAiRuntimePromise ??= import("@mariozechner/pi-ai");
+  const runtime = await piAiRuntimePromise;
   return runtime.streamSimple;
 }
 

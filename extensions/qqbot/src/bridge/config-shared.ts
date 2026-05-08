@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   applyAccountNameToChannelSection,
   deleteAccountFromConfigSection,
@@ -31,14 +31,14 @@ export const qqbotMeta = {
   order: 50,
 } as const;
 
-function validateQQBotSetupInput(params: {
+export function validateQQBotSetupInput(params: {
   accountId: string;
   input: ChannelSetupInput;
 }): string | null {
   return engineValidateSetupInput(params.accountId, params.input);
 }
 
-function applyQQBotSetupAccountConfig(params: {
+export function applyQQBotSetupAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
   input: ChannelSetupInput;
@@ -50,15 +50,15 @@ function applyQQBotSetupAccountConfig(params: {
   ) as OpenClawConfig;
 }
 
-function isQQBotConfigured(account: ResolvedQQBotAccount | undefined): boolean {
+export function isQQBotConfigured(account: ResolvedQQBotAccount | undefined): boolean {
   return engineIsAccountConfigured(account as never);
 }
 
-function describeQQBotAccount(account: ResolvedQQBotAccount | undefined) {
+export function describeQQBotAccount(account: ResolvedQQBotAccount | undefined) {
   return engineDescribeAccount(account as never);
 }
 
-function formatQQBotAllowFrom(params: {
+export function formatQQBotAllowFrom(params: {
   allowFrom: Array<string | number> | undefined | null;
 }): string[] {
   return engineFormatAllowFrom(params.allowFrom);

@@ -4,7 +4,7 @@ const loadConfigMock = vi.hoisted(() => vi.fn());
 const resolveExecApprovalInitiatingSurfaceStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => loadConfigMock(),
+  loadConfig: () => loadConfigMock(),
 }));
 
 vi.mock("./exec-approval-surface.js", () => ({

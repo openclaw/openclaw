@@ -95,7 +95,7 @@ function createManager(
   const runtime = runtimeForLogger(log);
   const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
   return createChannelManager({
-    getRuntimeConfig: () => ({}),
+    loadConfig: () => ({}),
     channelLogs,
     channelRuntimeEnvs,
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
@@ -188,25 +188,9 @@ describe("server-channels approval bootstrap", () => {
     ).toBeUndefined();
   });
 
-  it("continues account startup when approval bootstrap startup fails", async () => {
+  it("keeps the account stopped when approval bootstrap startup fails", async () => {
     const channelRuntime = createRuntimeChannel();
-    const stopped = createDeferred();
-    const startAccount = vi.fn(
-      async ({
-        abortSignal,
-      }: Parameters<NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>>[0]) => {
-        await new Promise<void>((resolve) => {
-          abortSignal.addEventListener(
-            "abort",
-            () => {
-              stopped.resolve();
-              resolve();
-            },
-            { once: true },
-          );
-        });
-      },
-    );
+    const startAccount = vi.fn(async () => {});
     hoisted.startChannelApprovalHandlerBootstrap.mockRejectedValue(new Error("boom"));
 
     installTestRegistry(createTestPlugin({ startAccount }));
@@ -214,19 +198,16 @@ describe("server-channels approval bootstrap", () => {
 
     await manager.startChannels();
 
-    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(startAccount).not.toHaveBeenCalled();
     const accountSnapshot =
       manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(accountSnapshot).toEqual(
       expect.objectContaining({
         accountId: DEFAULT_ACCOUNT_ID,
-        running: true,
+        running: false,
         restartPending: false,
-        lastError: null,
+        lastError: "boom",
       }),
     );
-
-    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-    await stopped.promise;
   });
 });

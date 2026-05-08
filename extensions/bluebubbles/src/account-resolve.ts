@@ -6,7 +6,7 @@ import {
 import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 
-type BlueBubblesAccountResolveOpts = {
+export type BlueBubblesAccountResolveOpts = {
   serverUrl?: string;
   password?: string;
   accountId?: string;

@@ -31,7 +31,7 @@ export type AcpApprovalClass =
   | "other"
   | "unknown";
 
-type AcpApprovalClassification = {
+export type AcpApprovalClassification = {
   toolName?: string;
   approvalClass: AcpApprovalClass;
   autoApprove: boolean;
@@ -69,7 +69,7 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
   return head ? normalizeToolName(head) : undefined;
 }
 
-function resolveToolNameForPermission(params: {
+export function resolveToolNameForPermission(params: {
   toolCall?: {
     title?: string | null;
     _meta?: unknown;

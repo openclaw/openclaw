@@ -1,8 +1,5 @@
 {
   "id": "webhooks",
-  "activation": {
-    "onStartup": true
-  },
   "name": "Webhooks",
   "description": "Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.",
   "configSchema": {

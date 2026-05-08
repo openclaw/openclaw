@@ -6,17 +6,7 @@ vi.mock("./auth.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({
-    gateway: {
-      controlUi: {
-        allowedOrigins: ["https://control.example.com"],
-      },
-    },
-  })),
-}));
-
-vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({
+  loadConfig: vi.fn(() => ({
     gateway: {
       controlUi: {
         allowedOrigins: ["https://control.example.com"],

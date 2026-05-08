@@ -5,22 +5,11 @@ import type {
   AnyAgentTool,
   AgentHarness,
   MediaUnderstandingProviderPlugin,
-  MigrationApplyResult,
-  MigrationDetection,
-  MigrationItem,
-  MigrationPlan,
-  MigrationProviderContext,
-  MigrationProviderPlugin,
-  MigrationSummary,
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
-  OpenClawPluginHttpRouteHandler,
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
-  OpenClawPluginNodeInvokePolicyContext,
-  OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginSecurityAuditContext,
@@ -84,25 +73,6 @@ import type {
   SpeechProviderPlugin,
   PluginCommandContext,
   PluginCommandResult,
-  PluginAgentEventSubscriptionRegistration,
-  PluginAgentTurnPrepareEvent,
-  PluginAgentTurnPrepareResult,
-  PluginControlUiDescriptor,
-  PluginHeartbeatPromptContributionEvent,
-  PluginHeartbeatPromptContributionResult,
-  PluginJsonValue,
-  PluginNextTurnInjection,
-  PluginNextTurnInjectionEnqueueResult,
-  PluginNextTurnInjectionRecord,
-  PluginRunContextGetParams,
-  PluginRunContextPatch,
-  PluginRuntimeLifecycleRegistration,
-  PluginSessionSchedulerJobHandle,
-  PluginSessionSchedulerJobRegistration,
-  PluginSessionExtensionRegistration,
-  PluginSessionExtensionProjection,
-  PluginToolMetadataRegistration,
-  PluginTrustedToolPolicyRegistration,
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 
@@ -110,18 +80,8 @@ export type {
   AnyAgentTool,
   AgentHarness,
   MediaUnderstandingProviderPlugin,
-  MigrationApplyResult,
-  MigrationDetection,
-  MigrationItem,
-  MigrationPlan,
-  MigrationProviderContext,
-  MigrationProviderPlugin,
-  MigrationSummary,
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
-  OpenClawPluginNodeInvokePolicyContext,
-  OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginSecurityAuditContext,
@@ -129,27 +89,7 @@ export type {
   OpenClawPluginToolFactory,
   PluginCommandContext,
   PluginCommandResult,
-  PluginAgentEventSubscriptionRegistration,
-  PluginAgentTurnPrepareEvent,
-  PluginAgentTurnPrepareResult,
-  PluginControlUiDescriptor,
-  PluginHeartbeatPromptContributionEvent,
-  PluginHeartbeatPromptContributionResult,
-  PluginJsonValue,
-  PluginNextTurnInjection,
-  PluginNextTurnInjectionEnqueueResult,
-  PluginNextTurnInjectionRecord,
-  PluginRunContextGetParams,
-  PluginRunContextPatch,
-  PluginRuntimeLifecycleRegistration,
-  PluginSessionSchedulerJobHandle,
-  PluginSessionSchedulerJobRegistration,
-  PluginSessionExtensionRegistration,
-  PluginSessionExtensionProjection,
-  PluginToolMetadataRegistration,
-  PluginTrustedToolPolicyRegistration,
   OpenClawPluginConfigSchema,
-  OpenClawPluginHttpRouteHandler,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
@@ -223,22 +163,13 @@ export type {
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { OpenClawConfig };
 
-export {
-  buildJsonPluginConfigSchema,
-  buildPluginConfigSchema,
-  emptyPluginConfigSchema,
-} from "../plugins/config-schema.js";
+export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
 
 /** Options for a plugin entry that registers providers, tools, commands, or services. */
 type DefinePluginEntryOptions = {
   id: string;
   name: string;
   description: string;
-  /**
-   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
-   * manifest `kind`. Runtime-entry `kind` remains only as a compatibility
-   * fallback for older plugins.
-   */
   kind?: OpenClawPluginDefinition["kind"];
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
   reload?: OpenClawPluginDefinition["reload"];

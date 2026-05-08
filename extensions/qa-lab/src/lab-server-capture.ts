@@ -10,7 +10,7 @@ const CAPTURE_QUERY_PRESETS = new Set([
   "error-bursts",
 ]);
 
-type QaStartupProbeStatus = {
+export type QaStartupProbeStatus = {
   label: string;
   url: string;
   ok: boolean;

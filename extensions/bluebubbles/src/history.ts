@@ -2,14 +2,14 @@ import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { createBlueBubblesClientFromParts } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
-type BlueBubblesHistoryEntry = {
+export type BlueBubblesHistoryEntry = {
   sender: string;
   body: string;
   timestamp?: number;
   messageId?: string;
 };
 
-type BlueBubblesHistoryFetchResult = {
+export type BlueBubblesHistoryFetchResult = {
   entries: BlueBubblesHistoryEntry[];
   /**
    * True when at least one API path returned a recognized response shape.
@@ -18,7 +18,7 @@ type BlueBubblesHistoryFetchResult = {
   resolved: boolean;
 };
 
-type BlueBubblesMessageData = {
+export type BlueBubblesMessageData = {
   guid?: string;
   text?: string;
   handle_id?: string;
@@ -32,7 +32,7 @@ type BlueBubblesMessageData = {
   };
 };
 
-type BlueBubblesChatOpts = {
+export type BlueBubblesChatOpts = {
   serverUrl?: string;
   password?: string;
   accountId?: string;

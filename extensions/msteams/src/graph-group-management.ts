@@ -13,14 +13,14 @@ import {
 // Add Participant
 // ---------------------------------------------------------------------------
 
-type AddParticipantMSTeamsParams = {
+export type AddParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   userId: string;
   role?: string;
 };
 
-type AddParticipantMSTeamsResult = {
+export type AddParticipantMSTeamsResult = {
   added: { userId: string; chatId: string };
 };
 
@@ -66,13 +66,13 @@ export async function addParticipantMSTeams(
 // Remove Participant
 // ---------------------------------------------------------------------------
 
-type RemoveParticipantMSTeamsParams = {
+export type RemoveParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   userId: string;
 };
 
-type RemoveParticipantMSTeamsResult = {
+export type RemoveParticipantMSTeamsResult = {
   removed: { userId: string; chatId: string };
 };
 
@@ -136,13 +136,13 @@ export async function removeParticipantMSTeams(
 // Rename Group
 // ---------------------------------------------------------------------------
 
-type RenameGroupMSTeamsParams = {
+export type RenameGroupMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   name: string;
 };
 
-type RenameGroupMSTeamsResult = {
+export type RenameGroupMSTeamsResult = {
   renamed: { chatId: string; newName: string };
 };
 

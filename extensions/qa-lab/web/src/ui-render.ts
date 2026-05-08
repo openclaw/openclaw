@@ -1,12 +1,12 @@
 /* ===== Shared types (unchanged from the bus protocol) ===== */
 
-type Conversation = {
+export type Conversation = {
   id: string;
   kind: "direct" | "channel";
   title?: string;
 };
 
-type Attachment = {
+export type Attachment = {
   id: string;
   kind: "image" | "video" | "audio" | "file";
   mimeType: string;
@@ -21,13 +21,13 @@ type Attachment = {
   transcript?: string;
 };
 
-type Thread = {
+export type Thread = {
   id: string;
   conversationId: string;
   title: string;
 };
 
-type Message = {
+export type Message = {
   id: string;
   direction: "inbound" | "outbound";
   conversation: Conversation;
@@ -43,7 +43,7 @@ type Message = {
   reactions: Array<{ emoji: string; senderId: string }>;
 };
 
-type BusEvent =
+export type BusEvent =
   | { cursor: number; kind: "thread-created"; thread: Thread }
   | { cursor: number; kind: string; message?: Message; emoji?: string };
 
@@ -62,7 +62,7 @@ export type ReportEnvelope = {
   };
 };
 
-type SeedScenario = {
+export type SeedScenario = {
   id: string;
   title: string;
   surface: string;
@@ -92,13 +92,13 @@ export type Bootstrap = {
   };
 };
 
-type ScenarioStep = {
+export type ScenarioStep = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;
 };
 
-type ScenarioOutcome = {
+export type ScenarioOutcome = {
   id: string;
   name: string;
   status: "pending" | "running" | "pass" | "fail" | "skip";
@@ -108,7 +108,7 @@ type ScenarioOutcome = {
   finishedAt?: string;
 };
 
-type ScenarioRun = {
+export type ScenarioRun = {
   kind: "suite" | "self-check";
   status: "idle" | "running" | "completed";
   startedAt?: string;
@@ -132,7 +132,7 @@ export type RunnerSelection = {
   scenarioIds: string[];
 };
 
-type RunnerSnapshot = {
+export type RunnerSnapshot = {
   status: "idle" | "running" | "completed" | "failed";
   selection: RunnerSelection;
   startedAt?: string;
@@ -146,7 +146,7 @@ type RunnerSnapshot = {
   error: string | null;
 };
 
-type RunnerModelOption = {
+export type RunnerModelOption = {
   key: string;
   name: string;
   provider: string;
@@ -158,7 +158,7 @@ export type OutcomesEnvelope = {
   run: ScenarioRun | null;
 };
 
-type CaptureSessionSummary = {
+export type CaptureSessionSummary = {
   id: string;
   startedAt: number;
   endedAt?: number;
@@ -168,7 +168,7 @@ type CaptureSessionSummary = {
   eventCount: number;
 };
 
-type CaptureEventView = {
+export type CaptureEventView = {
   id?: number;
   ts: number;
   protocol: string;
@@ -192,7 +192,7 @@ type CaptureEventView = {
   captureOrigin?: string;
 };
 
-type CaptureQueryPreset =
+export type CaptureQueryPreset =
   | "none"
   | "double-sends"
   | "retry-storms"
@@ -213,12 +213,12 @@ export type CaptureQueryEnvelope = {
   rows: Array<Record<string, string | number | null>>;
 };
 
-type CaptureObservedDimension = {
+export type CaptureObservedDimension = {
   value: string;
   count: number;
 };
 
-type CaptureCoverageSummary = {
+export type CaptureCoverageSummary = {
   sessionId: string;
   totalEvents: number;
   unlabeledEventCount: number;
@@ -233,14 +233,14 @@ export type CaptureCoverageEnvelope = {
   coverage: CaptureCoverageSummary;
 };
 
-type CaptureStartupProbeStatus = {
+export type CaptureStartupProbeStatus = {
   label: string;
   url: string;
   ok: boolean;
   error?: string;
 };
 
-type CaptureStartupStatus = {
+export type CaptureStartupStatus = {
   proxy: CaptureStartupProbeStatus;
   gateway: CaptureStartupProbeStatus;
   qaLab: CaptureStartupProbeStatus;
@@ -350,7 +350,7 @@ export type UiState = {
 
 /* ===== Helpers ===== */
 
-function formatTime(timestamp: number) {
+export function formatTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
@@ -915,30 +915,30 @@ function renderMessageAttachments(message: Message): string {
 
 const MOCK_MODELS: RunnerModelOption[] = [
   {
-    key: "mock-openai/gpt-5.5",
-    name: "GPT-5.5 (mock)",
+    key: "mock-openai/gpt-5.4",
+    name: "GPT-5.4 (mock)",
     provider: "mock-openai",
     input: "text",
     preferred: true,
   },
   {
-    key: "mock-openai/gpt-5.5-alt",
-    name: "GPT-5.5 Alt (mock)",
+    key: "mock-openai/gpt-5.4-alt",
+    name: "GPT-5.4 Alt (mock)",
     provider: "mock-openai",
     input: "text",
     preferred: false,
   },
 ];
 
-function deriveSelectedConversation(state: UiState): string | null {
+export function deriveSelectedConversation(state: UiState): string | null {
   return state.selectedConversationId ?? state.snapshot?.conversations[0]?.id ?? null;
 }
 
-function deriveSelectedThread(state: UiState): string | null {
+export function deriveSelectedThread(state: UiState): string | null {
   return state.selectedThreadId ?? null;
 }
 
-function filteredMessages(state: UiState) {
+export function filteredMessages(state: UiState) {
   const messages = state.snapshot?.messages ?? [];
   return messages.filter((message) => {
     if (state.selectedConversationId && message.conversation.id !== state.selectedConversationId) {

@@ -6,6 +6,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { captureEnv, withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -171,6 +173,8 @@ afterAll(async () => {
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {

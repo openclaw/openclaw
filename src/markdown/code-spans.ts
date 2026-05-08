@@ -14,7 +14,7 @@ type InlineCodeSpansResult = {
   state: InlineCodeState;
 };
 
-type CodeSpanIndex = {
+export type CodeSpanIndex = {
   inlineState: InlineCodeState;
   isInside: (index: number) => boolean;
 };

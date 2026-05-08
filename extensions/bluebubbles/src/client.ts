@@ -41,7 +41,7 @@ const DEFAULT_MULTIPART_TIMEOUT_MS = 60_000;
  *   - `blueBubblesHeaderAuth` — header-based auth; flip the default here when
  *     BB Server ships the header-auth change for #66869.
  */
-interface BlueBubblesAuthStrategy {
+export interface BlueBubblesAuthStrategy {
   /**
    * Stable identifier for this strategy. Used by the client cache fingerprint
    * so two clients for the same account + credential that differ only in auth
@@ -149,7 +149,7 @@ export function resolveBlueBubblesClientSsrfPolicy(params: {
 
 // --- Client ----------------------------------------------------------------
 
-type BlueBubblesClientOptions = {
+export type BlueBubblesClientOptions = {
   cfg?: OpenClawConfig;
   accountId?: string;
   serverUrl?: string;

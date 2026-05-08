@@ -1,22 +1,22 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
 
-type NativeCommandSpecMock = {
+export type NativeCommandSpecMock = {
   name: string;
   description: string;
   acceptsArgs: boolean;
 };
 
-type PluginCommandSpecMock = {
+export type PluginCommandSpecMock = {
   name: string;
   description: string;
   acceptsArgs: boolean;
 };
 
 type ProviderMonitorTestMocks = {
-  clientDeployCommandsMock: Mock<(options?: { mode?: string }) => Promise<void>>;
+  clientHandleDeployRequestMock: Mock<() => Promise<void>>;
   clientFetchUserMock: Mock<(target: string) => Promise<{ id: string }>>;
   clientGetPluginMock: Mock<(name: string) => unknown>;
   clientConstructorOptionsMock: Mock<(options?: unknown) => void>;
@@ -58,7 +58,6 @@ type ProviderMonitorTestMocks = {
     (params?: { cfg?: unknown; accountId?: string | null; token?: string | null }) => unknown
   >;
   resolveDiscordAllowlistConfigMock: Mock<() => Promise<unknown>>;
-  isNativeCommandsExplicitlyDisabledMock: Mock<(params?: unknown) => boolean>;
   resolveNativeCommandsEnabledMock: Mock<(params?: unknown) => boolean>;
   resolveNativeSkillsEnabledMock: Mock<(params?: unknown) => boolean>;
   isVerboseMock: Mock<() => boolean>;
@@ -66,7 +65,7 @@ type ProviderMonitorTestMocks = {
   voiceRuntimeModuleLoadedMock: Mock<() => void>;
 };
 
-function baseDiscordAccountConfig() {
+export function baseDiscordAccountConfig() {
   return {
     commands: { native: true, nativeSkills: false },
     voice: { enabled: false },
@@ -81,7 +80,7 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
   const shouldLogVerboseMock = vi.fn(() => false);
 
   return {
-    clientDeployCommandsMock: vi.fn(async () => undefined),
+    clientHandleDeployRequestMock: vi.fn(async () => undefined),
     clientFetchUserMock: vi.fn(async (_target: string) => ({ id: "bot-1" })),
     clientGetPluginMock: vi.fn<(_name: string) => unknown>(() => undefined),
     clientConstructorOptionsMock: vi.fn(),
@@ -151,7 +150,6 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
       guildEntries: undefined,
       allowFrom: undefined,
     })),
-    isNativeCommandsExplicitlyDisabledMock: vi.fn((_params) => false),
     resolveNativeCommandsEnabledMock: vi.fn((_params) => true),
     resolveNativeSkillsEnabledMock: vi.fn((_params) => false),
     isVerboseMock,
@@ -165,7 +163,7 @@ function buildDiscordSourceModuleId(artifactBasename: string): string {
 }
 
 const {
-  clientDeployCommandsMock,
+  clientHandleDeployRequestMock,
   clientFetchUserMock,
   clientGetPluginMock,
   clientConstructorOptionsMock,
@@ -185,7 +183,6 @@ const {
   monitorLifecycleMock,
   resolveDiscordAccountMock,
   resolveDiscordAllowlistConfigMock,
-  isNativeCommandsExplicitlyDisabledMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
   isVerboseMock,
@@ -195,6 +192,17 @@ const {
 
 export function getProviderMonitorTestMocks(): typeof providerMonitorTestMocks {
   return providerMonitorTestMocks;
+}
+
+export function mockResolvedDiscordAccountConfig(overrides: Record<string, unknown>) {
+  resolveDiscordAccountMock.mockImplementation(() => ({
+    accountId: "default",
+    token: "cfg-token",
+    config: {
+      ...baseDiscordAccountConfig(),
+      ...overrides,
+    },
+  }));
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe handler params shape.
@@ -207,7 +215,7 @@ export function getFirstDiscordMessageHandlerParams<T extends object>() {
 export function resetDiscordProviderMonitorMocks(params?: {
   nativeCommands?: NativeCommandSpecMock[];
 }) {
-  clientDeployCommandsMock.mockClear().mockResolvedValue(undefined);
+  clientHandleDeployRequestMock.mockClear().mockResolvedValue(undefined);
   clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
   clientGetPluginMock.mockClear().mockReturnValue(undefined);
   clientConstructorOptionsMock.mockClear();
@@ -262,7 +270,6 @@ export function resetDiscordProviderMonitorMocks(params?: {
     guildEntries: undefined,
     allowFrom: undefined,
   });
-  isNativeCommandsExplicitlyDisabledMock.mockClear().mockReturnValue(false);
   resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
   resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
   isVerboseMock.mockClear().mockReturnValue(false);
@@ -289,9 +296,8 @@ export const baseConfig = (): OpenClawConfig =>
     },
   }) as OpenClawConfig;
 
-vi.mock("../internal/discord.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../internal/discord.js")>("../internal/discord.js");
+vi.mock("@buape/carbon", async () => {
+  const actual = await vi.importActual<typeof import("@buape/carbon")>("@buape/carbon");
   class RateLimitError extends Error {
     status = 429;
     discordCode?: number;
@@ -310,28 +316,16 @@ vi.mock("../internal/discord.js", async () => {
   }
   class Client {
     listeners: unknown[];
-    rest: {
-      get: ReturnType<typeof vi.fn>;
-      post: ReturnType<typeof vi.fn>;
-      put: ReturnType<typeof vi.fn>;
-      patch: ReturnType<typeof vi.fn>;
-      delete: ReturnType<typeof vi.fn>;
-    };
+    rest: { put: ReturnType<typeof vi.fn> };
     options: unknown;
     constructor(options: unknown, handlers: { listeners?: unknown[] }) {
       this.options = options;
       this.listeners = handlers.listeners ?? [];
-      this.rest = {
-        get: vi.fn(async () => undefined),
-        post: vi.fn(async () => undefined),
-        put: vi.fn(async () => undefined),
-        patch: vi.fn(async () => undefined),
-        delete: vi.fn(async () => undefined),
-      };
+      this.rest = { put: vi.fn(async () => undefined) };
       clientConstructorOptionsMock(options);
     }
-    async deployCommands(options?: { mode?: string }) {
-      return await clientDeployCommandsMock(options);
+    async handleDeployRequest() {
+      return await clientHandleDeployRequestMock();
     }
     async fetchUser(target: string) {
       return await clientFetchUserMock(target);
@@ -343,11 +337,11 @@ vi.mock("../internal/discord.js", async () => {
   return { ...actual, Client, RateLimitError };
 });
 
-vi.mock("../internal/gateway.js", () => ({
+vi.mock("@buape/carbon/gateway", () => ({
   GatewayCloseCodes: { DisallowedIntents: 4014 },
 }));
 
-vi.mock("../internal/voice.js", () => ({
+vi.mock("@buape/carbon/voice", () => ({
   VoicePlugin: function VoicePlugin() {},
 }));
 
@@ -385,25 +379,16 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/native-command-config-runtime", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/native-command-config-runtime")
-  >("openclaw/plugin-sdk/native-command-config-runtime");
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
-    isNativeCommandsExplicitlyDisabled: isNativeCommandsExplicitlyDisabledMock,
+    isNativeCommandsExplicitlyDisabled: () => false,
+    loadConfig: () => ({}),
     resolveNativeCommandsEnabled: resolveNativeCommandsEnabledMock,
     resolveNativeSkillsEnabled: resolveNativeSkillsEnabledMock,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return {
-    ...actual,
-    getRuntimeConfig: () => ({}),
   };
 });
 
@@ -432,9 +417,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
-    "openclaw/plugin-sdk/error-runtime",
+vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
   );
   return {
     ...actual,
@@ -444,24 +429,10 @@ vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
 
 vi.mock(buildDiscordSourceModuleId("accounts.js"), () => ({
   resolveDiscordAccount: resolveDiscordAccountMock,
-  resolveDiscordAccountAllowFrom: () => undefined,
-  resolveDiscordAccountDmPolicy: () => undefined,
 }));
 
 vi.mock(buildDiscordSourceModuleId("probe.js"), () => ({
   fetchDiscordApplicationId: async () => "app-1",
-  parseApplicationIdFromToken: (token: string) => {
-    const segment = token.trim().split(".")[0];
-    if (!segment) {
-      return undefined;
-    }
-    try {
-      const decoded = Buffer.from(segment, "base64url").toString("utf8").trim();
-      return /^\d+$/.test(decoded) ? decoded : undefined;
-    } catch {
-      return undefined;
-    }
-  },
 }));
 
 vi.mock(buildDiscordSourceModuleId("token.js"), () => ({
@@ -499,11 +470,9 @@ vi.mock(buildDiscordSourceModuleId("monitor/exec-approvals.js"), () => ({
 
 vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
   createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
-  waitForDiscordGatewayPluginRegistration: () => undefined,
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
-  DiscordInteractionListener: function DiscordInteractionListener() {},
   DiscordMessageListener: function DiscordMessageListener() {},
   DiscordPresenceListener: function DiscordPresenceListener() {},
   DiscordReactionListener: function DiscordReactionListener() {},

@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
+import { isLoopbackHost } from "./net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 export type GatewayProbeAuth = {
@@ -33,11 +31,6 @@ export type GatewayProbeAuthSummary = {
   capability: GatewayProbeCapability;
 };
 
-export type GatewayProbeServerSummary = {
-  version: string | null;
-  connId: string | null;
-};
-
 export type GatewayProbeResult = {
   ok: boolean;
   url: string;
@@ -46,7 +39,6 @@ export type GatewayProbeResult = {
   connectErrorDetails?: unknown;
   close: GatewayProbeClose | null;
   auth: GatewayProbeAuthSummary;
-  server?: GatewayProbeServerSummary;
   health: unknown;
   status: unknown;
   presence: SystemPresence[] | null;
@@ -54,14 +46,14 @@ export type GatewayProbeResult = {
 };
 
 export const MIN_PROBE_TIMEOUT_MS = 250;
-export const MAX_TIMER_DELAY_MS = MAX_SAFE_TIMEOUT_DELAY_MS;
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const PAIRING_REQUIRED_PATTERN = /\bpairing required\b/i;
 const OPERATOR_READ_SCOPE = "operator.read";
 const OPERATOR_WRITE_SCOPE = "operator.write";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
 
 export function clampProbeTimeoutMs(timeoutMs: number): number {
-  return resolveSafeTimeoutDelayMs(timeoutMs, { minMs: MIN_PROBE_TIMEOUT_MS });
+  return Math.min(MAX_TIMER_DELAY_MS, Math.max(MIN_PROBE_TIMEOUT_MS, timeoutMs));
 }
 
 function formatProbeCloseError(close: GatewayProbeClose): string {
@@ -73,13 +65,6 @@ function emptyProbeAuth(): GatewayProbeAuthSummary {
     role: null,
     scopes: [],
     capability: "unknown",
-  };
-}
-
-function emptyProbeServer(): GatewayProbeServerSummary {
-  return {
-    version: null,
-    connId: null,
   };
 }
 
@@ -145,7 +130,6 @@ export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
   timeoutMs: number;
-  preauthHandshakeTimeoutMs?: number;
   includeDetails?: boolean;
   detailLevel?: "none" | "presence" | "full";
   tlsFingerprint?: string;
@@ -157,50 +141,44 @@ export async function probeGateway(opts: {
   let connectErrorDetails: unknown = null;
   let close: GatewayProbeClose | null = null;
   let auth = emptyProbeAuth();
-  let server = emptyProbeServer();
   let authMetadataPresent = false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
   const deviceIdentity = await (async () => {
+    let hostname: string;
     try {
-      if (!URL.canParse(opts.url)) {
-        return null;
-      }
-      const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-      const identity = loadDeviceIdentityIfPresent();
-      if (!identity) {
-        return null;
-      }
-      // Keep probes non-mutating: only attach a device identity when this CLI
-      // already has a cached operator device token. Fresh diagnostics should not
-      // create a read-only pairing baseline that later blocks admin commands.
-      const cachedOperatorToken = loadDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-      });
-      return cachedOperatorToken ? identity : null;
+      hostname = new URL(opts.url).hostname;
+    } catch {
+      return null;
+    }
+    // Local authenticated probes should stay device-bound so read/detail RPCs
+    // are not scope-limited by the shared-auth scope stripping hardening.
+    if (isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password)) {
+      return null;
+    }
+    try {
+      const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+      return loadOrCreateDeviceIdentity();
     } catch {
       // Read-only or restricted environments should still be able to run
-      // token/password-auth detail probes without mutating identity state.
+      // token/password-auth detail probes without crashing on identity persistence.
       return null;
     }
   })();
-  const initialProbeTimeoutMs = clampProbeTimeoutMs(opts.timeoutMs);
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const startAbort = new AbortController();
     const clearProbeTimer = () => {
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
     };
-    const armProbeTimer = (onTimeout: () => void, timeoutMs = initialProbeTimeoutMs) => {
+    const armProbeTimer = (onTimeout: () => void) => {
       clearProbeTimer();
-      timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(timeoutMs));
+      timer = setTimeout(onTimeout, clampProbeTimeoutMs(opts.timeoutMs));
     };
     const settle = (
       result: Omit<GatewayProbeResult, "url" | "connectErrorDetails"> & {
@@ -211,7 +189,6 @@ export async function probeGateway(opts: {
         return;
       }
       settled = true;
-      startAbort.abort();
       clearProbeTimer();
       client.stop();
       const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
@@ -247,7 +224,6 @@ export async function probeGateway(opts: {
           verifiedRead: params.verifiedRead,
           connectLatencyMs,
         }),
-        server,
         health: params.health,
         status: params.status,
         presence: params.presence,
@@ -260,7 +236,6 @@ export async function probeGateway(opts: {
       token: opts.auth?.token,
       password: opts.auth?.password,
       tlsFingerprint: opts.tlsFingerprint,
-      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",
@@ -287,10 +262,6 @@ export async function probeGateway(opts: {
       onHelloOk: async (hello) => {
         connectLatencyMs = Date.now() - startedAt;
         authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
-        server = {
-          version: typeof hello?.server?.version === "string" ? hello.server.version : null,
-          connId: typeof hello?.server?.connId === "string" ? hello.server.connId : null,
-        };
         auth = resolveProbeAuthSummary({
           role: typeof hello?.auth?.role === "string" ? hello.auth.role : null,
           scopes: Array.isArray(hello?.auth?.scopes)
@@ -377,36 +348,6 @@ export async function probeGateway(opts: {
       });
     });
 
-    void startGatewayClientWhenEventLoopReady(client, {
-      timeoutMs: initialProbeTimeoutMs,
-      signal: startAbort.signal,
-    })
-      .then((readiness) => {
-        if (settled || readiness.ready || readiness.aborted) {
-          return;
-        }
-        settleProbe({
-          ok: false,
-          error: "timeout",
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
-        });
-      })
-      .catch((err) => {
-        if (settled) {
-          return;
-        }
-        connectError = formatErrorMessage(err);
-        settleProbe({
-          ok: false,
-          error: connectError,
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
-        });
-      });
+    client.start();
   });
 }

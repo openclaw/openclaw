@@ -104,10 +104,6 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("../browser-lifecycle-cleanup.js", () => ({
-  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-}));
-
 vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
@@ -159,13 +155,13 @@ describe("subagent registry lifecycle error grace", () => {
     );
     mod.__testing.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
       loadSubagentRegistryRuntime: async () => ({
         countActiveDescendantRuns: mod.countActiveDescendantRuns,
         countPendingDescendantRuns: mod.countPendingDescendantRuns,
@@ -181,18 +177,11 @@ describe("subagent registry lifecycle error grace", () => {
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
-      getRequesterSessionActivity: (requesterSessionKey: string) => {
-        const entry = sessionStore[requesterSessionKey];
-        return {
-          sessionId: entry?.sessionId,
-          isActive: false,
-        };
-      },
+      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
     });
     subagentAnnounceOutputTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
     });
   });
 
@@ -468,7 +457,6 @@ describe("subagent registry lifecycle error grace", () => {
     emitLifecycleEvent("run-refresh-silent", { phase: "end", endedAt });
     await flushAsync();
     await waitForCleanupHandledFalse("run-refresh-silent");
-    await waitForFrozenResultText("run-refresh-silent", "All work complete, final summary");
 
     setAssistantOutput("agent:main:subagent:refresh-silent", "NO_REPLY");
     emitLifecycleEvent(

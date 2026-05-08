@@ -69,7 +69,7 @@ Feature/channel plugin:
 - calls `api.runtime.*` or the matching `plugin-sdk/*-runtime` helper
 - never calls a vendor implementation directly
 
-## Provider and harness seams
+## Provider and Harness Seams
 
 Use provider hooks when the behavior belongs to the model provider contract
 rather than the generic agent loop. Examples include provider-specific request

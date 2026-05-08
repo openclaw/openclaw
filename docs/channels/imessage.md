@@ -6,6 +6,8 @@ read_when:
 title: "iMessage"
 ---
 
+# iMessage (legacy: imsg)
+
 <Warning>
 For new iMessage deployments, use <a href="/channels/bluebubbles">BlueBubbles</a>.
 
@@ -306,7 +308,6 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
       - default root pattern: `/Users/*/Library/Messages/Attachments`
     - SCP uses strict host-key checking (`StrictHostKeyChecking=yes`)
     - outbound media size uses `channels.imessage.mediaMaxMb` (default 16 MB)
-
   </Accordion>
 
   <Accordion title="Outbound chunking">
@@ -314,7 +315,6 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
     - chunk mode: `channels.imessage.chunkMode`
       - `length` (default)
       - `newline` (paragraph-first splitting)
-
   </Accordion>
 
   <Accordion title="Addressing formats">

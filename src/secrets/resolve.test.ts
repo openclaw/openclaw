@@ -12,17 +12,8 @@ import {
 
 async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2)}`;
-  try {
-    await fs.writeFile(tempPath, content, "utf8");
-    await fs.chmod(tempPath, mode);
-    await fs.rename(tempPath, filePath);
-  } catch (err) {
-    await fs.rm(tempPath, { force: true }).catch(() => {});
-    throw err;
-  }
+  await fs.writeFile(filePath, content, "utf8");
+  await fs.chmod(filePath, mode);
 }
 
 describe("secret ref resolver", () => {

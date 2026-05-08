@@ -1,15 +1,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  generateExperimentalCodexAppServerProtocolSource,
-  normalizeGeneratedTypeScript,
-  selectedCodexAppServerJsonSchemas,
-} from "./lib/codex-app-server-protocol-source.js";
 
+const codexRepo = process.env.OPENCLAW_CODEX_REPO
+  ? path.resolve(process.env.OPENCLAW_CODEX_REPO)
+  : path.resolve(process.cwd(), "../codex");
+const schemaRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema/typescript");
+const sourceSchemaRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema");
 const generatedRoot = path.resolve(
   process.cwd(),
   "extensions/codex/src/app-server/protocol-generated",
 );
+
+const selectedJsonSchemas = [
+  "DynamicToolCallParams.json",
+  "v2/ErrorNotification.json",
+  "v2/GetAccountResponse.json",
+  "v2/ModelListResponse.json",
+  "v2/ThreadResumeResponse.json",
+  "v2/ThreadStartResponse.json",
+  "v2/TurnCompletedNotification.json",
+  "v2/TurnStartResponse.json",
+] as const;
 
 const checks: Array<{ file: string; snippets: string[] }> = [
   {
@@ -24,10 +35,10 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/ThreadItem.ts",
     snippets: [
-      'type: "contextCompaction"',
-      'type: "dynamicToolCall"',
-      'type: "commandExecution"',
-      'type: "mcpToolCall"',
+      '"type": "contextCompaction"',
+      '"type": "dynamicToolCall"',
+      '"type": "commandExecution"',
+      '"type": "mcpToolCall"',
     ],
   },
   {
@@ -40,23 +51,19 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "v2/Account.ts",
-    snippets: ['type: "apiKey"', 'type: "chatgpt"', 'type: "amazonBedrock"'],
+    snippets: ['"type": "apiKey"', '"type": "chatgpt"', '"type": "amazonBedrock"'],
   },
   {
     file: "v2/ThreadStartParams.ts",
     snippets: [
-      "permissions?: PermissionProfileSelectionParams | null",
-      "dynamicTools?: Array<DynamicToolSpec> | null",
+      "permissionProfile?: PermissionProfile | null",
       "experimentalRawEvents: boolean",
       "persistExtendedHistory: boolean",
     ],
   },
   {
     file: "v2/TurnStartParams.ts",
-    snippets: [
-      "permissions?: PermissionProfileSelectionParams | null",
-      "serviceTier?: ServiceTier | null",
-    ],
+    snippets: ["permissionProfile?: PermissionProfile | null", "serviceTier?: ServiceTier | null"],
   },
   {
     file: "ReviewDecision.ts",
@@ -73,28 +80,23 @@ const checks: Array<{ file: string; snippets: string[] }> = [
 ];
 
 const failures: string[] = [];
-const source = await generateExperimentalCodexAppServerProtocolSource();
 
-try {
-  await compareGeneratedProtocolMirror(source.typescriptRoot, source.jsonRoot);
+await compareGeneratedProtocolMirror();
 
-  for (const check of checks) {
-    const filePath = path.join(source.typescriptRoot, check.file);
-    let text: string;
-    try {
-      text = await fs.readFile(filePath, "utf8");
-    } catch (error) {
-      failures.push(`${check.file}: missing (${String(error)})`);
-      continue;
-    }
-    for (const snippet of check.snippets) {
-      if (!text.includes(snippet)) {
-        failures.push(`${check.file}: missing ${snippet}`);
-      }
+for (const check of checks) {
+  const filePath = path.join(schemaRoot, check.file);
+  let text: string;
+  try {
+    text = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    failures.push(`${check.file}: missing (${String(error)})`);
+    continue;
+  }
+  for (const snippet of check.snippets) {
+    if (!text.includes(snippet)) {
+      failures.push(`${check.file}: missing ${snippet}`);
     }
   }
-} finally {
-  await source.cleanup();
 }
 
 if (failures.length > 0) {
@@ -102,20 +104,16 @@ if (failures.length > 0) {
   for (const failure of failures) {
     console.error(`- ${failure}`);
   }
-  console.error(
-    `Run \`pnpm codex-app-server:protocol:sync\` after refreshing the Codex checkout at ${source.codexRepo}.`,
-  );
+  console.error("Run `pnpm codex-app-server:protocol:sync` after refreshing ../codex.");
   process.exit(1);
 }
 
 console.log(
-  `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${source.codexRepo}`,
+  `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${schemaRoot}`,
 );
 
-async function compareGeneratedProtocolMirror(
-  sourceTsRoot: string,
-  sourceJsonRoot: string,
-): Promise<void> {
+async function compareGeneratedProtocolMirror(): Promise<void> {
+  const sourceTsRoot = path.join(sourceSchemaRoot, "typescript");
   const targetTsRoot = path.join(generatedRoot, "typescript");
   const sourceFiles = await listFiles(sourceTsRoot, ".ts");
   const targetFiles = await listFiles(targetTsRoot, ".ts");
@@ -132,17 +130,19 @@ async function compareGeneratedProtocolMirror(
     );
     const target = await fs.readFile(path.join(targetTsRoot, file), "utf8");
     if (source !== target) {
-      failures.push(`protocol-generated/typescript/${file}: differs from normalized source schema`);
+      failures.push(
+        `protocol-generated/typescript/${file}: differs from normalized ../codex schema`,
+      );
     }
   }
   for (const file of targetFiles) {
     if (!sourceSet.has(file)) {
-      failures.push(`protocol-generated/typescript/${file}: no longer present in source schema`);
+      failures.push(`protocol-generated/typescript/${file}: no longer present in ../codex schema`);
     }
   }
 
-  for (const schema of selectedCodexAppServerJsonSchemas) {
-    const sourcePath = path.join(sourceJsonRoot, schema);
+  for (const schema of selectedJsonSchemas) {
+    const sourcePath = path.join(sourceSchemaRoot, "json", schema);
     const targetPath = path.join(generatedRoot, "json", schema);
     let source: string;
     let target: string;
@@ -161,7 +161,7 @@ async function compareGeneratedProtocolMirror(
       continue;
     }
     if (source !== target) {
-      failures.push(`protocol-generated/json/${schema}: differs from source schema`);
+      failures.push(`protocol-generated/json/${schema}: differs from ../codex schema`);
     }
   }
 }
@@ -181,4 +181,11 @@ async function listFiles(root: string, suffix: string): Promise<string[]> {
   }
   await visit(root);
   return files.toSorted();
+}
+
+function normalizeGeneratedTypeScript(text: string): string {
+  return text
+    .replace(/(from\s+["'])(\.{1,2}\/[^"']+?)(\.js)?(["'])/g, "$1$2.js$4")
+    .replace('export * as v2 from "./v2.js";', 'export * as v2 from "./v2/index.js";')
+    .replaceAll("| null | null", "| null");
 }

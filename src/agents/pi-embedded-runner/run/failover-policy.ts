@@ -1,5 +1,12 @@
 import type { FailoverReason } from "../../pi-embedded-helpers.js";
 
+export type RunFailoverDecisionAction =
+  | "continue_normal"
+  | "rotate_profile"
+  | "fallback_model"
+  | "surface_error"
+  | "return_error_payload";
+
 export type RunFailoverDecision =
   | {
       action: "continue_normal";
@@ -56,7 +63,6 @@ type AssistantDecisionParams = {
   failoverReason: FailoverReason | null;
   timedOut: boolean;
   timedOutDuringCompaction: boolean;
-  timedOutDuringToolExecution: boolean;
   profileRotated: boolean;
 };
 
@@ -82,7 +88,7 @@ function shouldRotatePrompt(params: PromptDecisionParams): boolean {
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   return (
     (!params.aborted && (params.failoverFailure || params.failoverReason !== null)) ||
-    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution)
+    (params.timedOut && !params.timedOutDuringCompaction)
   );
 }
 

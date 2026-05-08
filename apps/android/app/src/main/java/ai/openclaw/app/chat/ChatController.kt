@@ -1,6 +1,8 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -15,8 +17,6 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 class ChatController(
   private val scope: CoroutineScope,
@@ -173,12 +173,12 @@ class ChatController(
       }
     _messages.value =
       _messages.value +
-      ChatMessage(
-        id = UUID.randomUUID().toString(),
-        role = "user",
-        content = userContent,
-        timestampMs = System.currentTimeMillis(),
-      )
+        ChatMessage(
+          id = UUID.randomUUID().toString(),
+          role = "user",
+          content = userContent,
+          timestampMs = System.currentTimeMillis(),
+        )
 
     armPendingRunTimeout(runId)
     synchronized(pendingRuns) {
@@ -255,10 +255,7 @@ class ChatController(
     }
   }
 
-  fun handleGatewayEvent(
-    event: String,
-    payloadJson: String?,
-  ) {
+  fun handleGatewayEvent(event: String, payloadJson: String?) {
     when (event) {
       "tick" -> {
         scope.launch { pollHealthIfNeeded(force = false) }
@@ -282,10 +279,7 @@ class ChatController(
     }
   }
 
-  private suspend fun bootstrap(
-    forceHealth: Boolean,
-    refreshSessions: Boolean,
-  ) {
+  private suspend fun bootstrap(forceHealth: Boolean, refreshSessions: Boolean) {
     _errorText.value = null
     _healthOk.value = false
     clearPendingRuns()
@@ -304,10 +298,7 @@ class ChatController(
       val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
       _messages.value = history.messages
       _sessionId.value = history.sessionId
-      history.thinkingLevel
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
-        ?.let { _thinkingLevel.value = it }
+      history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
 
       pollHealthIfNeeded(force = forceHealth)
       if (refreshSessions) {
@@ -380,10 +371,7 @@ class ChatController(
             val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
             _messages.value = history.messages
             _sessionId.value = history.sessionId
-            history.thinkingLevel
-              ?.trim()
-              ?.takeIf { it.isNotEmpty() }
-              ?.let { _thinkingLevel.value = it }
+            history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
           } catch (_: Throwable) {
             // best-effort
           }
@@ -554,24 +542,22 @@ class ChatController(
     }
   }
 
-  private fun parseRunId(resJson: String): String? =
-    try {
-      json
-        .parseToJsonElement(resJson)
-        .asObjectOrNull()
-        ?.get("runId")
-        .asStringOrNull()
+  private fun parseRunId(resJson: String): String? {
+    return try {
+      json.parseToJsonElement(resJson).asObjectOrNull()?.get("runId").asStringOrNull()
     } catch (_: Throwable) {
       null
     }
+  }
 
-  private fun normalizeThinking(raw: String): String =
-    when (raw.trim().lowercase()) {
+  private fun normalizeThinking(raw: String): String {
+    return when (raw.trim().lowercase()) {
       "low" -> "low"
       "medium" -> "medium"
       "high" -> "high"
       else -> "off"
     }
+  }
 }
 
 internal data class MainSessionState(
@@ -596,10 +582,7 @@ internal fun applyMainSessionKey(
   )
 }
 
-internal fun reconcileMessageIds(
-  previous: List<ChatMessage>,
-  incoming: List<ChatMessage>,
-): List<ChatMessage> {
+internal fun reconcileMessageIds(previous: List<ChatMessage>, incoming: List<ChatMessage>): List<ChatMessage> {
   if (previous.isEmpty() || incoming.isEmpty()) return incoming
 
   val idsByKey = LinkedHashMap<String, ArrayDeque<String>>()
@@ -630,15 +613,9 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
       listOf(
         part.type.trim().lowercase(),
         part.text?.trim().orEmpty(),
-        part.mimeType
-          ?.trim()
-          ?.lowercase()
-          .orEmpty(),
+        part.mimeType?.trim()?.lowercase().orEmpty(),
         part.fileName?.trim().orEmpty(),
-        part.base64
-          ?.hashCode()
-          ?.toString()
-          .orEmpty(),
+        part.base64?.hashCode()?.toString().orEmpty(),
       ).joinToString(separator = "\u001F")
     }
 

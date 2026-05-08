@@ -1,19 +1,11 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
-import { getRuntimeConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveStorePath,
-  type SessionEntry,
-} from "../config/sessions.js";
+import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
-import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { registerPendingSpawnedChildrenQuery } from "../infra/outbound/pending-spawn-query.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -57,7 +49,6 @@ import {
 } from "./subagent-registry-queries.js";
 import {
   createSubagentRunManager,
-  markSubagentRunPausedAfterYield,
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
 import {
@@ -91,7 +82,7 @@ type SubagentRegistryDeps = {
   captureSubagentCompletionReply: SubagentAnnounceModule["captureSubagentCompletionReply"];
   cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
-  getRuntimeConfig: typeof getRuntimeConfig;
+  loadConfig: typeof loadConfig;
   onAgentEvent: typeof onAgentEvent;
   persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
@@ -99,27 +90,22 @@ type SubagentRegistryDeps = {
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof ensureRuntimePluginsLoadedFn;
-  resolveContextEngine?: (
-    cfg?: OpenClawConfig,
-    options?: ResolveContextEngineOptions,
-  ) => Promise<ContextEngine>;
+  resolveContextEngine?: (cfg: OpenClawConfig) => Promise<ContextEngine>;
 };
 
-const subagentAnnounceLoader = createLazyImportLoader<SubagentAnnounceModule>(
-  () => import("./subagent-announce.js"),
-);
-const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
-  () => import("../browser-lifecycle-cleanup.js"),
-);
+let subagentAnnouncePromise: Promise<SubagentAnnounceModule> | null = null;
+let browserCleanupPromise: Promise<BrowserCleanupModule> | null = null;
 
 async function loadSubagentAnnounceModule(): Promise<SubagentAnnounceModule> {
-  return await subagentAnnounceLoader.load();
+  subagentAnnouncePromise ??= import("./subagent-announce.js");
+  return await subagentAnnouncePromise;
 }
 
 async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
 > {
-  return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
+  browserCleanupPromise ??= import("../browser-lifecycle-cleanup.js");
+  return (await browserCleanupPromise).cleanupBrowserSessionsForLifecycleEnd;
 }
 
 const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
@@ -129,7 +115,7 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   cleanupBrowserSessionsForLifecycleEnd: async (params) =>
     (await loadCleanupBrowserSessionsForLifecycleEnd())(params),
   getSubagentRunsSnapshotForRead,
-  getRuntimeConfig,
+  loadConfig,
   onAgentEvent,
   persistSubagentRunsToDisk,
   resolveAgentTimeoutMs,
@@ -147,10 +133,7 @@ type ContextEngineInitModule = Pick<
 >;
 type ContextEngineRegistryModule = Pick<
   {
-    resolveContextEngine: (
-      cfg?: OpenClawConfig,
-      options?: ResolveContextEngineOptions,
-    ) => Promise<ContextEngine>;
+    resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
   },
   "resolveContextEngine"
 >;
@@ -163,15 +146,9 @@ type RuntimePluginsModule = Pick<
 
 const SUBAGENT_REGISTRY_RUNTIME_SPEC = ["./subagent-registry.runtime", ".js"] as const;
 
-const contextEngineInitLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<ContextEngineInitModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
-);
-const contextEngineRegistryLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<ContextEngineRegistryModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
-);
-const runtimePluginsLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<RuntimePluginsModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
-);
+let contextEngineInitPromise: Promise<ContextEngineInitModule> | null = null;
+let contextEngineRegistryPromise: Promise<ContextEngineRegistryModule> | null = null;
+let runtimePluginsPromise: Promise<RuntimePluginsModule> | null = null;
 
 let sweeper: NodeJS.Timeout | null = null;
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -189,114 +166,33 @@ const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
  * subsequent lifecycle `start` / `end` can cancel premature failure announces.
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
-/**
- * Embedded runs can also surface an intermediate lifecycle `end` with
- * `aborted=true` just before the runtime automatically retries the same run.
- * Give that timeout a short grace window so the parent does not get a stale
- * `timed out` completion right before the eventual success.
- */
-const LIFECYCLE_TIMEOUT_RETRY_GRACE_MS = 15_000;
 /** Absolute TTL for session-mode runs after cleanup completes (no archiveAtMs). */
 const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
-/** Absolute TTL for orphaned pendingLifecycleError / pendingLifecycleTimeout entries. */
-const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
-/** Grace period before treating a "running" subagent without a live run context as stale. */
-const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
-
-function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = sessionKey.trim().toLowerCase();
-  for (const [key, entry] of Object.entries(store)) {
-    if (key.trim().toLowerCase() === normalized) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
-function loadSubagentSessionEntry(
-  childSessionKey: string,
-  storeCache: Map<string, Record<string, SessionEntry>>,
-): SessionEntry | undefined {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return undefined;
-  }
-  const agentId = resolveAgentIdFromSessionKey(key);
-  const storePath = resolveStorePath(getRuntimeConfig().session?.store, { agentId });
-  let store = storeCache.get(storePath);
-  if (!store) {
-    store = loadSessionStore(storePath);
-    storeCache.set(storePath, store);
-  }
-  return findSessionEntryByKey(store, key);
-}
-
-function resolveCompletionFromSessionEntry(
-  sessionEntry: SessionEntry | undefined,
-  fallbackEndedAt: number,
-): {
-  endedAt: number;
-  outcome: SubagentRunOutcome;
-  reason: SubagentLifecycleEndedReason;
-} | null {
-  const status = sessionEntry?.status;
-  const endedAt =
-    typeof sessionEntry?.endedAt === "number" && Number.isFinite(sessionEntry.endedAt)
-      ? sessionEntry.endedAt
-      : fallbackEndedAt;
-
-  if (status === "done") {
-    return {
-      endedAt,
-      outcome: { status: "ok" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    };
-  }
-  if (status === "timeout") {
-    return {
-      endedAt,
-      outcome: { status: "timeout" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    };
-  }
-  if (status === "failed") {
-    return {
-      endedAt,
-      outcome: { status: "error", error: "session completed before registry settled" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-    };
-  }
-  if (status === "killed") {
-    return {
-      endedAt,
-      outcome: { status: "error", error: "subagent run terminated" },
-      reason: SUBAGENT_ENDED_REASON_KILLED,
-    };
-  }
-  if (status !== "running" && typeof sessionEntry?.endedAt === "number") {
-    return {
-      endedAt,
-      outcome: { status: "ok" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    };
-  }
-  return null;
-}
+/** Absolute TTL for orphaned pendingLifecycleError entries. */
+const PENDING_ERROR_TTL_MS = 5 * 60_000; // 5 minutes
 
 function loadContextEngineInitModule(): Promise<ContextEngineInitModule> {
-  return contextEngineInitLoader.load();
+  contextEngineInitPromise ??= importRuntimeModule<ContextEngineInitModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  );
+  return contextEngineInitPromise;
 }
 
 function loadContextEngineRegistryModule(): Promise<ContextEngineRegistryModule> {
-  return contextEngineRegistryLoader.load();
+  contextEngineRegistryPromise ??= importRuntimeModule<ContextEngineRegistryModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  );
+  return contextEngineRegistryPromise;
 }
 
 function loadRuntimePluginsModule(): Promise<RuntimePluginsModule> {
-  return runtimePluginsLoader.load();
+  runtimePluginsPromise ??= importRuntimeModule<RuntimePluginsModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  );
+  return runtimePluginsPromise;
 }
 
 async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
@@ -312,10 +208,7 @@ async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
   (await loadRuntimePluginsModule()).ensureRuntimePluginsLoaded(params);
 }
 
-async function resolveSubagentRegistryContextEngine(
-  cfg: OpenClawConfig,
-  options?: ResolveContextEngineOptions,
-) {
+async function resolveSubagentRegistryContextEngine(cfg: OpenClawConfig) {
   const initModule = await loadContextEngineInitModule();
   const registryModule = await loadContextEngineRegistryModule();
   const ensureContextEnginesInitialized =
@@ -324,7 +217,7 @@ async function resolveSubagentRegistryContextEngine(
   const resolveContextEngine =
     subagentRegistryDeps.resolveContextEngine ?? registryModule.resolveContextEngine;
   ensureContextEnginesInitialized();
-  return await resolveContextEngine(cfg, options);
+  return await resolveContextEngine(cfg);
 }
 
 function persistSubagentRuns() {
@@ -361,13 +254,6 @@ const pendingLifecycleErrorByRunId = new Map<
     error?: string;
   }
 >();
-const pendingLifecycleTimeoutByRunId = new Map<
-  string,
-  {
-    timer: NodeJS.Timeout;
-    endedAt: number;
-  }
->();
 
 function clearPendingLifecycleError(runId: string) {
   const pending = pendingLifecycleErrorByRunId.get(runId);
@@ -385,24 +271,7 @@ function clearAllPendingLifecycleErrors() {
   pendingLifecycleErrorByRunId.clear();
 }
 
-function clearPendingLifecycleTimeout(runId: string) {
-  const pending = pendingLifecycleTimeoutByRunId.get(runId);
-  if (!pending) {
-    return;
-  }
-  clearTimeout(pending.timer);
-  pendingLifecycleTimeoutByRunId.delete(runId);
-}
-
-function clearAllPendingLifecycleTimeouts() {
-  for (const pending of pendingLifecycleTimeoutByRunId.values()) {
-    clearTimeout(pending.timer);
-  }
-  pendingLifecycleTimeoutByRunId.clear();
-}
-
 function schedulePendingLifecycleError(params: { runId: string; endedAt: number; error?: string }) {
-  clearPendingLifecycleTimeout(params.runId);
   clearPendingLifecycleError(params.runId);
   const timer = setTimeout(() => {
     const pending = pendingLifecycleErrorByRunId.get(params.runId);
@@ -438,58 +307,19 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
   });
 }
 
-function schedulePendingLifecycleTimeout(params: { runId: string; endedAt: number }) {
-  clearPendingLifecycleError(params.runId);
-  clearPendingLifecycleTimeout(params.runId);
-  const timer = setTimeout(() => {
-    const pending = pendingLifecycleTimeoutByRunId.get(params.runId);
-    if (!pending || pending.timer !== timer) {
-      return;
-    }
-    pendingLifecycleTimeoutByRunId.delete(params.runId);
-    const entry = subagentRuns.get(params.runId);
-    if (!entry) {
-      return;
-    }
-    if (entry.outcome?.status === "ok") {
-      return;
-    }
-    void completeSubagentRun({
-      runId: params.runId,
-      endedAt: pending.endedAt,
-      outcome: {
-        status: "timeout",
-      },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      sendFarewell: true,
-      accountId: entry.requesterOrigin?.accountId,
-      triggerCleanup: true,
-    });
-  }, LIFECYCLE_TIMEOUT_RETRY_GRACE_MS);
-  timer.unref?.();
-  pendingLifecycleTimeoutByRunId.set(params.runId, {
-    timer,
-    endedAt: params.endedAt,
-  });
-}
-
 async function notifyContextEngineSubagentEnded(params: {
   childSessionKey: string;
   reason: SubagentEndReason;
-  agentDir?: string;
   workspaceDir?: string;
 }) {
   try {
-    const cfg = subagentRegistryDeps.getRuntimeConfig();
+    const cfg = subagentRegistryDeps.loadConfig();
     await ensureSubagentRegistryPluginRuntimeLoaded({
       config: cfg,
       workspaceDir: params.workspaceDir,
       allowGatewaySubagentBinding: true,
     });
-    const engine = await resolveSubagentRegistryContextEngine(cfg, {
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-    });
+    const engine = await resolveSubagentRegistryContextEngine(cfg);
     if (!engine.onSubagentEnded) {
       return;
     }
@@ -529,7 +359,7 @@ async function emitSubagentEndedHookForRun(params: {
   if (params.entry.endedHookEmittedAt) {
     return;
   }
-  const cfg = subagentRegistryDeps.getRuntimeConfig();
+  const cfg = subagentRegistryDeps.loadConfig();
   await ensureSubagentRegistryPluginRuntimeLoaded({
     config: cfg,
     workspaceDir: params.entry.workspaceDir,
@@ -562,7 +392,6 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   emitSubagentEndedHookForRun,
   notifyContextEngineSubagentEnded,
   resumeSubagentRun,
-  callGateway: (request) => subagentRegistryDeps.callGateway(request),
   captureSubagentCompletionReply: (sessionKey, options) =>
     subagentRegistryDeps.captureSubagentCompletionReply(sessionKey, options),
   cleanupBrowserSessionsForLifecycleEnd: (args) =>
@@ -589,9 +418,6 @@ function resumeSubagentRun(runId: string) {
     return;
   }
   if (entry.cleanupCompletedAt) {
-    return;
-  }
-  if (entry.pauseReason === "sessions_yield") {
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
@@ -669,7 +495,7 @@ function resumeSubagentRun(runId: string) {
   }
 
   // Wait for completion again after restart.
-  const cfg = subagentRegistryDeps.getRuntimeConfig();
+  const cfg = subagentRegistryDeps.loadConfig();
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, entry.runTimeoutSeconds);
   void subagentRunManager.waitForSubagentCompletion(runId, waitTimeoutMs, entry);
   resumedRuns.add(runId);
@@ -750,69 +576,8 @@ async function sweepSubagentRuns() {
   sweepInProgress = true;
   try {
     const now = Date.now();
-    const storeCache = new Map<string, Record<string, SessionEntry>>();
     let mutated = false;
     for (const [runId, entry] of subagentRuns.entries()) {
-      if (typeof entry.endedAt !== "number") {
-        const hasLiveRunContext = Boolean(getAgentRunContext(runId));
-        const activeAgeMs = now - (entry.startedAt ?? entry.createdAt);
-        if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
-          const orphanReason = resolveSubagentRunOrphanReason({
-            entry,
-            storeCache,
-          });
-          if (orphanReason) {
-            if (
-              reconcileOrphanedRun({
-                runId,
-                entry,
-                reason: orphanReason,
-                source: "resume",
-                runs: subagentRuns,
-                resumedRuns,
-              })
-            ) {
-              mutated = true;
-            }
-            continue;
-          }
-
-          const sessionEntry = loadSubagentSessionEntry(entry.childSessionKey, storeCache);
-          const completion = resolveCompletionFromSessionEntry(sessionEntry, now);
-          if (completion) {
-            await completeSubagentRun({
-              runId,
-              endedAt: completion.endedAt,
-              outcome: completion.outcome,
-              reason: completion.reason,
-              sendFarewell: true,
-              accountId: entry.requesterOrigin?.accountId,
-              triggerCleanup: true,
-            });
-            continue;
-          }
-
-          if (sessionEntry?.abortedLastRun === true) {
-            scheduleSubagentOrphanRecovery({ delayMs: 1_000 });
-            continue;
-          }
-
-          await completeSubagentRun({
-            runId,
-            endedAt: now,
-            outcome: {
-              status: "error",
-              error: "subagent run lost active execution context",
-            },
-            reason: SUBAGENT_ENDED_REASON_ERROR,
-            sendFarewell: true,
-            accountId: entry.requesterOrigin?.accountId,
-            triggerCleanup: true,
-          });
-          continue;
-        }
-      }
-
       // Session-mode runs have no archiveAtMs — apply absolute TTL after cleanup completes.
       // Use cleanupCompletedAt (not endedAt) to avoid interrupting deferred cleanup flows.
       if (!entry.archiveAtMs) {
@@ -824,7 +589,6 @@ async function sweepSubagentRuns() {
           void notifyContextEngineSubagentEnded({
             childSessionKey: entry.childSessionKey,
             reason: "swept",
-            agentDir: entry.agentDir,
             workspaceDir: entry.workspaceDir,
           });
           subagentRuns.delete(runId);
@@ -864,19 +628,13 @@ async function sweepSubagentRuns() {
       void notifyContextEngineSubagentEnded({
         childSessionKey: entry.childSessionKey,
         reason: "swept",
-        agentDir: entry.agentDir,
         workspaceDir: entry.workspaceDir,
       });
     }
     // Sweep orphaned pendingLifecycleError entries (absolute TTL).
     for (const [runId, pending] of pendingLifecycleErrorByRunId.entries()) {
-      if (now - pending.endedAt > PENDING_LIFECYCLE_TERMINAL_TTL_MS) {
+      if (now - pending.endedAt > PENDING_ERROR_TTL_MS) {
         clearPendingLifecycleError(runId);
-      }
-    }
-    for (const [runId, pending] of pendingLifecycleTimeoutByRunId.entries()) {
-      if (now - pending.endedAt > PENDING_LIFECYCLE_TERMINAL_TTL_MS) {
-        clearPendingLifecycleTimeout(runId);
       }
     }
 
@@ -911,7 +669,6 @@ function ensureListener() {
       }
       if (phase === "start") {
         clearPendingLifecycleError(evt.runId);
-        clearPendingLifecycleTimeout(evt.runId);
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         if (startedAt) {
           entry.startedAt = startedAt;
@@ -935,32 +692,14 @@ function ensureListener() {
         });
         return;
       }
-      if (evt.data?.aborted) {
-        schedulePendingLifecycleTimeout({
-          runId: evt.runId,
-          endedAt,
-        });
-        return;
-      }
-      if (evt.data?.yielded === true) {
-        if (
-          markSubagentRunPausedAfterYield({
-            entry,
-            endedAt,
-            startedAt:
-              typeof evt.data?.startedAt === "number" ? evt.data.startedAt : entry.startedAt,
-          })
-        ) {
-          persistSubagentRuns();
-        }
-        return;
-      }
       clearPendingLifecycleError(evt.runId);
-      clearPendingLifecycleTimeout(evt.runId);
+      const outcome: SubagentRunOutcome = evt.data?.aborted
+        ? { status: "timeout" }
+        : { status: "ok" };
       await completeSubagentRun({
         runId: evt.runId,
         endedAt,
-        outcome: { status: "ok" },
+        outcome,
         reason: SUBAGENT_ENDED_REASON_COMPLETE,
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
@@ -976,7 +715,7 @@ const subagentRunManager = createSubagentRunManager({
   endedHookInFlightRunIds,
   persist: persistSubagentRuns,
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
-  getRuntimeConfig: () => subagentRegistryDeps.getRuntimeConfig(),
+  loadConfig: () => subagentRegistryDeps.loadConfig(),
   ensureRuntimePluginsLoaded: (args: {
     config: OpenClawConfig;
     workspaceDir?: string;
@@ -988,7 +727,6 @@ const subagentRunManager = createSubagentRunManager({
   resumeSubagentRun,
   clearPendingLifecycleError,
   resolveSubagentWaitTimeoutMs,
-  scheduleOrphanRecovery: (args) => scheduleSubagentOrphanRecovery(args),
   notifyContextEngineSubagentEnded,
   completeCleanupBookkeeping,
   completeSubagentRun,
@@ -996,7 +734,6 @@ const subagentRunManager = createSubagentRunManager({
 
 configureSubagentRegistrySteerRuntime({
   replaceSubagentRunAfterSteer: (params) => subagentRunManager.replaceSubagentRunAfterSteer(params),
-  finalizeInterruptedSubagentRun: async (params) => await finalizeInterruptedSubagentRun(params),
 });
 
 export function markSubagentRunForSteerRestart(runId: string) {
@@ -1031,12 +768,11 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
   clearAllPendingLifecycleErrors();
-  clearAllPendingLifecycleTimeouts();
-  contextEngineInitLoader.clear();
-  contextEngineRegistryLoader.clear();
-  runtimePluginsLoader.clear();
-  subagentAnnounceLoader.clear();
-  browserCleanupLoader.clear();
+  contextEngineInitPromise = null;
+  contextEngineRegistryPromise = null;
+  runtimePluginsPromise = null;
+  subagentAnnouncePromise = null;
+  browserCleanupPromise = null;
   resetAnnounceQueuesForTests();
   stopSweeper();
   sweepInProgress = false;
@@ -1052,9 +788,6 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 export const __testing = {
-  async sweepOnceForTests() {
-    await sweepSubagentRuns();
-  },
   setDepsForTest(overrides?: Partial<SubagentRegistryDeps>) {
     subagentRegistryDeps = overrides
       ? {
@@ -1071,57 +804,6 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 
 export function releaseSubagentRun(runId: string) {
   subagentRunManager.releaseSubagentRun(runId);
-}
-
-export async function finalizeInterruptedSubagentRun(params: {
-  runId?: string;
-  childSessionKey?: string;
-  error: string;
-  endedAt?: number;
-}): Promise<number> {
-  const runIds = new Set<string>();
-  if (typeof params.runId === "string" && params.runId.trim()) {
-    runIds.add(params.runId.trim());
-  }
-  if (typeof params.childSessionKey === "string" && params.childSessionKey.trim()) {
-    const childSessionKey = params.childSessionKey.trim();
-    for (const [runId, entry] of subagentRuns.entries()) {
-      if (entry.childSessionKey === childSessionKey) {
-        runIds.add(runId);
-      }
-    }
-  }
-  if (runIds.size === 0) {
-    return 0;
-  }
-
-  const endedAt =
-    typeof params.endedAt === "number" && Number.isFinite(params.endedAt)
-      ? params.endedAt
-      : Date.now();
-  let updated = 0;
-  for (const runId of runIds) {
-    clearPendingLifecycleError(runId);
-    clearPendingLifecycleTimeout(runId);
-    const entry = subagentRuns.get(runId);
-    if (!entry || typeof entry.cleanupCompletedAt === "number") {
-      continue;
-    }
-    await completeSubagentRun({
-      runId,
-      endedAt,
-      outcome: {
-        status: "error",
-        error: params.error,
-      },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-      sendFarewell: true,
-      accountId: entry.requesterOrigin?.accountId,
-      triggerCleanup: true,
-    });
-    updated += 1;
-  }
-  return updated;
 }
 
 export function resolveRequesterForChildSession(childSessionKey: string): {

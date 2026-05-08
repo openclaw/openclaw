@@ -1,12 +1,11 @@
 import "./test-helpers.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   monitorWebChannelWithCapture,
   sendWebDirectInboundAndCollectSessionKeys,
 } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
-  createAcceptedWhatsAppSendResult,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
@@ -203,8 +202,8 @@ describe("broadcast groups", () => {
       },
     } satisfies OpenClawConfig);
 
-    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
-    const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
     const sendComposing = vi.fn();
 
     let started = 0;

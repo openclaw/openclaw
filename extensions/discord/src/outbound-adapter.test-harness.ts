@@ -8,7 +8,6 @@ type DiscordOutboundHoisted = {
   sendDiscordComponentMessageMock: AsyncUnknownMock;
   sendPollDiscordMock: AsyncUnknownMock;
   sendWebhookMessageDiscordMock: AsyncUnknownMock;
-  sendVoiceMessageDiscordMock: AsyncUnknownMock;
   getThreadBindingManagerMock: UnknownMock;
 };
 
@@ -29,25 +28,23 @@ export function createDiscordOutboundHoisted(): DiscordOutboundHoisted {
   const sendDiscordComponentMessageMock = vi.fn();
   const sendPollDiscordMock = vi.fn();
   const sendWebhookMessageDiscordMock = vi.fn();
-  const sendVoiceMessageDiscordMock = vi.fn();
   const getThreadBindingManagerMock = vi.fn();
   return {
     sendMessageDiscordMock,
     sendDiscordComponentMessageMock,
     sendPollDiscordMock,
     sendWebhookMessageDiscordMock,
-    sendVoiceMessageDiscordMock,
     getThreadBindingManagerMock,
   };
 }
 
-const DEFAULT_DISCORD_SEND_RESULT = {
+export const DEFAULT_DISCORD_SEND_RESULT = {
   channel: "discord",
   messageId: "msg-1",
   channelId: "ch-1",
 } as const;
 
-async function createDiscordSendModuleMock(
+export async function createDiscordSendModuleMock(
   hoisted: DiscordOutboundHoisted,
   loadActual: () => Promise<DiscordSendModule>,
 ): Promise<DiscordSendModule> {
@@ -71,15 +68,10 @@ async function createDiscordSendModuleMock(
         Parameters<DiscordSendModule["sendWebhookMessageDiscord"]>,
         ReturnType<DiscordSendModule["sendWebhookMessageDiscord"]>
       >(hoisted.sendWebhookMessageDiscordMock, ...args),
-    sendVoiceMessageDiscord: (...args: Parameters<DiscordSendModule["sendVoiceMessageDiscord"]>) =>
-      invokeMock<
-        Parameters<DiscordSendModule["sendVoiceMessageDiscord"]>,
-        ReturnType<DiscordSendModule["sendVoiceMessageDiscord"]>
-      >(hoisted.sendVoiceMessageDiscordMock, ...args),
   };
 }
 
-async function createDiscordSendComponentsModuleMock(
+export async function createDiscordSendComponentsModuleMock(
   hoisted: DiscordOutboundHoisted,
   loadActual: () => Promise<DiscordSendComponentsModule>,
 ): Promise<DiscordSendComponentsModule> {
@@ -96,7 +88,7 @@ async function createDiscordSendComponentsModuleMock(
   };
 }
 
-async function createDiscordThreadBindingsModuleMock(
+export async function createDiscordThreadBindingsModuleMock(
   hoisted: DiscordOutboundHoisted,
   loadActual: () => Promise<DiscordThreadBindingsModule>,
 ): Promise<DiscordThreadBindingsModule> {
@@ -122,9 +114,6 @@ export async function installDiscordOutboundModuleSpies(hoisted: DiscordOutbound
   vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(mockedSendModule.sendPollDiscord);
   vi.spyOn(sendModule, "sendWebhookMessageDiscord").mockImplementation(
     mockedSendModule.sendWebhookMessageDiscord,
-  );
-  vi.spyOn(sendModule, "sendVoiceMessageDiscord").mockImplementation(
-    mockedSendModule.sendVoiceMessageDiscord,
   );
 
   const sendComponentsModule = await import("./send.components.js");
@@ -163,10 +152,6 @@ export function resetDiscordOutboundMocks(hoisted: DiscordOutboundHoisted) {
     messageId: "msg-webhook-1",
     channelId: "thread-1",
   });
-  hoisted.sendVoiceMessageDiscordMock.mockReset().mockResolvedValue({
-    messageId: "voice-1",
-    channelId: "ch-1",
-  });
   hoisted.getThreadBindingManagerMock.mockReset().mockReturnValue(null);
 }
 
@@ -202,6 +187,5 @@ export function mockDiscordBoundThreadManager(hoisted: DiscordOutboundHoisted) {
       boundBy: "system",
       boundAt: Date.now(),
     }),
-    touchThread: vi.fn(),
   });
 }

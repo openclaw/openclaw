@@ -59,7 +59,7 @@ type DocxTextElement = NonNullable<
  *   [bold]text[/bold]             → bold
  *   [green bold]text[/green]      → green + bold
  */
-function parseColorMarkup(content: string): Segment[] {
+export function parseColorMarkup(content: string): Segment[] {
   const segments: Segment[] = [];
   // Only [known_tag]...[/...] pairs are treated as markup.  Using an open
   // pattern like \[([^\]]+)\] would match any bracket token — e.g. [Q1] —

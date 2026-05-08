@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - scripts/docker/sandbox/Dockerfile
-      - scripts/docker/sandbox/Dockerfile.common
+      - Dockerfile.sandbox
+      - Dockerfile.sandbox-common
       - scripts/sandbox-common-setup.sh
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
     paths:
-      - scripts/docker/sandbox/Dockerfile
-      - scripts/docker/sandbox/Dockerfile.common
+      - Dockerfile.sandbox
+      - Dockerfile.sandbox-common
       - scripts/sandbox-common-setup.sh
 
 permissions:

@@ -1,6 +1,6 @@
-type PendingToolCall = { id: string; name?: string };
+export type PendingToolCall = { id: string; name?: string };
 
-type PendingToolCallState = {
+export type PendingToolCallState = {
   size: () => number;
   entries: () => IterableIterator<[string, string | undefined]>;
   getToolName: (id: string) => string | undefined;

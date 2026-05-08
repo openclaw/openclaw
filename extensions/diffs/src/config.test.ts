@@ -1,9 +1,7 @@
 import fs from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import AjvPkg from "ajv";
-import type { JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it, vi } from "vitest";
+import type { JsonSchemaObject } from "../../../src/shared/json-schema.types.js";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -401,59 +399,44 @@ describe("diffs viewer URL helpers", () => {
 
 describe("viewer assets", () => {
   it("prefers the built plugin asset layout when present", async () => {
-    const repoRoot = join(process.cwd(), "tmp", "diffs-viewer-assets-test-repo");
-    const builtRuntimePath = join(
-      repoRoot,
-      "dist",
-      "extensions",
-      "diffs",
-      "assets",
-      "viewer-runtime.js",
-    );
     const stat = vi.fn(async (path: string) => {
-      if (path === builtRuntimePath) {
+      if (path === "/repo/dist/extensions/diffs/assets/viewer-runtime.js") {
         return { mtimeMs: 1 };
       }
       const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
       throw error;
     });
 
-    const runtimeUrl = await resolveViewerRuntimeFileUrl({
-      baseUrl: pathToFileURL(join(repoRoot, "dist", "extensions", "diffs", "index.js")),
-      stat,
+    await expect(
+      resolveViewerRuntimeFileUrl({
+        baseUrl: "file:///repo/dist/extensions/diffs/index.js",
+        stat,
+      }),
+    ).resolves.toMatchObject({
+      pathname: "/repo/dist/extensions/diffs/assets/viewer-runtime.js",
     });
-
-    expect(fileURLToPath(runtimeUrl)).toBe(builtRuntimePath);
     expect(stat).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the source asset layout when the built artifact is absent", async () => {
-    const repoRoot = join(process.cwd(), "tmp", "diffs-viewer-assets-test-repo");
-    const sourceCandidatePath = join(
-      repoRoot,
-      "extensions",
-      "diffs",
-      "src",
-      "assets",
-      "viewer-runtime.js",
-    );
-    const sourceRuntimePath = join(repoRoot, "extensions", "diffs", "assets", "viewer-runtime.js");
     const stat = vi.fn(async (path: string) => {
-      if (path === sourceRuntimePath) {
+      if (path === "/repo/extensions/diffs/assets/viewer-runtime.js") {
         return { mtimeMs: 1 };
       }
       const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
       throw error;
     });
 
-    const runtimeUrl = await resolveViewerRuntimeFileUrl({
-      baseUrl: pathToFileURL(join(repoRoot, "extensions", "diffs", "src", "viewer-assets.js")),
-      stat,
+    await expect(
+      resolveViewerRuntimeFileUrl({
+        baseUrl: "file:///repo/extensions/diffs/src/viewer-assets.js",
+        stat,
+      }),
+    ).resolves.toMatchObject({
+      pathname: "/repo/extensions/diffs/assets/viewer-runtime.js",
     });
-
-    expect(fileURLToPath(runtimeUrl)).toBe(sourceRuntimePath);
-    expect(stat).toHaveBeenNthCalledWith(1, sourceCandidatePath);
-    expect(stat).toHaveBeenNthCalledWith(2, sourceRuntimePath);
+    expect(stat).toHaveBeenNthCalledWith(1, "/repo/extensions/diffs/src/assets/viewer-runtime.js");
+    expect(stat).toHaveBeenNthCalledWith(2, "/repo/extensions/diffs/assets/viewer-runtime.js");
   });
 
   it("serves a stable loader that points at the current runtime bundle", async () => {

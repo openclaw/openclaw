@@ -3,7 +3,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedRunningTaskCreateParams,
   DetachedTaskCreateParams,
-  DetachedTaskFinalizeParams,
 } from "./detached-task-runtime-contract.js";
 import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import {
@@ -16,7 +15,7 @@ import {
   listTasksForFlowId,
   markTaskLostById,
   markTaskRunningByRunId,
-  finalizeTaskRunByRunId as finalizeTaskRunByRunIdInRegistry,
+  markTaskTerminalByRunId,
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
@@ -169,14 +168,17 @@ export function completeTaskRunByRunId(params: {
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
 }) {
-  return finalizeTaskRunByRunId({
-    ...params,
+  return markTaskTerminalByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
     status: "succeeded",
+    endedAt: params.endedAt,
+    lastEventAt: params.lastEventAt,
+    progressSummary: params.progressSummary,
+    terminalSummary: params.terminalSummary,
+    terminalOutcome: params.terminalOutcome,
   });
-}
-
-export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams) {
-  return finalizeTaskRunByRunIdInRegistry(params);
 }
 
 export function failTaskRunByRunId(params: {
@@ -190,9 +192,16 @@ export function failTaskRunByRunId(params: {
   progressSummary?: string | null;
   terminalSummary?: string | null;
 }) {
-  return finalizeTaskRunByRunId({
-    ...params,
+  return markTaskTerminalByRunId({
+    runId: params.runId,
+    runtime: params.runtime,
+    sessionKey: params.sessionKey,
     status: params.status ?? "failed",
+    endedAt: params.endedAt,
+    lastEventAt: params.lastEventAt,
+    error: params.error,
+    progressSummary: params.progressSummary,
+    terminalSummary: params.terminalSummary,
   });
 }
 
@@ -211,7 +220,6 @@ export function setDetachedTaskDeliveryStatusByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
-  error?: string;
 }) {
   return setTaskRunDeliveryStatusByRunId(params);
 }

@@ -1,16 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { shouldExcludeProviderFromDefaultHighSignalLiveSweep } from "./live-model-filter.js";
 
-function resolveProviderOwners(provider: string): readonly string[] | undefined {
-  if (provider === "openai" || provider === "openai-codex") {
-    return ["openai"];
-  }
-  if (provider === "codex" || provider === "codex-cli") {
-    return ["codex"];
-  }
-  return undefined;
-}
-
 describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
   it("excludes dedicated harness providers from the default high-signal sweep", () => {
     expect(
@@ -18,7 +8,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "codex",
         useExplicitModels: false,
         providerFilter: null,
-        resolveProviderOwners,
       }),
     ).toBe(true);
     expect(
@@ -26,7 +15,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "openai-codex",
         useExplicitModels: false,
         providerFilter: null,
-        resolveProviderOwners,
       }),
     ).toBe(true);
     expect(
@@ -34,7 +22,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "codex-cli",
         useExplicitModels: false,
         providerFilter: null,
-        resolveProviderOwners,
       }),
     ).toBe(true);
   });
@@ -45,7 +32,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "codex",
         useExplicitModels: false,
         providerFilter: new Set(["codex"]),
-        resolveProviderOwners,
       }),
     ).toBe(false);
     expect(
@@ -53,7 +39,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "openai-codex",
         useExplicitModels: false,
         providerFilter: new Set(["codex-cli"]),
-        resolveProviderOwners,
       }),
     ).toBe(false);
     expect(
@@ -61,7 +46,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "openai-codex",
         useExplicitModels: false,
         providerFilter: new Set(["openai"]),
-        resolveProviderOwners,
       }),
     ).toBe(false);
   });
@@ -82,7 +66,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         provider: "openai",
         useExplicitModels: false,
         providerFilter: null,
-        resolveProviderOwners,
       }),
     ).toBe(false);
   });

@@ -1,4 +1,4 @@
-function createEmptyRequirements() {
+export function createEmptyRequirements() {
   return {
     bins: [],
     anyBins: [],

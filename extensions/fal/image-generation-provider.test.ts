@@ -76,7 +76,6 @@ describe("fal image-generation provider", () => {
       cfg: {},
       count: 2,
       size: "1536x1024",
-      outputFormat: "jpeg",
     });
 
     expectFalJsonPost({
@@ -86,7 +85,7 @@ describe("fal image-generation provider", () => {
         prompt: "draw a cat",
         image_size: { width: 1536, height: 1024 },
         num_images: 2,
-        output_format: "jpeg",
+        output_format: "png",
       },
     });
     expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(

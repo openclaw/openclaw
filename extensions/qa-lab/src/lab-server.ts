@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  acquireDebugProxyCaptureStore,
+  getDebugProxyCaptureStore,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { closeQaHttpServer, handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
@@ -130,33 +130,30 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
   const cfg = createQaLabConfig(params.baseUrl);
   const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
   const abort = new AbortController();
-  const task = Promise.resolve().then(
-    async () =>
-      await qaChannelPlugin.gateway?.startAccount?.({
-        accountId: account.accountId,
-        account,
-        cfg,
-        runtime: {
-          log: () => undefined,
-          error: () => undefined,
-          exit: () => undefined,
-        },
-        abortSignal: abort.signal,
-        log: {
-          info: () => undefined,
-          warn: () => undefined,
-          error: () => undefined,
-          debug: () => undefined,
-        },
-        getStatus: () => ({
-          accountId: account.accountId,
-          configured: true,
-          enabled: true,
-          running: true,
-        }),
-        setStatus: () => undefined,
-      }),
-  );
+  const task = qaChannelPlugin.gateway?.startAccount?.({
+    accountId: account.accountId,
+    account,
+    cfg,
+    runtime: {
+      log: () => undefined,
+      error: () => undefined,
+      exit: () => undefined,
+    },
+    abortSignal: abort.signal,
+    log: {
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+      debug: () => undefined,
+    },
+    getStatus: () => ({
+      accountId: account.accountId,
+      configured: true,
+      enabled: true,
+      running: true,
+    }),
+    setStatus: () => undefined,
+  });
   return {
     cfg,
     async stop() {
@@ -171,11 +168,7 @@ export async function startQaLabServer(
 ): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const captureSettings = resolveDebugProxySettings();
-  const captureStoreLease = acquireDebugProxyCaptureStore(
-    captureSettings.dbPath,
-    captureSettings.blobDir,
-  );
-  const captureStore = captureStoreLease.store;
+  const captureStore = getDebugProxyCaptureStore(captureSettings.dbPath, captureSettings.blobDir);
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -646,7 +639,6 @@ export async function startQaLabServer(
       await runnerModelCatalogPromise?.catch(() => undefined);
       await gateway?.stop();
       await closeQaHttpServer(server);
-      captureStoreLease.release();
     },
   };
   labHandle = lab;

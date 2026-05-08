@@ -1,7 +1,6 @@
 import type { ErrorObject } from "ajv";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ErrorCodes, errorShape, formatValidationErrors } from "../protocol/index.js";
-export { safeParseJson } from "../server-json.js";
 import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";
 
@@ -29,6 +28,25 @@ export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Pr
     await fn();
   } catch (err) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+  }
+}
+
+export function uniqueSortedStrings(values: unknown[]) {
+  return [...new Set(values.filter((v) => typeof v === "string"))]
+    .map((v) => v.trim())
+    .filter(Boolean)
+    .toSorted();
+}
+
+export function safeParseJson(value: string | null | undefined): unknown {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return { payloadJSON: value };
   }
 }
 

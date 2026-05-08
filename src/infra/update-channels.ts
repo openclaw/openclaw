@@ -1,12 +1,7 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export type UpdateChannel = "stable" | "beta" | "dev";
-export type UpdateChannelSource =
-  | "config"
-  | "git-tag"
-  | "git-branch"
-  | "installed-version"
-  | "default";
+export type UpdateChannelSource = "config" | "git-tag" | "git-branch" | "default";
 
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
@@ -41,36 +36,11 @@ export function isStableTag(tag: string): boolean {
   return !isBetaTag(tag);
 }
 
-export function resolveRegistryUpdateChannel(params: {
-  configChannel?: UpdateChannel | null;
-  currentVersion?: string | null;
-}): UpdateChannel {
-  if (
-    params.currentVersion &&
-    isBetaTag(params.currentVersion) &&
-    params.configChannel !== "beta" &&
-    params.configChannel !== "dev"
-  ) {
-    return "beta";
-  }
-  return params.configChannel ?? DEFAULT_PACKAGE_CHANNEL;
-}
-
 export function resolveEffectiveUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
-  currentVersion?: string | null;
   installKind: "git" | "package" | "unknown";
   git?: { tag?: string | null; branch?: string | null };
 }): { channel: UpdateChannel; source: UpdateChannelSource } {
-  if (
-    params.currentVersion &&
-    isBetaTag(params.currentVersion) &&
-    params.configChannel !== "beta" &&
-    params.configChannel !== "dev"
-  ) {
-    return { channel: "beta", source: "installed-version" };
-  }
-
   if (params.configChannel) {
     return { channel: params.configChannel, source: "config" };
   }
@@ -111,22 +81,17 @@ export function formatUpdateChannelLabel(params: {
       ? `${params.channel} (${params.gitBranch})`
       : `${params.channel} (branch)`;
   }
-  if (params.source === "installed-version") {
-    return "beta (installed version)";
-  }
   return `${params.channel} (default)`;
 }
 
 export function resolveUpdateChannelDisplay(params: {
   configChannel?: UpdateChannel | null;
-  currentVersion?: string | null;
   installKind: "git" | "package" | "unknown";
   gitTag?: string | null;
   gitBranch?: string | null;
 }): { channel: UpdateChannel; source: UpdateChannelSource; label: string } {
   const channelInfo = resolveEffectiveUpdateChannel({
     configChannel: params.configChannel,
-    currentVersion: params.currentVersion,
     installKind: params.installKind,
     git:
       params.gitTag || params.gitBranch

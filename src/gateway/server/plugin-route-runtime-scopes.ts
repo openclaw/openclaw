@@ -3,7 +3,7 @@ import {
   getHeader,
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
-} from "../http-auth-utils.js";
+} from "../http-utils.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES, WRITE_SCOPE } from "../method-scopes.js";
 
 export type PluginRouteRuntimeScopeSurface = "write-default" | "trusted-operator";

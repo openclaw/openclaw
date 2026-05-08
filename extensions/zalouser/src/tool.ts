@@ -28,7 +28,7 @@ function stringEnum<T extends readonly string[]>(
   });
 }
 
-const ZalouserToolSchema = Type.Object(
+export const ZalouserToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: `Action to perform: ${ACTIONS.join(", ")}` }),
     threadId: Type.Optional(Type.String({ description: "Thread ID for messaging" })),

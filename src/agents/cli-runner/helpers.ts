@@ -5,8 +5,6 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -28,7 +26,6 @@ import { detectRuntimeShell } from "../shell-utils.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
-import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
@@ -71,12 +68,9 @@ export function buildSystemPrompt(params: {
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  silentReplyPromptMode?: SilentReplyPromptMode;
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
   docsPath?: string;
-  sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   skillsPrompt?: string;
@@ -103,24 +97,19 @@ export function buildSystemPrompt(params: {
       shell: detectRuntimeShell(),
     },
   });
-  const ttsHint = params.config
-    ? buildTtsSystemPromptHint(params.config, params.agentId)
-    : undefined;
+  const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     ownerDisplay: ownerDisplay.ownerDisplay,
     ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
-    sourcePath: params.sourcePath,
-    acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
+    acpEnabled: params.config?.acp?.enabled !== false,
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     modelAliasLines: buildModelAliasLines(params.config),
@@ -169,7 +158,6 @@ export function resolveSystemPromptUsage(params: {
   }
   if (
     !params.backend.systemPromptArg?.trim() &&
-    !params.backend.systemPromptFileArg?.trim() &&
     !params.backend.systemPromptFileConfigKey?.trim()
   ) {
     return null;
@@ -227,7 +215,7 @@ function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: 
   return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
 }
 
-function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
+export function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
   if (!paths.length) {
     return prompt;
   }
@@ -302,10 +290,7 @@ export async function writeCliSystemPromptFile(params: {
   backend: CliBackendConfig;
   systemPrompt: string;
 }): Promise<{ filePath?: string; cleanup: () => Promise<void> }> {
-  if (
-    !params.backend.systemPromptFileArg?.trim() &&
-    !params.backend.systemPromptFileConfigKey?.trim()
-  ) {
+  if (!params.backend.systemPromptFileConfigKey?.trim()) {
     return { cleanup: async () => {} };
   }
   const tempDir = await fs.mkdtemp(
@@ -382,13 +367,6 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
-    !params.useResume &&
-    params.systemPrompt &&
-    params.systemPromptFilePath &&
-    params.backend.systemPromptFileArg
-  ) {
-    args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
-  } else if (
     !params.useResume &&
     params.systemPrompt &&
     params.systemPromptFilePath &&

@@ -1,5 +1,5 @@
-import { assertOkOrThrowProviderError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
-import { trimToUndefined } from "openclaw/plugin-sdk/speech";
+import { postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import { extractProviderErrorDetail, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { XAI_BASE_URL } from "./api.js";
 export { XAI_BASE_URL };
 
@@ -37,6 +37,10 @@ export function normalizeXaiLanguageCode(value: unknown): string | undefined {
   throw new Error(
     `xAI language must be "auto" or a BCP-47 tag (e.g. "en", "pt-br", "zh-cn"); got: ${normalized}`,
   );
+}
+
+async function extractXaiErrorDetail(response: Response): Promise<string | undefined> {
+  return await extractProviderErrorDetail(response);
 }
 
 export async function xaiTTS(params: {
@@ -85,7 +89,17 @@ export async function xaiTTS(params: {
     auditContext: "xai tts",
   });
   try {
-    await assertOkOrThrowProviderError(response, "xAI TTS API error");
+    if (!response.ok) {
+      const detail = await extractXaiErrorDetail(response);
+      const requestId =
+        trimToUndefined(response.headers.get("x-request-id")) ??
+        trimToUndefined(response.headers.get("request-id"));
+      throw new Error(
+        `xAI TTS API error (${response.status})` +
+          (detail ? `: ${detail}` : "") +
+          (requestId ? ` [request_id=${requestId}]` : ""),
+      );
+    }
 
     return Buffer.from(await response.arrayBuffer());
   } finally {

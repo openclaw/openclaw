@@ -1,16 +1,12 @@
-import type { SubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-let log: SubsystemLogger | null = null;
-let logPromise: Promise<SubsystemLogger> | null = null;
+let log: ReturnType<typeof createSubsystemLogger> | null = null;
 const loggedEnv = new Set<string>();
 
-async function getLog(): Promise<SubsystemLogger> {
+function getLog(): ReturnType<typeof createSubsystemLogger> {
   if (!log) {
-    logPromise ??= import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
-      createSubsystemLogger("env"),
-    );
-    log = await logPromise;
+    log = createSubsystemLogger("env");
   }
   return log;
 }
@@ -45,15 +41,9 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
     return;
   }
   loggedEnv.add(option.key);
-  void getLog()
-    .then((logger) => {
-      logger.info(
-        `env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`,
-      );
-    })
-    .catch(() => {
-      // Best-effort diagnostics only.
-    });
+  getLog().info(
+    `env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`,
+  );
 }
 
 export function normalizeZaiEnv(): void {

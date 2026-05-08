@@ -31,9 +31,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Amazon Bedrock Mantle](/providers/bedrock-mantle)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Arcee AI (Trinity models)](/providers/arcee)
-- [Azure Speech](/providers/azure-speech)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
-- [Cerebras](/providers/cerebras)
 - [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [ComfyUI](/providers/comfy)
@@ -44,7 +42,6 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [GitHub Copilot](/providers/github-copilot)
 - [GLM models](/providers/glm)
 - [Google (Gemini)](/providers/google)
-- [Gradium](/providers/gradium)
 - [Groq (LPU inference)](/providers/groq)
 - [Hugging Face (Inference)](/providers/huggingface)
 - [inferrs (local models)](/providers/inferrs)
@@ -64,7 +61,6 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
 - [Runway](/providers/runway)
-- [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
@@ -92,7 +88,6 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [ElevenLabs](/providers/elevenlabs#speech-to-text)
 - [Mistral](/providers/mistral#audio-transcription-voxtral)
 - [OpenAI](/providers/openai#speech-to-text)
-- [SenseAudio](/providers/senseaudio)
 - [xAI](/providers/xai#speech-to-text)
 
 ## Community tools

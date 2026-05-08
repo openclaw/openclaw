@@ -10,7 +10,7 @@ import {
   resolvePollMaxSelections,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   normalizeMessagePresentation,
   presentationToInteractiveReply,
@@ -23,7 +23,6 @@ import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
-import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
@@ -135,7 +134,6 @@ function readTelegramSendContent(params: {
   args: Record<string, unknown>;
   mediaUrl?: string;
   hasButtons: boolean;
-  interactive?: unknown;
   presentation?: MessagePresentation;
 }) {
   const explicitContent =
@@ -146,20 +144,7 @@ function readTelegramSendContent(params: {
     explicitContent == null && params.presentation
       ? renderMessagePresentationFallbackText({ presentation: params.presentation })
       : undefined;
-  const interactiveText =
-    explicitContent == null && !params.presentation
-      ? resolveTelegramInteractiveTextFallback({ interactive: params.interactive })
-      : undefined;
-  let content =
-    explicitContent ??
-    (presentationText?.trim() ? presentationText : undefined) ??
-    (interactiveText?.trim() ? interactiveText : undefined);
-  if ((content == null || content.trim().length === 0) && !params.mediaUrl && params.hasButtons) {
-    const fallback = presentationText?.trim() ? presentationText : interactiveText;
-    if (fallback?.trim()) {
-      content = fallback;
-    }
-  }
+  const content = explicitContent ?? (presentationText?.trim() ? presentationText : undefined);
   if (content == null && !params.mediaUrl && !params.hasButtons) {
     throw new Error("content required.");
   }
@@ -336,7 +321,6 @@ export async function handleTelegramAction(
       args: params,
       mediaUrl: mediaUrl ?? undefined,
       hasButtons: Array.isArray(buttons) && buttons.length > 0,
-      interactive: params.interactive,
       presentation,
     });
     if (buttons) {
@@ -494,14 +478,11 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    const result = await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
+    await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
       cfg,
       token,
       accountId: accountId ?? undefined,
     });
-    if (!result.ok) {
-      return jsonResult({ ok: false, deleted: false, warning: result.warning });
-    }
     return jsonResult({ ok: true, deleted: true });
   }
 

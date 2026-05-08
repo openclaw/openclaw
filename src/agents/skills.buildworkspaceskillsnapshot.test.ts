@@ -247,14 +247,9 @@ describe("buildWorkspaceSkillSnapshot", () => {
     );
 
     // We should only have loaded a small subset.
-    const skillNames = snapshot.skills.map((skill) => skill.name);
-    expect(skillNames.length).toBeGreaterThan(0);
-    expect(skillNames.length).toBeLessThanOrEqual(5);
-    expect(new Set(skillNames).size).toBe(skillNames.length);
-    for (const name of skillNames) {
-      expect(name).toMatch(/^repo-skill-\d{2}$/);
-      expect(snapshot.prompt).toContain(name);
-    }
+    expect(snapshot.skills.length).toBeLessThanOrEqual(5);
+    expect(snapshot.prompt).toContain("repo-skill-00");
+    expect(snapshot.prompt).not.toContain("repo-skill-07");
   });
 
   it("skips skills whose SKILL.md exceeds maxSkillFileBytes", async () => {

@@ -112,10 +112,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
           delete nextCfg.channels;
         }
       }
-      await getLineRuntime().config.replaceConfigFile({
-        nextConfig: nextCfg,
-        afterWrite: { mode: "auto" },
-      });
+      await getLineRuntime().config.writeConfigFile(nextCfg);
     }
 
     const resolved = resolveLineAccount({

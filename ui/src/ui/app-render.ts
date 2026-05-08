@@ -1,8 +1,13 @@
 import { html, nothing } from "lit";
-import { styleMap } from "lit/directives/style-map.js";
+import { applyMergePatch } from "../../../src/config/merge-patch.ts";
+import {
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { hasAbortableSessionRun, refreshChat } from "./app-chat.ts";
+import { refreshChatAvatar } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -11,11 +16,8 @@ import {
   renderChatSessionSelect,
   renderTab,
   resolveAssistantAttachmentAuthToken,
-  resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
-  createChatSession,
-  dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
@@ -32,7 +34,6 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession,
   saveAgentsConfig,
 } from "./controllers/agents.ts";
-import { setAssistantAvatarOverride } from "./controllers/assistant-identity.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -44,11 +45,10 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
-  stageDefaultAgentConfigEntry,
-  stageConfigPreset,
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
+import { cloneConfigObject, serializeConfigForm } from "./controllers/config/form-utils.ts";
 import {
   loadCronJobsPage,
   loadCronRuns,
@@ -118,26 +118,11 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
-import { getCronJobPayload } from "./cron-payload.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
-import { createLazyView, renderLazyView } from "./lazy-view.ts";
-import {
-  normalizeBasePath,
-  TAB_GROUPS,
-  subtitleForTab,
-  titleForTab,
-  type Tab,
-} from "./navigation.ts";
-import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import "./components/dashboard-header.ts";
-import {
-  buildAgentMainSessionKey,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "./session-key.ts";
-import { loadLocalAssistantIdentity } from "./storage.ts";
-import { normalizeOptionalString } from "./string-coerce.ts";
+import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
@@ -149,36 +134,56 @@ import {
 } from "./views/agents-utils.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
-import { getPresetById } from "./views/config-presets.ts";
-import { renderQuickSettings, type QuickSettingsChannel } from "./views/config-quick.ts";
+import { getPresetById, type ConfigPresetId } from "./views/config-presets.ts";
+import {
+  renderQuickSettings,
+  type QuickSettingsChannel,
+  type QuickSettingsApiKey,
+} from "./views/config-quick.ts";
 import { renderConfig, type ConfigProps } from "./views/config.ts";
 import {
   renderCronQuickCreate,
   createDefaultDraft,
   draftToCronFormPatch,
 } from "./views/cron-quick-create.ts";
-import { renderDreamingRestartConfirmation } from "./views/dreaming-restart-confirmation.ts";
 import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderOverview } from "./views/overview.ts";
 
+// Lazy-loaded view modules – deferred so the initial bundle stays small.
+// Each loader resolves once; subsequent calls return the cached module.
+type LazyState<T> = { mod: T | null; promise: Promise<T> | null };
+
 let _pendingUpdate: (() => void) | undefined;
 
-const notifyLazyViewChanged = () => _pendingUpdate?.();
+function createLazy<T>(loader: () => Promise<T>): () => T | null {
+  const s: LazyState<T> = { mod: null, promise: null };
+  return () => {
+    if (s.mod) {
+      return s.mod;
+    }
+    if (!s.promise) {
+      s.promise = loader().then((m) => {
+        s.mod = m;
+        _pendingUpdate?.();
+        return m;
+      });
+    }
+    return null;
+  };
+}
 
-// Lazy-loaded view modules are deferred so the initial bundle stays small.
-// The shared loader renders visible fallback states instead of leaving a tab blank.
-const lazyAgents = createLazyView(() => import("./views/agents.ts"), notifyLazyViewChanged);
-const lazyChannels = createLazyView(() => import("./views/channels.ts"), notifyLazyViewChanged);
-const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewChanged);
-const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
-const lazyInstances = createLazyView(() => import("./views/instances.ts"), notifyLazyViewChanged);
-const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewChanged);
-const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
-const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
-const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
+const lazyAgents = createLazy(() => import("./views/agents.ts"));
+const lazyChannels = createLazy(() => import("./views/channels.ts"));
+const lazyCron = createLazy(() => import("./views/cron.ts"));
+const lazyDebug = createLazy(() => import("./views/debug.ts"));
+const lazyInstances = createLazy(() => import("./views/instances.ts"));
+const lazyLogs = createLazy(() => import("./views/logs.ts"));
+const lazyNodes = createLazy(() => import("./views/nodes.ts"));
+const lazySessions = createLazy(() => import("./views/sessions.ts"));
+const lazySkills = createLazy(() => import("./views/skills.ts"));
 
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
@@ -209,6 +214,10 @@ function resolveDreamingNextCycle(
 }
 
 let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
+function lazyRender<M>(getter: () => M | null, render: (mod: M) => unknown) {
+  const mod = getter();
+  return mod ? render(mod) : nothing;
+}
 
 const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 const CRON_THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
@@ -307,14 +316,7 @@ function dismissUpdateBanner(updateAvailable: unknown) {
   }
 }
 
-const COMMUNICATION_SECTION_KEYS = [
-  "channels",
-  "messages",
-  "broadcast",
-  "__notifications__",
-  "talk",
-  "audio",
-] as const;
+const COMMUNICATION_SECTION_KEYS = ["channels", "messages", "broadcast", "talk", "audio"] as const;
 const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 const AUTOMATION_SECTION_KEYS = [
   "commands",
@@ -369,10 +371,6 @@ type ConfigTabOverrides = Pick<
       | "includeVirtualSections"
       | "settingsLayout"
       | "onBackToQuick"
-      | "webPush"
-      | "onWebPushSubscribe"
-      | "onWebPushUnsubscribe"
-      | "onWebPushTest"
     >
   >;
 
@@ -421,27 +419,6 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   return undefined;
 }
 
-function resolveAssistantAvatarOverride(config: unknown): string | null {
-  if (!config || typeof config !== "object" || Array.isArray(config)) {
-    return null;
-  }
-  const ui = (config as { ui?: unknown }).ui;
-  if (!ui || typeof ui !== "object" || Array.isArray(ui)) {
-    return null;
-  }
-  const assistant = (ui as { assistant?: unknown }).assistant;
-  if (!assistant || typeof assistant !== "object" || Array.isArray(assistant)) {
-    return null;
-  }
-  return normalizeOptionalString((assistant as { avatar?: unknown }).avatar) ?? null;
-}
-
-function buildAssistantAvatarRoute(basePathValue: string | null | undefined, agentId: string) {
-  const basePath = normalizeBasePath(basePathValue ?? "");
-  const encoded = encodeURIComponent(agentId);
-  return basePath ? `${basePath}/avatar/${encoded}` : `/avatar/${encoded}`;
-}
-
 // ── Quick Settings data extraction helpers ──
 
 const KNOWN_CHANNEL_IDS = [
@@ -451,6 +428,13 @@ const KNOWN_CHANNEL_IDS = [
   { id: "whatsapp", label: "WhatsApp" },
   { id: "signal", label: "Signal" },
   { id: "imessage", label: "iMessage" },
+] as const;
+
+const KNOWN_PROVIDER_KEYS = [
+  { provider: "anthropic", label: "Anthropic", envKey: "ANTHROPIC_API_KEY" },
+  { provider: "openai", label: "OpenAI", envKey: "OPENAI_API_KEY" },
+  { provider: "google", label: "Google", envKey: "GOOGLE_API_KEY" },
+  { provider: "openrouter", label: "OpenRouter", envKey: "OPENROUTER_API_KEY" },
 ] as const;
 
 function formatQuickSettingsLabel(id: string): string {
@@ -497,6 +481,20 @@ function extractQuickSettingsChannels(state: AppViewState): QuickSettingsChannel
     });
   }
   return channels;
+}
+
+function extractQuickSettingsApiKeys(state: AppViewState): QuickSettingsApiKey[] {
+  const config = state.configForm ?? state.configSnapshot?.config;
+  const env = config && typeof config === "object" ? config.env : null;
+  const envObj = env && typeof env === "object" ? (env as Record<string, unknown>) : {};
+  const envVars =
+    envObj.vars && typeof envObj.vars === "object" ? (envObj.vars as Record<string, unknown>) : {};
+  return KNOWN_PROVIDER_KEYS.map(({ provider, label, envKey }) => {
+    const value = typeof envVars[envKey] === "string" ? envVars[envKey] : envObj[envKey];
+    const isSet = typeof value === "string" && value.trim().length > 0;
+    const masked = isSet ? `••••${value.slice(-4)}` : undefined;
+    return { provider, label, masked, isSet };
+  });
 }
 
 function extractMcpServerCount(state: AppViewState): number {
@@ -579,6 +577,35 @@ function resolveQuickSettingsSessionRow(state: AppViewState) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
 }
 
+async function applyQuickSettingsPreset(state: AppViewState, presetId: ConfigPresetId) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const preset = getPresetById(presetId);
+  if (!preset) {
+    return;
+  }
+  state.configApplying = true;
+  state.lastError = null;
+  try {
+    if (!state.configSnapshot?.hash) {
+      await loadConfig(state);
+    }
+    const baseHash = state.configSnapshot?.hash?.trim();
+    if (!baseHash) {
+      throw new Error("Config base hash unavailable. Reload config and retry.");
+    }
+    const baseConfig = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
+    const merged = applyMergePatch(baseConfig, preset.patch) as Record<string, unknown>;
+    await state.client.request("config.patch", { raw: serializeConfigForm(merged), baseHash });
+    await loadConfig(state);
+  } catch (err) {
+    state.lastError = `Failed to apply preset: ${String(err)}`;
+  } finally {
+    state.configApplying = false;
+  }
+}
+
 function renderCronQuickCreateForTab(
   state: AppViewState,
   requestHostUpdate: (() => void) | undefined,
@@ -647,47 +674,10 @@ export function renderApp(state: AppViewState) {
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
-  const dashboardHeaderContext = resolveDashboardHeaderContext(state);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
-  const localAssistantAvatarOverride =
-    normalizeOptionalString(loadLocalAssistantIdentity().avatar) ?? null;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
-  const chatAssistantAvatarStatus = localAssistantAvatarOverride
-    ? "data"
-    : (state.chatAvatarStatus ?? state.assistantAvatarStatus ?? null);
-  const chatAssistantAvatarReason = localAssistantAvatarOverride
-    ? null
-    : (state.chatAvatarReason ?? state.assistantAvatarReason ?? null);
-  const chatAssistantAvatarMissing =
-    chatAssistantAvatarStatus === "none" && chatAssistantAvatarReason === "missing";
-  const effectiveAssistantAvatar =
-    localAssistantAvatarOverride ?? (chatAssistantAvatarMissing ? null : state.assistantAvatar);
-  const chatAvatarUrl =
-    localAssistantAvatarOverride ??
-    state.chatAvatarUrl ??
-    (chatAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null));
-  const configAssistantAvatarStatus = localAssistantAvatarOverride
-    ? "data"
-    : (state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null);
-  const configAssistantAvatarReason = localAssistantAvatarOverride
-    ? null
-    : (state.assistantAvatarReason ?? state.chatAvatarReason ?? null);
-  const configAssistantAvatarSource =
-    localAssistantAvatarOverride ?? state.assistantAvatarSource ?? state.chatAvatarSource ?? null;
-  const configAssistantAvatarMissing =
-    configAssistantAvatarStatus === "none" && configAssistantAvatarReason === "missing";
-  const configAssistantAvatar =
-    localAssistantAvatarOverride ??
-    (configAssistantAvatarMissing || configAssistantAvatarStatus === "local"
-      ? null
-      : state.assistantAvatar);
-  const configAssistantAvatarUrl =
-    localAssistantAvatarOverride ??
-    (configAssistantAvatarStatus === "local" && state.assistantAgentId
-      ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
-      : (state.chatAvatarUrl ??
-        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null))));
+  const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const configuredDreaming = resolveConfiguredDreaming(configValue);
@@ -710,18 +700,18 @@ export function renderApp(state: AppViewState) {
     if (!state.client || !state.connected) {
       return null;
     }
-    const payload: {
+    const payload = (await state.client.request("wiki.get", {
+      lookup,
+      fromLine: 1,
+      lineCount: 5000,
+    })) as {
       title?: unknown;
       path?: unknown;
       content?: unknown;
       updatedAt?: unknown;
       totalLines?: unknown;
       truncated?: unknown;
-    } | null = await state.client.request("wiki.get", {
-      lookup,
-      fromLine: 1,
-      lineCount: 5000,
-    });
+    } | null;
     const title =
       typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
     const path =
@@ -749,49 +739,16 @@ export function renderApp(state: AppViewState) {
     };
   };
   const applyDreamingEnabled = (enabled: boolean) => {
-    if (
-      state.dreamingModeSaving ||
-      state.dreamingRestartConfirmLoading ||
-      state.dreamingRestartConfirmOpen ||
-      dreamingOn === enabled
-    ) {
-      return;
-    }
-    state.dreamingPendingEnabled = enabled;
-    state.dreamingRestartConfirmOpen = true;
-    state.dreamingStatusError = null;
-  };
-  const cancelDreamingRestart = () => {
-    if (state.dreamingRestartConfirmLoading) {
-      return;
-    }
-    state.dreamingRestartConfirmOpen = false;
-    state.dreamingPendingEnabled = null;
-    state.dreamingStatusError = null;
-  };
-  const confirmDreamingRestart = () => {
-    const enabled = state.dreamingPendingEnabled;
-    if (enabled == null || state.dreamingRestartConfirmLoading) {
+    if (state.dreamingModeSaving || dreamingOn === enabled) {
       return;
     }
     void (async () => {
-      state.dreamingRestartConfirmLoading = true;
-      state.dreamingStatusError = null;
-      try {
-        const updated = await updateDreamingEnabled(state, enabled);
-        if (!updated) {
-          if (!state.dreamingStatusError) {
-            state.dreamingStatusError = t("dreaming.restartConfirmation.failed");
-          }
-          return;
-        }
-        await loadConfig(state);
-        await loadDreamingStatus(state);
-        state.dreamingRestartConfirmOpen = false;
-        state.dreamingPendingEnabled = null;
-      } finally {
-        state.dreamingRestartConfirmLoading = false;
+      const updated = await updateDreamingEnabled(state, enabled);
+      if (!updated) {
+        return;
       }
+      await loadConfig(state);
+      await loadDreamingStatus(state);
     })();
   };
   const basePath = normalizeBasePath(state.basePath ?? "");
@@ -842,11 +799,10 @@ export function renderApp(state: AppViewState) {
         ...resolveConfiguredCronModelSuggestions(configValue),
         ...state.cronJobs
           .map((job) => {
-            const payload = getCronJobPayload(job);
-            if (payload?.kind !== "agentTurn" || typeof payload.model !== "string") {
+            if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
               return "";
             }
-            return payload.model.trim();
+            return job.payload.model.trim();
           })
           .filter(Boolean),
       ].filter(Boolean),
@@ -900,7 +856,7 @@ export function renderApp(state: AppViewState) {
     onRequestUpdate: requestHostUpdate,
     onFormPatch: (path: Array<string | number>, value: unknown) =>
       updateConfigFormValue(state, path, value),
-    onReload: () => loadConfig(state, { discardPendingChanges: true }),
+    onReload: () => loadConfig(state),
     onReset: () => resetConfigPendingChanges(state),
     onSave: () => saveConfig(state),
     onApply: () => applyConfig(state),
@@ -911,18 +867,6 @@ export function renderApp(state: AppViewState) {
     themeMode: state.themeMode,
     setTheme: (theme, context) => state.setTheme(theme, context),
     setThemeMode: (mode, context) => state.setThemeMode(mode, context),
-    hasCustomTheme: Boolean(state.settings.customTheme),
-    customThemeLabel: state.settings.customTheme?.label ?? null,
-    customThemeSourceUrl: state.settings.customTheme?.sourceUrl ?? null,
-    customThemeImportUrl: state.customThemeImportUrl,
-    customThemeImportBusy: state.customThemeImportBusy,
-    customThemeImportMessage: state.customThemeImportMessage,
-    customThemeImportExpanded: state.customThemeImportExpanded,
-    customThemeImportFocusToken: state.customThemeImportFocusToken,
-    onCustomThemeImportUrlChange: (next) => state.setCustomThemeImportUrl(next),
-    onOpenCustomThemeImport: () => state.openCustomThemeImport(),
-    onImportCustomTheme: () => void state.importCustomTheme(),
-    onClearCustomTheme: () => state.clearCustomTheme(),
     borderRadius: state.settings.borderRadius,
     setBorderRadius: (value) => state.setBorderRadius(value),
     gatewayUrl: state.settings.gatewayUrl,
@@ -986,8 +930,6 @@ export function renderApp(state: AppViewState) {
         // Quick Settings mode — opinionated card layout
         if (state.configSettingsMode === "quick") {
           const configObj = state.configForm ?? state.configSnapshot?.config ?? {};
-          const assistantAvatarOverride =
-            localAssistantAvatarOverride ?? resolveAssistantAvatarOverride(configObj);
           const agentsDefaults = ((configObj.agents as Record<string, unknown> | undefined)
             ?.defaults ?? {}) as Record<string, unknown>;
           const activeSession = resolveQuickSettingsSessionRow(state);
@@ -1033,6 +975,12 @@ export function renderApp(state: AppViewState) {
               state.communicationsActiveSection = "channels";
               requestHostUpdate?.();
             },
+            apiKeys: extractQuickSettingsApiKeys(state),
+            onApiKeyChange: () => {
+              state.configSettingsMode = "advanced";
+              state.configActiveSection = "env";
+              requestHostUpdate?.();
+            },
             automation: {
               cronJobCount: state.cronJobs?.length ?? 0,
               skillCount: state.skillsReport?.skills?.length ?? 0,
@@ -1059,69 +1007,18 @@ export function renderApp(state: AppViewState) {
             },
             theme: state.theme,
             themeMode: state.themeMode,
-            hasCustomTheme: Boolean(state.settings.customTheme),
-            customThemeLabel: state.settings.customTheme?.label ?? null,
             borderRadius: state.settings.borderRadius,
             setTheme: (theme, context) => state.setTheme(theme, context),
-            onOpenCustomThemeImport: () => {
-              state.setTab("appearance");
-              state.appearanceFormMode = "form";
-              state.appearanceSearchQuery = "";
-              state.appearanceActiveSection = "__appearance__";
-              state.appearanceActiveSubsection = null;
-              state.openCustomThemeImport();
-              requestHostUpdate?.();
-            },
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
+            userName: state.userName ?? null,
             userAvatar: state.userAvatar ?? null,
+            onUserNameChange: (name) => state.applyLocalUserIdentity?.({ name }),
             onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
-            assistantAvatar: configAssistantAvatar,
-            assistantAvatarUrl: configAssistantAvatarUrl,
-            assistantAvatarSource: configAssistantAvatarSource,
-            assistantAvatarStatus: configAssistantAvatarStatus,
-            assistantAvatarReason: configAssistantAvatarReason,
-            assistantAvatarOverride,
-            assistantAvatarUploadBusy: state.assistantAvatarUploadBusy,
-            assistantAvatarUploadError: state.assistantAvatarUploadError,
-            onAssistantAvatarOverrideChange: (dataUrl) => {
-              setAssistantAvatarOverride(state, dataUrl);
-              state.chatAvatarUrl = dataUrl;
-              state.chatAvatarSource = dataUrl;
-              state.chatAvatarStatus = "data";
-              state.chatAvatarReason = null;
-              state.assistantAvatarUploadError = null;
-              requestHostUpdate?.();
-            },
-            onAssistantAvatarClearOverride: () => {
-              setAssistantAvatarOverride(state, null);
-              state.chatAvatarUrl = null;
-              state.chatAvatarSource = null;
-              state.chatAvatarStatus = null;
-              state.chatAvatarReason = null;
-              state.assistantAvatarUploadError = null;
-              void state.loadAssistantIdentity?.().finally(() => requestHostUpdate?.());
-              requestHostUpdate?.();
-            },
-            basePath: state.basePath ?? "",
             configObject: configObj,
-            savedConfigObject:
-              (state.configSnapshot?.config as Record<string, unknown> | null) ?? {},
-            configDirty: state.configFormDirty,
-            configSaving: state.configSaving,
-            configApplying: state.configApplying,
-            configReady: Boolean(state.configSnapshot?.hash),
-            onSelectPreset: (presetId) => {
-              const preset = getPresetById(presetId);
-              if (!preset) {
-                return;
-              }
-              stageConfigPreset(state, preset.patch);
-              requestHostUpdate?.();
+            onApplyPreset: (presetId) => {
+              void applyQuickSettingsPreset(state, presetId).then(() => requestHostUpdate?.());
             },
-            onResetConfig: () => resetConfigPendingChanges(state),
-            onSaveConfig: () => saveConfig(state),
-            onApplyConfig: () => applyConfig(state),
             onAdvancedSettings: () => {
               state.configSettingsMode = "advanced";
               requestHostUpdate?.();
@@ -1176,16 +1073,6 @@ export function renderApp(state: AppViewState) {
           onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
           navRootLabel: "Communication",
           includeSections: [...COMMUNICATION_SECTION_KEYS],
-          includeVirtualSections: true,
-          webPush: {
-            supported: state.webPushSupported,
-            permission: state.webPushPermission,
-            subscribed: state.webPushSubscribed,
-            loading: state.webPushLoading,
-          },
-          onWebPushSubscribe: () => state.handleWebPushSubscribe(),
-          onWebPushUnsubscribe: () => state.handleWebPushUnsubscribe(),
-          onWebPushTest: () => state.handleWebPushTest(),
         });
       case "appearance":
         return renderConfigTab({
@@ -1326,7 +1213,7 @@ export function renderApp(state: AppViewState) {
       },
       onSlashCommand: (cmd) => {
         state.setTab("chat" as import("./navigation.ts").Tab);
-        state.handleChatDraftChange(cmd.endsWith(" ") ? cmd : `${cmd} `);
+        state.chatMessage = cmd.endsWith(" ") ? cmd : `${cmd} `;
       },
     })}
     <div
@@ -1335,9 +1222,6 @@ export function renderApp(state: AppViewState) {
         : ""} ${navCollapsed ? "shell--nav-collapsed" : ""} ${navDrawerOpen
         ? "shell--nav-drawer-open"
         : ""} ${state.onboarding ? "shell--onboarding" : ""}"
-      style=${styleMap(
-        state.chatMessageMaxWidth ? { "--chat-message-max-width": state.chatMessageMaxWidth } : {},
-      )}
     >
       <button
         type="button"
@@ -1351,7 +1235,7 @@ export function renderApp(state: AppViewState) {
         <div class="topnav-shell">
           <button
             type="button"
-            class="sidebar-menu-trigger topbar-nav-toggle"
+            class="topbar-nav-toggle"
             @click=${() => {
               state.navDrawerOpen = !navDrawerOpen;
             }}
@@ -1362,14 +1246,7 @@ export function renderApp(state: AppViewState) {
             <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
           </button>
           <div class="topnav-shell__content">
-            <dashboard-header
-              .tab=${state.tab}
-              .basePath=${state.basePath}
-              .agentLabel=${dashboardHeaderContext.agentLabel}
-              @navigate=${(event: CustomEvent<Tab>) => {
-                state.setTab(event.detail);
-              }}
-            ></dashboard-header>
+            <dashboard-header .tab=${state.tab}></dashboard-header>
           </div>
           <div class="topnav-shell__actions">
             <button
@@ -1377,8 +1254,8 @@ export function renderApp(state: AppViewState) {
               @click=${() => {
                 state.paletteOpen = !state.paletteOpen;
               }}
-              title=${t("chat.commandPaletteTitle")}
-              aria-label=${t("chat.openCommandPalette")}
+              title="Search or jump to… (⌘K)"
+              aria-label="Open command palette"
             >
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
@@ -1472,7 +1349,7 @@ export function renderApp(state: AppViewState) {
                   href="https://docs.openclaw.ai"
                   target=${EXTERNAL_LINK_TARGET}
                   rel=${buildExternalLinkRel()}
-                  title=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
+                  title="${t("common.docs")} (opens in new tab)"
                 >
                   <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
                   ${!navCollapsed
@@ -1505,29 +1382,24 @@ export function renderApp(state: AppViewState) {
         </aside>
       </div>
       <main class="content ${isChat ? "content--chat" : ""}">
-        ${state.updateStatusBanner
-          ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
-              ${state.updateStatusBanner.text}
-            </div>`
-          : nothing}
         ${state.updateAvailable &&
         state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
         !isUpdateBannerDismissed(state.updateAvailable)
           ? html`<div class="update-banner callout danger" role="alert">
-              <strong>${t("chat.updateAvailable")}</strong> v${state.updateAvailable.latestVersion}
-              (${t("chat.runningVersion", { version: state.updateAvailable.currentVersion })}).
+              <strong>Update available:</strong> v${state.updateAvailable.latestVersion} (running
+              v${state.updateAvailable.currentVersion}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
               >
-                ${state.updateRunning ? t("chat.updating") : t("chat.updateNow")}
+                ${state.updateRunning ? "Updating…" : "Update now"}
               </button>
               <button
                 class="update-banner__close"
                 type="button"
-                title=${t("common.dismiss")}
-                aria-label=${t("chat.dismissUpdateBanner")}
+                title="Dismiss"
+                aria-label="Dismiss update banner"
                 @click=${() => {
                   dismissUpdateBanner(state.updateAvailable);
                   state.updateAvailable = null;
@@ -1539,13 +1411,7 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "config"
           ? nothing
-          : html`<section
-              class=${isChat && state.chatHeaderControlsHidden
-                ? "content-header content-header--chat-hidden"
-                : "content-header"}
-              ?inert=${isChat && state.chatHeaderControlsHidden}
-              aria-hidden=${isChat && state.chatHeaderControlsHidden ? "true" : nothing}
-            >
+          : html`<section class="content-header">
               <div>
                 ${isChat
                   ? renderChatSessionSelect(state)
@@ -1614,7 +1480,19 @@ export function renderApp(state: AppViewState) {
               onSettingsChange: (next) => state.applySettings(next),
               onPasswordChange: (next) => (state.password = next),
               onSessionKeyChange: (next) => {
-                switchChatSession(state, next);
+                state.sessionKey = next;
+                state.chatMessage = "";
+                state.chatMessages = [];
+                state.chatToolMessages = [];
+                state.chatStream = null;
+                state.chatRunId = null;
+                state.chatQueue = [];
+                state.resetToolStream();
+                state.applySettings({
+                  ...state.settings,
+                  sessionKey: next,
+                  lastActiveSessionKey: next,
+                });
               },
               onToggleGatewayTokenVisibility: () => {
                 state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
@@ -1629,7 +1507,7 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
         ${state.tab === "channels"
-          ? renderLazyView(lazyChannels, (m) =>
+          ? lazyRender(lazyChannels, (m) =>
               m.renderChannels({
                 connected: state.connected,
                 loading: state.channelsLoading,
@@ -1667,7 +1545,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "instances"
-          ? renderLazyView(lazyInstances, (m) =>
+          ? lazyRender(lazyInstances, (m) =>
               m.renderInstances({
                 loading: state.presenceLoading,
                 entries: state.presenceEntries,
@@ -1678,7 +1556,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "sessions"
-          ? renderLazyView(lazySessions, (m) =>
+          ? lazyRender(lazySessions, (m) =>
               m.renderSessions({
                 loading: state.sessionsLoading,
                 result: state.sessionsResult,
@@ -1687,11 +1565,8 @@ export function renderApp(state: AppViewState) {
                 limit: state.sessionsFilterLimit,
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
-                showArchived: state.sessionsShowArchived,
-                filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
-                agentIdentityById: state.agentIdentityById,
                 sortColumn: state.sessionsSortColumn,
                 sortDir: state.sessionsSortDir,
                 page: state.sessionsPage,
@@ -1707,36 +1582,6 @@ export function renderApp(state: AppViewState) {
                   state.sessionsFilterLimit = next.limit;
                   state.sessionsIncludeGlobal = next.includeGlobal;
                   state.sessionsIncludeUnknown = next.includeUnknown;
-                  state.sessionsShowArchived = next.showArchived;
-                  state.sessionsSelectedKeys = new Set();
-                  state.sessionsPage = 0;
-                  void loadSessions(state, {
-                    activeMinutes: Number(next.activeMinutes) || 0,
-                    limit: Number(next.limit) || 0,
-                    includeGlobal: next.includeGlobal,
-                    includeUnknown: next.includeUnknown,
-                    showArchived: next.showArchived,
-                  });
-                },
-                onToggleFiltersCollapsed: () => {
-                  state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
-                },
-                onClearFilters: () => {
-                  state.sessionsFilterActive = "";
-                  state.sessionsFilterLimit = "";
-                  state.sessionsIncludeGlobal = true;
-                  state.sessionsIncludeUnknown = true;
-                  state.sessionsShowArchived = true;
-                  state.sessionsSearchQuery = "";
-                  state.sessionsSelectedKeys = new Set();
-                  state.sessionsPage = 0;
-                  void loadSessions(state, {
-                    activeMinutes: 0,
-                    limit: 0,
-                    includeGlobal: true,
-                    includeUnknown: true,
-                    showArchived: true,
-                  });
                 },
                 onSearchChange: (q) => {
                   state.sessionsSearchQuery = q;
@@ -1818,7 +1663,7 @@ export function renderApp(state: AppViewState) {
         ${renderUsageTab(state)}
         ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
         ${state.tab === "cron"
-          ? renderLazyView(lazyCron, (m) =>
+          ? lazyRender(lazyCron, (m) =>
               m.renderCron({
                 basePath: state.basePath,
                 loading: state.cronLoading,
@@ -1837,7 +1682,6 @@ export function renderApp(state: AppViewState) {
                 error: state.cronError,
                 busy: state.cronBusy,
                 form: state.cronForm,
-                cronFormCollapsed: state.cronFormCollapsed,
                 channels: state.channelsSnapshot?.channelMeta?.length
                   ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
                   : (state.channelsSnapshot?.channelOrder ?? []),
@@ -1868,18 +1712,9 @@ export function renderApp(state: AppViewState) {
                 },
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
-                onEdit: (job) => {
-                  state.cronFormCollapsed = false;
-                  startCronEdit(state, job);
-                },
-                onClone: (job) => {
-                  state.cronFormCollapsed = false;
-                  startCronClone(state, job);
-                },
+                onEdit: (job) => startCronEdit(state, job),
+                onClone: (job) => startCronClone(state, job),
                 onCancelEdit: () => cancelCronEdit(state),
-                onToggleFormCollapsed: (collapsed) => {
-                  state.cronFormCollapsed = collapsed;
-                },
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
                 onRun: (job, mode) => runCronJob(state, job, mode ?? "force"),
                 onRemove: (job) => removeCronJob(state, job),
@@ -1933,7 +1768,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "agents"
-          ? renderLazyView(lazyAgents, (m) =>
+          ? lazyRender(lazyAgents, (m) =>
               m.renderAgents({
                 basePath: state.basePath ?? "",
                 loading: state.agentsLoading,
@@ -2105,7 +1940,7 @@ export function renderApp(state: AppViewState) {
                     removeConfigFormValue(state, [...basePath, "deny"]);
                   }
                 },
-                onConfigReload: () => loadConfig(state, { discardPendingChanges: true }),
+                onConfigReload: () => loadConfig(state),
                 onConfigSave: () => saveAgentsConfig(state),
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
@@ -2239,13 +2074,16 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
-                  stageDefaultAgentConfigEntry(state, agentId);
+                  if (!configValue) {
+                    return;
+                  }
+                  updateConfigFormValue(state, ["agents", "defaultId"], agentId);
                 },
               }),
             )
           : nothing}
         ${state.tab === "skills"
-          ? renderLazyView(lazySkills, (m) =>
+          ? lazyRender(lazySkills, (m) =>
               m.renderSkills({
                 connected: state.connected,
                 loading: state.skillsLoading,
@@ -2291,7 +2129,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "nodes"
-          ? renderLazyView(lazyNodes, (m) =>
+          ? lazyRender(lazyNodes, (m) =>
               m.renderNodes({
                 loading: state.nodesLoading,
                 nodes: state.nodes,
@@ -2320,7 +2158,7 @@ export function renderApp(state: AppViewState) {
                 onDeviceRotate: (deviceId, role, scopes) =>
                   rotateDeviceToken(state, { deviceId, role, scopes }),
                 onDeviceRevoke: (deviceId, role) => revokeDeviceToken(state, { deviceId, role }),
-                onLoadConfig: () => loadConfig(state, { discardPendingChanges: true }),
+                onLoadConfig: () => loadConfig(state),
                 onLoadExecApprovals: () => {
                   const target =
                     state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
@@ -2398,14 +2236,13 @@ export function renderApp(state: AppViewState) {
               canSend: state.connected,
               disabledReason: chatDisabledReason,
               error: state.lastError,
-              onDismissError: () => dismissChatError(state),
               sessions: state.sessionsResult,
               focusMode: chatFocus,
               autoExpandToolCalls: false,
               onRefresh: () => {
                 state.chatSideResult = null;
                 state.resetToolStream();
-                return refreshChat(state, { scheduleScroll: false });
+                return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
               },
               onToggleFocusMode: () => {
                 if (state.onboarding) {
@@ -2418,32 +2255,20 @@ export function renderApp(state: AppViewState) {
               },
               onChatScroll: (event) => state.handleChatScroll(event),
               getDraft: () => state.chatMessage,
-              onDraftChange: (next) => state.handleChatDraftChange(next),
+              onDraftChange: (next) => (state.chatMessage = next),
               onRequestUpdate: requestHostUpdate,
-              onHistoryKeydown: (input) => state.handleChatInputHistoryKey(input),
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),
-              onCompact: () => state.handleSendChat("/compact", { restoreDraft: true }),
-              onOpenSessionCheckpoints: () => {
-                state.sessionsExpandedCheckpointKey = state.sessionKey;
-                state.setTab("sessions" as import("./navigation.ts").Tab);
-                void loadSessions(state, {
-                  activeMinutes: 0,
-                  limit: 0,
-                  includeGlobal: true,
-                  includeUnknown: true,
-                });
-              },
               onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
-              canAbort: hasAbortableSessionRun(state),
+              canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
               onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
               onDismissSideResult: () => {
                 state.chatSideResult = null;
               },
-              onNewSession: () => void createChatSession(state),
+              onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;
@@ -2483,7 +2308,7 @@ export function renderApp(state: AppViewState) {
               onCloseSidebar: () => state.handleCloseSidebar(),
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
-              assistantAvatar: effectiveAssistantAvatar,
+              assistantAvatar: state.assistantAvatar,
               userName: state.userName ?? null,
               userAvatar: state.userAvatar ?? null,
               localMediaPreviewRoots: state.localMediaPreviewRoots,
@@ -2495,7 +2320,7 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${renderConfigTabForActiveTab()}
         ${state.tab === "debug"
-          ? renderLazyView(lazyDebug, (m) =>
+          ? lazyRender(lazyDebug, (m) =>
               m.renderDebug({
                 loading: state.debugLoading,
                 status: state.debugStatus,
@@ -2516,7 +2341,7 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "logs"
-          ? renderLazyView(lazyLogs, (m) =>
+          ? lazyRender(lazyLogs, (m) =>
               m.renderLogs({
                 loading: state.logsLoading,
                 error: state.logsError,
@@ -2599,15 +2424,7 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
-      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)}
-      ${renderDreamingRestartConfirmation({
-        open: state.dreamingRestartConfirmOpen,
-        loading: state.dreamingRestartConfirmLoading,
-        onConfirm: confirmDreamingRestart,
-        onCancel: cancelDreamingRestart,
-        hasError: Boolean(state.dreamingStatusError),
-      })}
-      ${nothing}
+      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
     </div>
   `;
 }

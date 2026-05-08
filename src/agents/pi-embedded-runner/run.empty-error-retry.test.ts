@@ -14,9 +14,10 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 //
 // Symptom: ollama/glm-5.1 occasionally ends a turn with stopReason="error" and
 // zero output tokens after a successful tool-call sequence. The user sees no
-// reply and has to nudge. This suite locks in a narrower model-agnostic
-// resubmission for errored turns, separate from the visible-answer retry used
-// for stopReason="stop" empty zero-token turns.
+// reply and has to nudge. The existing empty-response retry path is gated on
+// the strict-agentic contract (gpt-5 only), so non-frontier models fell
+// through to "incomplete turn detected". This suite locks in a narrower,
+// model-agnostic resubmission.
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
@@ -112,15 +113,14 @@ describe("runEmbeddedPiAgent silent-error retry", () => {
 
   it("does not retry when stopReason=stop and output=0 (out of scope)", async () => {
     // Clean stop with no output is a legitimate silent reply (e.g. NO_REPLY
-    // token path), not a crash. Use a plain provider/model so this test stays
-    // scoped to the silent-error retry instead of the empty-response retry.
+    // token path), not a crash. This retry must not trigger there.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
           stopReason: "stop",
-          provider: "plain-provider",
-          model: "plain-model",
+          provider: "ollama",
+          model: "glm-5.1:cloud",
           content: [],
           usage: { input: 100, output: 0, totalTokens: 100 },
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
@@ -129,8 +129,8 @@ describe("runEmbeddedPiAgent silent-error retry", () => {
 
     await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
-      provider: "plain-provider",
-      model: "plain-model",
+      provider: "ollama",
+      model: "glm-5.1:cloud",
       runId: "run-empty-error-retry-skip-clean-stop",
     });
 

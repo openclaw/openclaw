@@ -89,7 +89,6 @@ export function buildStatusCommandOverviewRows(
     resolveMemoryVectorState: params.resolveMemoryVectorState,
     resolveMemoryFtsState: params.resolveMemoryFtsState,
     resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,
-    memoryUnavailableLabel: "not checked",
   });
   const pluginCompatibilityValue = buildStatusPluginCompatibilityValue({
     notices: params.pluginCompatibility,

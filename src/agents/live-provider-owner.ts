@@ -2,14 +2,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-type LiveProviderOwnerContext = {
+export type LiveProviderOwnerContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   ownerCache: Map<string, readonly string[]>;
 };
 
-function resolveCachedOwningPluginIdsForProvider(
+export function resolveCachedOwningPluginIdsForProvider(
   provider: string,
   context: LiveProviderOwnerContext,
 ): readonly string[] {

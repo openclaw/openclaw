@@ -3,13 +3,9 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
-import {
-  formatThreadBindingDisabledError,
-  formatThreadBindingSpawnDisabledError,
-  resolveThreadBindingSpawnPolicy,
-} from "openclaw/plugin-sdk/conversation-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
 import { resolveMatrixTargetIdentity } from "./target-ids.js";
 import {
   getMatrixThreadBindingManager,
@@ -80,6 +76,28 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function resolveThreadBindingFlags(
+  api: OpenClawPluginApi,
+  accountId?: string,
+): { enabled: boolean; spawnSubagentSessions: boolean } {
+  const matrix = resolveMatrixBaseConfig(api.config);
+  const baseThreadBindings = matrix.threadBindings;
+  const accountThreadBindings = accountId
+    ? findMatrixAccountConfig(api.config, accountId)?.threadBindings
+    : undefined;
+  return {
+    enabled:
+      accountThreadBindings?.enabled ??
+      baseThreadBindings?.enabled ??
+      api.config.session?.threadBindings?.enabled ??
+      true,
+    spawnSubagentSessions:
+      accountThreadBindings?.spawnSubagentSessions ??
+      baseThreadBindings?.spawnSubagentSessions ??
+      false,
+  };
+}
+
 function resolveMatrixBindingThreadId(binding: SessionBindingRecord): string | undefined {
   const { conversationId, parentConversationId } = binding.conversation;
   return parentConversationId && parentConversationId !== conversationId
@@ -118,31 +136,20 @@ export async function handleMatrixSubagentSpawning(
   // Falls back to DEFAULT_ACCOUNT_ID so accounts.default.threadBindings.* is
   // respected even when the requester omits accountId.
   const accountId = normalizeOptionalString(event.requester?.accountId) || DEFAULT_ACCOUNT_ID;
-  const policy = resolveThreadBindingSpawnPolicy({
-    cfg: api.config,
-    channel: "matrix",
-    accountId,
-    kind: "subagent",
-  });
+  const flags = resolveThreadBindingFlags(api, accountId);
 
-  if (!policy.enabled) {
+  if (!flags.enabled) {
     return {
       status: "error",
-      error: formatThreadBindingDisabledError({
-        channel: policy.channel,
-        accountId: policy.accountId,
-        kind: "subagent",
-      }),
+      error:
+        "Matrix thread bindings are disabled (set channels.matrix.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).",
     } satisfies SpawningResult;
   }
-  if (!policy.spawnEnabled) {
+  if (!flags.spawnSubagentSessions) {
     return {
       status: "error",
-      error: formatThreadBindingSpawnDisabledError({
-        channel: policy.channel,
-        accountId: policy.accountId,
-        kind: "subagent",
-      }),
+      error:
+        "Matrix thread-bound subagent spawns are disabled for this account (set channels.matrix.threadBindings.spawnSubagentSessions=true to enable).",
     };
   }
 
@@ -160,18 +167,14 @@ export async function handleMatrixSubagentSpawning(
     };
   }
 
-  const bindingService = getSessionBindingService();
-  const capabilities = bindingService.getCapabilities({ channel: "matrix", accountId });
-  if (!capabilities.adapterAvailable || !capabilities.bindSupported) {
+  // Verify the thread binding manager is running for this account. The manager
+  // holds the captured Matrix client the SessionBindingAdapter needs to send
+  // the intro message that bootstraps the thread.
+  const manager = getMatrixThreadBindingManager(accountId);
+  if (!manager) {
     return {
       status: "error",
-      error: `No Matrix session binding adapter available for account "${accountId}". Is the Matrix channel running?`,
-    };
-  }
-  if (!capabilities.placements.includes("child")) {
-    return {
-      status: "error",
-      error: `Matrix session binding adapter for account "${accountId}" does not support child thread bindings.`,
+      error: `No Matrix thread binding manager available for account "${accountId}". Is the Matrix channel running?`,
     };
   }
 
@@ -183,7 +186,7 @@ export async function handleMatrixSubagentSpawning(
     //
     // We do NOT call setBindingRecord here — the adapter's bind() handles
     // record creation, thread creation, and persistence atomically.
-    const binding = await bindingService.bind({
+    const binding = await getSessionBindingService().bind({
       targetSessionKey: event.childSessionKey,
       targetKind: "subagent",
       conversation: {

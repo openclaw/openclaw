@@ -7,7 +7,6 @@ import type { OutboundReplyPayload } from "./reply-payload.js";
 export {
   createPreCryptoDirectDmAuthorizer,
   resolveInboundDirectDmAccessWithRuntime,
-  type AccessGroupMembershipResolver,
   type DirectDmCommandAuthorizationRuntime,
   type ResolvedInboundDirectDmAccess,
 } from "./direct-dm-access.js";

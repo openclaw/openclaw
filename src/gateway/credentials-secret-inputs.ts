@@ -20,7 +20,7 @@ import {
   type SupportedGatewaySecretInputPath,
 } from "./secret-input-paths.js";
 
-type GatewayCredentialSecretInputOptions = {
+export type GatewayCredentialSecretInputOptions = {
   config: OpenClawConfig;
   explicitAuth?: ExplicitGatewayAuth;
   urlOverride?: string;
@@ -112,11 +112,8 @@ function localAuthModeAllowsGatewaySecretInputPath(params: {
   path: SupportedGatewaySecretInputPath;
 }): boolean {
   const { authMode, path } = params;
-  if (authMode === "none") {
+  if (authMode === "none" || authMode === "trusted-proxy") {
     return false;
-  }
-  if (authMode === "trusted-proxy") {
-    return !isTokenGatewaySecretInputPath(path);
   }
   if (authMode === "token") {
     return isTokenGatewaySecretInputPath(path);

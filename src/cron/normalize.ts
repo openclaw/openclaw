@@ -144,21 +144,6 @@ function coerceSchedule(schedule: UnknownRecord) {
   return next;
 }
 
-function inferTopLevelSchedule(next: UnknownRecord): UnknownRecord | null {
-  const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
-  const kind = kindRaw === "at" || kindRaw === "every" || kindRaw === "cron" ? kindRaw : undefined;
-  const schedule: UnknownRecord = {};
-  if (kind) {
-    schedule.kind = kind;
-  }
-  for (const field of ["at", "atMs", "everyMs", "anchorMs", "expr", "cron", "tz", "staggerMs"]) {
-    if (field in next) {
-      schedule[field] = next[field];
-    }
-  }
-  return Object.keys(schedule).length > 0 ? coerceSchedule(schedule) : null;
-}
-
 function coercePayload(payload: UnknownRecord) {
   const next: UnknownRecord = { ...payload };
   const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
@@ -170,17 +155,13 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = kindRaw;
   }
   if (!next.kind) {
-    const message = normalizeOptionalString(next.message);
-    const text = normalizeOptionalString(next.text);
-    const hasAgentTurnHint = hasAgentTurnPayloadHint(next);
-    if (message) {
+    const hasMessage = Boolean(normalizeOptionalString(next.message));
+    const hasText = Boolean(normalizeOptionalString(next.text));
+    if (hasMessage) {
       next.kind = "agentTurn";
-    } else if (text && hasAgentTurnHint) {
-      next.kind = "agentTurn";
-      next.message = text;
-    } else if (text) {
+    } else if (hasText) {
       next.kind = "systemEvent";
-    } else if (hasAgentTurnHint) {
+    } else if (hasAgentTurnPayloadHint(next)) {
       // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
       next.kind = "agentTurn";
     }
@@ -315,9 +296,6 @@ function inferTopLevelPayload(next: UnknownRecord) {
 
   const text = normalizeOptionalString(next.text) ?? "";
   if (text) {
-    if (hasAgentTurnPayloadHint(next)) {
-      return { kind: "agentTurn", message: text } satisfies UnknownRecord;
-    }
     return { kind: "systemEvent", text } satisfies UnknownRecord;
   }
 
@@ -389,9 +367,7 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
     }
   }
   if (!("toolsAllow" in payload) || payload.toolsAllow === undefined) {
-    const toolsAllow =
-      normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true }) ??
-      normalizeTrimmedStringArray(next.tools);
+    const toolsAllow = normalizeTrimmedStringArray(next.toolsAllow, { allowNull: true });
     if (toolsAllow !== undefined) {
       payload.toolsAllow = toolsAllow;
     }
@@ -417,16 +393,6 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.allowUnsafeExternalContent;
   delete next.message;
   delete next.text;
-  delete next.kind;
-  delete next.cron;
-  delete next.tz;
-  delete next.at;
-  delete next.atMs;
-  delete next.everyMs;
-  delete next.anchorMs;
-  delete next.staggerMs;
-  delete next.session;
-  delete next.tools;
   delete next.deliver;
   delete next.channel;
   delete next.to;
@@ -496,11 +462,6 @@ export function normalizeCronJobInput(
     } else {
       delete next.sessionTarget;
     }
-  } else if ("session" in base) {
-    const normalized = normalizeSessionTarget(base.session);
-    if (normalized) {
-      next.sessionTarget = normalized;
-    }
   }
 
   if ("wakeMode" in base) {
@@ -514,11 +475,6 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.schedule)) {
     next.schedule = coerceSchedule(base.schedule);
-  } else if (!isRecord(next.schedule)) {
-    const inferredSchedule = inferTopLevelSchedule(next);
-    if (inferredSchedule) {
-      next.schedule = inferredSchedule;
-    }
   }
 
   if (!("payload" in next) || !isRecord(next.payload)) {

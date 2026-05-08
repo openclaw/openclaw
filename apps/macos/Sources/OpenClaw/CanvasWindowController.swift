@@ -319,14 +319,12 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         self.sessionDir.path
     }
 
-    func shouldAutoNavigateToA2UI(lastAutoTarget: String?, candidateTarget: String) -> Bool {
-        let current = (self.currentTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let candidate = candidateTarget.trimmingCharacters(in: .whitespacesAndNewlines)
-        if current.isEmpty || current == "/" { return true }
-        if !candidate.isEmpty, current == candidate { return false }
+    func shouldAutoNavigateToA2UI(lastAutoTarget: String?) -> Bool {
+        let trimmed = (self.currentTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "/" { return true }
         if let lastAuto = lastAutoTarget?.trimmingCharacters(in: .whitespacesAndNewlines),
            !lastAuto.isEmpty,
-           current == lastAuto
+           trimmed == lastAuto
         {
             return true
         }

@@ -1,7 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawPluginApi,
-  OpenClawConfig,
   ProviderAuthContext,
   ProviderAuthResult,
   ProviderCatalogContext,
@@ -67,14 +66,6 @@ function apiModelRef(modelId: string): string {
 
 function portalModelRef(modelId: string): string {
   return `${PORTAL_PROVIDER_ID}/${modelId}`;
-}
-
-function getProviderBaseUrl(cfg: OpenClawConfig, providerId: string): string | undefined {
-  return normalizeOptionalString(cfg.models?.providers?.[providerId]?.baseUrl);
-}
-
-function resolveMinimaxUsageBaseUrl(cfg: OpenClawConfig): string | undefined {
-  return getProviderBaseUrl(cfg, PORTAL_PROVIDER_ID) ?? getProviderBaseUrl(cfg, API_PROVIDER_ID);
 }
 
 function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string }) {
@@ -264,9 +255,7 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
     ...MINIMAX_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     fetchUsageSnapshot: async (ctx) =>
-      await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, {
-        baseUrl: resolveMinimaxUsageBaseUrl(ctx.config),
-      }),
+      await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
   });
 
   api.registerProvider({

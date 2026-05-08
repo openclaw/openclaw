@@ -229,7 +229,7 @@ export function resolveApprovalAuditCandidatePath(
   return resolvePolicyTargetCandidatePath(resolution, cwd);
 }
 
-/** @deprecated Use resolveExecutionTargetCandidatePath. */
+// Legacy alias kept while callers migrate to explicit target naming.
 export function resolveAllowlistCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -315,30 +315,6 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
   }
 }
 
-function hasPathSelector(value: string): boolean {
-  return value.includes("/") || value.includes("\\") || value.includes("~");
-}
-
-function matchesExecutableBasenamePattern(
-  pattern: string,
-  resolution: ExecutableResolution,
-): boolean {
-  // Bare command-name allowlist entries are for PATH-resolved commands. A raw
-  // path such as ./rg or /tmp/rg must use a path allowlist entry so a workspace
-  // binary cannot inherit trust from a global command-name entry.
-  if (hasPathSelector(resolution.rawExecutable)) {
-    return false;
-  }
-  const candidates = new Set<string>();
-  if (resolution.executableName) {
-    candidates.add(resolution.executableName);
-  }
-  if (resolution.resolvedPath) {
-    candidates.add(path.basename(resolution.resolvedPath));
-  }
-  return [...candidates].some((candidate) => matchesExecAllowlistPattern(pattern, candidate));
-}
-
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: ExecutableResolution | null,
@@ -372,10 +348,11 @@ export function matchAllowlist(
     if (!pattern) {
       continue;
     }
-    const patternMatches = hasPathSelector(pattern)
-      ? matchesExecAllowlistPattern(pattern, resolvedPath)
-      : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
-    if (!patternMatches) {
+    const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
+    if (!hasPath) {
+      continue;
+    }
+    if (!matchesExecAllowlistPattern(pattern, resolvedPath)) {
       continue;
     }
     if (!useArgPattern) {

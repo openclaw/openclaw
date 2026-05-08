@@ -9,7 +9,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vi
  */
 
 const mocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(() => ({
+  loadConfig: vi.fn(() => ({
     session: { store: "/tmp/test-store", mainKey: "main" },
     agents: {},
   })),
@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
+  loadConfig: mocks.loadConfig,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -82,7 +82,7 @@ describe("announce loop guard (#18264)", () => {
     vi.useFakeTimers();
     mocks.callGateway.mockClear();
     mocks.captureSubagentCompletionReply.mockClear();
-    mocks.getRuntimeConfig.mockClear();
+    mocks.loadConfig.mockClear();
     mocks.loadSubagentRegistryFromDisk.mockReset();
     mocks.loadSubagentRegistryFromDisk.mockReturnValue(new Map());
     mocks.onAgentEventStop.mockClear();

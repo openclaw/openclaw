@@ -170,7 +170,6 @@ describe("mapSensitivePaths", () => {
     expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.request.headers.*"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.request.proxy.tls.cert"]?.sensitive).toBe(true);
-    expect(hints["proxy.proxyUrl"]?.sensitive).toBe(true);
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
   });
 

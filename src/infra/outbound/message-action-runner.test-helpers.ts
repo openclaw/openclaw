@@ -60,7 +60,7 @@ export const runDrySend = (params: {
 
 type ResolvedTestTarget = { to: string; kind: ChannelDirectoryEntryKind };
 
-function normalizeWorkspaceTarget(raw: string): string {
+export function normalizeWorkspaceTarget(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return trimmed;
@@ -81,7 +81,7 @@ function normalizeWorkspaceTarget(raw: string): string {
   return trimmed;
 }
 
-function createConfiguredTestPlugin(params: {
+export function createConfiguredTestPlugin(params: {
   id: string;
   isConfigured: (cfg: OpenClawConfig) => boolean;
   normalizeTarget: (raw: string) => string | undefined;

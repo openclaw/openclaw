@@ -2,7 +2,7 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown } from "./markdown.js";
 import { readQueryableWikiPages } from "./query.js";
 
-type MemoryWikiImportInsightItem = {
+export type MemoryWikiImportInsightItem = {
   pagePath: string;
   title: string;
   riskLevel: "low" | "medium" | "high" | "unknown";
@@ -25,7 +25,7 @@ type MemoryWikiImportInsightItem = {
   updatedAt?: string;
 };
 
-type MemoryWikiImportInsightCluster = {
+export type MemoryWikiImportInsightCluster = {
   key: string;
   label: string;
   itemCount: number;
@@ -36,7 +36,7 @@ type MemoryWikiImportInsightCluster = {
   items: MemoryWikiImportInsightItem[];
 };
 
-type MemoryWikiImportInsightsStatus = {
+export type MemoryWikiImportInsightsStatus = {
   sourceType: "chatgpt";
   totalItems: number;
   totalClusters: number;

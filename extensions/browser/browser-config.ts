@@ -10,7 +10,6 @@ export {
   resolveProfile,
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,
-  type ResolvedBrowserTabCleanupConfig,
 } from "./browser-profiles.js";
 export { resolveBrowserControlAuth, type BrowserControlAuth } from "./browser-control-auth.js";
 export { parseBrowserHttpUrl, redactCdpUrl } from "./src/browser/config.js";

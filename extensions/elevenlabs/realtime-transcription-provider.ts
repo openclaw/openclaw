@@ -243,7 +243,6 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     id: "elevenlabs",
     label: "ElevenLabs Realtime Transcription",
     aliases: ["elevenlabs-realtime", "scribe-v2-realtime"],
-    defaultModel: ELEVENLABS_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 40,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>

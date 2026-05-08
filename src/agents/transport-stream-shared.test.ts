@@ -3,7 +3,6 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
-  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -15,21 +14,6 @@ describe("transport stream shared helpers", () => {
     expect(sanitizeTransportPayloadText(`left${high}right`)).toBe("leftright");
     expect(sanitizeTransportPayloadText(`left${low}right`)).toBe("leftright");
     expect(sanitizeTransportPayloadText("emoji 🙈 ok")).toBe("emoji 🙈 ok");
-  });
-
-  it.each([
-    ["empty", ""],
-    ["whitespace-only", " \n\t "],
-    ["invalid-surrogate-only", String.fromCharCode(0xd83d)],
-  ])("falls back for %s tool payload text", (_label, value) => {
-    expect(sanitizeNonEmptyTransportPayloadText(value)).toBe("(no output)");
-  });
-
-  it("preserves non-empty sanitized tool payload text", () => {
-    expect(sanitizeNonEmptyTransportPayloadText(" ok ")).toBe(" ok ");
-    expect(sanitizeNonEmptyTransportPayloadText(`left${String.fromCharCode(0xd83d)}right`)).toBe(
-      "leftright",
-    );
   });
 
   it("merges transport headers in source order", () => {

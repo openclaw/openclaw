@@ -199,6 +199,8 @@ export async function verifyGoogleChatRequest(params: {
   return { ok: false, reason: "unsupported audience type" };
 }
 
+export const GOOGLE_CHAT_SCOPE = CHAT_SCOPE;
+
 export const __testing = {
   resetGoogleChatAuthForTests(): void {
     authCache.clear();

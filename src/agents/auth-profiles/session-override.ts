@@ -1,17 +1,17 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
-);
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
 
 function loadSessionStoreRuntime() {
-  return sessionStoreRuntimeLoader.load();
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
 }
 
 function isProfileForProvider(params: {
@@ -136,21 +136,12 @@ export async function resolveSessionAuthProfileOverride(params: {
     typeof sessionEntry.authProfileOverrideCompactionCount === "number"
       ? sessionEntry.authProfileOverrideCompactionCount
       : compactionCount;
-  const replacementForUnusableCurrent =
-    current && isProfileInCooldown(store, current)
-      ? order.find((profileId) => profileId !== current && !isProfileInCooldown(store, profileId))
-      : undefined;
-  if (replacementForUnusableCurrent) {
-    current = undefined;
-  }
   if (source === "user" && current && !isNewSession) {
     return current;
   }
 
   let next = current;
-  if (replacementForUnusableCurrent) {
-    next = replacementForUnusableCurrent;
-  } else if (isNewSession) {
+  if (isNewSession) {
     next = current ? pickNextAvailable(current) : pickFirstAvailable();
   } else if (current && compactionCount > storedCompaction) {
     next = pickNextAvailable(current);

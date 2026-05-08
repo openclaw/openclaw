@@ -20,7 +20,7 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
-  readSessionMessagesAsync: readSessionMessagesMock,
+  readSessionMessages: readSessionMessagesMock,
 }));
 
 vi.mock("../agents/subagent-registry.js", () => ({

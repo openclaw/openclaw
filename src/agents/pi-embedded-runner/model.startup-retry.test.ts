@@ -7,10 +7,13 @@ const discoverModelsMock = vi.fn<
   (authStorage: unknown, agentDir: string) => { find: ReturnType<typeof vi.fn> }
 >(() => ({ find: vi.fn(() => null) }));
 
+let hookCacheCleared = false;
+const clearProviderRuntimeHookCacheMock = vi.fn<() => void>(() => {
+  hookCacheCleared = true;
+});
 const prepareProviderDynamicModelMock = vi.fn<(params: unknown) => Promise<void>>(async () => {});
-let dynamicAttempts = 0;
 const runProviderDynamicModelMock = vi.fn<(params: unknown) => unknown>(() =>
-  dynamicAttempts > 1
+  hookCacheCleared
     ? {
         id: "gpt-5.4",
         name: "gpt-5.4",
@@ -35,9 +38,11 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => {},
   normalizeProviderResolvedModelWithPlugin: () => undefined,
   normalizeProviderTransportWithPlugin: () => undefined,
   prepareProviderDynamicModel: async () => {},
+  resolveProviderBuiltInModelSuppression: () => undefined,
   runProviderDynamicModel: () => undefined,
   shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
@@ -46,6 +51,7 @@ describe("resolveModelAsync startup retry", () => {
   const runtimeHooks = {
     applyProviderResolvedModelCompatWithPlugins: () => undefined,
     buildProviderUnknownModelHintWithPlugin: () => undefined,
+    clearProviderRuntimeHookCache: clearProviderRuntimeHookCacheMock,
     normalizeProviderResolvedModelWithPlugin: () => undefined,
     normalizeProviderTransportWithPlugin: () => undefined,
     prepareProviderDynamicModel: (params: unknown) => prepareProviderDynamicModelMock(params),
@@ -54,17 +60,15 @@ describe("resolveModelAsync startup retry", () => {
   };
 
   beforeEach(() => {
-    dynamicAttempts = 0;
+    hookCacheCleared = false;
+    clearProviderRuntimeHookCacheMock.mockClear();
     prepareProviderDynamicModelMock.mockClear();
-    prepareProviderDynamicModelMock.mockImplementation(async () => {
-      dynamicAttempts += 1;
-    });
     runProviderDynamicModelMock.mockClear();
     discoverAuthStorageMock.mockClear();
     discoverModelsMock.mockClear();
   });
 
-  it("retries once after a transient provider-runtime miss", async () => {
+  it("retries once after clearing the provider-runtime hook cache", async () => {
     const { resolveModelAsync } = await import("./model.js");
 
     const result = await resolveModelAsync(
@@ -84,11 +88,12 @@ describe("resolveModelAsync startup retry", () => {
       id: "gpt-5.4",
       api: "openai-codex-responses",
     });
+    expect(clearProviderRuntimeHookCacheMock).toHaveBeenCalledTimes(1);
     expect(prepareProviderDynamicModelMock).toHaveBeenCalledTimes(2);
     expect(runProviderDynamicModelMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry during steady-state misses", async () => {
+  it("does not clear the hook cache during steady-state misses", async () => {
     const { resolveModelAsync } = await import("./model.js");
 
     const result = await resolveModelAsync(
@@ -101,6 +106,7 @@ describe("resolveModelAsync startup retry", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: openai-codex/gpt-5.4");
+    expect(clearProviderRuntimeHookCacheMock).not.toHaveBeenCalled();
     expect(prepareProviderDynamicModelMock).toHaveBeenCalledTimes(1);
     expect(runProviderDynamicModelMock).toHaveBeenCalledTimes(1);
   });

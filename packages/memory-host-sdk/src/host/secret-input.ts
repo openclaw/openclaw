@@ -1,9 +1,9 @@
 import {
   hasConfiguredSecretInput,
-  normalizeEnvSecretInputString,
   normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
   resolveSecretInputRef,
-} from "./secret-input-utils.js";
+} from "../../../../src/config/types.secrets.js";
 
 export function hasConfiguredMemorySecretInput(value: unknown): boolean {
   return hasConfiguredSecretInput(value);
@@ -13,9 +13,9 @@ export function resolveMemorySecretInputString(params: {
   value: unknown;
   path: string;
 }): string | undefined {
-  const ref = resolveSecretInputRef(params.value);
+  const { ref } = resolveSecretInputRef({ value: params.value });
   if (ref?.source === "env") {
-    const envValue = normalizeEnvSecretInputString(process.env[ref.id]);
+    const envValue = normalizeSecretInputString(process.env[ref.id]);
     if (envValue) {
       return envValue;
     }

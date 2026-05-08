@@ -6,11 +6,10 @@ import {
   resolveSlackThreadHistory,
   resolveSlackThreadStarter,
   resetSlackThreadStarterCacheForTest,
-  SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
 } from "./media.js";
 import type { FetchLike, SavedMedia } from "./media.runtime.js";
 import * as mediaRuntime from "./media.runtime.js";
-import { logVerbose } from "./thread.runtime.js";
+import { logVerbose } from "./media.runtime.js";
 
 type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -20,10 +19,7 @@ const fetchRemoteMediaMock = vi.hoisted(() =>
       url: string;
       fetchImpl: FetchLike;
       filePathHint?: string;
-      maxBytes?: number;
-      readIdleTimeoutMs?: number;
       requestInit?: RequestInit;
-      ssrfPolicy?: unknown;
     }) => {
       let response = await params.fetchImpl(params.url, {
         ...params.requestInit,
@@ -69,10 +65,6 @@ vi.mock("./media.runtime.js", () => ({
   fetchWithRuntimeDispatcher: fetchWithRuntimeDispatcherMock,
   logVerbose: logVerboseMock,
   saveMediaBuffer: saveMediaBufferMock,
-}));
-
-vi.mock("./thread.runtime.js", () => ({
-  logVerbose: logVerboseMock,
 }));
 
 function withFetchPreconnect(fetchMock: ReturnType<typeof vi.fn<FetchMock>>): typeof fetch {
@@ -359,65 +351,6 @@ describe("resolveSlackMedia", () => {
     expect(result).toBeNull();
   });
 
-  it("passes bounded media download timeouts while preserving Slack auth", async () => {
-    vi.spyOn(mediaRuntime, "saveMediaBuffer").mockResolvedValue(
-      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
-    );
-    mockFetch.mockResolvedValueOnce(
-      new Response(Buffer.from("image data"), {
-        status: 200,
-        headers: { "content-type": "image/jpeg" },
-      }),
-    );
-
-    const result = await resolveSlackMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
-
-    expect(result).not.toBeNull();
-    const fetchOptions = fetchRemoteMediaMock.mock.calls[0]?.[0];
-    expect(fetchOptions?.readIdleTimeoutMs).toBe(SLACK_MEDIA_READ_IDLE_TIMEOUT_MS);
-    expect(fetchOptions?.requestInit?.signal).toBeInstanceOf(AbortSignal);
-    expect(new Headers(fetchOptions?.requestInit?.headers).get("Authorization")).toBe(
-      "Bearer xoxb-test-token",
-    );
-  });
-
-  it("returns null when a media download exceeds the total timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      let abortSignal: AbortSignal | undefined;
-      fetchRemoteMediaMock.mockImplementationOnce(
-        (params) =>
-          new Promise<never>((_resolve, reject) => {
-            abortSignal = params.requestInit?.signal ?? undefined;
-            abortSignal?.addEventListener(
-              "abort",
-              () => {
-                reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
-              },
-              { once: true },
-            );
-          }),
-      );
-
-      const resultPromise = resolveSlackMedia({
-        files: [{ url_private: "https://files.slack.com/slow.jpg", name: "slow.jpg" }],
-        token: "xoxb-test-token",
-        maxBytes: 1024 * 1024,
-        totalTimeoutMs: 25,
-      });
-
-      await vi.advanceTimersByTimeAsync(25);
-      await expect(resultPromise).resolves.toBeNull();
-      expect(abortSignal?.aborted).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("returns null when no files are provided", async () => {
     const result = await resolveSlackMedia({
       files: [],
@@ -621,8 +554,8 @@ describe("resolveSlackMedia", () => {
 
     const result = await resolveSlackMedia({
       files: [
-        { id: "FA", url_private: "https://files.slack.com/a.jpg", name: "a.jpg" },
-        { id: "FB", url_private: "https://files.slack.com/b.png", name: "b.png" },
+        { url_private: "https://files.slack.com/a.jpg", name: "a.jpg" },
+        { url_private: "https://files.slack.com/b.png", name: "b.png" },
       ],
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
@@ -630,9 +563,9 @@ describe("resolveSlackMedia", () => {
 
     expect(result).toHaveLength(2);
     expect(result![0].path).toBe("/tmp/a.jpg");
-    expect(result![0].placeholder).toBe("[Slack file: a.jpg (fileId: FA)]");
+    expect(result![0].placeholder).toBe("[Slack file: a.jpg]");
     expect(result![1].path).toBe("/tmp/b.png");
-    expect(result![1].placeholder).toBe("[Slack file: b.png (fileId: FB)]");
+    expect(result![1].placeholder).toBe("[Slack file: b.png]");
   });
 
   it("caps downloads to 8 files for large multi-attachment messages", async () => {
@@ -930,7 +863,7 @@ describe("resolveSlackThreadHistory", () => {
   it("includes file-only messages and drops empty-only entries", async () => {
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [
-        { text: "  ", ts: "1.000", files: [{ id: "FSCREEN", name: "screenshot.png" }] },
+        { text: "  ", ts: "1.000", files: [{ name: "screenshot.png" }] },
         { text: "   ", ts: "2.000" },
         { text: "hello", ts: "3.000", user: "U1" },
       ],
@@ -948,7 +881,7 @@ describe("resolveSlackThreadHistory", () => {
     });
 
     expect(result).toHaveLength(2);
-    expect(result[0]?.text).toBe("[attached: screenshot.png (fileId: FSCREEN)]");
+    expect(result[0]?.text).toBe("[attached: screenshot.png]");
     expect(result[1]?.text).toBe("hello");
   });
 
@@ -1045,7 +978,7 @@ describe("resolveSlackThreadStarter", () => {
           text: "   ",
           user: "U1",
           ts: "1.000",
-          files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
+          files: [{ name: "root.png", mimetype: "image/png" }],
         },
       ],
     });
@@ -1060,11 +993,11 @@ describe("resolveSlackThreadStarter", () => {
     });
 
     expect(result).toEqual({
-      text: "[attached: root.png (fileId: FROOT)]",
+      text: "[attached: root.png]",
       userId: "U1",
       botId: undefined,
       ts: "1.000",
-      files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
+      files: [{ name: "root.png", mimetype: "image/png" }],
     });
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });

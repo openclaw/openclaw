@@ -13,10 +13,7 @@ let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 let cachedEtcShells: Set<string> | null | undefined;
 let nextExecCacheId = 1;
-const loginShellEnvProbeCache = new Map<
-  string,
-  { ok: true; entries: Array<[string, string]> } | { ok: false; error: string }
->();
+const loginShellEnvProbeCache = new Map<string, Array<[string, string]>>();
 const execCacheIds = new WeakMap<object, number>();
 
 function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -184,27 +181,25 @@ function probeLoginShellEnv(params: {
   });
   const cached = loginShellEnvProbeCache.get(cacheKey);
   if (cached) {
-    return cached.ok ? { ok: true, shellEnv: new Map(cached.entries) } : cached;
+    return { ok: true, shellEnv: new Map(cached) };
   }
 
   try {
     const stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
     const shellEnv = parseShellEnv(stdout);
-    loginShellEnvProbeCache.set(cacheKey, { ok: true, entries: [...shellEnv.entries()] });
+    loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
     return { ok: true, shellEnv };
   } catch (err) {
-    const result = { ok: false as const, error: formatErrorMessage(err) };
-    loginShellEnvProbeCache.set(cacheKey, result);
-    return result;
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
 
-type ShellEnvFallbackResult =
+export type ShellEnvFallbackResult =
   | { ok: true; applied: string[]; skippedReason?: never }
   | { ok: true; applied: []; skippedReason: "already-has-keys" | "disabled" }
   | { ok: false; error: string; applied: [] };
 
-type ShellEnvFallbackOptions = {
+export type ShellEnvFallbackOptions = {
   enabled: boolean;
   env: NodeJS.ProcessEnv;
   expectedKeys: string[];
@@ -225,10 +220,8 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     return { ok: true, applied: [], skippedReason: "disabled" };
   }
 
-  const missingExpectedKeys = opts.expectedKeys.filter(
-    (key) => !hasExplicitEnvBinding(opts.env, key),
-  );
-  if (missingExpectedKeys.length === 0) {
+  const hasAnyKey = opts.expectedKeys.some((key) => hasExplicitEnvBinding(opts.env, key));
+  if (hasAnyKey) {
     lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
   }
@@ -245,7 +238,10 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
   }
 
   const applied: string[] = [];
-  for (const key of missingExpectedKeys) {
+  for (const key of opts.expectedKeys) {
+    if (hasExplicitEnvBinding(opts.env, key)) {
+      continue;
+    }
     const value = probe.shellEnv.get(key);
     if (!value?.trim()) {
       continue;

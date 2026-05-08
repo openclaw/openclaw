@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { getQaProvider } from "./providers/index.js";
@@ -12,8 +12,8 @@ import type {
 } from "./qa-transport.js";
 import { qaChannelPlugin } from "./runtime-api.js";
 
-const QA_CHANNEL_ID = "qa-channel";
-const QA_CHANNEL_ACCOUNT_ID = "default";
+export const QA_CHANNEL_ID = "qa-channel";
+export const QA_CHANNEL_ACCOUNT_ID = "default";
 export const QA_CHANNEL_REQUIRED_PLUGIN_IDS = Object.freeze([QA_CHANNEL_ID]);
 export const QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY = 4;
 
@@ -90,7 +90,6 @@ export function createQaChannelGatewayConfig(params: {
     messages: {
       groupChat: {
         mentionPatterns: ["\\b@?openclaw\\b"],
-        visibleReplies: "automatic",
       },
     },
   };

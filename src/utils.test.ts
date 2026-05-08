@@ -25,13 +25,10 @@ describe("ensureDir", () => {
 describe("sleep", () => {
   it("resolves after delay using fake timers", async () => {
     vi.useFakeTimers();
-    try {
-      const promise = sleep(1000);
-      vi.advanceTimersByTime(1000);
-      await expect(promise).resolves.toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
+    const promise = sleep(1000);
+    vi.advanceTimersByTime(1000);
+    await expect(promise).resolves.toBeUndefined();
+    vi.useRealTimers();
   });
 });
 
@@ -68,11 +65,10 @@ describe("resolveHomeDir", () => {
   it("prefers OPENCLAW_HOME over HOME", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
-    try {
-      expect(resolveHomeDir()).toBe(path.resolve("/srv/openclaw-home"));
-    } finally {
-      vi.unstubAllEnvs();
-    }
+
+    expect(resolveHomeDir()).toBe(path.resolve("/srv/openclaw-home"));
+
+    vi.unstubAllEnvs();
   });
 });
 
@@ -80,13 +76,12 @@ describe("shortenHomePath", () => {
   it("uses $OPENCLAW_HOME prefix when OPENCLAW_HOME is set", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
-    try {
-      expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
-        "$OPENCLAW_HOME/.openclaw/openclaw.json",
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
+
+    expect(shortenHomePath(`${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`)).toBe(
+      "$OPENCLAW_HOME/.openclaw/openclaw.json",
+    );
+
+    vi.unstubAllEnvs();
   });
 });
 
@@ -94,15 +89,12 @@ describe("shortenHomeInString", () => {
   it("uses $OPENCLAW_HOME replacement when OPENCLAW_HOME is set", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
-    try {
-      expect(
-        shortenHomeInString(
-          `config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`,
-        ),
-      ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
-    } finally {
-      vi.unstubAllEnvs();
-    }
+
+    expect(
+      shortenHomeInString(`config: ${path.resolve("/srv/openclaw-home")}/.openclaw/openclaw.json`),
+    ).toBe("config: $OPENCLAW_HOME/.openclaw/openclaw.json");
+
+    vi.unstubAllEnvs();
   });
 });
 
@@ -124,11 +116,10 @@ describe("resolveUserPath", () => {
   it("prefers OPENCLAW_HOME for tilde expansion", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
-    try {
-      expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
-    } finally {
-      vi.unstubAllEnvs();
-    }
+
+    expect(resolveUserPath("~/openclaw")).toBe(path.resolve("/srv/openclaw-home", "openclaw"));
+
+    vi.unstubAllEnvs();
   });
 
   it("uses the provided env for tilde expansion", () => {

@@ -1,5 +1,5 @@
-import { describeProviderContracts } from "openclaw/plugin-sdk/provider-test-contracts";
-import { describeWebSearchProviderContracts } from "openclaw/plugin-sdk/provider-test-contracts";
+import { describeProviderContracts } from "../../../test/helpers/plugins/provider-contract.js";
+import { describeWebSearchProviderContracts } from "../../../test/helpers/plugins/web-search-provider-contract.js";
 
 for (const providerId of [
   "anthropic",
@@ -20,7 +20,6 @@ for (const providerId of [
   "exa",
   "firecrawl",
   "google",
-  "minimax",
   "moonshot",
   "perplexity",
   "tavily",

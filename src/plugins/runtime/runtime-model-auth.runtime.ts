@@ -31,7 +31,6 @@ export async function getRuntimeAuthForModel(params: {
   const resolvedAuth = await resolveModelApiKey({
     model: params.model,
     cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
   });
 
   if (!resolvedAuth.apiKey || resolvedAuth.mode === "aws-sdk") {

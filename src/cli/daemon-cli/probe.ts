@@ -1,14 +1,13 @@
-import type { OpenClawConfig } from "../../config/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { withProgress } from "../progress.js";
 
 type GatewayStatusProbeKind = "connect" | "read";
 
-const probeGatewayModuleLoader = createLazyImportLoader(() => import("../../gateway/probe.js"));
+let probeGatewayModulePromise: Promise<typeof import("../../gateway/probe.js")> | undefined;
 
 async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
-  return await probeGatewayModuleLoader.load();
+  probeGatewayModulePromise ??= import("../../gateway/probe.js");
+  return await probeGatewayModulePromise;
 }
 
 function resolveProbeFailureMessage(result: {
@@ -28,10 +27,8 @@ export async function probeGatewayStatus(opts: {
   url: string;
   token?: string;
   password?: string;
-  config?: OpenClawConfig;
   tlsFingerprint?: string;
   timeoutMs: number;
-  preauthHandshakeTimeoutMs?: number;
   json?: boolean;
   requireRpc?: boolean;
   configPath?: string;
@@ -45,20 +42,6 @@ export async function probeGatewayStatus(opts: {
         enabled: opts.json !== true,
       },
       async () => {
-        const { probeGateway } = await loadProbeGatewayModule();
-        const probeOpts = {
-          url: opts.url,
-          auth: {
-            token: opts.token,
-            password: opts.password,
-          },
-          tlsFingerprint: opts.tlsFingerprint,
-          ...(opts.preauthHandshakeTimeoutMs !== undefined
-            ? { preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs }
-            : {}),
-          timeoutMs: opts.timeoutMs,
-          includeDetails: false,
-        };
         if (opts.requireRpc) {
           const { callGateway } = await import("../../gateway/call.js");
           await callGateway({
@@ -66,18 +49,38 @@ export async function probeGatewayStatus(opts: {
             token: opts.token,
             password: opts.password,
             tlsFingerprint: opts.tlsFingerprint,
-            ...(opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
-          const authProbe = await probeGateway(probeOpts).catch(() => null);
+          const { probeGateway } = await loadProbeGatewayModule();
+          const authProbe = await probeGateway({
+            url: opts.url,
+            auth: {
+              token: opts.token,
+              password: opts.password,
+            },
+            tlsFingerprint: opts.tlsFingerprint,
+            timeoutMs: opts.timeoutMs,
+            includeDetails: false,
+          }).catch(() => null);
           return { ok: true as const, authProbe };
         }
-        return await probeGateway(probeOpts);
+        const { probeGateway } = await loadProbeGatewayModule();
+        return await probeGateway({
+          url: opts.url,
+          auth: {
+            token: opts.token,
+            password: opts.password,
+          },
+          tlsFingerprint: opts.tlsFingerprint,
+          timeoutMs: opts.timeoutMs,
+          includeDetails: false,
+        });
       },
     );
-    const auth = "auth" in result ? result.auth : result.authProbe?.auth;
+    const auth =
+      "auth" in result ? result.auth : "authProbe" in result ? result.authProbe?.auth : undefined;
     if (result.ok) {
       return {
         ok: true,
@@ -86,7 +89,9 @@ export async function probeGatewayStatus(opts: {
           kind === "read"
             ? auth?.capability && auth.capability !== "unknown"
               ? auth.capability
-              : "read_only"
+              : // The status RPC proves read access even when a follow-up hello probe
+                // cannot recover richer scope metadata.
+                "read_only"
             : auth?.capability,
         auth,
       } as const;

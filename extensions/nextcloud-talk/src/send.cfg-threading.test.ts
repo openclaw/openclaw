@@ -1,8 +1,8 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
-} from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+} from "../../../test/helpers/plugins/send-config.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfig: vi.fn(),

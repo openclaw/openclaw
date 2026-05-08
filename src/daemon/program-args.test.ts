@@ -8,7 +8,6 @@ const childProcessMocks = vi.hoisted(() => ({
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
   realpath: vi.fn(),
-  stat: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", async () => {
@@ -19,11 +18,9 @@ vi.mock("node:fs/promises", async () => {
       ...actual,
       access: fsMocks.access,
       realpath: fsMocks.realpath,
-      stat: fsMocks.stat,
     },
     access: fsMocks.access,
     realpath: fsMocks.realpath,
-    stat: fsMocks.stat,
   };
 });
 
@@ -177,32 +174,5 @@ describe("resolveGatewayProgramArguments", () => {
       "18789",
     ]);
     expect(result.workingDirectory).toBe(path.resolve("/repo"));
-  });
-
-  it("uses an executable wrapper when provided", async () => {
-    const wrapperPath = path.resolve("/usr/local/bin/openclaw-doppler");
-    fsMocks.stat.mockResolvedValue({ isFile: () => true } as never);
-    fsMocks.access.mockResolvedValue(undefined);
-
-    const result = await resolveGatewayProgramArguments({
-      port: 18789,
-      wrapperPath,
-    });
-
-    expect(result.programArguments).toEqual([wrapperPath, "gateway", "--port", "18789"]);
-    expect(result.workingDirectory).toBeUndefined();
-  });
-
-  it("rejects a non-executable wrapper file", async () => {
-    const wrapperPath = path.resolve("/usr/local/bin/openclaw-doppler");
-    fsMocks.stat.mockResolvedValue({ isFile: () => true } as never);
-    fsMocks.access.mockRejectedValue(new Error("EACCES"));
-
-    await expect(
-      resolveGatewayProgramArguments({
-        port: 18789,
-        wrapperPath,
-      }),
-    ).rejects.toThrow("OPENCLAW_WRAPPER must point to an executable file");
   });
 });

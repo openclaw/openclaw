@@ -6,7 +6,7 @@
  * 2. entities array with mention metadata
  */
 
-type MentionEntity = {
+export type MentionEntity = {
   type: "mention";
   text: string;
   mentioned: {
@@ -15,7 +15,7 @@ type MentionEntity = {
   };
 };
 
-type MentionInfo = {
+export type MentionInfo = {
   /** User/bot ID (e.g., "28:xxx" or AAD object ID) */
   id: string;
   /** Display name */

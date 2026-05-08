@@ -90,14 +90,10 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   maxChars?: number;
   /** Default prompt. */
   prompt?: string;
-  /** Internal request-scoped prompt override injected by CLI/runtime wrappers. */
-  _requestPromptOverride?: string;
   /** Default timeout (seconds). */
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
-  /** Internal request-scoped language override injected by CLI/runtime wrappers. */
-  _requestLanguageOverride?: string;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
@@ -145,8 +141,8 @@ export type MediaToolsConfig = {
   concurrency?: number;
   asyncCompletion?: {
     /**
-     * Deprecated compatibility flag. Async media generation completions stay
-     * requester-session mediated so source delivery policy remains agent-owned.
+     * Enable direct channel sends for completed async media generation tasks.
+     * Default: false.
      */
     directSend?: boolean;
   };
@@ -166,11 +162,6 @@ export type ToolLoopDetectionDetectorConfig = {
   pingPong?: boolean;
 };
 
-export type ToolLoopPostCompactionGuardConfig = {
-  /** How many attempts post-compaction the guard remains armed (default: 3). */
-  windowSize?: number;
-};
-
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
@@ -186,8 +177,6 @@ export type ToolLoopDetectionConfig = {
   globalCircuitBreakerThreshold?: number;
   /** Detector toggles. */
   detectors?: ToolLoopDetectionDetectorConfig;
-  /** Post-compaction loop guard: aborts when the agent repeats the same (tool, args, result) immediately after auto-compaction-retry. */
-  postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
@@ -376,8 +365,6 @@ export type MemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
-    /** Max concurrent non-batch embedding tasks during indexing. Useful for slower local providers such as Ollama. */
-    nonBatchConcurrency?: number;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
       enabled?: boolean;
@@ -395,12 +382,6 @@ export type MemorySearchConfig = {
   fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
-  /** Optional provider-specific embedding input_type for query and document requests. */
-  inputType?: string;
-  /** Optional provider-specific embedding input_type for query-time memory search. */
-  queryInputType?: string;
-  /** Optional provider-specific embedding input_type for document/index embeddings. */
-  documentInputType?: string;
   /**
    * Gemini embedding-2 models only: output vector dimensions.
    * Supported values today are 768, 1536, and 3072.
@@ -452,11 +433,6 @@ export type MemorySearchConfig = {
     watch?: boolean;
     watchDebounceMs?: number;
     intervalMinutes?: number;
-    /**
-     * Timeout in seconds for inline embedding batches during memory indexing.
-     * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
-     */
-    embeddingBatchTimeoutSeconds?: number;
     sessions?: {
       /** Minimum appended bytes before session transcripts are reindexed. */
       deltaBytes?: number;
@@ -582,14 +558,10 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
-      /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
-      useTrustedEnvProxy?: boolean;
       /** SSRF policy configuration for web_fetch. */
       ssrfPolicy?: {
         /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
         allowRfc2544BenchmarkRange?: boolean;
-        /** Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility. */
-        allowIpv6UniqueLocalRange?: boolean;
       };
     };
   };

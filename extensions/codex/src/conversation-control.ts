@@ -10,7 +10,6 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
 import { getSharedCodexAppServerClient } from "./app-server/shared-client.js";
-import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
   sessionFile: string;
@@ -129,7 +128,7 @@ export async function setCodexConversationModel(params: {
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier ?? runtime.serviceTier,
   });
-  return `Codex model set to ${formatCodexDisplayText(response.model ?? model)}.`;
+  return `Codex model set to ${response.model ?? model}.`;
 }
 
 export async function setCodexConversationFastMode(params: {
@@ -254,3 +253,9 @@ function permissionsForMode(mode: PermissionsMode): {
     ? { approvalPolicy: "never", sandbox: "danger-full-access" }
     : { approvalPolicy: "on-request", sandbox: "workspace-write" };
 }
+
+export const __testing = {
+  resetActiveTurns() {
+    getActiveTurns().clear();
+  },
+};

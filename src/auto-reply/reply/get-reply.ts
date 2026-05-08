@@ -9,12 +9,8 @@ import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
-import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
-import { logVerbose } from "../../globals.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -46,53 +42,57 @@ import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
 
-const sessionResetModelRuntimeLoader = createLazyImportLoader(
-  () => import("./session-reset-model.runtime.js"),
-);
-const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
-  () => import("./stage-sandbox-media.runtime.js"),
-);
-const mediaUnderstandingApplyRuntimeLoader = createLazyImportLoader(
-  () => import("../../media-understanding/apply.runtime.js"),
-);
-const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
-  () => import("../../link-understanding/apply.runtime.js"),
-);
-const commandsCoreRuntimeLoader = createLazyImportLoader(
-  () => import("./commands-core.runtime.js"),
-);
+let sessionResetModelRuntimePromise: Promise<
+  typeof import("./session-reset-model.runtime.js")
+> | null = null;
+let stageSandboxMediaRuntimePromise: Promise<
+  typeof import("./stage-sandbox-media.runtime.js")
+> | null = null;
+let mediaUnderstandingApplyRuntimePromise: Promise<
+  typeof import("../../media-understanding/apply.runtime.js")
+> | null = null;
+let linkUnderstandingApplyRuntimePromise: Promise<
+  typeof import("../../link-understanding/apply.runtime.js")
+> | null = null;
+let commandsCoreRuntimePromise: Promise<typeof import("./commands-core.runtime.js")> | null = null;
 
 function loadSessionResetModelRuntime() {
-  return sessionResetModelRuntimeLoader.load();
+  sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
+  return sessionResetModelRuntimePromise;
 }
 
 function loadStageSandboxMediaRuntime() {
-  return stageSandboxMediaRuntimeLoader.load();
+  stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
+  return stageSandboxMediaRuntimePromise;
 }
 
 function loadMediaUnderstandingApplyRuntime() {
-  return mediaUnderstandingApplyRuntimeLoader.load();
+  mediaUnderstandingApplyRuntimePromise ??= import("../../media-understanding/apply.runtime.js");
+  return mediaUnderstandingApplyRuntimePromise;
 }
 
 function loadLinkUnderstandingApplyRuntime() {
-  return linkUnderstandingApplyRuntimeLoader.load();
+  linkUnderstandingApplyRuntimePromise ??= import("../../link-understanding/apply.runtime.js");
+  return linkUnderstandingApplyRuntimePromise;
 }
 
 function loadCommandsCoreRuntime() {
-  return commandsCoreRuntimeLoader.load();
+  commandsCoreRuntimePromise ??= import("./commands-core.runtime.js");
+  return commandsCoreRuntimePromise;
 }
 
-const hookRunnerGlobalLoader = createLazyImportLoader(
-  () => import("../../plugins/hook-runner-global.js"),
-);
-const originRoutingLoader = createLazyImportLoader(() => import("./origin-routing.js"));
+let hookRunnerGlobalPromise: Promise<typeof import("../../plugins/hook-runner-global.js")> | null =
+  null;
+let originRoutingPromise: Promise<typeof import("./origin-routing.js")> | null = null;
 
 function loadHookRunnerGlobal() {
-  return hookRunnerGlobalLoader.load();
+  hookRunnerGlobalPromise ??= import("../../plugins/hook-runner-global.js");
+  return hookRunnerGlobalPromise;
 }
 
 function loadOriginRouting() {
-  return originRoutingLoader.load();
+  originRoutingPromise ??= import("./origin-routing.js");
+  return originRoutingPromise;
 }
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
@@ -137,17 +137,9 @@ async function applyMediaUnderstandingIfNeeded(params: {
   if (!hasInboundMedia(params.ctx)) {
     return false;
   }
-  try {
-    const { applyMediaUnderstanding } = await loadMediaUnderstandingApplyRuntime();
-    await applyMediaUnderstanding(params);
-    return true;
-  } catch (err) {
-    mediaUnderstandingApplyRuntimeLoader.clear();
-    logVerbose(
-      `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
-    );
-    return false;
-  }
+  const { applyMediaUnderstanding } = await loadMediaUnderstandingApplyRuntime();
+  await applyMediaUnderstanding(params);
+  return true;
 }
 
 async function applyLinkUnderstandingIfNeeded(params: {
@@ -157,17 +149,9 @@ async function applyLinkUnderstandingIfNeeded(params: {
   if (!hasLinkCandidate(params.ctx)) {
     return false;
   }
-  try {
-    const { applyLinkUnderstanding } = await loadLinkUnderstandingApplyRuntime();
-    await applyLinkUnderstanding(params);
-    return true;
-  } catch (err) {
-    linkUnderstandingApplyRuntimeLoader.clear();
-    logVerbose(
-      `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
-    );
-    return false;
-  }
+  const { applyLinkUnderstanding } = await loadLinkUnderstandingApplyRuntime();
+  await applyLinkUnderstanding(params);
+  return true;
 }
 
 export async function getReplyFromConfig(
@@ -177,7 +161,7 @@ export async function getReplyFromConfig(
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const cfg = resolveGetReplyConfig({
-    getRuntimeConfig,
+    loadConfig,
     isFastTestEnv,
     configOverride,
   });
@@ -240,7 +224,6 @@ export async function getReplyFromConfig(
     : await ensureAgentWorkspace({
         dir: workspaceDirRaw,
         ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-        skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
@@ -310,40 +293,6 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
-
-  if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
-    const text = sessionEntry.pendingFinalDeliveryText;
-
-    // If it's a heartbeat, we definitely want to try delivering the lost reply now.
-    // If it's a user message, we deliver the lost reply first, then continue.
-    // For now, let's just return the lost reply if it's a heartbeat.
-    if (opts?.isHeartbeat) {
-      const updatedAt = Date.now();
-      const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-      sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
-      sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
-      sessionEntry.pendingFinalDeliveryLastError = null;
-      sessionEntry.updatedAt = updatedAt;
-      if (sessionKey && sessionStore) {
-        sessionStore[sessionKey] = sessionEntry;
-      }
-      if (sessionKey && storePath) {
-        const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({
-            pendingFinalDeliveryLastAttemptAt: updatedAt,
-            pendingFinalDeliveryAttemptCount: attemptCount,
-            pendingFinalDeliveryLastError: null,
-            updatedAt,
-          }),
-        });
-      }
-      return { text };
-    }
-  }
-
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({
@@ -379,7 +328,7 @@ export async function getReplyFromConfig(
         groupChannel:
           sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
         groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
-        parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
+        parentSessionKey: sessionCtx.ParentSessionKey,
       })
     : null;
   const hasSessionModelOverride = Boolean(
@@ -390,10 +339,7 @@ export async function getReplyFromConfig(
     sessionEntry,
     sessionStore,
     sessionKey,
-    parentSessionKey:
-      sessionEntry.parentSessionKey ??
-      sessionCtx.ModelParentSessionKey ??
-      sessionCtx.ParentSessionKey,
+    parentSessionKey: sessionEntry.parentSessionKey ?? sessionCtx.ParentSessionKey,
     defaultProvider,
   });
   if (storedModelOverride?.model && !hasResolvedHeartbeatModelOverride) {
@@ -502,7 +448,6 @@ export async function getReplyFromConfig(
     groupResolution,
     isGroup,
     triggerBodyNormalized,
-    resetTriggered,
     commandAuthorized,
     defaultProvider,
     defaultModel,
@@ -636,13 +581,9 @@ export async function getReplyFromConfig(
           sessionKey: agentSessionKey,
           sessionId,
           workspaceDir,
+          messageProvider: hookMessageProvider,
           trigger: opts?.isHeartbeat ? "heartbeat" : "user",
-          ...buildAgentHookContextChannelFields({
-            sessionKey: agentSessionKey,
-            messageProvider: hookMessageProvider,
-            currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-            messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-          }),
+          channelId: hookMessageProvider,
         },
       );
       if (hookResult?.handled) {
@@ -651,11 +592,7 @@ export async function getReplyFromConfig(
     }
   }
 
-  // ctx.MediaStaged=true means the caller (e.g. chat.send RPC) already staged
-  // synchronously so it could surface 5xx before respond(). Skipping here keeps
-  // staging a single-call contract instead of relying on relative-path no-op
-  // semantics in stageSandboxMedia.
-  if (!useFastTestBootstrap && sessionKey && !ctx.MediaStaged && hasInboundMedia(ctx)) {
+  if (!useFastTestBootstrap && sessionKey && hasInboundMedia(ctx)) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
     await stageSandboxMedia({
       ctx,

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { parseNodeList, parsePairingList } from "./format.js";
@@ -8,12 +7,11 @@ import type { NodeListNode, NodesRpcOpts } from "./types.js";
 
 type NodesCliRpcRuntimeModule = typeof import("./rpc.runtime.js");
 
-const nodesCliRpcRuntimeLoader = createLazyImportLoader<NodesCliRpcRuntimeModule>(
-  () => import("./rpc.runtime.js"),
-);
+let nodesCliRpcRuntimePromise: Promise<NodesCliRpcRuntimeModule> | undefined;
 
 async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
-  return nodesCliRpcRuntimeLoader.load();
+  nodesCliRpcRuntimePromise ??= import("./rpc.runtime.js");
+  return nodesCliRpcRuntimePromise;
 }
 
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>

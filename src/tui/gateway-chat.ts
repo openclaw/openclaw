@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getRuntimeConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";
 import {
@@ -7,7 +7,6 @@ import {
   ensureExplicitGatewayAuth,
   resolveExplicitGatewayAuth,
 } from "../gateway/call.js";
-import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
@@ -50,7 +49,6 @@ type ResolvedGatewayConnection = {
   url: string;
   token?: string;
   password?: string;
-  preauthHandshakeTimeoutMs?: number;
   allowInsecureLocalOperatorUi?: boolean;
 };
 
@@ -100,7 +98,7 @@ export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
-  readonly connection: ResolvedGatewayConnection;
+  readonly connection: { url: string; token?: string; password?: string };
   hello?: HelloOk;
 
   onEvent?: (evt: GatewayEvent) => void;
@@ -119,7 +117,6 @@ export class GatewayChatClient implements TuiBackend {
       url: connection.url,
       token: connection.token,
       password: connection.password,
-      preauthHandshakeTimeoutMs: connection.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.TUI,
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
@@ -161,13 +158,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   start() {
-    void startGatewayClientWhenEventLoopReady(this.client, {
-      clientOptions: { preauthHandshakeTimeoutMs: this.connection.preauthHandshakeTimeoutMs },
-    }).then((readiness) => {
-      if (!readiness.ready && !readiness.aborted) {
-        this.onDisconnected?.("gateway event loop readiness timeout");
-      }
-    });
+    this.client.start();
   }
 
   stop() {
@@ -182,7 +173,6 @@ export class GatewayChatClient implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     await this.client.request("chat.send", {
       sessionKey: opts.sessionKey,
-      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       message: opts.message,
       thinking: opts.thinking,
       deliver: opts.deliver,
@@ -259,7 +249,7 @@ export class GatewayChatClient implements TuiBackend {
 export async function resolveGatewayConnection(
   opts: GatewayConnectionOptions,
 ): Promise<ResolvedGatewayConnection> {
-  const config = getRuntimeConfig();
+  const config = loadConfig();
   const env = process.env;
   const gatewayAuthMode = config.gateway?.auth?.mode;
   const isRemoteMode = config.gateway?.mode === "remote";
@@ -294,7 +284,6 @@ export async function resolveGatewayConnection(
       url,
       token: explicitAuth.token,
       password: explicitAuth.password,
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -313,7 +302,6 @@ export async function resolveGatewayConnection(
       url,
       token: resolved.token,
       password: resolved.password,
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi: false,
     };
   }
@@ -329,7 +317,6 @@ export async function resolveGatewayConnection(
       url,
       token: resolved.token,
       password: resolved.password,
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -354,7 +341,6 @@ export async function resolveGatewayConnection(
     url,
     token: resolved.token,
     password: resolved.password,
-    preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
   };
 }

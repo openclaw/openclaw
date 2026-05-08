@@ -1,8 +1,5 @@
 {
   "id": "arcee",
-  "activation": {
-    "onStartup": false
-  },
   "enabledByDefault": true,
   "providers": ["arcee"],
   "providerAuthEnvVars": {

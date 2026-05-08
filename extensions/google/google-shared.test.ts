@@ -14,12 +14,6 @@ import {
   makeModel,
 } from "./google-shared.test-helpers.js";
 
-type GoogleSharedTestModel = ReturnType<typeof makeModel> | ReturnType<typeof makeGeminiCliModel>;
-const convertMessagesForTest = convertMessages as unknown as (
-  model: GoogleSharedTestModel,
-  context: Context,
-) => ReturnType<typeof convertMessages>;
-
 describe("google-shared convertTools", () => {
   it("preserves parameters when type is missing", () => {
     const tools = [
@@ -160,7 +154,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessagesForTest(model, context);
+    const contents = convertMessages(model, context);
     expect(contents).toHaveLength(2);
     expect(contents[0].role).toBe("user");
     expect(contents[1].role).toBe("user");
@@ -182,7 +176,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessagesForTest(model, context);
+    const contents = convertMessages(model, context);
     expect(contents).toHaveLength(1);
     expect(contents[0].role).toBe("model");
     expect(contents[0].parts?.[0]).toMatchObject({
@@ -205,7 +199,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessagesForTest(model, context);
+    const contents = convertMessages(model, context);
     const parts = contents?.[0]?.parts ?? [];
     expect(parts).toHaveLength(1);
     expect(parts[0]).toMatchObject({
@@ -243,7 +237,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessagesForTest(model, context);
+    const contents = convertMessages(model, context);
     expectConvertedRoles(contents, ["user", "model", "model"]);
     expect(contents[1].parts).toHaveLength(1);
     expect(contents[2].parts).toHaveLength(1);
@@ -280,7 +274,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessagesForTest(model, context);
+    const contents = convertMessages(model, context);
     expect(contents).toHaveLength(4);
     expect(contents[0].role).toBe("user");
     expect(contents[1].role).toBe("model");
@@ -314,7 +308,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessagesForTest(model, context);
+    const contents = convertMessages(model, context);
     expectConvertedRoles(contents, ["user", "model", "model", "user"]);
     const toolCallPart = contents[2].parts?.find(
       (part) => typeof part === "object" && part !== null && "functionCall" in part,
@@ -351,7 +345,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessagesForTest(model, context);
+    const contents = convertMessages(model, context);
     const parts = contents.flatMap((content) => content.parts ?? []);
     const toolCallPart = parts.find(
       (part) => typeof part === "object" && part !== null && "functionCall" in part,

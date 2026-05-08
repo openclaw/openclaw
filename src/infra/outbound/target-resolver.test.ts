@@ -14,18 +14,17 @@ const mocks = vi.hoisted(() => ({
   listGroupsLive: vi.fn(),
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
-  getLoadedChannelPlugin: vi.fn(),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: (...args: unknown[]) => mocks.getLoadedChannelPlugin(...args),
+  getLoadedChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
   getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
   normalizeChannelId: (value: string) => value,
 }));
 
 vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
-  getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getLoadedChannelPlugin(...args),
+  getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getChannelPlugin(...args),
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
@@ -46,10 +45,6 @@ beforeEach(() => {
   mocks.listGroupsLive.mockReset();
   mocks.resolveTarget.mockReset();
   mocks.getChannelPlugin.mockReset();
-  mocks.getLoadedChannelPlugin.mockReset();
-  mocks.getLoadedChannelPlugin.mockImplementation((...args: unknown[]) =>
-    mocks.getChannelPlugin(...args),
-  );
   mocks.getActivePluginChannelRegistryVersion.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
   resetDirectoryCache();
@@ -154,39 +149,6 @@ describe("resolveMessagingTarget (directory fallback)", () => {
         input: "dthcxgoxhifn3pwh65cut3ud3w",
       }),
     );
-    expect(mocks.listGroups).not.toHaveBeenCalled();
-    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
-  });
-
-  it("uses catalog plugin target grammar for unloaded numeric topic ids", async () => {
-    mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
-    mocks.getChannelPlugin.mockReturnValue({
-      messaging: {
-        normalizeTarget: (raw: string) =>
-          raw.trim() === "-1001234567890:topic:42"
-            ? "telegram:-1001234567890:topic:42"
-            : raw.trim() || undefined,
-        inferTargetChatType: ({ to }: { to: string }) => (to.includes("-100") ? "group" : "direct"),
-        targetResolver: {
-          looksLikeId: (_raw: string, normalized?: string) =>
-            normalized === "telegram:-1001234567890:topic:42",
-          hint: "<chatId>",
-        },
-      },
-    });
-
-    const result = await expectOkResolution({
-      cfg,
-      channel: "telegram",
-      input: "-1001234567890:topic:42",
-    });
-
-    expect(result.target).toEqual({
-      to: "telegram:-1001234567890:topic:42",
-      kind: "group",
-      display: "telegram:-1001234567890:topic:42",
-      source: "normalized",
-    });
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });

@@ -66,16 +66,8 @@ export async function materializeBundleMcpToolsForRun(params: {
   reservedToolNames?: Iterable<string>;
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
-  let disposed = false;
-  const releaseLease = params.runtime.acquireLease?.();
   params.runtime.markUsed();
-  let catalog;
-  try {
-    catalog = await params.runtime.getCatalog();
-  } catch (error) {
-    releaseLease?.();
-    throw error;
-  }
+  const catalog = await params.runtime.getCatalog();
   const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const tools: BundleMcpToolRuntime["tools"] = [];
   const sortedCatalogTools = [...catalog.tools].toSorted((a, b) => {
@@ -112,7 +104,6 @@ export async function materializeBundleMcpToolsForRun(params: {
       description: tool.description || tool.fallbackDescription,
       parameters: tool.inputSchema,
       execute: async (_toolCallId: string, input: unknown) => {
-        params.runtime.markUsed();
         const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
         return toAgentToolResult({
           serverName: tool.serverName,
@@ -136,11 +127,6 @@ export async function materializeBundleMcpToolsForRun(params: {
   return {
     tools,
     dispose: async () => {
-      if (disposed) {
-        return;
-      }
-      disposed = true;
-      releaseLease?.();
       await params.disposeRuntime?.();
     },
   };

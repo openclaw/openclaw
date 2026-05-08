@@ -3,7 +3,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { expandHomePrefix } from "./home-dir.js";
 
-function isDriveLessWindowsRootedPath(value: string): boolean {
+export function isDriveLessWindowsRootedPath(value: string): boolean {
   return process.platform === "win32" && /^:[\\/]/.test(value);
 }
 

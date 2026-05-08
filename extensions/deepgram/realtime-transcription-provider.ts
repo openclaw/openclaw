@@ -232,8 +232,6 @@ function createDeepgramRealtimeTranscriptionSession(
     reconnectDelayMs: DEEPGRAM_REALTIME_RECONNECT_DELAY_MS,
     maxQueuedBytes: DEEPGRAM_REALTIME_MAX_QUEUED_BYTES,
     connectTimeoutMessage: "Deepgram realtime transcription connection timeout",
-    connectClosedBeforeReadyMessage:
-      "Deepgram realtime transcription connection closed before ready",
     reconnectLimitMessage: "Deepgram realtime transcription reconnect limit reached",
     sendAudio: (audio, transport) => {
       transport.sendBinary(audio);
@@ -250,7 +248,6 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
     id: "deepgram",
     label: "Deepgram Realtime Transcription",
     aliases: ["deepgram-realtime", "nova-3-streaming"],
-    defaultModel: DEFAULT_DEEPGRAM_AUDIO_MODEL,
     autoSelectOrder: 35,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>

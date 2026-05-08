@@ -4,7 +4,7 @@ import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 type FacadeModule = {
   githubCopilotLoginCommand: (
-    opts: { profileId?: string; yes?: boolean; agentDir?: string },
+    opts: { profileId?: string; yes?: boolean },
     runtime: RuntimeEnv,
   ) => Promise<void>;
 };

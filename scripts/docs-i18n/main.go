@@ -27,30 +27,28 @@ type docResult struct {
 }
 
 type runConfig struct {
-	targetLang   string
-	sourceLang   string
-	docsRoot     string
-	tmPath       string
-	mode         string
-	thinking     string
-	overwrite    bool
-	allowPartial bool
-	maxFiles     int
-	parallel     int
+	targetLang string
+	sourceLang string
+	docsRoot   string
+	tmPath     string
+	mode       string
+	thinking   string
+	overwrite  bool
+	maxFiles   int
+	parallel   int
 }
 
 func main() {
 	var (
-		targetLang   = flag.String("lang", "zh-CN", "target language (e.g., zh-CN)")
-		sourceLang   = flag.String("src", "en", "source language")
-		docsRoot     = flag.String("docs", "docs", "docs root")
-		tmPath       = flag.String("tm", "", "translation memory path")
-		mode         = flag.String("mode", "segment", "translation mode (segment|doc)")
-		thinking     = flag.String("thinking", "high", "thinking level (low|medium|high|xhigh)")
-		overwrite    = flag.Bool("overwrite", false, "overwrite existing translations")
-		allowPartial = flag.Bool("allow-partial", false, "write successful doc-mode outputs even when another file fails")
-		maxFiles     = flag.Int("max", 0, "max files to process (0 = all)")
-		parallel     = flag.Int("parallel", 1, "parallel workers for doc mode")
+		targetLang = flag.String("lang", "zh-CN", "target language (e.g., zh-CN)")
+		sourceLang = flag.String("src", "en", "source language")
+		docsRoot   = flag.String("docs", "docs", "docs root")
+		tmPath     = flag.String("tm", "", "translation memory path")
+		mode       = flag.String("mode", "segment", "translation mode (segment|doc)")
+		thinking   = flag.String("thinking", "high", "thinking level (low|high)")
+		overwrite  = flag.Bool("overwrite", false, "overwrite existing translations")
+		maxFiles   = flag.Int("max", 0, "max files to process (0 = all)")
+		parallel   = flag.Int("parallel", 1, "parallel workers for doc mode")
 	)
 	flag.Parse()
 	files := flag.Args()
@@ -59,18 +57,17 @@ func main() {
 	}
 
 	if err := runDocsI18N(context.Background(), runConfig{
-		targetLang:   *targetLang,
-		sourceLang:   *sourceLang,
-		docsRoot:     *docsRoot,
-		tmPath:       *tmPath,
-		mode:         *mode,
-		thinking:     *thinking,
-		overwrite:    *overwrite,
-		allowPartial: *allowPartial,
-		maxFiles:     *maxFiles,
-		parallel:     *parallel,
+		targetLang: *targetLang,
+		sourceLang: *sourceLang,
+		docsRoot:   *docsRoot,
+		tmPath:     *tmPath,
+		mode:       *mode,
+		thinking:   *thinking,
+		overwrite:  *overwrite,
+		maxFiles:   *maxFiles,
+		parallel:   *parallel,
 	}, files, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (docsTranslator, error) {
-		return NewCodexTranslator(srcLang, tgtLang, glossary, thinking)
+		return NewPiTranslator(srcLang, tgtLang, glossary, thinking)
 	}); err != nil {
 		fatal(err)
 	}
@@ -130,7 +127,7 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 	processed := 0
 	skipped := 0
 	localizedFiles := []string{}
-	var translationErr error
+	var runErr error
 
 	log.Printf("docs-i18n: mode=%s total=%d pending=%d pre_skipped=%d overwrite=%t thinking=%s parallel=%d", cfg.mode, totalFiles, len(ordered), preSkipped, cfg.overwrite, cfg.thinking, parallel)
 	switch cfg.mode {
@@ -141,7 +138,7 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 			skipped += skip
 			localizedFiles = append(localizedFiles, outputs...)
 			if err != nil {
-				translationErr = err
+				runErr = err
 			}
 		} else {
 			translator, err := newTranslator(cfg.sourceLang, cfg.targetLang, glossary, cfg.thinking)
@@ -154,7 +151,7 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 			skipped += skip
 			localizedFiles = append(localizedFiles, outputs...)
 			if err != nil {
-				translationErr = err
+				runErr = err
 			}
 		}
 	case "segment":
@@ -170,25 +167,21 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 		processed += proc
 		localizedFiles = append(localizedFiles, outputs...)
 		if err != nil {
-			translationErr = err
+			runErr = err
 		}
 	default:
 		return fmt.Errorf("unknown mode: %s", cfg.mode)
 	}
 
-	if err := tm.Save(); err != nil {
-		return err
+	if err := tm.Save(); err != nil && runErr == nil {
+		runErr = err
 	}
-	if err := postprocessLocalizedDocs(resolvedDocsRoot, cfg.targetLang, localizedFiles); err != nil {
-		return err
+	if err := postprocessLocalizedDocs(resolvedDocsRoot, cfg.targetLang, localizedFiles); err != nil && runErr == nil {
+		runErr = err
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
 	log.Printf("docs-i18n: completed processed=%d skipped=%d elapsed=%s", processed, skipped, elapsed)
-	if translationErr != nil && cfg.allowPartial && cfg.mode == "doc" && processed > 0 {
-		log.Printf("docs-i18n: allowing partial doc output after translation error: %v", translationErr)
-		return nil
-	}
-	return translationErr
+	return runErr
 }
 
 func runDocSequential(ctx context.Context, ordered []string, translator docsTranslator, docsRoot, srcLang, tgtLang string, overwrite bool) (int, int, []string, error) {

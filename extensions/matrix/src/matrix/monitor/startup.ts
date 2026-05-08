@@ -60,8 +60,8 @@ export async function runMatrixStartupMaintenance(
     accountConfig: MatrixConfig;
     logger: RuntimeLogger;
     logVerboseMessage: (message: string) => void;
-    getRuntimeConfig: () => CoreConfig;
-    replaceConfigFile: (cfg: never) => Promise<void>;
+    loadConfig: () => CoreConfig;
+    writeConfigFile: (cfg: never) => Promise<void>;
     loadWebMedia: (
       url: string,
       maxBytes: number,
@@ -93,11 +93,11 @@ export async function runMatrixStartupMaintenance(
       profileSync.resolvedAvatarUrl &&
       params.accountConfig.avatarUrl !== profileSync.resolvedAvatarUrl
     ) {
-      const latestCfg = params.getRuntimeConfig();
+      const latestCfg = params.loadConfig();
       const updatedCfg = runtimeDeps.updateMatrixAccountConfig(latestCfg, params.accountId, {
         avatarUrl: profileSync.resolvedAvatarUrl,
       });
-      await params.replaceConfigFile(updatedCfg as never);
+      await params.writeConfigFile(updatedCfg as never);
       throwIfMatrixStartupAborted(params.abortSignal);
       params.logVerboseMessage(
         `matrix: persisted converted avatar URL for account ${params.accountId} (${profileSync.resolvedAvatarUrl})`,

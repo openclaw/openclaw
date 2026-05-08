@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBrewExecutable as defaultResolveBrewExecutable } from "../infra/brew.js";
@@ -36,7 +35,6 @@ export type { SkillInstallResult } from "./skills-install.types.js";
 type SkillsInstallDeps = {
   hasBinary: (bin: string) => boolean;
   loadWorkspaceSkillEntries: typeof defaultLoadWorkspaceSkillEntries;
-  resolveNodeInstallStateDir: () => string;
   resolveBrewExecutable: () => string | undefined;
   resolveSkillsInstallPreferences: typeof defaultResolveSkillsInstallPreferences;
 };
@@ -44,7 +42,6 @@ type SkillsInstallDeps = {
 const defaultSkillsInstallDeps: SkillsInstallDeps = {
   hasBinary: defaultHasBinary,
   loadWorkspaceSkillEntries: defaultLoadWorkspaceSkillEntries,
-  resolveNodeInstallStateDir: resolveDefaultNodeInstallStateDir,
   resolveBrewExecutable: defaultResolveBrewExecutable,
   resolveSkillsInstallPreferences: defaultResolveSkillsInstallPreferences,
 };
@@ -108,37 +105,6 @@ function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPrefer
     default:
       return ["npm", "install", "-g", "--ignore-scripts", packageName];
   }
-}
-
-function resolveDefaultNodeInstallStateDir({
-  cwd = process.cwd(),
-  getuid = process.getuid?.bind(process),
-  homedir = os.homedir,
-  platform = process.platform,
-}: {
-  cwd?: string;
-  getuid?: () => number;
-  homedir?: () => string;
-  platform?: NodeJS.Platform;
-} = {}): string {
-  if (platform !== "win32" && getuid?.() === 0) {
-    return path.join(path.parse(cwd).root, "var", "lib", "openclaw");
-  }
-  return path.join(homedir(), ".openclaw");
-}
-
-async function buildNodeInstallEnv(prefs: SkillsInstallPreferences): Promise<NodeJS.ProcessEnv> {
-  if (prefs.nodeManager !== "npm") {
-    return {};
-  }
-
-  const stateDir = getSkillsInstallDeps().resolveNodeInstallStateDir();
-  const prefix = path.join(stateDir, "tools", "node", "npm");
-  await fs.promises.mkdir(prefix, { recursive: true, mode: 0o700 });
-  return {
-    NPM_CONFIG_PREFIX: prefix,
-    npm_config_prefix: prefix,
-  };
 }
 
 // Strict allowlist patterns to prevent option injection and malicious package names.
@@ -232,6 +198,11 @@ async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<s
     if (prefix) {
       return path.join(prefix, "bin");
     }
+  }
+
+  const envPrefix = process.env.HOMEBREW_PREFIX?.trim();
+  if (envPrefix) {
+    return path.join(envPrefix, "bin");
   }
 
   for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
@@ -553,9 +524,6 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
 
   const envOverrides: NodeJS.ProcessEnv = {};
-  if (spec.kind === "node") {
-    Object.assign(envOverrides, await buildNodeInstallEnv(prefs));
-  }
   if (spec.kind === "go" && brewExe) {
     const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);
     if (brewBin) {
@@ -568,7 +536,6 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 }
 
 export const __testing = {
-  resolveDefaultNodeInstallStateDir,
   setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
     skillsInstallDeps = {
       ...defaultSkillsInstallDeps,

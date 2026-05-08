@@ -1,16 +1,8 @@
 import { relative, resolve } from "node:path";
 import { loadPluginManifestRegistry } from "../../manifest-registry.js";
 
-const sourceExtensionsDir = resolve(process.cwd(), "extensions");
 const bundledPluginRoots = new Map(
-  loadPluginManifestRegistry({
-    config: {},
-    env: {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: sourceExtensionsDir,
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-    },
-  })
+  loadPluginManifestRegistry({ cache: true, config: {} })
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .map((plugin) => [plugin.id, plugin.rootDir] as const),
 );

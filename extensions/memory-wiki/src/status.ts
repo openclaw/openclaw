@@ -6,7 +6,7 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { inferWikiPageKind, toWikiPageSummary, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
 
-type MemoryWikiStatusWarning = {
+export type MemoryWikiStatusWarning = {
   code:
     | "vault-missing"
     | "obsidian-cli-missing"
@@ -46,7 +46,7 @@ export type MemoryWikiStatus = {
   warnings: MemoryWikiStatusWarning[];
 };
 
-type MemoryWikiDoctorFix = {
+export type MemoryWikiDoctorFix = {
   code: MemoryWikiStatusWarning["code"];
   message: string;
 };

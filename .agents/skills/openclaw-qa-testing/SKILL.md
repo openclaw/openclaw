@@ -49,37 +49,6 @@ pnpm openclaw qa suite \
 5. If the user wants to watch the live UI, find the current `openclaw-qa` listen port and report `http://127.0.0.1:<port>`.
 6. If a scenario fails, fix the product or harness root cause, then rerun the full lane.
 
-## OTEL smoke
-
-For local QA-lab OpenTelemetry validation, use:
-
-```bash
-pnpm qa:otel:smoke
-```
-
-This starts a local OTLP/HTTP trace receiver, runs the `otel-trace-smoke`
-scenario through qa-channel, decodes the emitted protobuf spans, and verifies
-the exported trace names and privacy contract. It does not require Opik,
-Langfuse, or external collector credentials.
-
-## Matrix live profiles
-
-`pnpm openclaw qa matrix` defaults to the full `all` profile. Use explicit
-profiles for faster CI/release proof:
-
-```bash
-OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
-pnpm openclaw qa matrix --profile fast --fail-fast
-```
-
-- `fast`: release-critical transport contract, excluding generated image and
-  deep E2EE recovery inventory.
-- `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, `e2ee-cli`: sharded full
-  Matrix coverage.
-- `QA-Lab - All Lanes` uses explicit `fast` Matrix on scheduled runs. Manual
-  dispatch keeps `matrix_profile=all` as the default and always shards that full
-  Matrix selection.
-
 ## QA credentials and 1Password
 
 - Use `op` only inside `tmux` for QA secret lookup in this repo.
@@ -139,20 +108,6 @@ pnpm test:docker:npm-telegram-live
     - `OPENCLAW_QA_CONVEX_SITE_URL`
     - `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
     - `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE=mock-openai`
-- If direct Telegram env is missing locally and `op signin` blocks, prefer dispatching the manual GitHub lane because the `qa-live-shared` environment already has Convex CI credentials:
-
-```bash
-gh workflow run "NPM Telegram Beta E2E" --repo openclaw/openclaw --ref main \
-  -f package_spec=openclaw@YYYY.M.D-beta.N \
-  -f package_label=openclaw@YYYY.M.D-beta.N \
-  -f provider_mode=mock-openai
-```
-
-- Poll the exact run id from the dispatch URL. `gh run view --json artifacts` is not supported; list artifacts with:
-
-```bash
-gh api repos/openclaw/openclaw/actions/runs/<run-id>/artifacts
-```
 
 ## Character evals
 

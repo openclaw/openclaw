@@ -1,6 +1,5 @@
-import type { Block, KnownBlock } from "@slack/web-api";
 import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
@@ -8,8 +7,8 @@ import { sendMessageSlack } from "./send.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
 
-type SlackDraftStream = {
-  update: (update: SlackDraftStreamUpdate) => void;
+export type SlackDraftStream = {
+  update: (text: string) => void;
   flush: () => Promise<void>;
   clear: () => Promise<void>;
   discardPending: () => Promise<void>;
@@ -19,13 +18,6 @@ type SlackDraftStream = {
   messageId: () => string | undefined;
   channelId: () => string | undefined;
 };
-
-export type SlackDraftStreamUpdate =
-  | string
-  | {
-      text: string;
-      blocks?: (Block | KnownBlock)[];
-    };
 
 export function createSlackDraftStream(params: {
   target: string;
@@ -50,12 +42,8 @@ export function createSlackDraftStream(params: {
 
   let streamMessageId: string | undefined;
   let streamChannelId: string | undefined;
-  let lastSentKey = "";
-  let pendingUpdate: SlackDraftStreamUpdate | undefined;
+  let lastSentText = "";
   let stopped = false;
-
-  const normalizeUpdate = (update: SlackDraftStreamUpdate) =>
-    typeof update === "string" ? { text: update } : update;
 
   const sendOrEditStreamMessage = async (text: string) => {
     if (stopped) {
@@ -70,20 +58,16 @@ export function createSlackDraftStream(params: {
       params.warn?.(`slack stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
       return;
     }
-    const update = normalizeUpdate(pendingUpdate ?? text);
-    const blocks = update.text === text ? update.blocks : undefined;
-    const sentKey = `${trimmed}\n${blocks ? JSON.stringify(blocks) : ""}`;
-    if (sentKey === lastSentKey) {
+    if (trimmed === lastSentText) {
       return;
     }
-    lastSentKey = sentKey;
+    lastSentText = trimmed;
     try {
       if (streamChannelId && streamMessageId) {
         await edit(streamChannelId, streamMessageId, trimmed, {
           cfg: params.cfg,
           token: params.token,
           accountId: params.accountId,
-          ...(blocks ? { blocks } : {}),
         });
         return;
       }
@@ -92,7 +76,6 @@ export function createSlackDraftStream(params: {
         token: params.token,
         accountId: params.accountId,
         threadTs: params.resolveThreadTs?.(),
-        ...(blocks ? { blocks } : {}),
       });
       streamChannelId = sent.channelId || streamChannelId;
       streamMessageId = sent.messageId || streamMessageId;
@@ -129,8 +112,7 @@ export function createSlackDraftStream(params: {
     const messageId = streamMessageId;
     streamChannelId = undefined;
     streamMessageId = undefined;
-    lastSentKey = "";
-    pendingUpdate = undefined;
+    lastSentText = "";
     if (!channelId || !messageId) {
       return;
     }
@@ -147,19 +129,14 @@ export function createSlackDraftStream(params: {
   const forceNewMessage = () => {
     streamMessageId = undefined;
     streamChannelId = undefined;
-    lastSentKey = "";
-    pendingUpdate = undefined;
+    lastSentText = "";
     loop.resetPending();
   };
 
   params.log?.(`slack stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
-    update: (update: SlackDraftStreamUpdate) => {
-      const normalized = normalizeUpdate(update);
-      pendingUpdate = update;
-      loop.update(normalized.text);
-    },
+    update: loop.update,
     flush: loop.flush,
     clear,
     discardPending,
