@@ -37,7 +37,12 @@ type PersistedTelegramMessageNode = TelegramReplyChainEntry & {
   sourceMessage: Message;
 };
 
+type TelegramMessageCacheBucket = {
+  messages: Map<string, TelegramCachedMessageNode>;
+};
+
 const DEFAULT_MAX_MESSAGES = 5000;
+const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
 
 function telegramMessageCacheKey(params: {
   accountId: string;
@@ -243,14 +248,37 @@ function persistMessages(params: {
   });
 }
 
+function resolveMessageCacheBucket(params: {
+  persistedPath?: string;
+  maxMessages: number;
+}): TelegramMessageCacheBucket {
+  const { persistedPath, maxMessages } = params;
+  if (!persistedPath) {
+    return { messages: new Map<string, TelegramCachedMessageNode>() };
+  }
+  const existing = persistedMessageCacheBuckets.get(persistedPath);
+  if (existing) {
+    if (!fs.existsSync(persistedPath)) {
+      existing.messages.clear();
+    }
+    return existing;
+  }
+  const bucket = {
+    messages: readPersistedMessages(persistedPath, maxMessages),
+  };
+  persistedMessageCacheBuckets.set(persistedPath, bucket);
+  return bucket;
+}
+
 export function createTelegramMessageCache(params?: {
   maxMessages?: number;
   persistedPath?: string;
 }): TelegramMessageCache {
   const maxMessages = params?.maxMessages ?? DEFAULT_MAX_MESSAGES;
-  const messages = params?.persistedPath
-    ? readPersistedMessages(params.persistedPath, maxMessages)
-    : new Map<string, TelegramCachedMessageNode>();
+  const { messages } = resolveMessageCacheBucket({
+    persistedPath: params?.persistedPath,
+    maxMessages,
+  });
 
   const get: TelegramMessageCache["get"] = ({ accountId, chatId, messageId }) => {
     if (!messageId) {
