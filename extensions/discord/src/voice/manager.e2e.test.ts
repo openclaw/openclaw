@@ -648,9 +648,7 @@ describe("DiscordVoiceManager", () => {
       expect.objectContaining({
         configuredProviderId: "openai",
         defaultModel: "gpt-realtime-2",
-        providerConfigs: expect.objectContaining({
-          openai: expect.objectContaining({ model: "gpt-realtime-2", voice: "cedar" }),
-        }),
+        providerConfigOverrides: { model: "gpt-realtime-2", voice: "cedar" },
       }),
     );
     const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
@@ -675,6 +673,37 @@ describe("DiscordVoiceManager", () => {
     );
     expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
       expect.stringContaining("buffered brain answer"),
+    );
+  });
+
+  it("applies Discord realtime model and voice overrides during provider auto-selection", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "talk-buffer",
+        realtime: {
+          model: "gpt-realtime-2",
+          voice: "cedar",
+          providers: {
+            openai: { model: "provider-default", voice: "marin" },
+          },
+        },
+      },
+    });
+
+    const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(result.ok).toBe(true);
+    expect(resolveConfiguredRealtimeVoiceProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configuredProviderId: undefined,
+        defaultModel: "gpt-realtime-2",
+        providerConfigs: expect.objectContaining({
+          openai: { model: "provider-default", voice: "marin" },
+        }),
+        providerConfigOverrides: { model: "gpt-realtime-2", voice: "cedar" },
+      }),
     );
   });
 

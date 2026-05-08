@@ -103,6 +103,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     const resolved = resolveConfiguredRealtimeVoiceProvider({
       configuredProviderId: this.realtimeConfig?.provider,
       providerConfigs: buildProviderConfigs(this.realtimeConfig),
+      providerConfigOverrides: buildProviderConfigOverrides(this.realtimeConfig),
       cfg: this.params.cfg,
       defaultModel: this.realtimeConfig?.model,
       noRegisteredProviderMessage: "No configured realtime voice provider registered",
@@ -271,18 +272,18 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 function buildProviderConfigs(
   realtimeConfig: DiscordRealtimeVoiceConfig,
 ): Record<string, RealtimeVoiceProviderConfig | undefined> | undefined {
-  const configs = { ...realtimeConfig?.providers };
-  const provider = realtimeConfig?.provider?.trim();
-  if (!provider) {
-    return Object.keys(configs).length > 0 ? configs : undefined;
-  }
-  const existing = configs[provider] ?? {};
-  configs[provider] = {
-    ...existing,
+  const configs = realtimeConfig?.providers;
+  return configs && Object.keys(configs).length > 0 ? { ...configs } : undefined;
+}
+
+function buildProviderConfigOverrides(
+  realtimeConfig: DiscordRealtimeVoiceConfig,
+): RealtimeVoiceProviderConfig | undefined {
+  const overrides = {
     ...(realtimeConfig?.model ? { model: realtimeConfig.model } : {}),
     ...(realtimeConfig?.voice ? { voice: realtimeConfig.voice } : {}),
   };
-  return configs;
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
 function buildDiscordRealtimeInstructions(params: {
