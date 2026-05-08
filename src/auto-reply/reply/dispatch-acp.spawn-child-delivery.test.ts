@@ -195,8 +195,10 @@ function createDispatcher(): {
   blockReplyMock: ReturnType<typeof vi.fn>;
   finalReplyMock: ReturnType<typeof vi.fn>;
   counts: Record<"tool" | "block" | "final", number>;
+  failedCounts: Record<"tool" | "block" | "final", number>;
 } {
   const counts = { tool: 0, block: 0, final: 0 };
+  const failedCounts = { tool: 0, block: 0, final: 0 };
   const toolResultMock = vi.fn(() => true);
   const blockReplyMock = vi.fn(() => true);
   const finalReplyMock = vi.fn(() => true);
@@ -206,10 +208,10 @@ function createDispatcher(): {
     sendFinalReply: finalReplyMock,
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getFailedCounts: vi.fn(() => ({ ...failedCounts })),
     markComplete: vi.fn(),
   };
-  return { dispatcher, toolResultMock, blockReplyMock, finalReplyMock, counts };
+  return { dispatcher, toolResultMock, blockReplyMock, finalReplyMock, counts, failedCounts };
 }
 
 function setReadyAcpResolution() {
@@ -398,7 +400,7 @@ describe("tryDispatchAcpReply spawn-child outbound delivery (Gap 1)", () => {
       },
     );
 
-    const { dispatcher, toolResultMock, blockReplyMock } = createDispatcher();
+    const { dispatcher, toolResultMock, finalReplyMock } = createDispatcher();
     await runSpawnChildDispatch({
       bodyForAgent: "spawn child review",
       cfg: createFinalOnlyStreamConfig(),
@@ -406,13 +408,15 @@ describe("tryDispatchAcpReply spawn-child outbound delivery (Gap 1)", () => {
     });
 
     // final_only flushes buffered tool deliveries on `done` and emits the
-    // accumulated assistant text as one block.
+    // accumulated assistant text as a single "final" payload (not "block"),
+    // preserving TTS mode semantics: when TTS mode is "final", non-final kinds
+    // would be skipped by maybeApplyAcpTts.
     expect(toolResultMock).toHaveBeenCalledTimes(1);
     expect(toolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining("Run review") }),
     );
-    expect(blockReplyMock).toHaveBeenCalledTimes(1);
-    expect(blockReplyMock).toHaveBeenCalledWith(
+    expect(finalReplyMock).toHaveBeenCalledTimes(1);
+    expect(finalReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining("Reviewing PR #640.") }),
     );
   });
@@ -421,23 +425,21 @@ describe("tryDispatchAcpReply spawn-child outbound delivery (Gap 1)", () => {
     setReadyAcpResolution();
     bindingServiceMocks.listBySession.mockReturnValue([createTelegramBinding()]);
 
-    // The parent dispatcher: after the first event we mark all sends as no-ops
-    // (return false), simulating the parent's run lifecycle ending while the
-    // spawn child is still emitting events. A bind-aware persistent dispatcher
-    // — independent of the parent's run — should pick up the slack and deliver
-    // the remaining events to the bound conversation. Today no such fallback
-    // exists in production code, so this assertion is expected to fail and
-    // pinpoints the architectural gap from the plan.
-    const { dispatcher, toolResultMock, blockReplyMock, finalReplyMock } = createDispatcher();
-    let parentTornDown = false;
-    toolResultMock.mockImplementation(() => !parentTornDown);
-    blockReplyMock.mockImplementation(() => !parentTornDown);
-    finalReplyMock.mockImplementation(() => !parentTornDown);
+    // The parent dispatcher: the real production failure mode is that send*()
+    // returns true (payload is enqueued on the dispatcher's sendChain), but the
+    // async transport in the sendChain rejects, incrementing failedCounts. Later
+    // calls to deliver() check getFailedCounts() and detect the transport is
+    // failing, then route via bindings instead.
+    //
+    // We simulate this by having the first tool_call send succeed (send*() returns
+    // true, failedCounts stays zero), then after "parent teardown" we update
+    // failedCounts to reflect an async transport failure. The next deliver() call
+    // sees the failure and routes via the session binding.
+    const { dispatcher, toolResultMock, blockReplyMock, failedCounts } = createDispatcher();
 
     managerMocks.runTurn.mockImplementation(
       async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-        // Pre-teardown event — the parent dispatcher is still alive, so this
-        // one delivers normally.
+        // Pre-teardown event — the parent dispatcher transport is healthy.
         await onEvent({
           type: "tool_call",
           tag: "tool_call",
@@ -447,10 +449,12 @@ describe("tryDispatchAcpReply spawn-child outbound delivery (Gap 1)", () => {
           text: "starting",
         });
 
-        // Simulate the parent's run completing: parent's dispatcher sends now
-        // start returning false (disposed). We do this BEFORE the next chunk
-        // so the projector sees the disposed state on the next deliver.
-        parentTornDown = true;
+        // Simulate the parent's async transport having failed: in production this
+        // happens when the sendChain's deliver() rejects and the .catch() handler
+        // increments failedCounts. We replicate that state here so the next
+        // deliver() call in the delivery coordinator sees a failing dispatcher
+        // and routes via bindings instead.
+        failedCounts.tool = 1;
         dispatcher.markComplete();
 
         // Post-teardown events from the still-running spawn child.
@@ -482,24 +486,10 @@ describe("tryDispatchAcpReply spawn-child outbound delivery (Gap 1)", () => {
       expect.objectContaining({ text: expect.stringContaining("Run review") }),
     );
 
-    // Post-teardown events must still reach the user via the bind-aware
-    // fallback path. Concretely: the projector or delivery coordinator should
-    // consult the session binding service and route the remaining payloads
-    // to the bound telegram conversation via routeReply (or an equivalent
-    // bind-aware dispatcher). Today no such fallback exists, so neither the
-    // binding service is consulted nor routeReply is called for these
-    // events. Asserting on both here pins the test to the architecturally
-    // correct fix shape: a future fix that delivered via routeReply through
-    // some other mechanism (without consulting bindings) would still leave
-    // Gap 1 unsolved. The two assertions go green together when the real
-    // bind-aware dispatcher lands.
-    //   - extending the projector's lifetime to the spawn turn would let the
-    //     parent dispatcher continue receiving sends, but in production the
-    //     parent's dispatcher tears down because its turn ended; the only
-    //     stable target post-teardown is the bound conversation;
-    //   - a bind-aware persistent dispatcher would consult the binding
-    //     service and drive routeReply for the bound conversation
-    //     independent of the parent's run.
+    // Post-teardown events must reach the user via the bind-aware fallback path.
+    // The delivery coordinator detects prior async transport failures via
+    // getFailedCounts(), then routes via the session binding service to the bound
+    // telegram conversation via routeReply — independent of the parent's run.
     expect(bindingServiceMocks.listBySession).toHaveBeenCalledWith(sessionKey);
     expect(routeMocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -509,6 +499,97 @@ describe("tryDispatchAcpReply spawn-child outbound delivery (Gap 1)", () => {
           text: expect.stringContaining("Streaming continues after parent run ended."),
         }),
       }),
+    );
+  });
+
+  it("fails closed when multiple session bindings exist and requester context is missing — no delivery, no broadcast", async () => {
+    setReadyAcpResolution();
+    // Two active bindings for the same session — ambiguous without requester context.
+    const binding1: SessionBindingRecord = {
+      bindingId: "binding-a",
+      targetSessionKey: sessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100111:topic:100",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    };
+    const binding2: SessionBindingRecord = {
+      bindingId: "binding-b",
+      targetSessionKey: sessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100222:topic:200",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    };
+    bindingServiceMocks.listBySession.mockReturnValue([binding1, binding2]);
+
+    const { dispatcher, failedCounts } = createDispatcher();
+
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        // Pre-teardown event.
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call",
+          toolCallId: "call-5",
+          status: "in_progress",
+          title: "Run review",
+          text: "starting",
+        });
+
+        // Simulate async transport failure.
+        failedCounts.tool = 1;
+        dispatcher.markComplete();
+
+        // Post-teardown event.
+        await onEvent({
+          type: "text_delta",
+          tag: "agent_message_chunk",
+          text: "Ambiguous binding output.",
+        });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    // Use a ctx with an empty To field so no requester conversationId can be built,
+    // forcing the bind-aware router into the ambiguous/fail-closed path.
+    await tryDispatchAcpReply({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        IsForum: true,
+        SessionKey: sessionKey,
+        BodyForAgent: "spawn child review",
+        To: "",
+      }),
+      cfg: createLiveStreamConfig(),
+      dispatcher,
+      sessionKey,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      shouldSendToolSummaries: true,
+      bypassForCommand: false,
+      recordProcessed: vi.fn(),
+      markIdle: vi.fn(),
+    });
+
+    // With multiple bindings and no requester context, the fallback must fail
+    // closed: routeReply must NOT be called for either bound conversation.
+    // Broadcasting would leak private child output to unrelated chats.
+    expect(routeMocks.routeReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ to: binding1.conversation.conversationId }),
+    );
+    expect(routeMocks.routeReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ to: binding2.conversation.conversationId }),
     );
   });
 });

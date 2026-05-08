@@ -211,7 +211,7 @@ describe("createAcpReplyProjector", () => {
     expect(onProgress).toHaveBeenCalledTimes(2);
   });
 
-  it("buffers default final-only text into one block reply", async () => {
+  it("buffers default final-only text into one final reply", async () => {
     const { deliveries, projector } = createProjectorHarness();
 
     await projector.onEvent({
@@ -221,7 +221,9 @@ describe("createAcpReplyProjector", () => {
     });
     await projector.flush(true);
 
-    expect(deliveries).toEqual([{ kind: "block", text: "a".repeat(70) }]);
+    // final_only mode flushes accumulated text as "final" kind so TTS mode
+    // "final" is applied correctly (was "block" before, which skipped TTS).
+    expect(deliveries).toEqual([{ kind: "final", text: "a".repeat(70) }]);
   });
 
   it("does not suppress identical short text across terminal turn boundaries", async () => {
@@ -370,7 +372,9 @@ describe("createAcpReplyProjector", () => {
       text: prefixSystemMessage("available commands updated (7)"),
     });
     expectToolCallSummary(deliveries[1]);
-    expect(deliveries[2]).toEqual({ kind: "block", text: "What now?" });
+    // final_only mode flushes accumulated text as "final" kind (not "block") so
+    // TTS mode "final" is applied correctly.
+    expect(deliveries[2]).toEqual({ kind: "final", text: "What now?" });
   });
 
   it("flushes buffered status/tool output on error in deliveryMode=final_only", async () => {

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeOptionalLowercaseString,
@@ -192,6 +193,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
+  /**
+   * Requester conversation context for requester-scoped bind-aware fallback delivery.
+   * When provided, used to resolve a single matching binding via the bound-delivery router
+   * rather than broadcasting to all active bindings for the session.
+   */
+  requesterConversation?: ConversationRef;
 }): AcpDispatchDeliveryCoordinator {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
@@ -435,33 +442,48 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       text: ttsPayload.text,
       routed: false,
     });
-    let delivered =
-      kind === "tool"
-        ? params.dispatcher.sendToolResult(ttsPayload)
-        : kind === "block"
-          ? params.dispatcher.sendBlockReply(ttsPayload)
-          : params.dispatcher.sendFinalReply(ttsPayload);
 
-    // Bind-aware fallback: when the parent dispatcher cannot accept the payload
-    // (returns false, e.g., because the payload normalizes to empty), route
-    // the payload to any active bound conversations via routeReply. This
-    // handles the spawn-child case where the parent's run ends while the
-    // child is still emitting events (catalog #1 / #15).
-    if (!delivered && deliverySessionKey) {
+    // Bind-aware fallback: when the parent dispatcher's async transport has started
+    // failing (detectable via getFailedCounts() showing accumulated failures), route
+    // directly to the bound conversation instead of queuing on the failing dispatcher.
+    // This covers the spawn-child case where the parent run ends mid-stream and the
+    // child's subsequent deliveries would otherwise silently drop (catalog #1 / #15).
+    //
+    // The trigger is async transport failures — not the synchronous `send*()` returning
+    // false. send*() returns false only when the payload normalizes to empty (before
+    // enqueue); it returns true for real payloads even after the parent run ends, and
+    // the transport failure is recorded asynchronously in failedCounts. Checking
+    // failedCounts before each send catches the "dispatcher transport already failing"
+    // state reliably.
+    const priorFailedCounts = params.dispatcher.getFailedCounts();
+    const dispatcherTransportFailing =
+      deliverySessionKey != null &&
+      priorFailedCounts.block + priorFailedCounts.final + priorFailedCounts.tool > 0;
+
+    let delivered: boolean;
+    if (dispatcherTransportFailing) {
+      // Route via bindings directly: the dispatcher transport is already failing,
+      // so queuing more payloads on it would silently drop them after the chain settles.
       try {
         const { deliverViaSessionBindings } = await loadBindAwareDispatch();
-        const bindDelivered = await deliverViaSessionBindings({
+        delivered = await deliverViaSessionBindings({
           sessionKey: deliverySessionKey,
           kind,
           payload: ttsPayload,
           cfg: params.cfg,
+          requesterConversation: params.requesterConversation,
         });
-        if (bindDelivered) {
-          delivered = true;
-        }
       } catch (err) {
         logVerbose(`dispatch-acp-delivery: bind-aware fallback failed: ${formatErrorMessage(err)}`);
+        delivered = false;
       }
+    } else {
+      delivered =
+        kind === "tool"
+          ? params.dispatcher.sendToolResult(ttsPayload)
+          : kind === "block"
+            ? params.dispatcher.sendBlockReply(ttsPayload)
+            : params.dispatcher.sendFinalReply(ttsPayload);
     }
 
     if (kind === "final" && delivered) {

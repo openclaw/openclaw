@@ -361,6 +361,23 @@ export async function tryDispatchAcpReply(params: {
       : undefined;
 
   let queuedFinal = false;
+
+  // Build requester conversation context for bind-aware fallback scoping.
+  // The requester is the inbound channel conversation that triggered this turn,
+  // used to resolve a single matching binding when the parent dispatcher fails.
+  const requesterChannel = normalizeOptionalLowercaseString(
+    params.ctx.Surface ?? params.ctx.Provider,
+  );
+  const requesterConversationId = normalizeOptionalString(params.ctx.To);
+  const requesterConversation =
+    requesterChannel && requesterConversationId
+      ? {
+          channel: requesterChannel,
+          accountId: normalizeOptionalString(params.ctx.AccountId) ?? "default",
+          conversationId: requesterConversationId,
+        }
+      : undefined;
+
   const delivery = createAcpDispatchDeliveryCoordinator({
     cfg: params.cfg,
     agentId: acpAgentId,
@@ -376,6 +393,7 @@ export async function tryDispatchAcpReply(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
+    requesterConversation,
   });
 
   const identityPendingBeforeTurn = isSessionIdentityPending(
