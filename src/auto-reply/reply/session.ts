@@ -521,7 +521,11 @@ export async function initSessionState(params: {
       // must be cleared so /new and /reset actually return the session to
       // the configured default instead of staying pinned to the auto pick
       // (#69301).
-      const preservedSelection = resolveResetPreservedSelection({ entry });
+      const preservedSelection = resolveResetPreservedSelection({
+        entry,
+        cfg,
+        agentId,
+      });
       persistedModelOverride = preservedSelection.modelOverride;
       persistedProviderOverride = preservedSelection.providerOverride;
       persistedModelOverrideSource = preservedSelection.modelOverrideSource;
