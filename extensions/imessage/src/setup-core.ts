@@ -171,6 +171,7 @@ export const imessageCompletionNote = {
   lines: [
     "Run OpenClaw on the Mac signed into Messages, or set cliPath to an SSH wrapper that runs imsg on that Mac.",
     "Linux/Windows hosts cannot run the default local imsg path directly.",
+    "Run `imsg launch`, then `openclaw channels status --probe` to verify private API actions.",
     "Ensure OpenClaw has Full Disk Access to Messages DB.",
     "Grant Automation permission for Messages when prompted.",
     "List chats with: imsg chats --limit 20",

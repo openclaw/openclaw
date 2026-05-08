@@ -405,6 +405,7 @@ export type RegisterTelegramHandlerParams = {
     storeAllowFrom: string[],
     options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
+    replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
 };

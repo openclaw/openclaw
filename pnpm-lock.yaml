@@ -496,8 +496,8 @@ importers:
         specifier: 0.73.0
         version: 0.73.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)
       '@openai/codex':
-        specifier: 0.129.0-alpha.15
-        version: 0.129.0-alpha.15
+        specifier: 0.129.0
+        version: 0.129.0
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -3198,43 +3198,43 @@ packages:
     resolution: {integrity: sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==}
     engines: {node: '>=12.4.0'}
 
-  '@openai/codex@0.129.0-alpha.15':
-    resolution: {integrity: sha512-OQLHP6rjcINfe/L0N/u9q/f0XhbV4JmzgWeEgks03gLQZuI/G0CPO2gVfJk27Eg8UEhEdz0YyeIuPCZP293XDg==}
+  '@openai/codex@0.129.0':
+    resolution: {integrity: sha512-8zZlcO4ploUzULJ3xT5qx8eOCL/L7gOrpWXCtr2kP568idZjWhbz3L2WE8BvjBDUF17WMDhjOklCj6DGd1cKfQ==}
     engines: {node: '>=16'}
     hasBin: true
 
-  '@openai/codex@0.129.0-alpha.15-darwin-arm64':
-    resolution: {integrity: sha512-w4hHyBuasNrewr1cNRUcwWWXgTrLPYCtFJl+YvpADdgFw0iA1xlymRASfCf5BCkKdonW427tL0pD/jYBkOJnsQ==}
+  '@openai/codex@0.129.0-darwin-arm64':
+    resolution: {integrity: sha512-tVFwzbh612oip/yZMeQziMtUWLz08A8ChhS6U/bNZjCKWD11bQvDZjxZJNzhWvmom/gKeXstwoUp9u1S8eCcnA==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openai/codex@0.129.0-alpha.15-darwin-x64':
-    resolution: {integrity: sha512-G35Mr4pxUm9Lqe88uycW8dlGNW0SDu+/oQSvlYFYfNeLAjlmLPZ1hpraQoLMiQHc649F9SA+mEtSNfkKs+jB4A==}
+  '@openai/codex@0.129.0-darwin-x64':
+    resolution: {integrity: sha512-BtGc4ujzxRVIB0DcpiehP7/aQeAGEi0pNd9C98rtIqy1OBMwhOZ3ri/achzP0lxw8LWWFp8sL+hQdTGze6SGwg==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [darwin]
 
-  '@openai/codex@0.129.0-alpha.15-linux-arm64':
-    resolution: {integrity: sha512-HXFTHxj51vZtBgtsO7RL6v/nbB3K+Hkp71pJqgWR3qGsY00nNeM40bx1e0P0SS6VkCBJEHVE6i3y9yaIFhZMtg==}
+  '@openai/codex@0.129.0-linux-arm64':
+    resolution: {integrity: sha512-VnjI4Xla4uwaAqYCekwBm4dlucvaduTdhVr3bqU+6qfG5N9yn1bR7ZS7xMRlaRgS0oIst9fgYyC2niSYPOzuDA==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
 
-  '@openai/codex@0.129.0-alpha.15-linux-x64':
-    resolution: {integrity: sha512-0UNw7e+BW5gXNsdg7Y/hoim9rrAL+bsKXGUXODsX+aPYRBpLOZT/SDlj/a3wvXk4uzxQ2OQWZqmk3E/VNNo/4g==}
+  '@openai/codex@0.129.0-linux-x64':
+    resolution: {integrity: sha512-YwkJtcHXeXdI+cfdv7qKGfafwePEEbSCRL5Z++/8djnI+iBj6nIMz4ouhe12yvsMccVqNTtCH8H0QrygHARpNg==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
 
-  '@openai/codex@0.129.0-alpha.15-win32-arm64':
-    resolution: {integrity: sha512-d5TedgG1pGYji26EZt2dAaPbpdgp3DSjIheEG84lzNcMyW2kma0Q2YK+PnQo0d+SVgRszdLHluBSQQaKRfdsNw==}
+  '@openai/codex@0.129.0-win32-arm64':
+    resolution: {integrity: sha512-8rwpYBKg/vI3IHZB2ggFmIDz+4slG7mfYTFoQtRw2m2KMS1g1XMOJK9heM80NMiCY3hqmyMN81bOQ7aKAmgFLg==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [win32]
 
-  '@openai/codex@0.129.0-alpha.15-win32-x64':
-    resolution: {integrity: sha512-LtZZBiqyhC2q5PYZEiKuyp9wNO4vck93krBTwqp5/nSMTRAkDRgGpjMVWG1Fz7iJLuy9IbQwVncrkd3hWhGZig==}
+  '@openai/codex@0.129.0-win32-x64':
+    resolution: {integrity: sha512-yP59c7O3J8zZ/eyN6HXMeeZ2xksJE8/Xy9kn3qznC7jCN3GEtM7B6Wv4gEY5F/jzik+B+tU71rmkGmqzQjfVVQ==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
@@ -10015,31 +10015,31 @@ snapshots:
 
   '@nolyfill/domexception@1.0.28': {}
 
-  '@openai/codex@0.129.0-alpha.15':
+  '@openai/codex@0.129.0':
     optionalDependencies:
-      '@openai/codex-darwin-arm64': '@openai/codex@0.129.0-alpha.15-darwin-arm64'
-      '@openai/codex-darwin-x64': '@openai/codex@0.129.0-alpha.15-darwin-x64'
-      '@openai/codex-linux-arm64': '@openai/codex@0.129.0-alpha.15-linux-arm64'
-      '@openai/codex-linux-x64': '@openai/codex@0.129.0-alpha.15-linux-x64'
-      '@openai/codex-win32-arm64': '@openai/codex@0.129.0-alpha.15-win32-arm64'
-      '@openai/codex-win32-x64': '@openai/codex@0.129.0-alpha.15-win32-x64'
+      '@openai/codex-darwin-arm64': '@openai/codex@0.129.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.129.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.129.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.129.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.129.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.129.0-win32-x64'
 
-  '@openai/codex@0.129.0-alpha.15-darwin-arm64':
+  '@openai/codex@0.129.0-darwin-arm64':
     optional: true
 
-  '@openai/codex@0.129.0-alpha.15-darwin-x64':
+  '@openai/codex@0.129.0-darwin-x64':
     optional: true
 
-  '@openai/codex@0.129.0-alpha.15-linux-arm64':
+  '@openai/codex@0.129.0-linux-arm64':
     optional: true
 
-  '@openai/codex@0.129.0-alpha.15-linux-x64':
+  '@openai/codex@0.129.0-linux-x64':
     optional: true
 
-  '@openai/codex@0.129.0-alpha.15-win32-arm64':
+  '@openai/codex@0.129.0-win32-arm64':
     optional: true
 
-  '@openai/codex@0.129.0-alpha.15-win32-x64':
+  '@openai/codex@0.129.0-win32-x64':
     optional: true
 
   '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c':

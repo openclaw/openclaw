@@ -290,7 +290,7 @@ describe("qa-lab server", () => {
     expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=qa-token");
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
-    expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
+    expect(bootstrap.scenarios.map((scenario) => scenario.id)).toContain("dm-chat-baseline");
     expect(bootstrap.runner.status).toBe("idle");
     expect(bootstrap.runner.selection.providerMode).toBe("live-frontier");
     expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
@@ -314,7 +314,7 @@ describe("qa-lab server", () => {
     const snapshot = (await stateResponse.json()) as {
       messages: Array<{ direction: string; text: string }>;
     };
-    expect(snapshot.messages.some((message) => message.text === "hello from test")).toBe(true);
+    expect(snapshot.messages.map((message) => message.text)).toContain("hello from test");
 
     await expect(readFile(outputPath, "utf8")).rejects.toThrow();
   });
@@ -389,8 +389,8 @@ describe("qa-lab server", () => {
     ).json()) as {
       messages: Array<{ text: string }>;
     };
-    expect(autoSnapshot.messages.some((message) => message.text.includes("QA mission:"))).toBe(
-      true,
+    expect(autoSnapshot.messages.map((message) => message.text)).toEqual(
+      expect.arrayContaining([expect.stringContaining("QA mission:")]),
     );
 
     const manualLab = await startQaLabServerForTest({
@@ -412,9 +412,9 @@ describe("qa-lab server", () => {
     ).json()) as {
       messages: Array<{ text: string }>;
     };
-    expect(
-      manualSnapshot.messages.some((message) => message.text.includes("Lobster Invaders")),
-    ).toBe(true);
+    expect(manualSnapshot.messages.map((message) => message.text)).toEqual(
+      expect.arrayContaining([expect.stringContaining("Lobster Invaders")]),
+    );
   });
 
   it("proxies control-ui paths through /control-ui", async () => {
@@ -836,14 +836,14 @@ describe("qa-lab server", () => {
     const sessions = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/sessions`)
     ).json()) as { sessions: Array<{ id: string }> };
-    expect(sessions.sessions.some((session) => session.id === "qa-capture-session")).toBe(true);
+    expect(sessions.sessions.map((session) => session.id)).toContain("qa-capture-session");
 
     const events = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/capture/events?sessionId=qa-capture-session`)
     ).json()) as {
       events: Array<{ flowId: string; provider?: string; model?: string; captureOrigin?: string }>;
     };
-    expect(events.events.some((event) => event.flowId === "flow-1")).toBe(true);
+    expect(events.events.map((event) => event.flowId)).toContain("flow-1");
     expect(events.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

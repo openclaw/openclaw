@@ -119,7 +119,9 @@ function expectRegistryDiagnosticContains(
   registry: ReturnType<typeof loadPluginManifestRegistry>,
   fragment: string,
 ) {
-  expect(registry.diagnostics.some((diag) => diag.message.includes(fragment))).toBe(true);
+  expect(registry.diagnostics.map((diag) => diag.message)).toEqual(
+    expect.arrayContaining([expect.stringContaining(fragment)]),
+  );
 }
 
 function prepareLinkedManifestFixture(params: { id: string; mode: "symlink" | "hardlink" }): {
@@ -283,8 +285,10 @@ function expectPluginRoot(
   pluginId: string,
 ) {
   const plugin = registry.plugins.find((entry) => entry.id === pluginId);
-  expect(plugin).toBeDefined();
-  return plugin?.rootDir ?? "";
+  if (!plugin) {
+    throw new Error(`expected plugin ${pluginId} in manifest registry`);
+  }
+  return plugin.rootDir;
 }
 
 function expectCachedPluginRoot(params: {
@@ -1335,12 +1339,14 @@ describe("loadPluginManifestRegistry", () => {
     });
     const channelConfigs = registry.plugins[0]?.channelConfigs;
 
-    expect(channelConfigs).toBeDefined();
+    if (!channelConfigs) {
+      throw new Error("expected external chat manifest channel config map");
+    }
     expect(Object.getPrototypeOf(channelConfigs)).toBe(null);
     expect(Object.prototype.hasOwnProperty.call(channelConfigs, "__proto__")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(channelConfigs, "constructor")).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(channelConfigs, "prototype")).toBe(false);
-    expect(channelConfigs?.["safe-chat"]?.schema).toMatchObject({
+    expect(channelConfigs["safe-chat"]?.schema).toMatchObject({
       type: "object",
       additionalProperties: false,
     });
@@ -1944,8 +1950,8 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(registry.plugins.some((plugin) => plugin.id === "codex")).toBe(true);
-    expect(registry.diagnostics.some((diag) => diag.message.includes("requires OpenClaw"))).toBe(
-      false,
+    expect(registry.diagnostics.map((diag) => diag.message)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("requires OpenClaw")]),
     );
   });
 

@@ -96,6 +96,42 @@
           }
         }
       },
+      "codexPlugins": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "allow_destructive_actions": {
+            "type": "boolean",
+            "default": false
+          },
+          "plugins": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "marketplaceName": {
+                  "type": "string",
+                  "enum": ["openai-curated"]
+                },
+                "pluginName": {
+                  "type": "string"
+                },
+                "allow_destructive_actions": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
       "appServer": {
         "type": "object",
         "additionalProperties": false,
@@ -152,7 +188,7 @@
             "type": "string",
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
-          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
+          "serviceTier": { "type": ["string", "null"] },
           "defaultWorkspaceDir": {
             "type": "string"
           }
@@ -234,6 +270,26 @@
       "help": "MCP server name exposed by the Computer Use plugin.",
       "advanced": true
     },
+    "codexPlugins": {
+      "label": "Native Codex Plugins",
+      "help": "Controls native Codex plugin availability for Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.enabled": {
+      "label": "Enable Native Plugins",
+      "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.allow_destructive_actions": {
+      "label": "Allow Destructive Plugin Actions",
+      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to false.",
+      "advanced": true
+    },
+    "codexPlugins.plugins": {
+      "label": "Migrated Plugin Entries",
+      "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
+      "advanced": true
+    },
     "appServer": {
       "label": "App Server",
       "help": "Runtime controls for connecting to Codex app-server.",
@@ -307,7 +363,7 @@
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
-      "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
+      "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
       "advanced": true
     },
     "appServer.defaultWorkspaceDir": {

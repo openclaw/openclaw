@@ -232,7 +232,7 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
 
-  it("preserves OpenAI API-key session auth when the session explicitly pins PI", async () => {
+  it("preserves OpenAI API-key session auth when model policy explicitly pins PI", async () => {
     authProfileStoreMock.store = {
       version: 1,
       profiles: {
@@ -243,12 +243,21 @@ describe("createModelSelectionState catalog loading", () => {
       sessionId: "s1",
       updatedAt: 1,
       authProfileOverride: "openai:work",
-      agentRuntimeOverride: "pi",
     };
     const sessionStore = { main: sessionEntry };
 
     await createModelSelectionState({
-      cfg: {} as OpenClawConfig,
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
       agentCfg: undefined,
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
