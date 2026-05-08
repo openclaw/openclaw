@@ -286,6 +286,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/pairing: preserve deliberately narrowed role-token scopes when approving device scope upgrades instead of regranting the whole approved baseline.
 - Telegram/ACP: keep chat-bound ACP replies durable by delivering final-only ACP output as final text instead of transient Telegram preview blocks. Thanks @shakkernerd.
 - Telegram: hydrate replied-to messages as a persisted nearest-first reply chain so agents can see observed parent text, media refs, captions, senders, timestamps, and nested replies instead of guessing from a shallow reply id.
+- Telegram: skip the rewritten silent-reply fallback when the dispatcher reports a final reply was queued in the same turn so a "No extra answer from me." filler cannot race ahead of the actual reply when lane delivery state never observes the send. Fixes #78929.
 - Gateway/watch: leave `OPENCLAW_TRACE_SYNC_IO` disabled by default in `pnpm gateway:watch:raw` so watch mode avoids noisy Node sync-I/O stack traces unless explicitly requested.
 - Codex app-server: close stdio stdin before force-killing the managed app-server, matching Codex single-client shutdown behavior and avoiding unsettled CLI exits after successful runs.
 - CLI/Codex: dispose registered agent harnesses during short-lived CLI shutdown so successful Codex-backed `agent --local` runs do not leave app-server child processes alive.

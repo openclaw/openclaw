@@ -1543,7 +1543,8 @@ export const dispatchTelegramMessage = async ({
     !sentFallback &&
     !dispatchError &&
     !deliverySummary.delivered &&
-    !suppressSilentReplyFallback
+    !suppressSilentReplyFallback &&
+    !queuedFinal
   ) {
     const policySessionKey =
       ctxPayload.CommandSource === "native"
@@ -1573,7 +1574,8 @@ export const dispatchTelegramMessage = async ({
     });
   }
 
-  const hasFinalResponse = deliverySummary.delivered || sentFallback || suppressSilentReplyFallback;
+  const hasFinalResponse =
+    deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
 
   if (statusReactionController && !hasFinalResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(

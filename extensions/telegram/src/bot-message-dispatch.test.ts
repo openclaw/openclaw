@@ -365,6 +365,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     };
   }
 
+  function createDirectSessionPayload(): TelegramMessageContext["ctxPayload"] {
+    return {
+      SessionKey: "agent:test:telegram:direct:123",
+      ChatType: "direct",
+    } as TelegramMessageContext["ctxPayload"];
+  }
+
   function observeDeliveredReply(text: string): Promise<void> {
     return new Promise((resolve) => {
       deliverReplies.mockImplementation(async (params: { replies?: Array<{ text?: string }> }) => {
@@ -1643,5 +1650,42 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(generateTopicLabel).not.toHaveBeenCalled();
     expect(bot.api.editForumTopic).not.toHaveBeenCalled();
+  });
+
+  it("does not emit a silent-reply fallback when the dispatcher reports a queued final reply", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: true,
+      counts: { block: 0, final: 1, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("emits a silent-reply fallback when no final reply was queued and nothing was delivered", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    const replies = deliverReplies.mock.calls[0]?.[0]?.replies as
+      | Array<{ text?: string }>
+      | undefined;
+    expect(replies?.[0]?.text?.trim()).toBeTruthy();
+    expect(replies?.[0]?.text).not.toBe("NO_REPLY");
   });
 });
