@@ -44,11 +44,13 @@ describe("tlon channel message adapter", () => {
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
     const adapter = tlonPlugin.message;
-    expect(adapter).toBeDefined();
+    if (!adapter?.send?.text || !adapter.send.media) {
+      throw new Error("expected tlon channel message adapter with text and media senders");
+    }
 
     const proveText = async () => {
       mocks.sendText.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send.text({
         cfg,
         to: "chat/~nec/general",
         text: "hello",
@@ -68,7 +70,7 @@ describe("tlon channel message adapter", () => {
 
     const proveMedia = async () => {
       mocks.sendMedia.mockClear();
-      const result = await adapter!.send!.media!({
+      const result = await adapter.send.media({
         cfg,
         to: "chat/~nec/general",
         text: "image",

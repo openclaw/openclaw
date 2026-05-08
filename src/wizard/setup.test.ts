@@ -531,7 +531,7 @@ describe("runSetupWizard", () => {
     ).rejects.toThrow("auth choice is required");
   });
 
-  async function runTuiHatchTest(params: {
+  async function runTuiHatchTestAndExpectLaunch(params: {
     writeBootstrapFile: boolean;
     expectedMessage: string | undefined;
   }) {
@@ -579,11 +579,17 @@ describe("runSetupWizard", () => {
   }
 
   it("launches TUI without auto-delivery when hatching", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: true, expectedMessage: "Wake up, my friend!" });
+    await runTuiHatchTestAndExpectLaunch({
+      writeBootstrapFile: true,
+      expectedMessage: "Wake up, my friend!",
+    });
   });
 
   it("offers TUI hatch even without BOOTSTRAP.md", async () => {
-    await runTuiHatchTest({ writeBootstrapFile: false, expectedMessage: undefined });
+    await runTuiHatchTestAndExpectLaunch({
+      writeBootstrapFile: false,
+      expectedMessage: undefined,
+    });
   });
 
   it("shows the web search hint at the end of setup", async () => {

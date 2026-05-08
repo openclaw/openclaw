@@ -32,8 +32,10 @@ function findExtensionWithoutTests() {
     (candidate) => !resolveExtensionTestPlan({ targetArg: candidate, cwd: process.cwd() }).hasTests,
   );
 
-  expect(extensionId).toBeDefined();
-  return extensionId ?? "missing-no-test-extension";
+  if (!extensionId) {
+    throw new Error("Expected at least one extension without tests");
+  }
+  return extensionId;
 }
 
 describe("scripts/test-extension.mjs", () => {

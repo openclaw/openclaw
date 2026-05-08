@@ -497,8 +497,10 @@ describe("msteams attachments", () => {
       const redirected = seen.find(
         (entry) => entry.url === "https://attacker.azureedge.net/collect",
       );
-      expect(redirected).toBeDefined();
-      expect(redirected?.auth).toBe("");
+      if (!redirected) {
+        throw new Error("expected Azure CDN redirect request to be observed");
+      }
+      expect(redirected.auth).toBe("");
     });
 
     it("skips urls outside the allowlist", async () => {

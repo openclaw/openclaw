@@ -123,7 +123,7 @@ describe("installFromNpmSpecArchive", () => {
     const okResult = expectWrappedOkResult(result, { ok: true, target: "done" });
     expect(okResult.integrityDrift).toBeUndefined();
     expect(okResult.npmResolution.resolvedSpec).toBe("@openclaw/test@1.0.0");
-    expect(okResult.npmResolution.resolvedAt).toBeTruthy();
+    expect(Date.parse(okResult.npmResolution.resolvedAt)).not.toBeNaN();
     expect(installFromArchive).toHaveBeenCalledWith({ archivePath: "/tmp/openclaw-test.tgz" });
   });
 

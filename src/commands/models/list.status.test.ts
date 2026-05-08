@@ -323,9 +323,11 @@ describe("modelsStatusCommand auth overview", () => {
       env?: { value: string; source: string };
     }>;
     const anthropic = providers.find((p) => p.provider === "anthropic");
-    expect(anthropic).toBeTruthy();
-    expect(anthropic?.profiles.labels.join(" ")).toContain("OAuth");
-    expect(anthropic?.profiles.labels.join(" ")).toContain("...");
+    if (anthropic === undefined) {
+      throw new Error("expected anthropic provider status");
+    }
+    expect(anthropic.profiles.labels.join(" ")).toContain("OAuth");
+    expect(anthropic.profiles.labels.join(" ")).toContain("...");
 
     const openai = providers.find((p) => p.provider === "openai");
     expect(openai?.env?.source).toContain("OPENAI_API_KEY");

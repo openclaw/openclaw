@@ -263,9 +263,29 @@ describe("DiscordVoiceManager", () => {
     ]);
   };
 
+  const getSessionEntry = (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    guildId = "g1",
+  ) => {
+    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get(guildId);
+    if (!entry) {
+      throw new Error(`expected Discord voice session for guild ${guildId}`);
+    }
+    return entry;
+  };
+
+  const getLastAudioPlayer = () => {
+    const player = createAudioPlayerMock.mock.results.at(-1)?.value as
+      | { state: { status: string } }
+      | undefined;
+    if (!player) {
+      throw new Error("expected Discord voice audio player to be created");
+    }
+    return player;
+  };
+
   const emitDecryptFailure = (manager: InstanceType<typeof managerModule.DiscordVoiceManager>) => {
-    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
-    expect(entry).toBeDefined();
+    const entry = getSessionEntry(manager);
     (
       manager as unknown as { handleReceiveError: (e: unknown, err: unknown) => void }
     ).handleReceiveError(
@@ -424,10 +444,8 @@ describe("DiscordVoiceManager", () => {
 
     await manager.join({ guildId: "g1", channelId: "1001" });
 
-    const player = createAudioPlayerMock.mock.results.at(-1)?.value;
-    const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1");
-    expect(entry).toBeDefined();
-    expect(player).toBeDefined();
+    const player = getLastAudioPlayer();
+    const entry = getSessionEntry(manager);
     player.state.status = "playing";
 
     await (
@@ -567,29 +585,24 @@ describe("DiscordVoiceManager", () => {
 
       await manager.join({ guildId: "g1", channelId: "1001" });
 
-      const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get(
-        "g1",
-      ) as
-        | {
-            guildId: string;
-            channelId: string;
-            capture: {
-              activeSpeakers: Set<string>;
-              activeCaptureStreams: Map<
-                string,
-                { generation: number; stream: { destroy: () => void } }
-              >;
-              captureFinalizeTimers: Map<string, unknown>;
-              captureGenerations: Map<string, number>;
-            };
-          }
-        | undefined;
-      expect(entry).toBeDefined();
+      const entry = getSessionEntry(manager) as {
+        guildId: string;
+        channelId: string;
+        capture: {
+          activeSpeakers: Set<string>;
+          activeCaptureStreams: Map<
+            string,
+            { generation: number; stream: { destroy: () => void } }
+          >;
+          captureFinalizeTimers: Map<string, unknown>;
+          captureGenerations: Map<string, number>;
+        };
+      };
 
       const firstStream = { destroy: vi.fn() };
-      entry?.capture.activeSpeakers.add("u1");
-      entry?.capture.captureGenerations.set("u1", 1);
-      entry?.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
+      entry.capture.activeSpeakers.add("u1");
+      entry.capture.captureGenerations.set("u1", 1);
+      entry.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
 
       (
         manager as unknown as {

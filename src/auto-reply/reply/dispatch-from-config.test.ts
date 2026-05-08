@@ -708,6 +708,24 @@ function firstToolResultPayload(dispatcher: ReplyDispatcher): ReplyPayload | und
     | undefined;
 }
 
+function requireToolResultHandler(
+  handler: GetReplyOptions["onToolResult"] | undefined,
+): NonNullable<GetReplyOptions["onToolResult"]> {
+  if (typeof handler !== "function") {
+    throw new Error("expected onToolResult handler");
+  }
+  return handler;
+}
+
+function requireBlockReplyHandler(
+  handler: GetReplyOptions["onBlockReply"] | undefined,
+): NonNullable<GetReplyOptions["onBlockReply"]> {
+  if (typeof handler !== "function") {
+    throw new Error("expected onBlockReply handler");
+  }
+  return handler;
+}
+
 async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs, "dispatcher">) {
   await dispatchReplyFromConfig({
     ...params,
@@ -1301,8 +1319,8 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeDefined();
-      await opts?.onToolResult?.({
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({
         text: "NO_REPLY",
         mediaUrls: ["https://example.com/tts-routed.opus"],
       });
@@ -1340,8 +1358,7 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeDefined();
-      expect(typeof opts?.onToolResult).toBe("function");
+      expect(requireToolResultHandler(opts?.onToolResult)).toEqual(expect.any(Function));
       return { text: "hi" } satisfies ReplyPayload;
     };
 
@@ -1363,9 +1380,9 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeDefined();
-      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
-      await opts?.onToolResult?.({
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 exec: ls" });
+      await onToolResult({
         text: "NO_REPLY",
         mediaUrls: ["https://example.com/tts-group.opus"],
       });
@@ -1536,9 +1553,9 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeDefined();
-      await opts?.onToolResult?.({ text: "🔧 tools/sessions_send" });
-      await opts?.onToolResult?.({
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 tools/sessions_send" });
+      await onToolResult({
         mediaUrl: "https://example.com/tts-native.opus",
       });
       return { text: "hi" } satisfies ReplyPayload;
@@ -4297,8 +4314,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     // Trigger a tool result — delivery should be suppressed
-    expect(capturedOnToolResult).toBeDefined();
-    await capturedOnToolResult!({ text: "tool output" });
+    await requireToolResultHandler(capturedOnToolResult)({ text: "tool output" });
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
@@ -4331,8 +4347,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     // Trigger a block reply — delivery should be suppressed
-    expect(capturedOnBlockReply).toBeDefined();
-    await capturedOnBlockReply!({ text: "streaming chunk" });
+    await requireBlockReplyHandler(capturedOnBlockReply)({ text: "streaming chunk" });
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 

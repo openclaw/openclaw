@@ -120,8 +120,10 @@ describe("config footprint guardrails", () => {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
         (entry) => entry.pluginId === pluginId,
       );
-      expect(metadata, `${pluginId} metadata missing`).toBeDefined();
-      const paths = new Set(collectSchemaPaths(metadata?.schema));
+      if (metadata === undefined) {
+        throw new Error(`${pluginId} metadata missing`);
+      }
+      const paths = new Set(collectSchemaPaths(metadata.schema));
       expect(paths.has("allowPrivateNetwork"), `${pluginId} leaked flat allowPrivateNetwork`).toBe(
         false,
       );

@@ -18,7 +18,7 @@ describe("Claude migration provider", () => {
     await cleanupTempRoots();
   });
 
-  it("registers a Claude migration provider", async () => {
+  it("registers a Claude migration provider", () => {
     const provider = buildClaudeMigrationProvider();
     expect(provider.id).toBe("claude");
     expect(provider.label).toBe("Claude");

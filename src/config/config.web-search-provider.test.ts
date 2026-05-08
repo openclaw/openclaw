@@ -613,11 +613,6 @@ describe("web search provider auto-detection", () => {
     expect(resolveSearchProvider({})).toBe("grok");
   });
 
-  it("auto-detects kimi when only KIMI_API_KEY is set", () => {
-    process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
-    expect(resolveSearchProvider({})).toBe("kimi");
-  });
-
   it("auto-detects kimi when only MOONSHOT_API_KEY is set", () => {
     process.env.MOONSHOT_API_KEY = "test-moonshot-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("kimi");

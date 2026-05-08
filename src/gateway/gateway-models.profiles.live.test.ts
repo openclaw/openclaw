@@ -1330,7 +1330,10 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toBeDefined();
+      expect(sanitized.profiles.codexProfile).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+      });
       expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
       expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
       expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
@@ -2765,6 +2768,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
           );
         }
+        expect(selectedCandidates.length).toBeGreaterThan(0);
         const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
         if (imageCandidates.length === 0) {
           logProgress("[all-models] no image-capable models selected; image probe will be skipped");

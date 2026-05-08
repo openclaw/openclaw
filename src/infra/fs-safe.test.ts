@@ -275,13 +275,15 @@ describe("fs-safe", () => {
     });
 
     await expect((await openRoot(root)).open("inside.txt")).rejects.toThrow("after-open boom");
-    expect(openedHandle).toBeDefined();
-    await expect(openedHandle?.readFile({ encoding: "utf8" })).rejects.toMatchObject({
+    if (openedHandle === undefined) {
+      throw new Error("expected opened file handle");
+    }
+    await expect(openedHandle.readFile({ encoding: "utf8" })).rejects.toMatchObject({
       code: "EBADF",
     });
   });
 
-  it("rejects setting fs-safe test hooks outside test mode", async () => {
+  it("rejects setting fs-safe test hooks outside test mode", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("VITEST", undefined);
 

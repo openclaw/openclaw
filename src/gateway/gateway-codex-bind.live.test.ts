@@ -453,6 +453,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           contains: "Bound this conversation to Codex thread",
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
+        expect(bindReply.matchedText).toContain("Bound this conversation to Codex thread");
         const boundSessionKey = resolveBoundSessionKey({
           channel: "slack",
           accountId,
@@ -518,6 +519,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           contains: textToken,
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
+        expect(textHistory.matchedAssistantText).toContain(textToken);
 
         await sendChatAndWait({
           client,
@@ -536,7 +538,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
             },
           ],
         });
-        await waitForAssistantText({
+        const imageHistory = await waitForAssistantText({
           client,
           sessionKey: boundSessionKey,
           contains: "cat",
@@ -544,6 +546,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           minAssistantCount: textHistory.assistantTexts.length + 1,
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
+        expect(imageHistory.matchedAssistantText.toLowerCase()).toContain("cat");
 
         await sendCodexCommand("/codex detach", "Detached this conversation from Codex.");
         await sendCodexCommand("/codex binding", "No Codex conversation binding is attached.");

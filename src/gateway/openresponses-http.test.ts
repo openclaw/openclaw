@@ -109,8 +109,10 @@ async function postResponses(port: number, body: unknown, headers?: Record<strin
   return res;
 }
 
-function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
-  const events: Array<{ event?: string; data: string }> = [];
+type SseEvent = { event?: string; data: string };
+
+function parseSseEvents(text: string): SseEvent[] {
+  const events: SseEvent[] = [];
   const lines = text.split("\n");
   let currentEvent: string | undefined;
   let currentData: string[] = [];
@@ -128,6 +130,25 @@ function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
   }
 
   return events;
+}
+
+function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
+  const event = events.find((candidate) => candidate.event === eventName);
+  if (!event) {
+    throw new Error(`expected SSE event ${eventName}`);
+  }
+  return event;
+}
+
+function parseSseData<T>(event: SseEvent): T {
+  return JSON.parse(event.data) as T;
+}
+
+function requireSessionKey(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label} sessionKey`);
+  }
+  return value;
 }
 
 async function ensureResponseConsumed(res: Response) {
@@ -912,19 +933,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     const events = parseSseEvents(text);
-    const outputTextDone = events.find((event) => event.event === "response.output_text.done");
-    expect(outputTextDone).toBeTruthy();
-    expect((JSON.parse(outputTextDone?.data ?? "{}") as { text?: string }).text).toBe(
-      "Let me check that.",
-    );
+    const outputTextDone = findSseEvent(events, "response.output_text.done");
+    expect(parseSseData<{ text?: string }>(outputTextDone).text).toBe("Let me check that.");
 
-    const completed = events.find((event) => event.event === "response.completed");
-    expect(completed).toBeTruthy();
-    const response = (
-      JSON.parse(completed?.data ?? "{}") as {
-        response?: { status?: string; output?: Array<Record<string, unknown>> };
-      }
-    ).response;
+    const completed = findSseEvent(events, "response.completed");
+    const response = parseSseData<{
+      response?: { status?: string; output?: Array<Record<string, unknown>> };
+    }>(completed).response;
     expect(response?.status).toBe("incomplete");
     expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
     expect(response?.output?.[0]?.phase).toBe("commentary");
@@ -1060,13 +1075,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
       .filter((evt) => evt.item.type === "function_call");
     expect(doneFunctionCalls.map((evt) => evt.output_index)).toEqual([1, 2, 3]);
 
-    const completed = events.find((event) => event.event === "response.completed");
-    expect(completed).toBeTruthy();
-    const response = (
-      JSON.parse(completed?.data ?? "{}") as {
-        response?: { status?: string; output?: Array<Record<string, unknown>> };
-      }
-    ).response;
+    const completed = findSseEvent(events, "response.completed");
+    const response = parseSseData<{
+      response?: { status?: string; output?: Array<Record<string, unknown>> };
+    }>(completed).response;
     expect(response?.status).toBe("incomplete");
     expect(response?.output?.map((item) => item.type)).toEqual([
       "message",
@@ -1111,7 +1123,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       | { sessionKey?: string }
       | undefined;
     expect(firstJson.id).toMatch(/^resp_/);
-    expect(firstOpts?.sessionKey).toBeTruthy();
+    const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
 
     agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "It is sunny." }],
@@ -1127,7 +1139,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
       | { sessionKey?: string }
       | undefined;
-    expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
+    expect(secondOpts?.sessionKey).toBe(firstSessionKey);
     await ensureResponseConsumed(secondResponse);
   });
 

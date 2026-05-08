@@ -600,8 +600,11 @@ describe("MatrixClient request hardening", () => {
       });
 
       const store = lastCreateClientOpts?.store as { flush: () => Promise<void> } | undefined;
-      expect(store).toBeTruthy();
-      const flushSpy = vi.spyOn(store!, "flush").mockResolvedValue();
+      if (!store) {
+        throw new Error("expected Matrix sync store");
+      }
+      expect(store.flush).toEqual(expect.any(Function));
+      const flushSpy = vi.spyOn(store, "flush").mockResolvedValue();
 
       await client.stopAndPersist();
 
@@ -1733,7 +1736,13 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const status = await client.getOwnDeviceVerificationStatus();
     expect(status.verified).toBe(true);
-    expect(status.backup).toBeDefined();
+    expect(status.backup).toMatchObject({
+      serverVersion: null,
+      activeVersion: null,
+      trusted: null,
+      keyLoadAttempted: false,
+      keyLoadError: null,
+    });
     expect(status.serverDeviceKnown).toBeNull();
   });
 

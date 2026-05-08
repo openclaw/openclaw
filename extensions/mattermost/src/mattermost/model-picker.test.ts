@@ -128,7 +128,7 @@ describe("Mattermost model picker", () => {
     expect(parseMattermostModelPickerContext({ action: "select" })).toBeNull();
   });
 
-  it("falls back to the routed agent default model when no override is stored", async () => {
+  it("falls back to the routed agent default model when no override is stored", () => {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
     try {
       const cfg: OpenClawConfig = {

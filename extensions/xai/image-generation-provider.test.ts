@@ -82,8 +82,8 @@ describe("xai image generation provider", () => {
     ]);
     expect(provider.capabilities.edit.enabled).toBe(true);
     expect(provider.capabilities.edit.maxInputImages).toBe(5);
-    expect(provider.isConfigured).toBeDefined();
-    expect(provider.generateImage).toBeDefined();
+    expect(provider.isConfigured).toEqual(expect.any(Function));
+    expect(provider.generateImage).toEqual(expect.any(Function));
   });
 
   it("uses main provider URL and resolves auth for generation", async () => {

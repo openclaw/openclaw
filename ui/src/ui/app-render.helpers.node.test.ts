@@ -236,7 +236,7 @@ describe("parseSessionKey", () => {
     });
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown parse patterns", () => {
     expect(parseSessionKey("something-unknown")).toEqual({
       prefix: "",
       fallbackName: "something-unknown",
@@ -319,7 +319,7 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("discord:123:456")).toBe("Discord Session");
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown display-name patterns", () => {
     expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
   });
 
@@ -938,7 +938,7 @@ describe("switchChatSession", () => {
     ).toHaveBeenCalledWith("agent:main:test-b", "Review Session");
   });
 
-  it("restores queued messages when switching back to their session", async () => {
+  it("restores queued messages when switching back to their session", () => {
     const settings = createSettings();
     const state = {
       sessionKey: "main",

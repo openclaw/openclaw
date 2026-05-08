@@ -392,8 +392,10 @@ describe("CLI attempt execution", () => {
     });
 
     const sessionFile = updatedEntry?.sessionFile;
-    expect(sessionFile).toBeTruthy();
-    const entries = await readSessionFileEntries(sessionFile!);
+    if (!sessionFile) {
+      throw new Error("expected CLI transcript persistence to create a session file");
+    }
+    const entries = await readSessionFileEntries(sessionFile);
     expect(entries[0]).toMatchObject({
       type: "session",
       id: sessionEntry.sessionId,
@@ -404,7 +406,7 @@ describe("CLI attempt execution", () => {
       type: "message",
       parentId: entries[1]?.id,
     });
-    const messages = await readSessionMessages(sessionFile!);
+    const messages = await readSessionMessages(sessionFile);
     expect(messages).toHaveLength(2);
     expect(messages[0]).toMatchObject({
       role: "user",
@@ -507,10 +509,12 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
     const sessionFile = updatedFirst?.sessionFile;
-    expect(sessionFile).toBeTruthy();
+    if (!sessionFile) {
+      throw new Error("expected embedded gap-fill persistence to create a session file");
+    }
 
     await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile!,
+      transcriptPath: sessionFile,
       sessionId: sessionEntry.sessionId,
       cwd: tmpDir,
       config: {},

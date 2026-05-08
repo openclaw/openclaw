@@ -362,7 +362,7 @@ describe("CodexAppServerClient", () => {
     );
   });
 
-  it("does not write to stdin after the child process exits", async () => {
+  it("does not write to stdin after the child process exits", () => {
     const harness = createClientHarness();
     clients.push(harness.client);
 

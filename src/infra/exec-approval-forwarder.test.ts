@@ -574,7 +574,7 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
   });
 
-  it("includes command analysis warnings in fallback delivery text", async () => {
+  it("includes command analysis warnings in fallback delivery text", () => {
     const text = buildExecApprovalRequestMessage(
       {
         ...baseRequest,

@@ -286,8 +286,10 @@ describe("msteams graph attachments", () => {
 
     expectAttachmentMediaLength(media.media, 1);
     const redirected = seen.find((entry) => entry.url === escapedUrl);
-    expect(redirected).toBeDefined();
-    expect(redirected?.auth).toBe("");
+    if (!redirected) {
+      throw new Error("expected SharePoint redirect request to be observed");
+    }
+    expect(redirected.auth).toBe("");
   });
 
   it("blocks SharePoint redirects to hosts outside allowHosts", async () => {

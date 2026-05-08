@@ -139,7 +139,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -200,7 +202,9 @@ describe("createTelegramBot", () => {
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
       )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-      expect(callbackHandler).toBeDefined();
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
 
       await callbackHandler({
         callbackQuery: {
@@ -271,7 +275,9 @@ describe("createTelegramBot", () => {
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
       )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-      expect(callbackHandler).toBeDefined();
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
 
       await callbackHandler({
         callbackQuery: {
@@ -342,7 +348,9 @@ describe("createTelegramBot", () => {
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
       )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-      expect(callbackHandler).toBeDefined();
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
 
       currentConfig = {
         ...currentConfig,
@@ -410,7 +418,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -455,7 +465,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -534,7 +546,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -579,7 +593,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = getOnHandler("callback_query") as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -641,7 +657,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -738,7 +756,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -802,7 +822,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await expect(
       callbackHandler({
@@ -867,7 +889,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -898,7 +922,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -945,7 +971,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -988,7 +1016,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -1043,7 +1073,9 @@ describe("createTelegramBot", () => {
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
       )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-      expect(callbackHandler).toBeDefined();
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
 
       await callbackHandler({
         callbackQuery: {
@@ -1117,7 +1149,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -1190,7 +1224,9 @@ describe("createTelegramBot", () => {
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
       )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-      expect(callbackHandler).toBeDefined();
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
 
       await callbackHandler({
         callbackQuery: {
@@ -1263,7 +1299,9 @@ describe("createTelegramBot", () => {
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
       )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-      expect(callbackHandler).toBeDefined();
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
 
       await callbackHandler({
         callbackQuery: {
@@ -1356,7 +1394,9 @@ describe("createTelegramBot", () => {
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
       )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-      expect(callbackHandler).toBeDefined();
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
 
       // User selects openai/gpt-5.4 — was default at startup but NOT default
       // in fresh config.  The override must be persisted.
@@ -1413,7 +1453,9 @@ describe("createTelegramBot", () => {
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
       ctx: Record<string, unknown>,
     ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
 
     await callbackHandler({
       callbackQuery: {
@@ -2595,7 +2637,8 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     createTelegramBot({ token: "tok" });
     const reactionHandler = onSpy.mock.calls.find((call) => call[0] === "message_reaction");
-    expect(reactionHandler).toBeDefined();
+    expect(reactionHandler?.[0]).toBe("message_reaction");
+    expect(reactionHandler?.[1]).toEqual(expect.any(Function));
   });
 
   it("enqueues system event for reaction", async () => {

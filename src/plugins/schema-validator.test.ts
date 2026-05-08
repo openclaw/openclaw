@@ -17,7 +17,10 @@ function expectValidationIssue(
   path: string,
 ) {
   const issue = result.errors.find((entry) => entry.path === path);
-  expect(issue).toBeDefined();
+  if (!issue) {
+    expect(result.errors.map((entry) => entry.path)).toContain(path);
+    throw new Error(`expected validation issue at ${path}`);
+  }
   return issue;
 }
 
@@ -25,9 +28,9 @@ function expectIssueMessageIncludes(
   issue: ReturnType<typeof expectValidationIssue>,
   fragments: readonly string[],
 ) {
-  expect(issue?.message).toEqual(expect.stringContaining(fragments[0] ?? ""));
+  expect(issue.message).toEqual(expect.stringContaining(fragments[0] ?? ""));
   fragments.slice(1).forEach((fragment) => {
-    expect(issue?.message).toContain(fragment);
+    expect(issue.message).toContain(fragment);
   });
 }
 
@@ -60,7 +63,7 @@ function expectUriValidationCase(params: {
 
   const result = expectValidationFailure(params.input);
   const issue = expectValidationIssue(result, params.expectedPath ?? "");
-  expect(issue?.message).toContain(params.expectedMessage ?? "");
+  expect(issue.message).toContain(params.expectedMessage ?? "");
 }
 
 describe("schema validator", () => {
@@ -344,14 +347,16 @@ describe("schema validator", () => {
     });
 
     const issue = result.errors[0];
-    expect(issue).toBeDefined();
-    expect(issue?.path).toContain("\n");
-    expect(issue?.message).toContain("\n");
-    expect(issue?.text).toContain("\\n");
-    expect(issue?.text).toContain("\\t");
-    expect(issue?.text).not.toContain("\n");
-    expect(issue?.text).not.toContain("\t");
-    expect(issue?.text).not.toContain("\x1b");
+    if (!issue) {
+      throw new Error("expected terminal sanitization validation issue");
+    }
+    expect(issue.path).toContain("\n");
+    expect(issue.message).toContain("\n");
+    expect(issue.text).toContain("\\n");
+    expect(issue.text).toContain("\\t");
+    expect(issue.text).not.toContain("\n");
+    expect(issue.text).not.toContain("\t");
+    expect(issue.text).not.toContain("\x1b");
   });
 
   it.each([

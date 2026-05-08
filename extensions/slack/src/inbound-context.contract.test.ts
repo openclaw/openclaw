@@ -53,8 +53,10 @@ describe("Slack inbound context contract", () => {
         opts: { source: "message" },
       });
 
-      expect(prepared).toBeTruthy();
-      expectChannelInboundContextContract(prepared!.ctxPayload);
+      if (!prepared) {
+        throw new Error("expected slack message to prepare an inbound context payload");
+      }
+      expectChannelInboundContextContract(prepared.ctxPayload);
     } finally {
       await tempHome.restore();
     }

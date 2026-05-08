@@ -659,7 +659,7 @@ describe("plugin-sdk package contract guardrails", () => {
       "fake-indexeddb",
       "matrix-js-sdk",
     ]) {
-      expect(matrixRuntimeDeps.get(dep)).toBeDefined();
+      expect(matrixRuntimeDeps.get(dep)).toEqual(expect.any(String));
       expect(rootRuntimeDeps.has(dep)).toBe(false);
     }
     expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);

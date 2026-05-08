@@ -101,20 +101,22 @@ describe("config schema", () => {
     const gatewayPortSchema = gatewaySchema?.properties?.port as
       | { title?: string; description?: string }
       | undefined;
-    expect(schema.properties?.gateway).toBeTruthy();
-    expect(schema.properties?.agents).toBeTruthy();
-    expect(schema.properties?.acp).toBeTruthy();
+    expect(schema.properties).toHaveProperty("gateway");
+    expect(schema.properties).toHaveProperty("agents");
+    expect(schema.properties).toHaveProperty("acp");
     expect(schema.properties?.$schema).toBeUndefined();
     expect(gatewayPortSchema?.title).toBe("Gateway Port");
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
-    expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toBeTruthy();
+    expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toEqual(
+      expect.stringMatching(/\S/),
+    );
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
-    expect(res.version).toBeTruthy();
-    expect(res.generatedAt).toBeTruthy();
+    expect(res.version).toEqual(expect.stringMatching(/\S/));
+    expect(res.generatedAt).toEqual(expect.stringMatching(/\S/));
   });
 
   it("includes MCP SSE header schema under mcp.servers entries", () => {
@@ -133,8 +135,8 @@ describe("config schema", () => {
           };
         }
       | undefined;
-    expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
-    expect(serversNode?.additionalProperties?.properties?.transport).toBeTruthy();
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
   });
 
   it("merges plugin ui hints", () => {
@@ -168,13 +170,13 @@ describe("config schema", () => {
     const pluginConfig = pluginEntry?.properties as Record<string, unknown> | undefined;
     const pluginConfigSchema = pluginConfig?.config as Record<string, unknown> | undefined;
     const pluginConfigProps = pluginConfigSchema?.properties as Record<string, unknown> | undefined;
-    expect(pluginConfigProps?.provider).toBeTruthy();
+    expect(pluginConfigProps).toHaveProperty("provider");
 
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
     const channelsProps = channelsNode?.properties as Record<string, unknown> | undefined;
     const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
     const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
-    expect(channelProps?.accessToken).toBeTruthy();
+    expect(channelProps).toHaveProperty("accessToken");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
@@ -542,7 +544,6 @@ describe("config schema", () => {
   });
 
   it("rejects prototype-chain lookup segments", () => {
-    expect(() => lookupConfigSchema(baseSchema, "constructor")).not.toThrow();
     expect(lookupConfigSchema(baseSchema, "constructor")).toBeNull();
     expect(lookupConfigSchema(baseSchema, "__proto__.polluted")).toBeNull();
   });

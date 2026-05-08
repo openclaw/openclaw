@@ -308,7 +308,7 @@ describe("promptDefaultModel", () => {
     ]);
   });
 
-  it("uses configured provider models without loading the full catalog in replace mode", async () => {
+  it("uses configured provider models for default picker without loading the full catalog in replace mode", async () => {
     loadModelCatalog.mockResolvedValue([
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
@@ -853,7 +853,7 @@ describe("promptModelAllowlist", () => {
     ).toEqual(["github-copilot/gpt-5.4"]);
   });
 
-  it("uses configured provider models without loading the full catalog in replace mode", async () => {
+  it("uses configured provider models for allowlist picker without loading the full catalog in replace mode", async () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "openai",

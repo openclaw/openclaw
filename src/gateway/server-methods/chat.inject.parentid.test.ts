@@ -18,7 +18,8 @@ describe("gateway chat.inject transcript writes", () => {
         message: "hello",
       });
       expect(appended.ok).toBe(true);
-      expect(appended.messageId).toBeTruthy();
+      expect(appended.messageId).toEqual(expect.any(String));
+      expect(appended.messageId.length).toBeGreaterThan(0);
 
       const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/).filter(Boolean);
       expect(lines.length).toBeGreaterThanOrEqual(2);
@@ -60,7 +61,8 @@ describe("gateway chat.inject transcript writes", () => {
         message: "hello",
       });
       expect(appended.ok).toBe(true);
-      expect(appended.messageId).toBeTruthy();
+      expect(appended.messageId).toEqual(expect.any(String));
+      expect(appended.messageId.length).toBeGreaterThan(0);
 
       const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/).filter(Boolean);
       const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;

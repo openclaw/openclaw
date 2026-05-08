@@ -1338,7 +1338,7 @@ describe("handleSendChat", () => {
     ]);
   });
 
-  it("removes pending steer indicators when the run finishes", async () => {
+  it("removes pending steer indicators when the run finishes", () => {
     const host = makeHost({
       chatQueue: [
         {
@@ -1403,7 +1403,7 @@ describe("handleSendChat", () => {
     expect(JSON.stringify(host.chatMessages)).not.toContain("JVBERi0xLjQK");
   });
 
-  it("releases queued attachment payloads when the queued item is removed", async () => {
+  it("releases queued attachment payloads when the queued item is removed", () => {
     const revokeObjectURL = vi.fn();
     vi.stubGlobal(
       "URL",

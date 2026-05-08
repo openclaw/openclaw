@@ -26,11 +26,13 @@ describe("slack channel message adapter", () => {
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
     const adapter = slackPlugin.message;
-    expect(adapter).toBeDefined();
+    if (!adapter?.send?.text || !adapter.send.media || !adapter.send.payload) {
+      throw new Error("expected slack channel message adapter with text/media/payload senders");
+    }
 
     const proveText = async () => {
       sendSlack.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send.text({
         cfg,
         to: "C123",
         text: "hello",
@@ -48,7 +50,7 @@ describe("slack channel message adapter", () => {
 
     const proveMedia = async () => {
       sendSlack.mockClear();
-      const result = await adapter!.send!.media!({
+      const result = await adapter.send.media({
         cfg,
         to: "C123",
         text: "caption",
@@ -71,7 +73,7 @@ describe("slack channel message adapter", () => {
 
     const provePayload = async () => {
       sendSlack.mockClear();
-      const result = await adapter!.send!.payload!({
+      const result = await adapter.send.payload({
         cfg,
         to: "C123",
         text: "payload",
@@ -89,7 +91,7 @@ describe("slack channel message adapter", () => {
 
     const proveReplyThread = async () => {
       sendSlack.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send.text({
         cfg,
         to: "C123",
         text: "threaded",
@@ -111,7 +113,7 @@ describe("slack channel message adapter", () => {
 
     const proveThreadFallback = async () => {
       sendSlack.mockClear();
-      const result = await adapter!.send!.text!({
+      const result = await adapter.send.text({
         cfg,
         to: "C123",
         text: "threaded",
@@ -132,7 +134,7 @@ describe("slack channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "slackMessageAdapter",
-      adapter: adapter!,
+      adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
@@ -140,7 +142,7 @@ describe("slack channel message adapter", () => {
         replyTo: proveReplyThread,
         thread: proveThreadFallback,
         messageSendingHooks: () => {
-          expect(adapter!.send!.text).toBeTypeOf("function");
+          expect(adapter.send.text).toBeTypeOf("function");
         },
       },
     });

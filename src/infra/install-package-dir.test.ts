@@ -412,12 +412,14 @@ describe("installPackageDir", () => {
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
       const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
-      expect(cwd).toBeTruthy();
-      await expect(fs.stat(path.join(cwd ?? "", ".npmrc"))).rejects.toMatchObject({
+      if (cwd === undefined) {
+        throw new Error("expected package install cwd");
+      }
+      await expect(fs.stat(path.join(cwd, ".npmrc"))).rejects.toMatchObject({
         code: "ENOENT",
       });
       await expect(
-        listMatchingEntries(cwd ?? "", ".openclaw-install-hidden-npmrc-"),
+        listMatchingEntries(cwd, ".openclaw-install-hidden-npmrc-"),
       ).resolves.toHaveLength(1);
       return {
         stdout: "",

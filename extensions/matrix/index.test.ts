@@ -51,11 +51,13 @@ describe("matrix plugin", () => {
         },
       ],
     });
-    expect(typeof registrar).toBe("function");
+    if (!registrar) {
+      throw new Error("expected Matrix CLI registrar to be registered");
+    }
     expect(cliMocks.registerMatrixCli).not.toHaveBeenCalled();
 
     const program = { command: vi.fn() };
-    const result = registrar?.({ program } as never);
+    const result = registrar({ program } as never);
 
     await result;
     expect(cliMocks.registerMatrixCli).toHaveBeenCalledWith({ program });

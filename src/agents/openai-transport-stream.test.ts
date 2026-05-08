@@ -2223,7 +2223,14 @@ describe("openai transport stream", () => {
       } as never,
     ) as { reasoning_effort?: unknown; tools?: unknown };
 
-    expect(params.tools).toBeDefined();
+    expect(params.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        function: expect.objectContaining({
+          name: "lookup_weather",
+        }),
+      }),
+    ]);
     expect(params).not.toHaveProperty("reasoning_effort");
   });
 
@@ -3185,8 +3192,10 @@ describe("openai transport stream", () => {
     };
 
     const functionCall = params.input?.find((item) => item.type === "function_call");
-    expect(functionCall).toBeDefined();
-    expect(functionCall?.arguments).toBe("not valid json");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      arguments: "not valid json",
+    });
   });
 
   it("defaults tool_choice to auto for proxy-like openai-completions endpoints", () => {

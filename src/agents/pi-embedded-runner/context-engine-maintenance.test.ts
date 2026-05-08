@@ -102,9 +102,11 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     });
 
     expect(runtimeContext.workspaceDir).toBe("/tmp/workspace");
-    expect(typeof runtimeContext.rewriteTranscriptEntries).toBe("function");
+    if (!runtimeContext.rewriteTranscriptEntries) {
+      throw new Error("expected transcript rewrite helper");
+    }
 
-    const result = await runtimeContext.rewriteTranscriptEntries?.({
+    const result = await runtimeContext.rewriteTranscriptEntries({
       replacements: [
         { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
       ],
@@ -199,7 +201,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
           { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
         ],
       });
-      expect(rewritePromise).toBeDefined();
+      expect(rewritePromise).toEqual(expect.any(Promise));
 
       await flushAsyncWork();
       expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
@@ -319,7 +321,19 @@ describe("runContextEngineMaintenance", () => {
     )?.runtimeContext as
       | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
       | undefined;
-    expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
+    if (!runtimeContext?.rewriteTranscriptEntries) {
+      throw new Error("expected maintain runtime context rewrite helper");
+    }
+    const rewriteResult = await runtimeContext.rewriteTranscriptEntries({
+      replacements: [
+        { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
+      ],
+    });
+    expect(rewriteResult).toEqual({
+      changed: true,
+      bytesFreed: 123,
+      rewrittenEntries: 2,
+    });
   });
 
   it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {

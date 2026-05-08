@@ -41,7 +41,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
           },
           google: {
             aliases: {
-              "gemini-3-pro": "gemini-3-pro-preview",
+              "gemini-3-pro": "gemini-3.1-pro-preview",
               "gemini-3-flash": "gemini-3-flash-preview",
               "gemini-3.1-pro": "gemini-3.1-pro-preview",
               "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
@@ -51,7 +51,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
           },
           "google-vertex": {
             aliases: {
-              "gemini-3-pro": "gemini-3-pro-preview",
+              "gemini-3-pro": "gemini-3.1-pro-preview",
               "gemini-3-flash": "gemini-3-flash-preview",
               "gemini-3.1-pro": "gemini-3.1-pro-preview",
               "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
@@ -922,7 +922,7 @@ describe("model-selection", () => {
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(true);
+      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(true);
       expect(result.allowAny).toBe(false);
     });
 
@@ -956,7 +956,7 @@ describe("model-selection", () => {
 
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
-      expect(result.allowedKeys.has("google/gemini-3-pro-preview")).toBe(false);
+      expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
       expect(result.allowAny).toBe(false);
     });
   });

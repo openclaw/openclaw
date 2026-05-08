@@ -89,6 +89,14 @@ description: test skill
     vi.restoreAllMocks();
   });
 
+  function requireFinding<T>(findings: T[], predicate: (finding: T) => boolean, label: string): T {
+    const finding = findings.find(predicate);
+    if (!finding) {
+      throw new Error(`expected ${label} finding`);
+    }
+    return finding;
+  }
+
   it("reports detailed code-safety issues for both plugins and skills", async () => {
     vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockImplementation(async (dirPath) => {
       const isPlugin = dirPath.includes(`${path.sep}evil-plugin`);
@@ -121,19 +129,21 @@ description: test skill
       collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir: sharedCodeSafetyStateDir }),
     ]);
 
-    const pluginFinding = pluginFindings.find(
+    const pluginFinding = requireFinding(
+      pluginFindings,
       (finding) => finding.checkId === "plugins.code_safety" && finding.severity === "critical",
+      "critical plugin code-safety",
     );
-    expect(pluginFinding).toBeDefined();
-    expect(pluginFinding?.detail).toContain("dangerous-exec");
-    expect(pluginFinding?.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
+    expect(pluginFinding.detail).toContain("dangerous-exec");
+    expect(pluginFinding.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
 
-    const skillFinding = skillFindings.find(
+    const skillFinding = requireFinding(
+      skillFindings,
       (finding) => finding.checkId === "skills.code_safety" && finding.severity === "critical",
+      "critical skill code-safety",
     );
-    expect(skillFinding).toBeDefined();
-    expect(skillFinding?.detail).toContain("dangerous-exec");
-    expect(skillFinding?.detail).toMatch(/runner\.js:\d+/);
+    expect(skillFinding.detail).toContain("dangerous-exec");
+    expect(skillFinding.detail).toMatch(/runner\.js:\d+/);
   });
 
   it("flags plugin extension entry path traversal in deep audit", async () => {
@@ -210,10 +220,13 @@ description: test skill
     await fs.writeFile(path.join(pluginDir, "package.json"), "{ not valid json !!!", "utf-8");
 
     const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-    const finding = findings.find((f) => f.checkId === "plugins.code_safety.manifest_parse_error");
-    expect(finding).toBeDefined();
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("broken-plugin");
+    const finding = requireFinding(
+      findings,
+      (f) => f.checkId === "plugins.code_safety.manifest_parse_error",
+      "manifest parse error",
+    );
+    expect(finding.severity).toBe("warn");
+    expect(finding.detail).toContain("broken-plugin");
     // Deep scan should still continue (scan_failed should NOT be emitted for the same plugin)
     expect(
       findings.some(

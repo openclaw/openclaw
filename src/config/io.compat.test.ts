@@ -148,7 +148,7 @@ describe("config io paths", () => {
     });
   });
 
-  it("normalizes safe-bin config entries at config load time", async () => {
+  it("normalizes safe-bin config entries at config load time", () => {
     const cfg = {
       tools: {
         exec: {
