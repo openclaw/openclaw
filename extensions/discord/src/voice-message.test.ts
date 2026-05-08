@@ -52,7 +52,7 @@ describe("ensureOggOpus", () => {
   });
 
   function expectStagedFfmpegOutput(ffmpegOutputPath: string | undefined, finalPath: string) {
-    expect(ffmpegOutputPath).toEqual(expect.any(String));
+    expect(ffmpegOutputPath).toBeTypeOf("string");
     if (typeof ffmpegOutputPath !== "string") {
       throw new Error("missing ffmpeg output path");
     }
