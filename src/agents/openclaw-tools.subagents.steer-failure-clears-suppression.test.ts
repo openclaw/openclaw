@@ -22,7 +22,6 @@ describe("openclaw-tools: subagents steer failure", () => {
     callGatewayMock.mockClear();
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagents-steer-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     setSubagentsConfigOverride({
       session: {
         mainKey: "main",
