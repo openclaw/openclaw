@@ -689,33 +689,36 @@ describe("scoped vitest configs", () => {
   });
 
   it("normalizes gateway include patterns relative to the scoped dir", () => {
-    expect(defaultGatewayConfig.test?.dir).toBe(path.join(process.cwd(), "src", "gateway"));
-    expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
-    expect(defaultGatewayConfig.test?.exclude).toContain("gateway.test.ts");
-    expect(defaultGatewayConfig.test?.exclude).toContain(
-      "server.startup-matrix-migration.integration.test.ts",
-    );
-    expect(defaultGatewayConfig.test?.exclude).toContain("sessions-history-http.test.ts");
+    const testConfig = requireTestConfig(defaultGatewayConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "gateway"));
+    expect(testConfig.include).toEqual(["**/*.test.ts"]);
+    expect(testConfig.exclude).toContain("gateway.test.ts");
+    expect(testConfig.exclude).toContain("server.startup-matrix-migration.integration.test.ts");
+    expect(testConfig.exclude).toContain("sessions-history-http.test.ts");
   });
 
   it("normalizes infra include patterns relative to the scoped dir", () => {
-    expect(defaultInfraConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultInfraConfig.test?.include).toEqual(["infra/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultInfraConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["infra/**/*.test.ts"]);
   });
 
   it("normalizes runtime config include patterns relative to the scoped dir", () => {
-    expect(defaultRuntimeConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultRuntimeConfig.test?.include).toEqual(["config/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultRuntimeConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["config/**/*.test.ts"]);
   });
 
   it("normalizes cron include patterns relative to the scoped dir", () => {
-    expect(defaultCronConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultCronConfig.test?.include).toEqual(["cron/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultCronConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["cron/**/*.test.ts"]);
   });
 
   it("normalizes daemon include patterns relative to the scoped dir", () => {
-    expect(defaultDaemonConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultDaemonConfig.test?.include).toEqual(["daemon/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultDaemonConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["daemon/**/*.test.ts"]);
   });
 
   it("normalizes media include patterns relative to the scoped dir", () => {
