@@ -21,8 +21,6 @@ export type BackgroundEmailDeliveryParams = {
   timeoutMs?: number;
 };
 
-const DEFAULT_EMAIL_DELIVERY_TIMEOUT_MS = 120_000;
-
 const EMAIL_DELIVERY_SYSTEM_PROMPT_BASE = [
   "You are a background task agent.",
   "The user was on a phone call and asked a question. The answer has been found.",
@@ -104,7 +102,7 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
         userLabel: "Caller",
         assistantLabel: "Agent",
         questionSourceLabel: "caller",
-        timeoutMs: timeoutMs ?? DEFAULT_EMAIL_DELIVERY_TIMEOUT_MS,
+        timeoutMs: timeoutMs,
         extraSystemPrompt:
           backgroundEmailPrompt ?? resolveEmailDeliverySystemPrompt(recipientEmail),
         fallbackText: "",
