@@ -43,8 +43,7 @@ function expectNormalizedAllowList(
   prefixes: string[],
 ): NonNullable<ReturnType<typeof normalizeDiscordAllowList>> {
   const allow = normalizeDiscordAllowList(entries, prefixes);
-  expect(allow).not.toBeNull();
-  if (!allow) {
+  if (allow === null) {
     throw new Error("Expected allow list to be normalized");
   }
   return allow;
