@@ -85,7 +85,8 @@ describe("buildCliRespawnPlan", () => {
       autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
     });
 
-    expect(plan?.env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
   });
 
   it("returns null when both respawn guards are already satisfied", () => {
@@ -128,8 +129,13 @@ describe("buildCliRespawnPlan", () => {
       platform: "linux",
     });
 
-    expect(plan?.command).toBe("node");
-    expect(plan?.argv).toEqual([EXPERIMENTAL_WARNING_FLAG, "/usr/local/bin/openclaw", "status"]);
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.command).toBe("node");
+    expect(respawnPlan.argv).toEqual([
+      EXPERIMENTAL_WARNING_FLAG,
+      "/usr/local/bin/openclaw",
+      "status",
+    ]);
   });
 });
 
