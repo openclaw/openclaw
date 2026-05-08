@@ -295,6 +295,7 @@ export async function sessionsCommand(
           provider: modelRef.provider,
           model: modelRef.model,
           sessionKey: row.key,
+          acpBackend: entry?.acp?.backend,
         });
         return Object.assign({}, row, {
           agentId,

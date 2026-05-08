@@ -1735,6 +1735,7 @@ export function buildGatewaySessionRow(params: {
     provider: rowModelProvider,
     model: rowModel,
     sessionKey: key,
+    acpBackend: entry?.acp?.backend,
   });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)

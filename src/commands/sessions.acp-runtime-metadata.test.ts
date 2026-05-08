@@ -86,12 +86,15 @@ function computeSessionAgentRuntime(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   fallbackAgentId: string;
+  /** Mirrors `entry?.acp?.backend` passed from the session store entry. */
+  acpBackend?: string;
 }): ReturnType<typeof resolveModelAgentRuntimeMetadata> {
   const agentId = parseAgentSessionKey(params.sessionKey)?.agentId ?? params.fallbackAgentId;
   return resolveModelAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId,
     sessionKey: params.sessionKey,
+    acpBackend: params.acpBackend,
   });
 }
 
@@ -164,5 +167,37 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
         `(a) override at the call site in src/commands/sessions.ts:294 once isAcpSessionKey(row.key) is true, or ` +
         `(b) extend resolveAgentRuntimeMetadata to accept an optional sessionKey and apply the override centrally.`,
     ).toBe("acpx");
+  });
+
+  it("backend override: ACP session with entry.acp.backend set reports that backend id, NOT 'acpx'", () => {
+    // When the session entry carries an explicit acp.backend (e.g. a registered
+    // non-default backend), the overlay must reflect the actual backend instead
+    // of the generic "acpx" fallback.
+    const cfg = buildConfigWithoutAgentRuntimePolicy();
+    const agentRuntime = computeSessionAgentRuntime({
+      cfg,
+      sessionKey: ACP_SESSION_KEY,
+      fallbackAgentId: "copilot",
+      acpBackend: "custom-backend",
+    });
+
+    expect(agentRuntime.id).toBe("custom-backend");
+    expect(agentRuntime.source).toBe("session-key");
+  });
+
+  it("backend fallback: ACP session with no entry.acp.backend falls back to 'acpx'", () => {
+    // When the session entry has no acp.backend (entry.acp is absent or backend
+    // is not set), the overlay must fall back to the canonical "acpx" id so
+    // existing behaviour is preserved.
+    const cfg = buildConfigWithoutAgentRuntimePolicy();
+    const agentRuntime = computeSessionAgentRuntime({
+      cfg,
+      sessionKey: ACP_SESSION_KEY,
+      fallbackAgentId: "copilot",
+      // acpBackend intentionally omitted — mirrors entry with no acp.backend
+    });
+
+    expect(agentRuntime.id).toBe("acpx");
+    expect(agentRuntime.source).toBe("session-key");
   });
 });

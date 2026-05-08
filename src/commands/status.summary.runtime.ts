@@ -164,6 +164,7 @@ function resolveSessionRuntimeLabel(params: {
     provider: params.provider,
     model: params.model,
     sessionKey: params.sessionKey,
+    acpBackend: params.entry?.acp?.backend,
   });
   const id = normalizeOptionalLowercaseString(runtime.id);
   const resolvedHarness = id && id !== "pi" && id !== "auto" ? id : undefined;
