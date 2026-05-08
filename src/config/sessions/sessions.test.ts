@@ -57,11 +57,17 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
   });
 
-  it("ignores multi-store sentinel paths when deriving session file options", () => {
-    expect(resolveSessionFilePathOptions({ agentId: "worker", storePath: "(multiple)" })).toEqual({
+  it("derives session file options from an explicit sessions dir", () => {
+    expect(
+      resolveSessionFilePathOptions({
+        agentId: "worker",
+        sessionsDir: "/tmp/openclaw/agents/worker/sessions",
+      }),
+    ).toEqual({
       agentId: "worker",
+      sessionsDir: path.resolve("/tmp/openclaw/agents/worker/sessions"),
     });
-    expect(resolveSessionFilePathOptions({ storePath: "(multiple)" })).toBeUndefined();
+    expect(resolveSessionFilePathOptions({})).toBeUndefined();
   });
 
   it("accepts symlink-alias session paths that resolve under the sessions dir", () => {
@@ -245,8 +251,8 @@ describe("session lifecycle timestamps", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = dir;
     try {
-      const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
-      const sessionFile = path.join(path.dirname(storePath), "legacy-session.jsonl");
+      const sessionsDir = path.join(dir, "agents", "main", "sessions");
+      const sessionFile = path.join(sessionsDir, "legacy-session.jsonl");
       const headerTimestamp = "2026-04-20T04:30:00.000Z";
       replaceSqliteSessionTranscriptEvents({
         agentId: "main",
@@ -288,8 +294,8 @@ describe("session lifecycle timestamps", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = dir;
     try {
-      const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
-      const sessionFile = path.join(path.dirname(storePath), "legacy-session.jsonl");
+      const sessionsDir = path.join(dir, "agents", "main", "sessions");
+      const sessionFile = path.join(sessionsDir, "legacy-session.jsonl");
       await fsPromises.mkdir(path.dirname(sessionFile), { recursive: true });
       await fsPromises.writeFile(
         sessionFile,
@@ -331,15 +337,15 @@ describe("SQLite session store patch retries", () => {
   async function makeTmpStore(
     initial: Record<string, unknown> = {},
     options: { agentId?: string } = {},
-  ): Promise<{ dir: string; agentId: string; storePath: string }> {
+  ): Promise<{ dir: string; agentId: string; sessionsDir: string }> {
     const dir = await patchFixtureRootTracker.make("case");
     process.env.OPENCLAW_STATE_DIR = dir;
     const agentId = options.agentId ?? "main";
-    const storePath = path.join(dir, "agents", agentId, "sessions", "sessions.json");
+    const sessionsDir = path.join(dir, "agents", agentId, "sessions");
     for (const [sessionKey, entry] of Object.entries(initial)) {
       upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
     }
-    return { dir, agentId, storePath };
+    return { dir, agentId, sessionsDir };
   }
 
   function readSessionEntries(agentId = "main"): Record<string, SessionEntry> {
@@ -538,7 +544,7 @@ describe("SQLite session store patch retries", () => {
 
   it("allows explicit ACP metadata removal through the ACP session helper", async () => {
     const key = "agent:codex:acp:binding:discord:default:deadbeef";
-    const { agentId, storePath } = await makeTmpStore(
+    const { agentId, sessionsDir } = await makeTmpStore(
       {
         [key]: {
           sessionId: "sess-acp-clear",

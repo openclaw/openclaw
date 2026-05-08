@@ -5,14 +5,12 @@ import { afterEach, beforeEach, vi } from "vitest";
 
 export function useTempSessionsFixture(prefix: string) {
   let tempDir = "";
-  let storePath = "";
   let sessionsDir = "";
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     sessionsDir = path.join(tempDir, "agents", "main", "sessions");
     fs.mkdirSync(sessionsDir, { recursive: true });
-    storePath = path.join(sessionsDir, "sessions.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
   });
 
@@ -21,7 +19,6 @@ export function useTempSessionsFixture(prefix: string) {
   });
 
   return {
-    storePath: () => storePath,
     sessionsDir: () => sessionsDir,
   };
 }

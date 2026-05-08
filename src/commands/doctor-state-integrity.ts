@@ -878,7 +878,7 @@ export async function noteStateIntegrity(
   const store = Object.fromEntries(
     listSessionEntries({ agentId, env }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
-  const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
+  const sessionPathOpts = resolveSessionFilePathOptions({ agentId, sessionsDir });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries
