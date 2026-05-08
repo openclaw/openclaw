@@ -1484,9 +1484,9 @@ describe("preflightDiscordMessage", () => {
         }),
       }),
     );
-    expect(result).not.toBeNull();
-    expect(result?.wasMentioned).toBe(true);
-    expect(result?.preflightAudioTranscript).toBe("hey openclaw");
+    const preflight = expectPreflightResult(result);
+    expect(preflight.wasMentioned).toBe(true);
+    expect(preflight.preflightAudioTranscript).toBe("hey openclaw");
   });
 
   it("does not transcribe guild audio from unauthorized members", async () => {
@@ -1629,7 +1629,7 @@ describe("preflightDiscordMessage", () => {
           "guild-1": { channels: { [channelId]: { enabled: true, requireMention: true } } },
         },
       });
-      expect(result).not.toBeNull();
+      expect(expectPreflightResult(result)).toEqual(expect.any(Object));
     } finally {
       routeSpy.mockRestore();
       ensureSpy.mockRestore();
@@ -1701,7 +1701,7 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
       webhookId: "wh-1",
       webhookToken: "tok-1",
     });
-    expect(binding).not.toBeNull();
+    expect(binding).toEqual(expect.any(Object));
 
     manager.unbindThread({
       threadId: "thread-1",
