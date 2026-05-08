@@ -259,6 +259,245 @@ Details: [Development channels](https://docs.openclaw.ai/install/development-cha
 - Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
 - Skills: `~/.openclaw/workspace/skills/<skill>/SKILL.md`.
 
+## Log-memory subsystem (fork addition)
+
+This fork adds a Markdown-file-based log-memory subsystem under
+`extensions/memory-core/src/log-memory/` aimed at factory log analysis with
+persistent memory and an automatic dream-style consolidation cycle.
+
+### Layout under the agent workspace
+
+```
+<workspaceDir>/
+  log-memory/
+    2026-05-07.md     # episodic, append-only blocks (one file per UTC day)
+    2026-05-08.md
+    KNOWLEDGE.md      # semantic, append-only patterns + engineer knowledge
+  skills/
+    log-analyst/
+      SKILL.md        # written once on first run by ensureLogAnalystSkill
+```
+
+Episodic block (raw log chunks):
+
+```
+## [2026-05-07T12:00:00.000Z] level:ERROR service:diagfw host:dut-01
+probe disconnected after relay reset
+decay: 0.95
+accessCount: 0
+```
+
+Semantic block (consolidated patterns + engineer knowledge):
+
+```
+## [2026-05-07T12:00:00.000Z] Probe stuck pattern
+Pattern: Repeated probe disconnects on diagfw.
+Root cause: Jig misalignment.
+Tags: service:diagfw, level:ERROR
+Source: dream_consolidation
+```
+
+### Public surface (re-exported from the extension barrels)
+
+- `LogMemoryStore` — file-backed store; methods: `appendEpisodic`,
+  `appendSemantic`, `loadEpisodic({daysBack})`, `loadSemantic`,
+  `selectDreamCandidates`, `recordAccess`, `removeEpisodic`.
+- `LogIngestor` — parses (JSON / syslog / ISO-prefixed), chunks (sliding window
+  400/80), dedupes (sha256), embeds via the injected `EmbedFn`, appends
+  episodic blocks. Exposes `query()` for hybrid retrieval
+  (`0.6 × cosine + 0.4 × keyword-match`, top-K).
+- `KnowledgeCapture` — `detectTeachingMoment(message)` flags teaching phrases
+  (Chinese + English + `TEACH:` / `FACT:` / `RULE:` prefixes); captured entries
+  go straight to `KNOWLEDGE.md` with a high decay score.
+- `runDreamCycle` / `DreamScheduler` — selects low-decay episodic candidates
+  (`computeCurrentDecay < 0.25`), greedy cosine clustering (≥ 3 members),
+  calls the injected `ConsolidateFn`, appends consolidated patterns to
+  `KNOWLEDGE.md`, then **rewrites the consumed entries out of their daily
+  files**.
+- `ensureLogAnalystSkill(workspaceDir)` — writes `skills/log-analyst/SKILL.md`
+  on first run only; never overwrites a user-customized version.
+- `DREAM_DAILY_CRON = "0 3 * * *"` — schedule constant the host wires into
+  whatever cron / interval seam the agent uses.
+
+### Forgetting semantics (read this before deploying)
+
+The current dream cycle is **destructive**: when episodic blocks get
+consolidated into `KNOWLEDGE.md`, they are removed from the daily Markdown
+files (and an emptied day file is unlinked). Only the consolidated semantic
+summary survives long-term.
+
+If you need non-destructive forgetting (raw logs preserved for audit; only
+the LLM prompt is compressed), `removeEpisodic` is the seam to swap — replace
+with a `markConsolidated` flag and have `loadEpisodic` skip flagged blocks by
+default. Tests live next to each module under
+`extensions/memory-core/src/log-memory/*.test.ts`.
+
+### Embeddings and consolidation are injected
+
+The extension never calls a model provider directly. The host wires:
+
+- `EmbedFn = (texts: string[]) => Promise<Float32Array[]>` — used for query
+  embedding, hybrid scoring, and clustering during the dream cycle.
+- `ConsolidateFn = (input: { members }) => Promise<ConsolidatedPattern | null>`
+  — called per cluster; return `null` to skip a cluster without aborting the
+  cycle.
+
+Tests use a deterministic hash-based fake embedder
+(`extensions/memory-core/src/log-memory/test-helpers.ts`) so the suite needs
+no provider keys.
+
+## Deploying this fork on a Raspberry Pi
+
+Tested layout: Raspberry Pi 4 (4 GB+) or Pi 5 running 64-bit Raspberry Pi OS
+(Bookworm or later). Pi 3 will struggle with Node 22 + embeddings; not
+recommended.
+
+### 1. System prerequisites
+
+```bash
+sudo apt update
+sudo apt install -y git build-essential python3 ca-certificates curl
+```
+
+### 2. Install Node.js 22 (ARM64) and pnpm
+
+Use `nvm` so Node lives under your home dir and survives Pi OS upgrades:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+source ~/.bashrc
+nvm install 22
+nvm alias default 22
+
+# pnpm via Corepack (ships with Node 22)
+corepack enable
+corepack prepare pnpm@10 --activate
+node -v && pnpm -v
+```
+
+### 3. Clone this fork and install
+
+```bash
+git clone https://github.com/cake11298/AI_Agent_OpenClaw.git
+cd AI_Agent_OpenClaw
+# until the branch is merged to main on this fork:
+git checkout claude/memory-auto-dream-system-0fuc7
+pnpm install
+```
+
+### 4. First-time OpenClaw setup
+
+```bash
+pnpm openclaw setup
+```
+
+This creates `~/.openclaw/` (config) and `~/.openclaw/workspace/` (data).
+Once that runs, `~/.openclaw/workspace/log-memory/` will be the directory
+your daily MD files and `KNOWLEDGE.md` live in.
+
+### 5. Sanity-check the log-memory tests
+
+```bash
+pnpm test extensions/memory-core/src/log-memory --run
+```
+
+Expect 60/60 tests passing. If they pass on the Pi, the file-based store +
+dream cycle work end-to-end on your hardware.
+
+### 6. Wiring the subsystem from your agent code
+
+The extension exposes the surface through `extensions/memory-core/api.ts`
+(types + pure helpers) and `extensions/memory-core/runtime-api.ts` (classes).
+Minimal usage from your host code:
+
+```ts
+import {
+  LogMemoryStore,
+  LogIngestor,
+  KnowledgeCapture,
+  DreamScheduler,
+  ensureLogAnalystSkill,
+} from "@openclaw/memory-core/runtime-api";
+import { DREAM_DAILY_CRON, detectTeachingMoment } from "@openclaw/memory-core/api";
+
+const workspaceDir = process.env.OPENCLAW_WORKSPACE_DIR ?? "~/.openclaw/workspace";
+
+await ensureLogAnalystSkill(workspaceDir);
+
+const store = new LogMemoryStore({ workspaceDir });
+
+// EmbedFn: on a Pi, prefer a remote embedding provider over local CPU models.
+// Wire to your existing provider client (OpenAI, Anthropic, local Ollama, etc.).
+const embed = async (texts: string[]) => {
+  /* return Float32Array[] */
+};
+
+// ConsolidateFn: call your LLM, parse JSON, return null on parse failure.
+const consolidate = async ({ members }) => {
+  /* return ConsolidatedPattern | null */
+};
+
+const scheduler = new DreamScheduler({ store, embed, consolidate });
+const ingestor = new LogIngestor({
+  store,
+  embed,
+  onThresholdTrigger: () => scheduler.triggerFromThreshold(),
+});
+
+// Ingest a log line:
+await ingestor.ingest(rawLine, { service: "diagfw", host: "dut-01" });
+
+// Query:
+const hits = await ingestor.query("probe stuck on diagfw");
+
+// Engineer-teaching capture:
+const capture = new KnowledgeCapture({ workspaceDir, store, embed });
+if (detectTeachingMoment(message)) {
+  await capture.capture({ message, tags: ["service:diagfw"], title: "Probe stuck" });
+}
+```
+
+### 7. Daily dream cron on the Pi
+
+`DREAM_DAILY_CRON` is just the schedule string `"0 3 * * *"`. On a Pi, the
+simplest reliable trigger is a systemd timer:
+
+```ini
+# /etc/systemd/system/openclaw-dream.service
+[Service]
+Type=oneshot
+User=pi
+ExecStart=/home/pi/.nvm/versions/node/v22.x.x/bin/pnpm \
+  --dir /home/pi/AI_Agent_OpenClaw openclaw dream:tick
+
+# /etc/systemd/system/openclaw-dream.timer
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Replace the `pnpm openclaw dream:tick` invocation with whatever entry point
+your host wires to `scheduler.tick()`. Enable with
+`sudo systemctl enable --now openclaw-dream.timer`.
+
+### Pi-specific notes
+
+- **Memory pressure**: hybrid query loads every entry from today + yesterday
+  - `KNOWLEDGE.md` and embeds them per call. On a 4 GB Pi, keep
+    `episodicDaysBack` at 1 (the default) and bound daily ingest to a few
+    thousand lines. Heavier workloads should consider a precomputed embedding
+    sidecar (not currently implemented — see "Forgetting semantics" above for
+    the seam to extend).
+- **Storage**: append-only Markdown grows linearly with ingest volume. The
+  destructive dream cycle reclaims that space; if you switch to
+  non-destructive forgetting, plan rotation manually.
+- **Embeddings**: prefer a network-hosted embedding provider over local
+  CPU-bound models on the Pi. The extension never calls a provider directly,
+  so the cost/latency tradeoff is entirely in your `EmbedFn`.
+
 ## Configuration
 
 Minimal `~/.openclaw/openclaw.json` (model + defaults):
