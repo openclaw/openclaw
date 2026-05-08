@@ -1766,7 +1766,8 @@ describe("createTelegramBot", () => {
         mediaRef: "telegram:file/root-photo-1",
       }),
     ]);
-    expect(payload.ReplyChain?.[1]?.mediaPath).toEqual(expect.any(String));
+    expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
+    expect(payload.ReplyChain?.[1]?.mediaPath).not.toBe("");
     expect(getFileSpy).toHaveBeenCalledWith("root-photo-1");
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });

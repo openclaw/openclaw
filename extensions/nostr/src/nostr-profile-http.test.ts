@@ -429,7 +429,7 @@ describe("nostr-profile-http", () => {
       const data = expectBadRequestResponse(res);
       // The schema validation catches non-https URLs before SSRF check
       expect(data.error).toBe("Validation failed");
-      expect(data.details).toEqual(expect.any(Array));
+      expect(Array.isArray(data.details)).toBe(true);
       expect(data.details).toEqual(expect.arrayContaining([expect.stringContaining("https")]));
     });
 

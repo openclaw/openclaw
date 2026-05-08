@@ -190,8 +190,10 @@ describe("diffs tool", () => {
     });
 
     expectArtifactOnlyFileResult(screenshotter, result);
-    expect((result?.details as Record<string, unknown>).artifactId).toEqual(expect.any(String));
-    expect((result?.details as Record<string, unknown>).expiresAt).toEqual(expect.any(String));
+    expect(requireString(readDetails(result).artifactId, "artifactId")).toMatch(/^[a-f0-9]{20}$/u);
+    expect(requireString(readDetails(result).expiresAt, "expiresAt")).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
+    );
   });
 
   it("honors ttlSeconds for artifact-only file output", async () => {

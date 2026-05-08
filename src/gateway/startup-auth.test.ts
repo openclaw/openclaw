@@ -5,6 +5,7 @@ import {
   assertGatewayAuthNotKnownWeak,
   assertHooksTokenSeparateFromGatewayAuth,
   ensureGatewayStartupAuth,
+  mergeGatewayTailscaleConfig,
 } from "./startup-auth.js";
 
 const mocks = vi.hoisted(() => ({
@@ -21,6 +22,17 @@ vi.mock("../config/mutate.js", async () => {
     ...actual,
     replaceConfigFile: mocks.replaceConfigFile,
   };
+});
+
+describe("mergeGatewayTailscaleConfig", () => {
+  it("preserves explicit preserveFunnel overrides", () => {
+    expect(
+      mergeGatewayTailscaleConfig(
+        { mode: "serve", resetOnExit: false, preserveFunnel: false },
+        { preserveFunnel: true },
+      ),
+    ).toEqual({ mode: "serve", resetOnExit: false, preserveFunnel: true });
+  });
 });
 
 describe("ensureGatewayStartupAuth", () => {

@@ -60,7 +60,7 @@ describe("buildCliRespawnPlan", () => {
     expect(
       buildCliRespawnPlan({
         argv: ["node", "openclaw", "tui"],
-        env: {},
+        env: { [OPENCLAW_NODE_EXTRA_CA_CERTS_READY]: "1" },
         execArgv: [],
         autoNodeExtraCaCerts: undefined,
       }),

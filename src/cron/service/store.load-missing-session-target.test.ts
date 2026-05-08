@@ -61,7 +61,7 @@ describe("cron service store load: missing sessionTarget", () => {
       message: "watch dbus",
       toolsAllow: ["exec"],
     });
-    expect(job.state.nextRunAtMs).toEqual(expect.any(Number));
+    expect(job.state.nextRunAtMs).toBeGreaterThan(STORE_TEST_NOW);
     expect(assertSupportedJobSpec(job)).toBeUndefined();
   });
 

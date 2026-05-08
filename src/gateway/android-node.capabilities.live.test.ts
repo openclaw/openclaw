@@ -238,7 +238,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("sms.search", payload);
-      expect(typeof obj.count === "number" || typeof obj.count === "string").toBe(true);
+      expect(["number", "string"]).toContain(typeof obj.count);
       expect(Array.isArray(obj.messages)).toBe(true);
     },
   },

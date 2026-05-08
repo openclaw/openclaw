@@ -540,10 +540,27 @@ const DiscordVoiceAutoJoinSchema = z
   })
   .strict();
 
+const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
+const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
+const DiscordVoiceRealtimeSchema = z
+  .object({
+    provider: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    voice: z.string().min(1).optional(),
+    instructions: z.string().min(1).optional(),
+    toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
+    consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
+    debounceMs: z.number().int().positive().max(10_000).optional(),
+    providers: z.record(z.string(), z.record(z.string(), z.unknown()).optional()).optional(),
+  })
+  .strict();
+
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
+    mode: z.enum(["stt-tts", "talk-buffer", "bidi"]).optional(),
     model: z.string().min(1).optional(),
+    realtime: DiscordVoiceRealtimeSchema.optional(),
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),

@@ -74,7 +74,8 @@ function getDispatcherClassName(value: unknown): string | null {
 }
 
 function expectDispatcherAttached(value: unknown): void {
-  expect(value).toEqual(expect.any(Object));
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
 }
 
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
