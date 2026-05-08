@@ -139,8 +139,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected closed = false;
   protected dirty = false;
   protected sessionsDirty = false;
-  protected sessionsDirtyFiles = new Set<string>();
-  protected sessionPendingFiles = new Set<string>();
+  protected dirtySessionTranscripts = new Set<string>();
+  protected pendingSessionTranscripts = new Set<string>();
   protected sessionDeltas = new Map<
     string,
     { lastSize: number; lastMessages: number; pendingBytes: number; pendingMessages: number }

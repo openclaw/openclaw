@@ -9,17 +9,17 @@ type TargetedSyncProgress = {
 };
 
 export function clearMemorySyncedSessionTranscripts(params: {
-  sessionsDirtyFiles: Set<string>;
+  dirtySessionTranscripts: Set<string>;
   targetSessionTranscripts?: Iterable<string> | null;
 }): boolean {
   if (!params.targetSessionTranscripts) {
-    params.sessionsDirtyFiles.clear();
+    params.dirtySessionTranscripts.clear();
   } else {
     for (const targetSessionTranscript of params.targetSessionTranscripts) {
-      params.sessionsDirtyFiles.delete(targetSessionTranscript);
+      params.dirtySessionTranscripts.delete(targetSessionTranscript);
     }
   }
-  return params.sessionsDirtyFiles.size > 0;
+  return params.dirtySessionTranscripts.size > 0;
 }
 
 export async function runMemoryTargetedSessionSync(params: {
@@ -28,7 +28,7 @@ export async function runMemoryTargetedSessionSync(params: {
   reason?: string;
   progress?: TargetedSyncProgress;
   useUnsafeReindex: boolean;
-  sessionsDirtyFiles: Set<string>;
+  dirtySessionTranscripts: Set<string>;
   syncSessionTranscripts: (params: {
     needsFullReindex: boolean;
     targetSessionTranscripts?: string[];
@@ -50,7 +50,7 @@ export async function runMemoryTargetedSessionSync(params: {
   if (!params.hasSessionSource || !params.targetSessionTranscripts) {
     return {
       handled: false,
-      sessionsDirty: params.sessionsDirtyFiles.size > 0,
+      sessionsDirty: params.dirtySessionTranscripts.size > 0,
     };
   }
 
@@ -63,7 +63,7 @@ export async function runMemoryTargetedSessionSync(params: {
     return {
       handled: true,
       sessionsDirty: clearMemorySyncedSessionTranscripts({
-        sessionsDirtyFiles: params.sessionsDirtyFiles,
+        dirtySessionTranscripts: params.dirtySessionTranscripts,
         targetSessionTranscripts: params.targetSessionTranscripts,
       }),
     };
@@ -86,7 +86,7 @@ export async function runMemoryTargetedSessionSync(params: {
     }
     return {
       handled: true,
-      sessionsDirty: params.sessionsDirtyFiles.size > 0,
+      sessionsDirty: params.dirtySessionTranscripts.size > 0,
     };
   }
 }

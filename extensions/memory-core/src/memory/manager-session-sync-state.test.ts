@@ -7,7 +7,7 @@ describe("memory session sync state", () => {
       needsFullReindex: false,
       files: ["/tmp/a.jsonl", "/tmp/b.jsonl"],
       targetSessionTranscripts: null,
-      sessionsDirtyFiles: new Set(),
+      dirtySessionTranscripts: new Set(),
       existingRows: [
         { path: "sessions/a.jsonl", hash: "hash-a" },
         { path: "sessions/b.jsonl", hash: "hash-b" },
@@ -34,7 +34,7 @@ describe("memory session sync state", () => {
       needsFullReindex: false,
       files: ["/tmp/targeted-first.jsonl"],
       targetSessionTranscripts: new Set(["/tmp/targeted-first.jsonl"]),
-      sessionsDirtyFiles: new Set(["/tmp/targeted-first.jsonl"]),
+      dirtySessionTranscripts: new Set(["/tmp/targeted-first.jsonl"]),
       existingRows: [
         { path: "sessions/targeted-first.jsonl", hash: "hash-first" },
         { path: "sessions/targeted-second.jsonl", hash: "hash-second" },
@@ -53,7 +53,7 @@ describe("memory session sync state", () => {
       needsFullReindex: false,
       files: ["/tmp/incremental.jsonl"],
       targetSessionTranscripts: null,
-      sessionsDirtyFiles: new Set(["/tmp/incremental.jsonl"]),
+      dirtySessionTranscripts: new Set(["/tmp/incremental.jsonl"]),
       existingRows: [],
       sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
     });

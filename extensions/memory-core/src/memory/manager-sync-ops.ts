@@ -176,8 +176,8 @@ export abstract class MemoryManagerSyncOps {
   protected closed = false;
   protected dirty = false;
   protected sessionsDirty = false;
-  protected sessionsDirtyFiles = new Set<string>();
-  protected sessionPendingFiles = new Set<string>();
+  protected dirtySessionTranscripts = new Set<string>();
+  protected pendingSessionTranscripts = new Set<string>();
   protected sessionDeltas = new Map<
     string,
     { lastSize: number; lastMessages: number; pendingBytes: number; pendingMessages: number }
@@ -475,7 +475,7 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private scheduleSessionDirty(sessionTranscript: string) {
-    this.sessionPendingFiles.add(sessionTranscript);
+    this.pendingSessionTranscripts.add(sessionTranscript);
     if (this.sessionWatchTimer) {
       return;
     }
@@ -488,11 +488,11 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private async processSessionDeltaBatch(): Promise<void> {
-    if (this.sessionPendingFiles.size === 0) {
+    if (this.pendingSessionTranscripts.size === 0) {
       return;
     }
-    const pending = Array.from(this.sessionPendingFiles);
-    this.sessionPendingFiles.clear();
+    const pending = Array.from(this.pendingSessionTranscripts);
+    this.pendingSessionTranscripts.clear();
     let shouldSync = false;
     for (const sessionTranscript of pending) {
       const delta = await this.updateSessionDelta(sessionTranscript);
@@ -510,7 +510,7 @@ export abstract class MemoryManagerSyncOps {
       if (!bytesHit && !messagesHit) {
         continue;
       }
-      this.sessionsDirtyFiles.add(sessionTranscript);
+      this.dirtySessionTranscripts.add(sessionTranscript);
       this.sessionsDirty = true;
       delta.pendingBytes =
         bytesThreshold > 0 ? Math.max(0, delta.pendingBytes - bytesThreshold) : 0;
@@ -642,7 +642,7 @@ export abstract class MemoryManagerSyncOps {
     return shouldSyncSessionsForReindex({
       hasSessionSource: this.sources.has("sessions"),
       sessionsDirty: this.sessionsDirty,
-      dirtySessionTranscriptCount: this.sessionsDirtyFiles.size,
+      dirtySessionTranscriptCount: this.dirtySessionTranscripts.size,
       sync: params,
       needsFullReindex,
     });
@@ -778,7 +778,7 @@ export abstract class MemoryManagerSyncOps {
       needsFullReindex: params.needsFullReindex,
       files,
       targetSessionTranscripts,
-      sessionsDirtyFiles: this.sessionsDirtyFiles,
+      dirtySessionTranscripts: this.dirtySessionTranscripts,
       existingRows: targetSessionTranscripts
         ? null
         : loadMemorySourceFileState({
@@ -791,8 +791,8 @@ export abstract class MemoryManagerSyncOps {
     log.debug("memory sync: indexing session transcripts", {
       files: files.length,
       indexAll,
-      dirtyFiles: this.sessionsDirtyFiles.size,
-      targetedFiles: targetSessionTranscripts?.size ?? 0,
+      dirtyTranscripts: this.dirtySessionTranscripts.size,
+      targetedTranscripts: targetSessionTranscripts?.size ?? 0,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
@@ -808,7 +808,7 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+      if (!indexAll && !this.dirtySessionTranscripts.has(absPath)) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -950,7 +950,7 @@ export abstract class MemoryManagerSyncOps {
       useUnsafeReindex:
         process.env.OPENCLAW_TEST_FAST === "1" &&
         process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
-      sessionsDirtyFiles: this.sessionsDirtyFiles,
+      dirtySessionTranscripts: this.dirtySessionTranscripts,
       syncSessionTranscripts: async (targetedParams) => {
         await this.syncSessionTranscripts(targetedParams);
       },
@@ -1021,8 +1021,8 @@ export abstract class MemoryManagerSyncOps {
           progress: progress ?? undefined,
         });
         this.sessionsDirty = false;
-        this.sessionsDirtyFiles.clear();
-      } else if (this.sessionsDirtyFiles.size > 0) {
+        this.dirtySessionTranscripts.clear();
+      } else if (this.dirtySessionTranscripts.size > 0) {
         this.sessionsDirty = true;
       } else {
         this.sessionsDirty = false;
@@ -1183,8 +1183,8 @@ export abstract class MemoryManagerSyncOps {
               progress: params.progress,
             });
             this.sessionsDirty = false;
-            this.sessionsDirtyFiles.clear();
-          } else if (this.sessionsDirtyFiles.size > 0) {
+            this.dirtySessionTranscripts.clear();
+          } else if (this.dirtySessionTranscripts.size > 0) {
             this.sessionsDirty = true;
           } else {
             this.sessionsDirty = false;
@@ -1263,8 +1263,8 @@ export abstract class MemoryManagerSyncOps {
     if (shouldSyncSessions) {
       await this.syncSessionTranscripts({ needsFullReindex: true, progress: params.progress });
       this.sessionsDirty = false;
-      this.sessionsDirtyFiles.clear();
-    } else if (this.sessionsDirtyFiles.size > 0) {
+      this.dirtySessionTranscripts.clear();
+    } else if (this.dirtySessionTranscripts.size > 0) {
       this.sessionsDirty = true;
     } else {
       this.sessionsDirty = false;
@@ -1307,7 +1307,7 @@ export abstract class MemoryManagerSyncOps {
     this.ensureSchema();
     this.dropVectorTable();
     this.vector.dims = undefined;
-    this.sessionsDirtyFiles.clear();
+    this.dirtySessionTranscripts.clear();
   }
 
   protected readMeta(): MemoryIndexMeta | null {
