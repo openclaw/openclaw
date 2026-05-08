@@ -221,6 +221,9 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
   job_json TEXT NOT NULL,
+  state_json TEXT NOT NULL DEFAULT '{}',
+  runtime_updated_at_ms INTEGER,
+  schedule_identity TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (store_key, job_id)

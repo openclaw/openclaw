@@ -112,7 +112,10 @@ export interface Commitments {
 export interface CronJobs {
   job_id: string;
   job_json: string;
+  runtime_updated_at_ms: number | null;
+  schedule_identity: string | null;
   sort_order: Generated<number>;
+  state_json: Generated<string>;
   store_key: string;
   updated_at: number;
 }
