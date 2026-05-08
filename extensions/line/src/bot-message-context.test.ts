@@ -28,7 +28,6 @@ const lineBindingsPlugin = {
 
 describe("buildLineMessageContext", () => {
   let tmpDir: string;
-  let storePath: string;
   let cfg: OpenClawConfig;
   const account: ResolvedLineAccount = {
     accountId: "default",
@@ -83,8 +82,7 @@ describe("buildLineMessageContext", () => {
     );
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-context-"));
-    storePath = path.join(tmpDir, "sessions.json");
-    cfg = { session: { store: storePath } };
+    cfg = { session: {} };
   });
 
   afterEach(async () => {
@@ -249,7 +247,7 @@ describe("buildLineMessageContext", () => {
   it("group peer binding matches raw groupId without prefix (#21907)", async () => {
     const groupId = "Cc7e3bece1234567890abcdef"; // pragma: allowlist secret
     const bindingCfg: OpenClawConfig = {
-      session: { store: storePath },
+      session: {},
       agents: {
         list: [{ id: "main" }, { id: "line-group-agent" }],
       },
@@ -286,7 +284,7 @@ describe("buildLineMessageContext", () => {
   it("room peer binding matches raw roomId without prefix (#21907)", async () => {
     const roomId = "Rr1234567890abcdef";
     const bindingCfg: OpenClawConfig = {
-      session: { store: storePath },
+      session: {},
       agents: {
         list: [{ id: "main" }, { id: "line-room-agent" }],
       },
