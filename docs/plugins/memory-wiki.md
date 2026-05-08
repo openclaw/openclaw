@@ -236,14 +236,9 @@ claims:
 
 ## Compile pipeline
 
-The compile step reads wiki pages, normalizes summaries, and emits stable
-machine-facing artifacts under:
-
-- `.openclaw-wiki/cache/agent-digest.json`
-- `.openclaw-wiki/cache/claims.jsonl`
-
-These digests exist so agents and runtime code do not have to scrape Markdown
-pages.
+The compile step reads wiki pages, normalizes summaries, and stores stable
+machine-facing digests in SQLite plugin state. These digests exist so agents
+and runtime code do not have to scrape Markdown pages.
 
 Compiled output also powers:
 
@@ -353,7 +348,7 @@ plugin supports corpus selection.
 ## Prompt and context behavior
 
 When `context.includeCompiledDigestPrompt` is enabled, memory prompt sections
-append a compact compiled snapshot from `agent-digest.json`.
+append a compact compiled snapshot from SQLite plugin state.
 
 That snapshot is intentionally small and high-signal:
 

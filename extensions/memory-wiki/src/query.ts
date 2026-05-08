@@ -17,6 +17,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
+import { readMemoryWikiCompiledDigestBundle } from "./digest-state.js";
 import {
   parseWikiMarkdown,
   toWikiPageSummary,
@@ -27,8 +28,6 @@ import {
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
-const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
-const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
 const RELATED_BLOCK_PATTERN =
   /<!-- openclaw:wiki:related:start -->[\s\S]*?<!-- openclaw:wiki:related:end -->/g;
 const MARKDOWN_FRONTMATTER_PATTERN = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -286,10 +285,8 @@ function parseClaimsDigest(raw: string): QueryDigestClaim[] {
 }
 
 async function readQueryDigestBundle(rootDir: string): Promise<QueryDigestBundle | null> {
-  const [agentDigestRaw, claimsDigestRaw] = await Promise.all([
-    fs.readFile(path.join(rootDir, AGENT_DIGEST_PATH), "utf8").catch(() => null),
-    fs.readFile(path.join(rootDir, CLAIMS_DIGEST_PATH), "utf8").catch(() => null),
-  ]);
+  const { agentDigest: agentDigestRaw, claimsDigest: claimsDigestRaw } =
+    await readMemoryWikiCompiledDigestBundle(rootDir);
   if (!agentDigestRaw && !claimsDigestRaw) {
     return null;
   }

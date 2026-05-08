@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -44,6 +45,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
+let previousStateDir: string | undefined;
 
 function collectWikiResultPaths(results: readonly { corpus: string; path: string }[]): string[] {
   const paths: string[] = [];
@@ -66,9 +68,17 @@ beforeEach(() => {
 
 beforeAll(async () => {
   suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-query-suite-"));
+  previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(suiteRoot, "state");
 });
 
 afterAll(async () => {
+  resetPluginBlobStoreForTests();
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
   if (suiteRoot) {
     await fs.rm(suiteRoot, { recursive: true, force: true });
   }
