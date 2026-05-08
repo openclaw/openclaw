@@ -356,7 +356,7 @@ describe("createTelegramBot", () => {
     });
 
     const events: string[] = [];
-    let releaseTopicTurn!: () => void;
+    let releaseTopicTurn: (() => void) | undefined;
     const topicGate = new Promise<void>((resolve) => {
       releaseTopicTurn = resolve;
     });
@@ -395,6 +395,9 @@ describe("createTelegramBot", () => {
 
     expect(events).toEqual(["busy:start", "status"]);
 
+    if (!releaseTopicTurn) {
+      throw new Error("Expected Telegram topic turn release callback to be initialized");
+    }
     releaseTopicTurn();
     await busyPromise;
     expect(events).toEqual(["busy:start", "status", "busy:end"]);
@@ -413,7 +416,7 @@ describe("createTelegramBot", () => {
     });
 
     const startedBodies: string[] = [];
-    let releaseFirstTurn!: () => void;
+    let releaseFirstTurn: (() => void) | undefined;
     const firstTurnGate = new Promise<void>((resolve) => {
       releaseFirstTurn = resolve;
     });
@@ -470,6 +473,9 @@ describe("createTelegramBot", () => {
     expect(startedBodies[0]).toContain("first message");
     expect(sendMessageSpy).not.toHaveBeenCalled();
 
+    if (!releaseFirstTurn) {
+      throw new Error("Expected first Telegram turn release callback to be initialized");
+    }
     releaseFirstTurn();
     await Promise.all([firstPromise, secondPromise]);
 
@@ -523,7 +529,7 @@ describe("createTelegramBot", () => {
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const startedBodies: string[] = [];
-    let releaseFirstRun!: () => void;
+    let releaseFirstRun: (() => void) | undefined;
     const firstRunGate = new Promise<void>((resolve) => {
       releaseFirstRun = resolve;
     });
@@ -617,6 +623,9 @@ describe("createTelegramBot", () => {
       expect(startedBodies).toHaveLength(1);
       expect(sendMessageSpy).not.toHaveBeenCalled();
 
+      if (!releaseFirstRun) {
+        throw new Error("Expected first Telegram run release callback to be initialized");
+      }
       releaseFirstRun();
       await Promise.all([firstFlush, secondFlush]);
 

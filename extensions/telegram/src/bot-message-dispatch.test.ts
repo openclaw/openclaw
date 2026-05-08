@@ -1304,11 +1304,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("does not supersede the same session for unauthorized abort-looking commands", async () => {
-    let releaseFirstFinal!: () => void;
+    let releaseFirstFinal: (() => void) | undefined;
     const firstFinalGate = new Promise<void>((resolve) => {
       releaseFirstFinal = resolve;
     });
-    let resolveStreamVisible!: () => void;
+    let resolveStreamVisible: (() => void) | undefined;
     const streamVisible = new Promise<void>((resolve) => {
       resolveStreamVisible = resolve;
     });
@@ -1317,6 +1317,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       messageId: 1001,
       onUpdate: (text) => {
         if (text === "Old reply partial") {
+          if (!resolveStreamVisible) {
+            throw new Error("Expected Telegram stream-visible resolver to be initialized");
+          }
           resolveStreamVisible();
         }
       },
@@ -1367,6 +1370,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await unauthorizedReplyDelivered;
 
+    if (!releaseFirstFinal) {
+      throw new Error("Expected first Telegram final release callback to be initialized");
+    }
     releaseFirstFinal();
     await Promise.all([firstPromise, unauthorizedPromise]);
 
