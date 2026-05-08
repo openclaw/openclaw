@@ -4282,7 +4282,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
 
-    expect(registry.services.filter((entry) => entry.service.id === "shared-service")).toHaveLength(
+    expect(countMatching(registry.services, (entry) => entry.service.id === "shared-service")).toBe(
       1,
     );
     expectNoDiagnosticContaining({

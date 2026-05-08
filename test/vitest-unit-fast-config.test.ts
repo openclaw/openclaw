@@ -20,6 +20,16 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
   return config.test as NonNullable<T["test"]>;
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("unit-fast vitest lane", () => {
   it("runs cache-friendly tests without the reset-heavy runner or runtime setup", () => {
     const config = createUnitFastVitestConfig({});
@@ -122,7 +132,7 @@ describe("unit-fast vitest lane", () => {
 
     expect(currentCandidates.length).toBeGreaterThanOrEqual(unitFastTestFiles.length);
     expect(broadCandidates.length).toBeGreaterThan(currentCandidates.length);
-    expect(broadAnalysis.filter((entry) => entry.unitFast).length).toBeGreaterThan(
+    expect(countMatching(broadAnalysis, (entry) => entry.unitFast)).toBeGreaterThan(
       unitFastTestFiles.length,
     );
   });
