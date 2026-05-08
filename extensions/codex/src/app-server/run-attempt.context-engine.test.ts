@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { SessionManager } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  appendSqliteSessionTranscriptEvent,
   embeddedAgentLog,
+  SessionManager,
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -343,9 +344,18 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     );
     const bootstrap = vi.fn(
       async ({ sessionFile: file }: Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]) => {
-        SessionManager.open(file).appendMessage(
-          assistantMessage("bootstrap context", Date.now() + 1) as never,
-        );
+        appendSqliteSessionTranscriptEvent({
+          agentId: "main",
+          sessionId: "session-1",
+          transcriptPath: file,
+          event: {
+            type: "message",
+            id: "bootstrap-context",
+            parentId: "entry-1",
+            timestamp: new Date(Date.now() + 1).toISOString(),
+            message: assistantMessage("bootstrap context", Date.now() + 1),
+          },
+        });
         return { bootstrapped: true };
       },
     );
