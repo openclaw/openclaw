@@ -587,10 +587,13 @@ describe("session.message websocket events", () => {
         main: {
           sessionId: "sess-thread",
           updatedAt: Date.now(),
-          lastChannel: "telegram",
-          lastTo: "-100123",
-          lastAccountId: "acct-1",
-          lastThreadId: 42,
+          channel: "telegram",
+          deliveryContext: {
+            channel: "telegram",
+            to: "-100123",
+            accountId: "acct-1",
+            threadId: 42,
+          },
         },
       },
     });
@@ -617,18 +620,22 @@ describe("session.message websocket events", () => {
       });
       expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
-        lastChannel: "telegram",
-        lastTo: "-100123",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+          accountId: "acct-1",
+          threadId: "42",
+        },
       });
       expectRecordFields(changedEvent.payload, {
         sessionKey: "agent:main:main",
         phase: "message",
-        lastChannel: "telegram",
-        lastTo: "-100123",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+          accountId: "acct-1",
+          threadId: "42",
+        },
       });
     });
   });
