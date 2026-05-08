@@ -112,7 +112,8 @@ describe("unit vitest config", () => {
 
   it("adds the OpenClaw runtime setup hooks on top of the base setup", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(normalizeConfigPaths(unitConfig.test?.setupFiles)).toEqual([
+    const testConfig = requireTestConfig(unitConfig);
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
@@ -125,21 +126,23 @@ describe("unit vitest config", () => {
         extraExcludePatterns: ["src/security/**"],
       },
     );
-    expect(unitConfig.test?.exclude).toEqual(
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.exclude).toEqual(
       expect.arrayContaining(["src/commands/**", "src/config/**", "src/security/**"]),
     );
   });
 
   it("scopes default coverage to source files owned by the unit lane", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(unitConfig.test?.coverage?.include).toEqual(
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.coverage?.include).toEqual(
       expect.arrayContaining([
         "src/commitments/runtime.ts",
         "src/media-generation/runtime-shared.ts",
         "src/web-search/runtime.ts",
       ]),
     );
-    expect(unitConfig.test?.coverage?.include).not.toEqual(
+    expect(testConfig.coverage?.include).not.toEqual(
       expect.arrayContaining(["src/markdown/render.ts", "src/security/audit-workspace-skills.ts"]),
     );
   });
