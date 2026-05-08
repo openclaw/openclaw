@@ -526,7 +526,12 @@ describe("config io write prepare", () => {
     expect(channels?.imessage).not.toHaveProperty("runtimeOnlyDefault");
   });
 
-  it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {
+  it("does not reintroduce legacy nested dm.policy defaults when caller declares unsetPaths", () => {
+    // After catalog #5/#17 fix: absent keys are preserved by default. Callers that
+    // intentionally remove a key (e.g. doctor migrations removing dm.policy) must
+    // declare the path via unsetPaths so resolvePersistCandidateForWrite applies
+    // the deletion explicitly. Without unsetPaths the field would survive (expected
+    // after the fix, since preservation is now the default behavior).
     const sourceConfig: OpenClawConfig = {
       channels: {
         discord: {
@@ -551,6 +556,11 @@ describe("config io write prepare", () => {
       runtimeConfig: sourceConfig,
       sourceConfig,
       nextConfig,
+      // Explicit unsetPaths required to delete these legacy keys (Candidate 1).
+      unsetPaths: [
+        ["channels", "discord", "dm", "policy"],
+        ["channels", "slack", "dm", "policy"],
+      ],
     }) as {
       channels?: {
         discord?: { dm?: Record<string, unknown>; dmPolicy?: unknown };

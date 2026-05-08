@@ -25,7 +25,9 @@ export function createMergePatch(base: unknown, target: unknown): unknown {
     const hasBase = key in base;
     const hasTarget = key in target;
     if (!hasTarget) {
-      patch[key] = null;
+      // Absent in target means "caller didn't touch this key" — preserve it.
+      // Callers that want explicit deletion must pass the path via `unsetPaths`
+      // through resolvePersistCandidateForWrite (Candidate 1 fix, catalog #5/#17).
       continue;
     }
     const targetValue = target[key];
@@ -297,13 +299,26 @@ export function resolvePersistCandidateForWrite(params: {
     nextConfig: params.nextConfig,
     persistedCandidate: persisted,
   });
-  return preserveAuthoredAgentParams({
+  const withAgentParams = preserveAuthoredAgentParams({
     sourceConfig: params.sourceConfig,
     nextConfig: params.nextConfig,
     rootAuthoredConfig,
     persistedCandidate: withSchema,
     unsetPaths: params.unsetPaths,
   });
+  // Apply explicit unsetPaths deletions inline. Since createMergePatch no longer
+  // emits null for absent keys (catalog #5/#17 fix), callers that want deletion
+  // must declare the path via unsetPaths. We apply those deletions here using
+  // deletePathValue (no parent pruning) so the result shape stays intact.
+  // The IO layer's own applyUnsetPathsForWrite call is complementary and handles
+  // managed paths (e.g. plugins.installs) that callers do not enumerate.
+  let result: unknown = withAgentParams;
+  for (const unsetPath of params.unsetPaths ?? []) {
+    if (Array.isArray(unsetPath) && unsetPath.length > 0) {
+      result = deletePathValue(result, unsetPath);
+    }
+  }
+  return result;
 }
 
 function readRootSchemaUri(value: unknown): string | undefined {

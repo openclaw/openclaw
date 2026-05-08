@@ -62,15 +62,16 @@ describe("deliveryMode persistence (catalog #5/#17)", () => {
     // These probes pinpoint createMergePatch / applyMergePatch behavior
     // around the optional acp.stream.deliveryMode field.
 
-    it("createMergePatch from base-with-deliveryMode to target-without sets it null (drop site)", () => {
+    it("createMergePatch from base-with-deliveryMode to target-without omits acp (preservation fix)", () => {
       const base = makeAcpStreamConfig();
       const target: OpenClawConfig = { gateway: { mode: "local" } };
 
       const patch = createMergePatch(base, target);
 
-      // io.write-prepare.ts:26-28: `if (!hasTarget) { patch[key] = null; }`
-      // The whole `acp` subtree gets nulled when the target lacks it.
-      expect(patch).toMatchObject({ acp: null });
+      // After catalog #5/#17 fix: absent-in-target keys are skipped (not nulled).
+      // The patch contains only the fields explicitly present in target; absent
+      // keys are preserved when the patch is applied to the source config.
+      expect((patch as Record<string, unknown>).acp).toBeUndefined();
     });
 
     it("applyMergePatch deletes acp when patch sets it to null", () => {
