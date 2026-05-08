@@ -40,7 +40,12 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
   );
 
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return registerProviderMock.mock.calls[0]?.[0];
+  const firstCall = registerProviderMock.mock.calls.at(0);
+  expect(firstCall).toBeDefined();
+  if (!firstCall) {
+    throw new Error("expected huggingface provider registration");
+  }
+  return firstCall[0];
 }
 
 describe("huggingface plugin", () => {
