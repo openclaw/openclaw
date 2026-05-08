@@ -152,4 +152,47 @@ describe("security audit trust model findings", () => {
       testCase.assert();
     }
   });
+
+  it("flags open dmPolicy when elevated tools are enabled", () => {
+    const findings = audit({
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          groupPolicy: "disabled",
+        },
+      },
+      tools: { elevated: { enabled: true } },
+    } satisfies OpenClawConfig);
+
+    const finding = findings.find(
+      (entry) => entry.checkId === "security.exposure.open_groups_with_elevated",
+    );
+    expect(finding?.severity).toBe("critical");
+    expect(finding?.title).toContain("DM/group");
+    expect(finding?.detail).toContain("channels.feishu.dmPolicy");
+    expect(finding?.detail).not.toContain("channels.feishu.groupPolicy");
+  });
+
+  it("flags open account dmPolicy when runtime/filesystem tools are exposed without guards", () => {
+    const findings = audit({
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          accounts: {
+            support: {
+              dmPolicy: "open",
+            },
+          },
+        },
+      },
+      tools: { elevated: { enabled: false } },
+    } satisfies OpenClawConfig);
+
+    const finding = findings.find(
+      (entry) => entry.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+    );
+    expect(finding?.severity).toBe("critical");
+    expect(finding?.detail).toContain("channels.whatsapp.accounts.support.dmPolicy");
+    expect(finding?.detail).toContain("agents.defaults");
+  });
 });
