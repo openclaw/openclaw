@@ -4,10 +4,15 @@ import { z } from "openclaw/plugin-sdk/zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET = randomBytes(32);
-const CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
+const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
+const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
+type CodexAppServerDefaultPolicy = {
+  mode: CodexAppServerPolicyMode;
+  sandbox?: CodexAppServerSandboxMode;
+};
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerEffectiveApprovalPolicy =
   | CodexAppServerApprovalPolicy
@@ -310,6 +315,7 @@ export function resolveCodexAppServerRuntimeOptions(
     requirementsToml?: string | null;
     requirementsPath?: string;
     readRequirementsFile?: (path: string) => string | undefined;
+    platform?: NodeJS.Platform;
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
@@ -330,14 +336,17 @@ export function resolveCodexAppServerRuntimeOptions(
   const url = readNonEmptyString(config.url);
   const explicitPolicyMode =
     resolvePolicyMode(config.mode) ?? resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
-  const policyMode =
-    explicitPolicyMode ??
-    resolveDefaultCodexAppServerPolicyMode({
-      transport,
-      requirementsToml: params.requirementsToml,
-      requirementsPath: params.requirementsPath,
-      readRequirementsFile: params.readRequirementsFile,
-    });
+  const defaultPolicy = explicitPolicyMode
+    ? undefined
+    : resolveDefaultCodexAppServerPolicy({
+        transport,
+        env,
+        requirementsToml: params.requirementsToml,
+        requirementsPath: params.requirementsPath,
+        readRequirementsFile: params.readRequirementsFile,
+        platform: params.platform,
+      });
+  const policyMode = explicitPolicyMode ?? defaultPolicy?.mode ?? "yolo";
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
@@ -368,6 +377,7 @@ export function resolveCodexAppServerRuntimeOptions(
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
+      defaultPolicy?.sandbox ??
       (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
@@ -513,40 +523,44 @@ function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined
   return value === "guardian" || value === "yolo" ? value : undefined;
 }
 
-function resolveDefaultCodexAppServerPolicyMode(params: {
+function resolveDefaultCodexAppServerPolicy(params: {
   transport: CodexAppServerTransportMode;
+  env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
   requirementsPath?: string;
   readRequirementsFile?: (path: string) => string | undefined;
-}): CodexAppServerPolicyMode {
+  platform?: NodeJS.Platform;
+}): CodexAppServerDefaultPolicy {
   if (params.transport !== "stdio") {
-    return "yolo";
+    return { mode: "yolo" };
   }
-  return codexRequirementsAllowDangerFullAccess(params) ? "yolo" : "guardian";
-}
-
-function codexRequirementsAllowDangerFullAccess(params: {
-  requirementsToml?: string | null;
-  requirementsPath?: string;
-  readRequirementsFile?: (path: string) => string | undefined;
-}): boolean {
   const content = readCodexRequirementsToml(params);
   if (content === undefined) {
-    return true;
+    return { mode: "yolo" };
   }
   const allowedSandboxModes = parseAllowedSandboxModesFromCodexRequirements(content);
-  return allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
+  if (allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access")) {
+    return { mode: "yolo" };
+  }
+  return {
+    mode: "guardian",
+    sandbox: allowedSandboxModes.has("workspace-write") ? "workspace-write" : "read-only",
+  };
 }
 
 function readCodexRequirementsToml(params: {
+  env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
   requirementsPath?: string;
   readRequirementsFile?: (path: string) => string | undefined;
+  platform?: NodeJS.Platform;
 }): string | undefined {
   if (params.requirementsToml !== undefined) {
     return params.requirementsToml ?? undefined;
   }
-  const path = readNonEmptyString(params.requirementsPath) ?? CODEX_REQUIREMENTS_PATH;
+  const path =
+    readNonEmptyString(params.requirementsPath) ??
+    resolveCodexRequirementsPath(params.env ?? process.env, params.platform ?? process.platform);
   try {
     if (params.readRequirementsFile) {
       return params.readRequirementsFile(path);
@@ -557,23 +571,36 @@ function readCodexRequirementsToml(params: {
   }
 }
 
+function resolveCodexRequirementsPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  if (platform === "win32") {
+    const programData = readNonEmptyString(env.ProgramData) ?? "C:\\ProgramData";
+    return `${programData.replace(/[\\/]+$/, "")}${WINDOWS_CODEX_REQUIREMENTS_SUFFIX}`;
+  }
+  return UNIX_CODEX_REQUIREMENTS_PATH;
+}
+
 function parseAllowedSandboxModesFromCodexRequirements(
   content: string,
 ): Set<CodexAppServerSandboxMode> | undefined {
-  const match = content.match(/(?:^|\n)\s*allowed_sandbox_modes\s*=\s*\[([\s\S]*?)\]/);
+  const topLevelContent = stripTomlLineComments(content).slice(0, firstTomlTableOffset(content));
+  const match = topLevelContent.match(/(?:^|\n)\s*allowed_sandbox_modes\s*=\s*\[([\s\S]*?)\]/);
   if (!match) {
     return undefined;
   }
-  const arrayBody = stripTomlLineComments(match[1] ?? "");
+  const arrayBody = match[1] ?? "";
   const stringMatches = [...arrayBody.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'/g)];
   if (stringMatches.length === 0 && arrayBody.trim().length > 0) {
     return undefined;
   }
-  return new Set(
-    stringMatches
-      .map((entry) => normalizeRequirementsSandboxMode(entry[1] ?? entry[2] ?? ""))
-      .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined),
-  );
+  const normalizedModes = stringMatches
+    .map((entry) => normalizeRequirementsSandboxMode(entry[1] ?? entry[2] ?? ""))
+    .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined);
+  return normalizedModes.length > 0 ? new Set(normalizedModes) : undefined;
+}
+
+function firstTomlTableOffset(content: string): number {
+  const match = content.match(/^\s*\[[^\]\n]/m);
+  return match?.index ?? content.length;
 }
 
 function stripTomlLineComments(value: string): string {

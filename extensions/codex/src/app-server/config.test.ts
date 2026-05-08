@@ -176,6 +176,21 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("uses read-only sandbox for guardian defaults when requirements only allow read-only", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: 'allowed_sandbox_modes = ["read-only"]\n',
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "read-only",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
   it("ignores quoted sandbox modes inside requirements comments", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {},
@@ -196,6 +211,24 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("ignores remote-only sandbox requirements when resolving local stdio defaults", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: `[[remote_sandbox_config]]
+hostname = "managed.example.com"
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+`,
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
   it("reads local requirements policy from the configured requirements path", () => {
     const readPaths: string[] = [];
     const runtime = resolveCodexAppServerRuntimeOptions({
@@ -209,6 +242,28 @@ describe("Codex app-server config", () => {
     });
 
     expect(readPaths).toEqual(["/custom/codex/requirements.toml"]);
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
+  it("reads local requirements policy from the Codex Windows requirements path", () => {
+    const readPaths: string[] = [];
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: { ProgramData: "D:\\ManagedData" },
+      platform: "win32",
+      readRequirementsFile: (path) => {
+        readPaths.push(path);
+        return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
+      },
+    });
+
+    expect(readPaths).toEqual(["D:\\ManagedData\\OpenAI\\Codex\\requirements.toml"]);
     expect(runtime).toEqual(
       expect.objectContaining({
         approvalPolicy: "on-request",
