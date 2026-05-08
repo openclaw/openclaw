@@ -93,13 +93,15 @@ The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams Ap
       appId: "<CLIENT_ID>",
       appPassword: "<CLIENT_SECRET>",
       tenantId: "<TENANT_ID>",
-      webhook: { host: "127.0.0.1", port: 3978, path: "/api/messages" },
+      webhook: { port: 3978, path: "/api/messages" },
     },
   },
 }
 ```
 
 Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`.
+
+Set `webhook.host: "127.0.0.1"` only when a same-host tunnel or reverse proxy forwards Teams traffic to the gateway.
 
 **5. Install the app in Teams**
 

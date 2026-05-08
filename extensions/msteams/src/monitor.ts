@@ -241,7 +241,9 @@ export async function monitorMSTeamsProvider(
   const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreFs();
   const pollStore = opts.pollStore ?? createMSTeamsPollStoreFs();
 
-  log.info(`starting provider (${host ?? "0.0.0.0"}:${port})`);
+  const bindTarget = host ? `${host}:${port}` : `default interface:${port}`;
+
+  log.info(`starting provider (${bindTarget})`);
 
   // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
@@ -375,7 +377,7 @@ export async function monitorMSTeamsProvider(
   await new Promise<void>((resolve, reject) => {
     const onListening = () => {
       httpServer.off("error", onError);
-      log.info(`msteams provider started on ${host ?? "0.0.0.0"}:${port}`);
+      log.info(`msteams provider started on ${bindTarget}`);
       resolve();
     };
     const onError = (err: unknown) => {
