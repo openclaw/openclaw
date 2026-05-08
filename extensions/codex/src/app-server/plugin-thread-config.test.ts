@@ -393,9 +393,7 @@ describe("Codex plugin thread config", () => {
     });
     expect(config.diagnostics).toEqual([]);
     expect(request.mock.calls.map(([method]) => method)).toContain("plugin/install");
-    expect(request.mock.calls.filter(([method]) => method === "app/list").length).toBeGreaterThan(
-      0,
-    );
+    expect(request.mock.calls.some(([method]) => method === "app/list")).toBe(true);
     expect(appListParams.map((params) => params.forceRefetch)).toContain(true);
   });
 
