@@ -398,6 +398,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - Path override handling now treats literal `undefined`/`null` environment
   values as unset, preventing accidental repo-root `undefined/state/*.sqlite`
   databases during tests or shell handoffs.
+- Config health fingerprints now use shared SQLite KV instead of
+  `logs/config-health.json`, keeping the normal config file as the only
+  non-credential configuration document.
 - Voice Wake trigger and routing settings now use shared SQLite KV instead of
   `settings/voicewake.json` and `settings/voicewake-routing.json`; doctor imports
   the legacy JSON files and removes them after a successful migration.
@@ -477,9 +480,9 @@ The remaining cleanup is mostly consolidation and deletion:
   legacy store names with write-style filesystem APIs. Tests and migration,
   doctor, import, and explicit export code remain allowed. The guard now also
   covers runtime `cache/*.json` stores, generic `thread-bindings.json`
-  sidecars, cron state/run-log JSON, restart and lock sidecars, Voice Wake
-  settings, plugin binding approvals, installed plugin index JSON, File Transfer
-  audit JSONL, and Memory Wiki activity logs.
+  sidecars, cron state/run-log JSON, config health JSON, restart and lock
+  sidecars, Voice Wake settings, plugin binding approvals, installed plugin
+  index JSON, File Transfer audit JSONL, and Memory Wiki activity logs.
 
 ## Target Schema Shape
 

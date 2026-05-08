@@ -54,6 +54,7 @@ const legacyStoreMarkers = [
   { label: "Crestodian audit JSONL", pattern: /\bcrestodian\.jsonl\b/u },
   { label: "File Transfer audit JSONL", pattern: /\bfile-transfer\.jsonl\b/u },
   { label: "Config audit JSONL", pattern: /\bconfig-audit\.jsonl\b/u },
+  { label: "Config health JSON", pattern: /\bconfig-health\.json\b/u },
   {
     label: "Crestodian rescue pending JSON",
     pattern: /\bcrestodian[/\\]rescue-pending[/\\][A-Za-z0-9._-]+\.json\b/u,

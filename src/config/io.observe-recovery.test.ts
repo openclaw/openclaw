@@ -5,6 +5,8 @@ import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readConfigHealthStateFromSqlite } from "./health-state.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.js";
 import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import {
@@ -45,6 +47,7 @@ describe("config observe recovery", () => {
 
   afterEach(() => {
     resetPluginStateStoreForTests();
+    closeOpenClawStateDatabaseForTest();
   });
 
   async function seedConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
@@ -180,47 +183,6 @@ describe("config observe recovery", () => {
       configPath,
       auditPath: path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
       warn,
-    };
-  }
-
-  function withAsyncHealthWriteFailure(
-    deps: ObserveRecoveryDeps,
-    healthPath: string,
-  ): ObserveRecoveryDeps {
-    const writeFile = deps.fs.promises.writeFile.bind(deps.fs.promises);
-    return {
-      ...deps,
-      fs: {
-        ...deps.fs,
-        promises: {
-          ...deps.fs.promises,
-          writeFile: async (target, data, options) => {
-            if (target === healthPath) {
-              throw new Error("health write failed");
-            }
-            return await writeFile(target, data, options);
-          },
-        },
-      },
-    };
-  }
-
-  function withSyncHealthWriteFailure(
-    deps: ObserveRecoveryDeps,
-    healthPath: string,
-  ): ObserveRecoveryDeps {
-    const writeFileSync = deps.fs.writeFileSync.bind(deps.fs);
-    return {
-      ...deps,
-      fs: {
-        ...deps.fs,
-        writeFileSync: (target, data, options) => {
-          if (target === healthPath) {
-            throw new Error("health write failed");
-          }
-          return writeFileSync(target, data, options);
-        },
-      },
     };
   }
 
@@ -510,44 +472,32 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("logs async health-state write failures", async () => {
+  it("stores promoted config health state in SQLite instead of config-health.json", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, warn } = makeDeps(home);
+      const { deps, configPath } = makeDeps(home);
       const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
       const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
 
       await expect(
         promoteConfigSnapshotToLastKnownGood({
-          deps: withAsyncHealthWriteFailure(deps, healthPath),
+          deps,
           snapshot,
           logger: deps.logger,
         }),
       ).resolves.toBe(true);
 
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Config health-state write failed: ${healthPath}: health write failed`,
-        ),
-      );
-    });
-  });
-
-  it("logs sync health-state write failures", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, warn } = makeDeps(home);
-      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
-      await writeClobberedUpdateChannel(configPath);
-
-      recoverClobberedUpdateChannelSync({
-        deps: withSyncHealthWriteFailure(deps, healthPath),
-        configPath,
-      });
-
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Config health-state write failed: ${healthPath}: health write failed`,
-        ),
+      await expect(fsp.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(readConfigHealthStateFromSqlite(deps.env, deps.homedir).entries?.[configPath]).toEqual(
+        expect.objectContaining({
+          lastKnownGood: expect.objectContaining({
+            hash: expect.any(String),
+            gatewayMode: "local",
+          }),
+          lastPromotedGood: expect.objectContaining({
+            hash: expect.any(String),
+            gatewayMode: "local",
+          }),
+        }),
       );
     });
   });
