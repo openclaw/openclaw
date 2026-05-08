@@ -93,6 +93,15 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
   return config.test as NonNullable<T["test"]>;
 }
 
+function expectThreadedNonIsolatedRunner(config: {
+  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
+}) {
+  const testConfig = requireTestConfig(config);
+  expect(testConfig.pool).toBe("threads");
+  expect(testConfig.isolate).toBe(false);
+  expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+}
+
 describe("resolveVitestIsolation", () => {
   it("aliases private QA plugin SDK subpaths for source tests only", () => {
     expect(sharedVitestConfig.resolve.alias).toEqual(
@@ -325,73 +334,65 @@ describe("scoped vitest configs", () => {
       defaultAutoReplyReplyConfig,
       defaultToolingConfig,
     ]) {
-      expect(config.test?.pool).toBe("threads");
-      expect(config.test?.isolate).toBe(false);
-      expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
+      expectThreadedNonIsolatedRunner(config);
     }
 
     for (const config of [defaultGatewayConfig, defaultAgentsConfig]) {
-      expect(config.test?.pool).toBe("threads");
-      expect(config.test?.isolate).toBe(false);
-      expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
+      expectThreadedNonIsolatedRunner(config);
     }
 
-    expect(defaultCommandsConfig.test?.pool).toBe("threads");
-    expect(defaultCommandsConfig.test?.isolate).toBe(false);
-    expect(normalizeConfigPath(defaultCommandsConfig.test?.runner)).toBe(
-      "test/non-isolated-runner.ts",
-    );
+    expectThreadedNonIsolatedRunner(defaultCommandsConfig);
 
-    expect(defaultUiConfig.test?.pool).toBe("threads");
-    expect(defaultUiConfig.test?.isolate).toBe(false);
-    expect(normalizeConfigPath(defaultUiConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
+    expectThreadedNonIsolatedRunner(defaultUiConfig);
   });
 
   it("keeps the process lane off the openclaw runtime setup", () => {
-    expect(normalizeConfigPaths(defaultProcessConfig.test?.setupFiles)).toEqual(["test/setup.ts"]);
-    expect(normalizeConfigPaths(defaultRuntimeConfig.test?.setupFiles)).toEqual(["test/setup.ts"]);
-    expect(normalizeConfigPaths(defaultPluginSdkConfig.test?.setupFiles)).toEqual([
+    expect(normalizeConfigPaths(requireTestConfig(defaultProcessConfig).setupFiles)).toEqual([
+      "test/setup.ts",
+    ]);
+    expect(normalizeConfigPaths(requireTestConfig(defaultRuntimeConfig).setupFiles)).toEqual([
+      "test/setup.ts",
+    ]);
+    expect(normalizeConfigPaths(requireTestConfig(defaultPluginSdkConfig).setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
   });
 
   it("splits auto-reply into narrower scoped buckets", () => {
-    expect(defaultAutoReplyCoreConfig.test?.include).toEqual(["*.test.ts"]);
-    expect(defaultAutoReplyCoreConfig.test?.exclude).toEqual(
-      expect.arrayContaining(["reply*.test.ts"]),
-    );
-    expect(defaultAutoReplyTopLevelConfig.test?.include).toEqual(["reply*.test.ts"]);
-    expect(defaultAutoReplyReplyConfig.test?.include).toEqual(["reply/**/*.test.ts"]);
+    const coreTestConfig = requireTestConfig(defaultAutoReplyCoreConfig);
+    expect(coreTestConfig.include).toEqual(["*.test.ts"]);
+    expect(coreTestConfig.exclude).toEqual(expect.arrayContaining(["reply*.test.ts"]));
+    expect(requireTestConfig(defaultAutoReplyTopLevelConfig).include).toEqual(["reply*.test.ts"]);
+    expect(requireTestConfig(defaultAutoReplyReplyConfig).include).toEqual(["reply/**/*.test.ts"]);
   });
 
   it("keeps the broad agents lane on shared file parallelism", () => {
-    expect(defaultAgentsConfig.test?.fileParallelism).toBe(sharedVitestConfig.test.fileParallelism);
+    expect(requireTestConfig(defaultAgentsConfig).fileParallelism).toBe(
+      sharedVitestConfig.test.fileParallelism,
+    );
   });
 
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
-    expect(normalizeConfigPaths(defaultPluginSdkLightConfig.test?.setupFiles)).toEqual([
-      "test/setup.ts",
-    ]);
-    expect(normalizeConfigPaths(defaultCommandsLightConfig.test?.setupFiles)).toEqual([
+    expect(normalizeConfigPaths(requireTestConfig(defaultPluginSdkLightConfig).setupFiles)).toEqual(
+      ["test/setup.ts"],
+    );
+    expect(normalizeConfigPaths(requireTestConfig(defaultCommandsLightConfig).setupFiles)).toEqual([
       "test/setup.ts",
     ]);
   });
 
   it("keeps the ui lane off both the openclaw runtime setup and unit-fast excludes", () => {
-    expect(normalizeConfigPaths(defaultUiConfig.test?.setupFiles)).toEqual([
+    const testConfig = requireTestConfig(defaultUiConfig);
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual([
       "test/setup.ts",
       "ui/src/test-helpers/lit-warnings.setup.ts",
     ]);
-    expect(defaultUiConfig.test?.exclude).not.toContain("chat/slash-command-executor.node.test.ts");
+    expect(testConfig.exclude).not.toContain("chat/slash-command-executor.node.test.ts");
   });
 
   it("defaults channel tests to threads with the non-isolated runner", () => {
-    expect(defaultChannelsConfig.test?.isolate).toBe(false);
-    expect(defaultChannelsConfig.test?.pool).toBe("threads");
-    expect(normalizeConfigPath(defaultChannelsConfig.test?.runner)).toBe(
-      "test/non-isolated-runner.ts",
-    );
+    expectThreadedNonIsolatedRunner(defaultChannelsConfig);
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
