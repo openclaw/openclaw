@@ -41,6 +41,15 @@ describe("plugins cli policy mutations", () => {
     });
   }
 
+  function requireFirstWrittenConfig(): OpenClawConfig {
+    const [config] = writeConfigFile.mock.calls[0] ?? [];
+    expect(config).toBeDefined();
+    if (!config) {
+      throw new Error("expected writeConfigFile to receive a config");
+    }
+    return config;
+  }
+
   it("refreshes the persisted plugin registry after enabling a plugin", async () => {
     const sourceConfig = {} as OpenClawConfig;
     const enabledConfig = {
@@ -103,7 +112,7 @@ describe("plugins cli policy mutations", () => {
 
     await runPluginsCommand(["plugins", "disable", "alpha"]);
 
-    const nextConfig = writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+    const nextConfig = requireFirstWrittenConfig();
     expect(nextConfig.plugins?.entries?.alpha?.enabled).toBe(false);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: nextConfig,
@@ -154,7 +163,7 @@ describe("plugins cli policy mutations", () => {
 
       await runPluginsCommand(["plugins", "disable", alias]);
 
-      const nextConfig = writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+      const nextConfig = requireFirstWrittenConfig();
       expect(nextConfig.plugins?.entries?.[pluginId]?.enabled).toBe(false);
       expect(nextConfig.plugins?.entries?.[alias]).toBeUndefined();
     },
@@ -184,7 +193,7 @@ describe("plugins cli policy mutations", () => {
 
     await runPluginsCommand(["plugins", "disable", "twitch"]);
 
-    const nextConfig = writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
+    const nextConfig = requireFirstWrittenConfig();
     expect(nextConfig.plugins?.entries?.twitch?.enabled).toBe(false);
     expect(nextConfig.channels?.twitch).toBeUndefined();
   });
