@@ -781,7 +781,7 @@ describe("scripts/changed-lanes", () => {
       "utf8",
     );
     git(dir, ["add", "package.json"]);
-    expect(() =>
+    expect(
       execFileSync(
         process.execPath,
         [path.join(repoRoot, "scripts", "check-release-metadata-only.mjs"), "--staged"],
@@ -791,7 +791,7 @@ describe("scripts/changed-lanes", () => {
           stdio: "pipe",
         },
       ),
-    ).not.toThrow();
+    ).toBeInstanceOf(Buffer);
 
     writeFileSync(
       path.join(dir, "package.json"),
