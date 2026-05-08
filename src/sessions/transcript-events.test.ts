@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 describe("transcript events", () => {
-  it("emits trimmed SQLite session-scope updates", () => {
+  it("emits trimmed session-scope updates", () => {
     const listener = vi.fn();
     cleanup.push(onSessionTranscriptUpdate(listener));
 

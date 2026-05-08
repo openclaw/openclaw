@@ -246,6 +246,8 @@ export async function compactEmbeddedPiSession(
         if (engineOwnsCompaction && result.ok && result.compacted) {
           await runPostCompactionSideEffects({
             config: params.config,
+            agentId: agentIds.sessionAgentId,
+            sessionId: postCompactionSessionId,
             sessionKey: params.sessionKey,
             sessionFile: postCompactionSessionFile,
           });
