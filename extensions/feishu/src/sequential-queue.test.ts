@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { createSequentialQueue } from "./sequential-queue.js";
 
 function createDeferred() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
