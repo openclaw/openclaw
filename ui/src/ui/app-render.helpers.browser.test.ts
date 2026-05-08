@@ -63,8 +63,22 @@ function renderRefreshButton(overrides: Partial<AppViewState> = {}) {
   const button = container.querySelector<HTMLButtonElement>(
     `.chat-controls .btn--icon[data-tooltip="${t("chat.refreshTitle")}"]`,
   );
-  expect(button).not.toBeNull();
-  return button!;
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Expected chat refresh button");
+  }
+  return button;
+}
+
+function requireButton(
+  button: HTMLButtonElement | null | undefined,
+  label: string,
+): HTMLButtonElement {
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected ${label} button`);
+  }
+  return button;
 }
 
 describe("chat header controls (browser)", () => {
@@ -140,14 +154,12 @@ describe("chat header controls (browser)", () => {
     );
 
     expect(buttons).toHaveLength(4);
-    const cronButton = buttons.at(-1);
-    expect(cronButton?.classList.contains("active")).toBe(true);
-    expect(cronButton?.getAttribute("aria-pressed")).toBe("true");
-    expect(cronButton?.getAttribute("title")).toBe(
-      t("chat.showCronSessionsHidden", { count: "1" }),
-    );
+    const cronButton = requireButton(buttons.at(-1), "cron sessions");
+    expect(cronButton.classList.contains("active")).toBe(true);
+    expect(cronButton.getAttribute("aria-pressed")).toBe("true");
+    expect(cronButton.getAttribute("title")).toBe(t("chat.showCronSessionsHidden", { count: "1" }));
 
-    cronButton?.click();
+    cronButton.click();
 
     expect(state.sessionsHideCron).toBe(false);
   });
@@ -202,14 +214,17 @@ describe("chat header controls (browser)", () => {
     render(renderChatMobileToggle(state), container);
     await Promise.resolve();
 
-    const toggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
+    const toggle = requireButton(
+      container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle"),
+      "mobile controls toggle",
+    );
     const dropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle?.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
     expect(dropdown?.id).toBe("chat-mobile-controls-dropdown");
     expect(dropdown?.classList.contains("open")).toBe(false);
 
-    toggle?.click();
+    toggle.click();
 
     expect(setChatMobileControlsOpen).toHaveBeenCalledWith(true, { trigger: toggle });
     expect(dropdown?.classList.contains("open")).toBe(false);

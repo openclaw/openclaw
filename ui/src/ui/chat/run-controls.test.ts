@@ -37,6 +37,15 @@ function createProps(overrides: Partial<ChatRunControlsProps> = {}): ChatRunCont
   };
 }
 
+function getButton(container: Element, selector: string): HTMLButtonElement {
+  const button = container.querySelector<HTMLButtonElement>(selector);
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button matching ${selector}`);
+  }
+  return button;
+}
+
 describe("chat run controls", () => {
   it("switches between idle and abort actions", () => {
     const container = document.createElement("div");
@@ -57,11 +66,11 @@ describe("chat run controls", () => {
       container,
     );
 
-    const queueButton = container.querySelector<HTMLButtonElement>('button[title="Queue"]');
-    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
-    expect(queueButton?.disabled).toBe(true);
-    expect(stopButton?.title).toBe("Stop");
-    stopButton?.click();
+    const queueButton = getButton(container, 'button[title="Queue"]');
+    const stopButton = getButton(container, 'button[title="Stop"]');
+    expect(queueButton.disabled).toBe(true);
+    expect(stopButton.title).toBe("Stop");
+    stopButton.click();
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("New session");
 
@@ -81,16 +90,14 @@ describe("chat run controls", () => {
       container,
     );
 
-    const newSessionButton = container.querySelector<HTMLButtonElement>(
-      'button[title="New session"]',
-    );
-    expect(newSessionButton?.title).toBe("New session");
-    newSessionButton?.click();
+    const newSessionButton = getButton(container, 'button[title="New session"]');
+    expect(newSessionButton.title).toBe("New session");
+    newSessionButton.click();
     expect(onNewSession).toHaveBeenCalledTimes(1);
 
-    const sendButton = container.querySelector<HTMLButtonElement>('button[title="Send"]');
-    expect(sendButton?.title).toBe("Send");
-    sendButton?.click();
+    const sendButton = getButton(container, 'button[title="Send"]');
+    expect(sendButton.title).toBe("Send");
+    sendButton.click();
     expect(onStoreDraft).toHaveBeenCalledWith(" run this ");
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
@@ -112,9 +119,9 @@ describe("chat run controls", () => {
       container,
     );
 
-    const queueButton = container.querySelector<HTMLButtonElement>('button[title="Queue"]');
-    expect(queueButton?.disabled).toBe(false);
-    queueButton?.click();
+    const queueButton = getButton(container, 'button[title="Queue"]');
+    expect(queueButton.disabled).toBe(false);
+    queueButton.click();
     expect(onStoreDraft).toHaveBeenCalledWith(" follow up ");
     expect(onSend).toHaveBeenCalledTimes(1);
   });
@@ -133,9 +140,9 @@ describe("chat run controls", () => {
       container,
     );
 
-    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
-    expect(stopButton?.disabled).toBe(false);
-    stopButton?.click();
+    const stopButton = getButton(container, 'button[title="Stop"]');
+    expect(stopButton.disabled).toBe(false);
+    stopButton.click();
     expect(onAbort).toHaveBeenCalledTimes(1);
   });
 });
@@ -290,7 +297,7 @@ describe("context notice", () => {
     const onCompact = vi.fn();
     render(renderContextNotice(session, 200_000, { onCompact }), container);
     expect(container.textContent).toContain("Compact");
-    container.querySelector<HTMLButtonElement>(".context-notice__action")?.click();
+    getButton(container, ".context-notice__action").click();
     expect(onCompact).toHaveBeenCalledTimes(1);
 
     expect(
@@ -348,8 +355,11 @@ describe("side result render", () => {
     expect(container.querySelectorAll(".chat-side-result")).toHaveLength(1);
 
     const button = container.querySelector<HTMLButtonElement>(".chat-side-result__dismiss");
-    expect(button).not.toBeNull();
-    button?.click();
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error("Expected side result dismiss button");
+    }
+    button.click();
     expect(onDismissSideResult).toHaveBeenCalledTimes(1);
 
     render(
