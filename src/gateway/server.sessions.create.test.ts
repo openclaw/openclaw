@@ -49,10 +49,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  const sessionFile = requireNonEmptyString(
-    created.payload?.entry?.sessionFile,
-    "created session file",
-  );
+  requireNonEmptyString(created.payload?.entry?.sessionFile, "created session file");
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );

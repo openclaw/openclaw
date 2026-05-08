@@ -10,14 +10,6 @@ import { executeCrestodianOperation, parseCrestodianOperation } from "./operatio
 
 type TestConfig = Record<string, unknown>;
 
-function parseLastJsonLine(raw: string): unknown {
-  const lastLine = raw.trim().split("\n").at(-1);
-  if (!lastLine) {
-    throw new Error("Expected audit log to contain at least one JSON line");
-  }
-  return JSON.parse(lastLine) as unknown;
-}
-
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);

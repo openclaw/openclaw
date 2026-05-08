@@ -1083,7 +1083,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     });
 
     history.mockClear();
-    seedExistingSession(prepared!.ctxPayload.SessionKey!);
+    seedExistingSession(prepared.ctxPayload.SessionKey!);
     const existing = await prepareMessageWith(
       slackCtx,
       account,

@@ -28,10 +28,8 @@ const piPackageStringPattern = /["'](@mariozechner\/pi-[^"']+)["']/g;
 const allowedPiPackageImportFiles = new Set([
   "src/agents/agent-core-contract.ts",
   "src/agents/pi-ai-contract.ts",
-  "src/agents/pi-ai-openai-codex-responses-contract.ts",
   "src/agents/pi-ai-oauth-contract.ts",
   "src/agents/pi-ai-openai-completions-contract.ts",
-  "src/agents/pi-ai-openai-responses-contract.ts",
   "src/agents/pi-coding-agent-contract.ts",
   "src/agents/pi-tui-contract.ts",
   "src/types/pi-agent-core.d.ts",

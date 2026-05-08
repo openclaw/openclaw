@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe("appendAssistantMessageToSessionTranscript", () => {
-  const fixture = useTempSessionsFixture("transcript-test-");
+  useTempSessionsFixture("transcript-test-");
   const sessionId = "test-session-id";
   const sessionKey = "test-session";
   type ExactAssistantMessage = Parameters<

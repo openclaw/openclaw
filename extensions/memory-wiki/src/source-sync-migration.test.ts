@@ -49,15 +49,19 @@ describe("memory wiki source sync migration", () => {
     await fs.writeFile(path.join(locksDir, "stale.lock"), "stale", "utf8");
 
     const provider = createMemoryWikiSourceSyncMigrationProvider(createConfig(vaultRoot));
-    await expect(provider.detect()).resolves.toMatchObject({
+    const ctx = {} as MigrationProviderContext;
+    if (!provider.detect) {
+      throw new Error("Expected memory wiki migration provider to expose detect");
+    }
+    await expect(provider.detect(ctx)).resolves.toMatchObject({
       found: true,
       confidence: "high",
     });
-    const plan = await provider.plan({} as MigrationProviderContext);
+    const plan = await provider.plan(ctx);
 
     expect(plan.items.map((item) => item.id)).toContain("memory-wiki-vault-metadata-json");
 
-    const result = await provider.apply({} as MigrationProviderContext, plan);
+    const result = await provider.apply(ctx, plan);
     const item = result.items.find((item) => item.id === "memory-wiki-vault-metadata-json");
 
     expect(item).toMatchObject({
