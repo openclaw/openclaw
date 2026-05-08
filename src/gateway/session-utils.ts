@@ -56,7 +56,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import {
   DEFAULT_AGENT_ID,
@@ -168,7 +168,7 @@ function resolveIdentityAvatarUrl(
     return undefined;
   }
   try {
-    const opened = openBoundaryFileSync({
+    const opened = openRootFileSync({
       absolutePath: resolvedCandidate,
       rootPath: workspaceRoot,
       rootRealPath: workspaceRoot,
@@ -372,6 +372,14 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
 type SessionListRowContext = {
   subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
   storeChildSessionsByKey: Map<string, string[]>;
+  selectedModelByOverrideRef: Map<string, ReturnType<typeof resolveSessionModelRef>>;
+  thinkingMetadataByModelRef: Map<
+    string,
+    {
+      levels: ReturnType<typeof listThinkingLevelOptions>;
+      defaultLevel: ReturnType<typeof resolveGatewaySessionThinkingDefault>;
+    }
+  >;
 };
 
 function resolveRuntimeChildSessionKeys(
@@ -488,7 +496,93 @@ function buildSessionListRowContext(params: {
   return {
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+    selectedModelByOverrideRef: new Map(),
+    thinkingMetadataByModelRef: new Map(),
   };
+}
+
+function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
+  return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
+}
+
+function resolveSessionSelectedModelRef(params: {
+  cfg: OpenClawConfig;
+  entry?: SessionEntry;
+  agentId: string;
+  rowContext?: SessionListRowContext;
+  allowPluginNormalization?: boolean;
+}): ReturnType<typeof resolveSessionModelRef> | null {
+  const override = normalizeStoredOverrideModel({
+    providerOverride: params.entry?.providerOverride,
+    modelOverride: params.entry?.modelOverride,
+  });
+  if (!override.modelOverride) {
+    return null;
+  }
+  if (!params.rowContext) {
+    return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
+  }
+  const key = [
+    normalizeAgentId(params.agentId),
+    override.providerOverride ?? "",
+    override.modelOverride,
+  ].join("\0");
+  const cached = params.rowContext.selectedModelByOverrideRef.get(key);
+  if (cached) {
+    return cached;
+  }
+  const selected = resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
+  params.rowContext.selectedModelByOverrideRef.set(key, selected);
+  return selected;
+}
+
+function resolveSessionRowThinkingMetadata(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider: string;
+  model: string;
+  modelCatalog?: ModelCatalogEntry[];
+  rowContext?: SessionListRowContext;
+}): {
+  levels: ReturnType<typeof listThinkingLevelOptions>;
+  defaultLevel: ReturnType<typeof resolveGatewaySessionThinkingDefault>;
+} {
+  if (!params.rowContext) {
+    return {
+      levels: listThinkingLevelOptions(params.provider, params.model, params.modelCatalog),
+      defaultLevel: resolveGatewaySessionThinkingDefault({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        agentId: params.agentId,
+        modelCatalog: params.modelCatalog,
+      }),
+    };
+  }
+  const key = `${normalizeAgentId(params.agentId)}\0${createSessionRowModelCacheKey(
+    params.provider,
+    params.model,
+  )}`;
+  const cached = params.rowContext.thinkingMetadataByModelRef.get(key);
+  if (cached) {
+    return cached;
+  }
+  const metadata = {
+    levels: listThinkingLevelOptions(params.provider, params.model, params.modelCatalog),
+    defaultLevel: resolveGatewaySessionThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentId: params.agentId,
+      modelCatalog: params.modelCatalog,
+    }),
+  };
+  params.rowContext.thinkingMetadataByModelRef.set(key, metadata);
+  return metadata;
 }
 
 function mergeChildSessionKeys(
@@ -1197,11 +1291,13 @@ export function resolveGatewaySessionThinkingDefault(params: {
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
+  options?: { allowPluginNormalization?: boolean },
 ): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: options?.allowPluginNormalization,
   });
   const contextTokens =
     cfg.agents?.defaults?.contextTokens ??
@@ -1229,26 +1325,46 @@ export function resolveSessionModelRef(
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
+  options?: { allowPluginNormalization?: boolean },
 ): { provider: string; model: string } {
-  const resolved = agentId
-    ? resolveDefaultModelForAgent({ cfg, agentId })
-    : resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
-
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
   });
+  if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
+    return resolvePersistedSelectedModelRef({
+      defaultProvider: normalizedOverride.providerOverride,
+      overrideProvider: normalizedOverride.providerOverride,
+      overrideModel: normalizedOverride.modelOverride,
+      allowPluginNormalization: options?.allowPluginNormalization,
+    })!;
+  }
+  const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
+  const runtimeModel = normalizeOptionalString(entry?.model);
+  if (runtimeProvider && runtimeModel) {
+    return { provider: runtimeProvider, model: runtimeModel };
+  }
+
+  const resolved = agentId
+    ? resolveDefaultModelForAgent({
+        cfg,
+        agentId,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      })
+    : resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      });
 
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-    runtimeProvider: entry?.modelProvider,
-    runtimeModel: entry?.model,
+    runtimeProvider,
+    runtimeModel,
     overrideProvider: normalizedOverride.providerOverride,
     overrideModel: normalizedOverride.modelOverride,
+    allowPluginNormalization: options?.allowPluginNormalization,
   });
   if (persisted) {
     return persisted;
@@ -1336,6 +1452,7 @@ export function resolveSessionModelIdentityRef(
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
   fallbackModelRef?: string,
+  options?: { allowPluginNormalization?: boolean },
 ): { provider?: string; model: string } {
   const runtimeModel = entry?.model?.trim();
   const runtimeProvider = entry?.modelProvider?.trim();
@@ -1351,7 +1468,9 @@ export function resolveSessionModelIdentityRef(
       return { provider: inferredProvider, model: runtimeModel };
     }
     if (runtimeModel.includes("/")) {
-      const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER);
+      const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER, {
+        allowPluginNormalization: options?.allowPluginNormalization,
+      });
       if (parsedRuntime) {
         return { provider: parsedRuntime.provider, model: parsedRuntime.model };
       }
@@ -1361,7 +1480,9 @@ export function resolveSessionModelIdentityRef(
   }
   const fallbackRef = fallbackModelRef?.trim();
   if (fallbackRef) {
-    const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER);
+    const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER, {
+      allowPluginNormalization: options?.allowPluginNormalization,
+    });
     if (parsedFallback) {
       return { provider: parsedFallback.provider, model: parsedFallback.model };
     }
@@ -1374,7 +1495,9 @@ export function resolveSessionModelIdentityRef(
     }
     return { model: fallbackRef };
   }
-  const resolved = resolveSessionModelRef(cfg, entry, agentId);
+  const resolved = resolveSessionModelRef(cfg, entry, agentId, {
+    allowPluginNormalization: options?.allowPluginNormalization,
+  });
   return { provider: resolved.provider, model: resolved.model };
 }
 
@@ -1515,14 +1638,19 @@ export function buildGatewaySessionRow(params: {
           ? resolveSessionRuntimeMs(subagentRun, now)
           : undefined))
     : undefined;
-  const selectedModel = entry?.modelOverride?.trim()
-    ? resolveSessionModelRef(cfg, entry, sessionAgentId)
-    : null;
+  const selectedModel = resolveSessionSelectedModelRef({
+    cfg,
+    entry,
+    agentId: sessionAgentId,
+    rowContext,
+    allowPluginNormalization: !lightweight,
+  });
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,
     sessionAgentId,
     subagentRun?.model,
+    { allowPluginNormalization: !lightweight },
   );
   const runtimeModelPresent =
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
@@ -1530,6 +1658,7 @@ export function buildGatewaySessionRow(params: {
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
+    !skipTranscriptUsage &&
     resolveEstimatedSessionCostUsd({
       cfg,
       provider: resolvedModel.provider,
@@ -1635,11 +1764,16 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(
-    thinkingProvider,
-    thinkingModel,
-    params.modelCatalog,
-  );
+  const thinkingMetadata = resolveSessionRowThinkingMetadata({
+    cfg,
+    agentId: sessionAgentId,
+    provider: thinkingProvider,
+    model: thinkingModel,
+    modelCatalog: params.modelCatalog,
+    rowContext,
+  });
+  const thinkingLevels = thinkingMetadata.levels;
+  const thinkingDefault = thinkingMetadata.defaultLevel;
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
@@ -1668,16 +1802,8 @@ export function buildGatewaySessionRow(params: {
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
-    thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: lightweight
-      ? entry?.thinkingLevel
-      : resolveGatewaySessionThinkingDefault({
-          cfg,
-          provider: thinkingProvider,
-          model: thinkingModel,
-          agentId: sessionAgentId,
-          modelCatalog: params.modelCatalog,
-        }),
+    thinkingOptions: thinkingLevels?.map((level) => level.label),
+    thinkingDefault,
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
@@ -1768,8 +1894,14 @@ export function loadGatewaySessionRow(
  */
 const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
 const SESSIONS_LIST_TOP_N_LIMIT = 200;
+const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 
 type SessionEntryPair = [string, SessionEntry];
+type SessionEntrySelection = {
+  entries: SessionEntryPair[];
+  totalCount: number;
+  limitApplied?: number;
+};
 
 function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntryPair): number {
   return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
@@ -1777,9 +1909,10 @@ function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntr
 
 function resolveSessionsListLimit(
   opts: import("./protocol/index.js").SessionsListParams,
+  defaultLimit?: number,
 ): number | undefined {
   if (typeof opts.limit !== "number" || !Number.isFinite(opts.limit)) {
-    return undefined;
+    return defaultLimit;
   }
   return Math.max(1, Math.floor(opts.limit));
 }
@@ -1816,12 +1949,12 @@ function sortAndLimitSessionEntries(
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
-export function filterAndSortSessionEntries(params: {
+function filterSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
-}): [string, SessionEntry][] {
+}): SessionEntryPair[] {
   const { store, opts, now } = params;
   const rowContext = params.rowContext;
   const includeGlobal = opts.includeGlobal === true;
@@ -1914,7 +2047,33 @@ export function filterAndSortSessionEntries(params: {
     entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
-  return sortAndLimitSessionEntries(entries, resolveSessionsListLimit(opts));
+  return entries;
+}
+
+function selectSessionEntries(params: {
+  store: Record<string, SessionEntry>;
+  opts: import("./protocol/index.js").SessionsListParams;
+  now: number;
+  rowContext?: SessionListRowContext;
+  defaultLimit?: number;
+}): SessionEntrySelection {
+  const filtered = filterSessionEntries(params);
+  const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
+  const entries = sortAndLimitSessionEntries(filtered, limit);
+  return {
+    entries,
+    totalCount: filtered.length,
+    limitApplied: limit,
+  };
+}
+
+export function filterAndSortSessionEntries(params: {
+  store: Record<string, SessionEntry>;
+  opts: import("./protocol/index.js").SessionsListParams;
+  now: number;
+  rowContext?: SessionListRowContext;
+}): [string, SessionEntry][] {
+  return selectSessionEntries(params).entries;
 }
 
 export function listSessionsFromStore(params: {
@@ -1937,12 +2096,14 @@ export function listSessionsFromStore(params: {
   const includeLastMessage = opts.includeLastMessage === true;
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const entries = filterAndSortSessionEntries({
+  const selection = selectSessionEntries({
     store,
     opts,
     now,
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
+  const { entries, totalCount, limitApplied } = selection;
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -1966,7 +2127,10 @@ export function listSessionsFromStore(params: {
     ts: now,
     path: storePath,
     count: sessions.length,
-    defaults: getSessionDefaults(cfg, params.modelCatalog),
+    totalCount,
+    limitApplied,
+    hasMore: sessions.length < totalCount,
+    defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };
 }
@@ -2001,12 +2165,14 @@ export async function listSessionsFromStoreAsync(params: {
   const includeLastMessage = opts.includeLastMessage === true;
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const entries = filterAndSortSessionEntries({
+  const selection = selectSessionEntries({
     store,
     opts,
     now,
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+    defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
+  const { entries, totalCount, limitApplied } = selection;
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
@@ -2062,7 +2228,10 @@ export async function listSessionsFromStoreAsync(params: {
     ts: now,
     path: storePath,
     count: sessions.length,
-    defaults: getSessionDefaults(cfg, params.modelCatalog),
+    totalCount,
+    limitApplied,
+    hasMore: sessions.length < totalCount,
+    defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };
 }

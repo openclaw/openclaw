@@ -98,6 +98,89 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("continues from transcript after compaction when the current inbound message was persisted", async () => {
+    const overflowError = makeOverflowError();
+
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (attemptParams) => {
+        (
+          attemptParams as {
+            onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+          }
+        ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+        return makeAttemptResult({ promptError: overflowError });
+      })
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-51024",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: expect.stringContaining("Continue from the current transcript"),
+        suppressNextUserMessagePersistence: true,
+      }),
+    );
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ prompt: baseParams.prompt }),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("does not suppress the next user turn when precheck overflow never persisted it", async () => {
+    const overflowError = makeOverflowError(
+      "Context overflow: prompt too large for the model (precheck).",
+    );
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: overflowError,
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "compact_only" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted before prompt submission",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-51025",
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        prompt: baseParams.prompt,
+        suppressNextUserMessagePersistence: false,
+      }),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it("retries after successful compaction on likely-overflow promptError variants", async () => {
     const overflowHintError = new Error("Context window exceeded: requested 12000 tokens");
 
@@ -276,6 +359,7 @@ describe("overflow compaction in run loop", () => {
       2,
       expect.objectContaining({
         prompt: expect.stringContaining("Continue from the current transcript"),
+        suppressNextUserMessagePersistence: true,
       }),
     );
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(
@@ -350,6 +434,7 @@ describe("overflow compaction in run loop", () => {
       2,
       expect.objectContaining({
         prompt: expect.stringContaining("Continue from the current transcript"),
+        suppressNextUserMessagePersistence: true,
       }),
     );
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenNthCalledWith(

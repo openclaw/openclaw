@@ -10,6 +10,8 @@ const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
+const listAgentHarnessIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
+const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
@@ -120,6 +122,11 @@ vi.mock("../plugins/memory-state.js", () => ({
   hasMemoryRuntime: hasMemoryRuntimeMock,
 }));
 
+vi.mock("../agents/harness/registry.js", () => ({
+  listAgentHarnessIds: listAgentHarnessIdsMock,
+  disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
+}));
+
 vi.mock("../tasks/task-registry.js", () => ({
   ensureTaskRegistryReady: ensureTaskRegistryReadyMock,
 }));
@@ -216,6 +223,7 @@ describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasMemoryRuntimeMock.mockReturnValue(false);
+    listAgentHarnessIdsMock.mockReturnValue([]);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
@@ -242,10 +250,52 @@ describe("runCli exit behavior", () => {
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
+    expect(disposeRegisteredAgentHarnessesMock).not.toHaveBeenCalled();
     expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();
     expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("disposes registered harnesses after full CLI command completion", async () => {
+    listAgentHarnessIdsMock.mockReturnValueOnce(["codex"]);
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "agent", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "agent", "--local"]);
+
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "agent", "--local"]);
+    expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("pauses non-tty stdin after full CLI command completion", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "channels", aliases: () => [] }],
+      parseAsync,
+    });
+    const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+    const pauseSpy = vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
+
+    try {
+      await runCli(["node", "openclaw", "channels"]);
+
+      expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "channels"]);
+      expect(pauseSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      pauseSpy.mockRestore();
+      if (stdinTty) {
+        Object.defineProperty(process.stdin, "isTTY", stdinTty);
+      } else {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      }
+    }
   });
 
   it("emits the startup banner before gateway foreground fast-path startup", async () => {
@@ -366,6 +416,7 @@ describe("runCli exit behavior", () => {
     ["chat control-plane", ["node", "openclaw", "chat"]],
     ["terminal control-plane", ["node", "openclaw", "terminal"]],
     ["config", ["node", "openclaw", "config", "get", "proxy.enabled"]],
+    ["channels parent help", ["node", "openclaw", "channels"]],
     ["completion", ["node", "openclaw", "completion", "zsh"]],
     ["debug proxy cli", ["node", "openclaw", "proxy", "start"]],
     ["agents list", ["node", "openclaw", "agents", "list"]],

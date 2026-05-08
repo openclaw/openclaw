@@ -9,6 +9,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { FailoverReason } from "../pi-embedded-helpers/types.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -234,6 +235,17 @@ export const overflowBaseRunParams = {
 } as const;
 
 export function resetRunOverflowCompactionHarnessMocks(): void {
+  clearAgentHarnesses();
+  registerAgentHarness({
+    id: "codex",
+    label: "Codex",
+    supports: (ctx) =>
+      ctx.provider === "codex" || ctx.provider === "openai-codex"
+        ? { supported: true, priority: 100 }
+        : { supported: false },
+    runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
+  });
+
   mockedGlobalHookRunner.hasHooks.mockReset();
   mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
   mockedGlobalHookRunner.runBeforeAgentReply.mockReset();
@@ -533,10 +545,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../utils/message-channel.js", () => ({
     isMarkdownCapableMessageChannel: vi.fn(() => true),
-  }));
-
-  vi.doMock("../agent-paths.js", () => ({
-    resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent-dir"),
   }));
 
   vi.doMock("../defaults.js", () => ({

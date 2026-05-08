@@ -99,12 +99,14 @@ import {
 } from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
   PluginCliBackendRegistration,
   PluginCliRegistration,
   PluginCommandRegistration,
   PluginControlUiDescriptorRegistryRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
+  PluginHostedMediaResolverRegistration,
   PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
   PluginAgentHarnessRegistration,
@@ -125,6 +127,7 @@ import type {
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   findUndeclaredPluginToolNames,
@@ -149,6 +152,7 @@ import type {
   PluginConversationBindingResolvedEvent,
   OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawGatewayDiscoveryService,
+  OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -198,6 +202,7 @@ export type {
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
   PluginControlUiDescriptorRegistryRegistration,
+  PluginHostedMediaResolverRegistration,
   PluginRuntimeLifecycleRegistryRegistration,
   PluginRecord,
   PluginRegistry,
@@ -271,9 +276,17 @@ export function resolvePluginPath(input: string, rootDir: string | undefined): s
   return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
 }
 
-function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootDir" | "source">) {
+function isOfficialCodexPluginRecord(
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
+) {
   if (record.id !== "codex") {
     return false;
+  }
+  if (record.origin !== "global") {
+    return false;
+  }
+  if (record.packageName === "@openclaw/codex") {
+    return true;
   }
   const sourcePath = path
     .normalize(record.rootDir ?? record.source)
@@ -283,9 +296,9 @@ function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootD
 }
 
 function canClaimReservedCommandOwnership(
-  record: Pick<PluginRecord, "id" | "origin" | "rootDir" | "source">,
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
 ) {
-  return record.origin === "bundled" || isOfficialNpmCodexPluginRecord(record);
+  return record.origin === "bundled" || isOfficialCodexPluginRecord(record);
 }
 
 const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
@@ -295,6 +308,9 @@ const activePluginHookRegistrations = resolveGlobalSingleton<
 
 type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
 type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };
+type PluginSideEffectGuard = {
+  active: boolean;
+};
 
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
@@ -330,6 +346,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const coreGatewayMethods = new Set(coreGatewayMethodNames);
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
+  const pluginSideEffectGuards = new Map<string, Set<PluginSideEffectGuard>>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
@@ -344,6 +361,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       throw new Error(message);
     }
     return value;
+  };
+
+  const createPluginSideEffectGuard = (pluginId: string): PluginSideEffectGuard => {
+    const guard = { active: true };
+    const guards = pluginSideEffectGuards.get(pluginId) ?? new Set<PluginSideEffectGuard>();
+    guards.add(guard);
+    pluginSideEffectGuards.set(pluginId, guards);
+    return guard;
+  };
+
+  const deactivatePluginSideEffectGuards = (pluginId: string): void => {
+    const guards = pluginSideEffectGuards.get(pluginId);
+    if (!guards) {
+      return;
+    }
+    for (const guard of guards) {
+      guard.active = false;
+    }
+    pluginSideEffectGuards.delete(pluginId);
   };
 
   const registerCodexAppServerExtensionFactory = (
@@ -750,11 +786,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         path: normalizedPath,
         handler: params.handler,
+        ...(params.handleUpgrade ? { handleUpgrade: params.handleUpgrade } : {}),
         auth: params.auth,
         match,
         ...(params.gatewayRuntimeScopeSurface
           ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
           : {}),
+        ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
         source: record.source,
       };
       return;
@@ -764,12 +802,36 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       path: normalizedPath,
       handler: params.handler,
+      ...(params.handleUpgrade ? { handleUpgrade: params.handleUpgrade } : {}),
       auth: params.auth,
       match,
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
         : {}),
+      ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
+    });
+  };
+
+  const registerHostedMediaResolver = (
+    record: PluginRecord,
+    resolver: OpenClawPluginHostedMediaResolver,
+  ) => {
+    if (typeof resolver !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "hosted media resolver registration missing resolver",
+      });
+      return;
+    }
+    (registry.hostedMediaResolvers ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      resolver,
+      source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -1174,7 +1236,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
-    opts?: { commands?: string[]; descriptors?: OpenClawPluginCliCommandDescriptor[] },
+    opts?: {
+      parentPath?: string[];
+      commands?: string[];
+      descriptors?: OpenClawPluginCliCommandDescriptor[];
+    },
   ) => {
     const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
       const normalized = normalizeCommandDescriptorName(raw);
@@ -1188,6 +1254,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       }
       return normalized;
     };
+    const parentPath = (opts?.parentPath ?? []).map((segment) =>
+      normalizeCommandRoot(segment, "command"),
+    );
+    if (parentPath.some((segment) => segment === null)) {
+      return;
+    }
+    const normalizedParentPath = parentPath as string[];
     const descriptors = (opts?.descriptors ?? [])
       .map((descriptor) => {
         const name = normalizeCommandRoot(descriptor.name, "descriptor");
@@ -1218,11 +1291,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const serializeCommandPath = (command: string) => [...normalizedParentPath, command].join(" ");
+    const commandPaths = commands.map(serializeCommandPath);
+    const commandPathSet = new Set(commandPaths);
     const existing = registry.cliRegistrars.find((entry) =>
-      entry.commands.some((command) => commands.includes(command)),
+      entry.commands
+        .map((command) => [...(entry.parentPath ?? []), command].join(" "))
+        .some((commandPath) => commandPathSet.has(commandPath)),
     );
     if (existing) {
-      const overlap = commands.find((command) => existing.commands.includes(command));
+      const existingCommandPaths = new Set(
+        existing.commands.map((command) => [...(existing.parentPath ?? []), command].join(" ")),
+      );
+      const overlap = commandPaths.find((commandPath) => existingCommandPaths.has(commandPath));
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -1231,11 +1312,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    record.cliCommands.push(...commands);
+    record.cliCommands.push(...commandPaths);
     registry.cliRegistrars.push({
       pluginId: record.id,
       pluginName: record.name,
       register: registrar,
+      parentPath: normalizedParentPath,
       commands,
       descriptors,
       source: record.source,
@@ -1419,6 +1501,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       service,
       source: record.source,
       origin: record.origin,
+      trustedOfficialInstall: record.trustedOfficialInstall,
       rootDir: record.rootDir,
     });
   };
@@ -1593,6 +1676,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const namespace = normalizeHostHookString(extension.namespace);
     const description = normalizeHostHookString(extension.description);
     const project = extension.project;
+    let normalizedSessionEntrySlotKey: string | undefined;
     let invalidMessage: string | undefined;
     if (!namespace || !description) {
       invalidMessage = "session extension registration requires namespace and description";
@@ -1602,6 +1686,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       invalidMessage = "session extension projector must be synchronous";
     } else if (extension.cleanup !== undefined && typeof extension.cleanup !== "function") {
       invalidMessage = "session extension cleanup must be a function";
+    } else if (extension.sessionEntrySlotKey !== undefined) {
+      const slotKey = normalizeSessionEntrySlotKey(extension.sessionEntrySlotKey);
+      if (!slotKey.ok) {
+        invalidMessage = slotKey.error;
+      } else {
+        normalizedSessionEntrySlotKey = slotKey.key;
+      }
     }
     if (invalidMessage) {
       pushDiagnostic({
@@ -1624,6 +1715,28 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    if (normalizedSessionEntrySlotKey) {
+      const existingSlot = (registry.sessionExtensions ?? []).find((entry) => {
+        const existingSlotKey = entry.extension.sessionEntrySlotKey;
+        if (existingSlotKey === undefined) {
+          return false;
+        }
+        const normalizedExistingSlotKey = normalizeSessionEntrySlotKey(existingSlotKey);
+        return (
+          normalizedExistingSlotKey.ok &&
+          normalizedExistingSlotKey.key === normalizedSessionEntrySlotKey
+        );
+      });
+      if (existingSlot) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `sessionEntrySlotKey already registered: ${normalizedSessionEntrySlotKey}`,
+        });
+        return;
+      }
+    }
     (registry.sessionExtensions ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1631,6 +1744,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...extension,
         namespace,
         description,
+        ...(normalizedSessionEntrySlotKey
+          ? { sessionEntrySlotKey: normalizedSessionEntrySlotKey }
+          : {}),
       },
       source: record.source,
       rootDir: record.rootDir,
@@ -2128,6 +2244,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             },
           } satisfies PluginRuntime["state"];
         }
+        if (prop === "llm") {
+          const llm = Reflect.get(target, prop, receiver);
+          return {
+            complete: (params) =>
+              withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
+          } satisfies PluginRuntime["llm"];
+        }
         if (prop !== "subagent") {
           return Reflect.get(target, prop, receiver);
         }
@@ -2161,6 +2284,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
     pluginRuntimeRecordById.set(record.id, record);
+    const sideEffectGuard = createPluginSideEffectGuard(record.id);
+    const isLoadedRecordInRegistry = () =>
+      registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
+    const isActivatingLoadedRecord = () =>
+      registryParams.activateGlobalSideEffects !== false &&
+      record.enabled &&
+      record.status === "loaded" &&
+      !registry.plugins.some((plugin) => plugin.id === record.id);
+    const shouldCommitWorkflowSideEffect = () =>
+      sideEffectGuard.active &&
+      !isPluginRegistryRetired(registry) &&
+      (isLoadedRecordInRegistry() || isActivatingLoadedRecord());
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -2181,6 +2316,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config, params.pluginConfig),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
+              registerHostedMediaResolver: (resolver) =>
+                registerHostedMediaResolver(record, resolver),
               registerProvider: (provider) => registerProvider(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
               registerDetachedTaskRuntime: (runtime) => {
@@ -2370,14 +2507,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),
-              setRunContext: (patch) => setPluginRunContext({ pluginId: record.id, patch }),
+              setRunContext: (patch) =>
+                registryParams.activateGlobalSideEffects !== false &&
+                shouldCommitWorkflowSideEffect()
+                  ? setPluginRunContext({ pluginId: record.id, patch })
+                  : false,
               getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
-              clearRunContext: (params) =>
+              clearRunContext: (params) => {
+                if (
+                  registryParams.activateGlobalSideEffects === false ||
+                  !shouldCommitWorkflowSideEffect()
+                ) {
+                  return;
+                }
                 clearPluginRunContext({
                   pluginId: record.id,
                   runId: params.runId,
                   namespace: params.namespace,
-                }),
+                });
+              },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -2540,6 +2688,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const rollbackPluginGlobalSideEffects = (pluginId: string) => {
+    deactivatePluginSideEffectGuards(pluginId);
     if (registryParams.activateGlobalSideEffects === false) {
       return;
     }
@@ -2575,6 +2724,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     pushDiagnostic,
     registerTool,
     registerChannel,
+    registerHostedMediaResolver,
     registerProvider,
     registerAgentHarness,
     registerCliBackend,

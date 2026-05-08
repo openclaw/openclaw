@@ -22,7 +22,6 @@ import {
 } from "../secrets/runtime.js";
 import {
   getInspectableActiveTaskRestartBlockers,
-  getInspectableTaskRegistrySummary,
   type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -113,6 +112,7 @@ type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
+  onCronRestart?: () => void;
 };
 
 type ManagedGatewayConfigReloaderParams = Omit<
@@ -142,7 +142,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
     const embeddedRuns = getActiveEmbeddedRunCount();
-    const activeTasks = getInspectableTaskRegistrySummary().active;
+    const activeTasks = getInspectableActiveTaskRestartBlockers().length;
     return {
       queueSize,
       pendingReplies,
@@ -163,7 +163,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       details.push(`${counts.embeddedRuns} embedded run(s)`);
     }
     if (counts.activeTasks > 0) {
-      details.push(`${counts.activeTasks} task run(s)`);
+      details.push(`${counts.activeTasks} background task run(s)`);
     }
     return details;
   };
@@ -202,11 +202,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         ", ",
       )} complete`,
     );
-    const timeoutMsRaw = nextConfig.gateway?.reload?.deferralTimeoutMs;
-    const timeoutMs =
-      typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
-        ? Math.max(CHANNEL_RELOAD_DEFERRAL_POLL_MS, Math.floor(timeoutMsRaw))
-        : undefined;
+    const timeoutMs = resolveGatewayRestartDeferralTimeoutMs(
+      nextConfig.gateway?.reload?.deferralTimeoutMs,
+    );
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
     while (true) {
@@ -310,6 +308,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartCron) {
+      params.onCronRestart?.();
       state.cronState.cron.stop();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
@@ -418,7 +417,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       );
       const taskBlockers = formatTaskBlockers();
       if (taskBlockers) {
-        params.logReload.warn(`restart blocked by active task run(s): ${taskBlockers}`);
+        params.logReload.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
       }
 
       deferGatewayRestartUntilIdle({
@@ -489,6 +488,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     logChannels: params.logChannels,
     logCron: params.logCron,
     logReload: params.logReload,
+    ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
         cfg: config,

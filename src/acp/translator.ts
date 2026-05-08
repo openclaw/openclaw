@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+import path from "node:path";
 import type {
   Agent,
   AgentSideConnection,
   AuthenticateRequest,
   AuthenticateResponse,
   CancelNotification,
+  CloseSessionRequest,
+  CloseSessionResponse,
   InitializeRequest,
   InitializeResponse,
   ListSessionsRequest,
@@ -16,7 +19,10 @@ import type {
   NewSessionResponse,
   PromptRequest,
   PromptResponse,
+  ResumeSessionRequest,
+  ResumeSessionResponse,
   SessionConfigOption,
+  SessionInfo,
   SessionModeState,
   SetSessionConfigOptionRequest,
   SetSessionConfigOptionResponse,
@@ -62,6 +68,11 @@ const ACP_TIMEOUT_CONFIG_ID = "timeout";
 const ACP_TIMEOUT_SECONDS_CONFIG_ID = "timeout_seconds";
 const ACP_LOAD_SESSION_REPLAY_LIMIT = 1_000_000;
 const ACP_GATEWAY_DISCONNECT_GRACE_MS = 5_000;
+const ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE = 100;
+const ACP_LIST_SESSIONS_MAX_PAGE_SIZE = 100;
+const ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET = 10_000;
+const ACP_LIST_SESSIONS_MAX_FETCH_LIMIT =
+  ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET + ACP_LIST_SESSIONS_MAX_PAGE_SIZE + 1;
 
 let acpCommandsModulePromise: Promise<typeof import("./commands.js")> | undefined;
 let acpSdkModulePromise: Promise<typeof import("@agentclientprotocol/sdk")> | undefined;
@@ -189,6 +200,61 @@ type ReplayChunk = {
   sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk";
   text: string;
 };
+
+type ListSessionsCursor = {
+  offset: number;
+  cwd?: string;
+};
+
+function encodeListSessionsCursor(cursor: ListSessionsCursor): string {
+  return Buffer.from(JSON.stringify({ v: 1, ...cursor }), "utf8").toString("base64url");
+}
+
+function decodeListSessionsCursor(value: string | null | undefined): ListSessionsCursor {
+  if (!value) {
+    return { offset: 0 };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Invalid ACP session list cursor.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid ACP session list cursor.");
+  }
+  const record = parsed as Record<string, unknown>;
+  if (record.v !== 1) {
+    throw new Error("Unsupported ACP session list cursor.");
+  }
+  if (
+    typeof record.offset !== "number" ||
+    !Number.isInteger(record.offset) ||
+    record.offset < 0 ||
+    record.offset > ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET
+  ) {
+    throw new Error("Invalid ACP session list cursor offset.");
+  }
+  const cwd = normalizeOptionalString(record.cwd);
+  return {
+    offset: record.offset,
+    ...(cwd ? { cwd } : {}),
+  };
+}
+
+function assertAbsoluteCwd(cwd: string, method: string): void {
+  if (!path.isAbsolute(cwd)) {
+    throw new Error(`ACP ${method} requires an absolute cwd.`);
+  }
+}
+
+function resolveListSessionsPageSize(meta: Record<string, unknown> | null | undefined): number {
+  const requested = readNumber(meta, ["limit", "pageSize"]);
+  if (requested === undefined) {
+    return ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE;
+  }
+  return Math.min(ACP_LIST_SESSIONS_MAX_PAGE_SIZE, Math.max(1, Math.floor(requested)));
+}
 
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
@@ -534,6 +600,8 @@ export class AcpGatewayAgent implements Agent {
         },
         sessionCapabilities: {
           list: {},
+          resume: {},
+          close: {},
         },
       },
       agentInfo: ACP_AGENT_INFO,
@@ -605,24 +673,105 @@ export class AcpGatewayAgent implements Agent {
     return { configOptions, modes };
   }
 
-  async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
-    const limit = readNumber(params._meta, ["limit"]) ?? 100;
-    const result = await this.gateway.request<SessionsListResult>("sessions.list", { limit });
-    const cwd = params.cwd ?? process.cwd();
+  async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+    const requestedCwd = normalizeOptionalString(params.cwd);
+    if (requestedCwd) {
+      assertAbsoluteCwd(requestedCwd, "session/list");
+    }
+    const fallbackCwd = requestedCwd ?? process.cwd();
+    const rawCursor = normalizeOptionalString(params.cursor);
+    const cursor = decodeListSessionsCursor(rawCursor);
+    if (rawCursor && cursor.cwd !== requestedCwd) {
+      throw new Error("ACP session list cursor does not match the cwd filter.");
+    }
+
+    const pageSize = resolveListSessionsPageSize(params._meta);
+    const start = cursor.offset;
+    const end = start + pageSize;
+    let fetchLimit = end + 1;
+    let rows: SessionInfo[] = [];
+
+    while (true) {
+      const result = await this.gateway.request<SessionsListResult>("sessions.list", {
+        limit: fetchLimit,
+        includeDerivedTitles: true,
+      });
+      rows = result.sessions
+        .filter((session) => {
+          if (!requestedCwd) {
+            return true;
+          }
+          return normalizeOptionalString(session.spawnedWorkspaceDir) === requestedCwd;
+        })
+        .map((session) => this.mapGatewaySessionToAcpSessionInfo(session, fallbackCwd));
+      if (
+        rows.length > end ||
+        result.hasMore !== true ||
+        fetchLimit >= ACP_LIST_SESSIONS_MAX_FETCH_LIMIT
+      ) {
+        break;
+      }
+      fetchLimit = Math.min(fetchLimit * 2, ACP_LIST_SESSIONS_MAX_FETCH_LIMIT);
+    }
+
+    const page = rows.slice(start, end);
+    const hasMore = rows.length > end;
     return {
-      sessions: result.sessions.map((session) => ({
-        sessionId: session.key,
-        cwd,
-        title: session.displayName ?? session.label ?? session.key,
-        updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
-        _meta: {
-          sessionKey: session.key,
-          kind: session.kind,
-          channel: session.channel,
-        },
-      })),
-      nextCursor: null,
+      sessions: page,
+      nextCursor: hasMore
+        ? encodeListSessionsCursor({
+            offset: end,
+            ...(requestedCwd ? { cwd: requestedCwd } : {}),
+          })
+        : null,
     };
+  }
+
+  async resumeSession(params: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    this.assertSupportedSessionSetup(params.mcpServers ?? []);
+    assertAbsoluteCwd(params.cwd, "session/resume");
+
+    const existingSession = this.sessionStore.getSession(params.sessionId);
+    if (!existingSession) {
+      this.enforceSessionCreateRateLimit("resumeSession");
+    }
+
+    const meta = parseSessionMeta(params._meta);
+    const fallbackKey = existingSession?.sessionKey ?? params.sessionId;
+    const sessionKey = await this.resolveSessionKeyFromMeta({
+      meta,
+      fallbackKey,
+    });
+
+    const shouldRequireGatewaySession =
+      !existingSession || sessionKey !== existingSession.sessionKey;
+    const sessionSnapshot = shouldRequireGatewaySession
+      ? await this.getExistingSessionSnapshot(sessionKey)
+      : await this.getSessionSnapshot(sessionKey);
+
+    const session = this.sessionStore.createSession({
+      sessionId: params.sessionId,
+      sessionKey,
+      cwd: params.cwd,
+    });
+    this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
+    await this.sendSessionSnapshotUpdate(session.sessionId, sessionSnapshot, {
+      includeControls: false,
+    });
+    await this.sendAvailableCommands(session.sessionId);
+    const { configOptions, modes } = sessionSnapshot;
+    return { configOptions, modes };
+  }
+
+  async closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
+    const session = this.sessionStore.getSession(params.sessionId);
+    if (!session) {
+      throw new Error(`Session ${params.sessionId} not found`);
+    }
+    await this.cancelSessionWork(session);
+    this.sessionStore.deleteSession(params.sessionId);
+    this.log(`closeSession: ${params.sessionId}`);
+    return {};
   }
 
   async authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse> {
@@ -802,32 +951,7 @@ export class AcpGatewayAgent implements Agent {
     if (!session) {
       return;
     }
-    // Capture runId before cancelActiveRun clears session.activeRunId.
-    const activeRunId = session.activeRunId;
-
-    this.sessionStore.cancelActiveRun(params.sessionId);
-    const pending = this.pendingPrompts.get(params.sessionId);
-    const scopedRunId = activeRunId ?? pending?.idempotencyKey;
-    if (!scopedRunId) {
-      return;
-    }
-
-    try {
-      await this.gateway.request("chat.abort", {
-        sessionKey: session.sessionKey,
-        runId: scopedRunId,
-      });
-    } catch (err) {
-      this.log(`cancel error: ${String(err)}`);
-    }
-
-    if (pending) {
-      this.pendingPrompts.delete(params.sessionId);
-      if (this.pendingPrompts.size === 0) {
-        this.clearDisconnectTimer();
-      }
-      pending.resolve({ stopReason: "cancelled" });
-    }
+    await this.cancelSessionWork(session);
   }
 
   private async resolveSessionKeyFromMeta(params: {
@@ -1257,6 +1381,68 @@ export class AcpGatewayAgent implements Agent {
     }
   }
 
+  private async getExistingSessionSnapshot(sessionKey: string): Promise<SessionSnapshot> {
+    const row = await this.getGatewaySessionRow(sessionKey);
+    if (!row) {
+      throw new Error(`Session ${sessionKey} not found`);
+    }
+    return {
+      ...buildSessionPresentation({ row }),
+      metadata: buildSessionMetadata({ row, sessionKey }),
+      usage: buildSessionUsageSnapshot(row),
+    };
+  }
+
+  private mapGatewaySessionToAcpSessionInfo(
+    session: GatewaySessionRow,
+    fallbackCwd: string,
+  ): SessionInfo {
+    const cwd = normalizeOptionalString(session.spawnedWorkspaceDir) ?? fallbackCwd;
+    return {
+      sessionId: session.key,
+      cwd,
+      title: session.derivedTitle ?? session.displayName ?? session.label ?? session.key,
+      updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
+      _meta: {
+        sessionKey: session.key,
+        kind: session.kind,
+        channel: session.channel,
+      },
+    };
+  }
+
+  private async cancelSessionWork(session: {
+    sessionId: string;
+    sessionKey: string;
+    activeRunId: string | null;
+  }): Promise<void> {
+    // Capture runId before cancelActiveRun clears session.activeRunId.
+    const activeRunId = session.activeRunId;
+
+    this.sessionStore.cancelActiveRun(session.sessionId);
+    const pending = this.pendingPrompts.get(session.sessionId);
+    const scopedRunId = activeRunId ?? pending?.idempotencyKey;
+
+    if (scopedRunId) {
+      try {
+        await this.gateway.request("chat.abort", {
+          sessionKey: session.sessionKey,
+          runId: scopedRunId,
+        });
+      } catch (err) {
+        this.log(`cancel error: ${String(err)}`);
+      }
+    }
+
+    if (pending) {
+      this.pendingPrompts.delete(session.sessionId);
+      if (this.pendingPrompts.size === 0) {
+        this.clearDisconnectTimer();
+      }
+      pending.resolve({ stopReason: "cancelled" });
+    }
+  }
+
   private async getGatewaySessionRow(
     sessionKey: string,
   ): Promise<GatewaySessionPresentationRow | undefined> {
@@ -1432,7 +1618,9 @@ export class AcpGatewayAgent implements Agent {
     );
   }
 
-  private enforceSessionCreateRateLimit(method: "newSession" | "loadSession"): void {
+  private enforceSessionCreateRateLimit(
+    method: "newSession" | "loadSession" | "resumeSession",
+  ): void {
     const budget = this.sessionCreateRateLimiter.consume();
     if (budget.allowed) {
       return;

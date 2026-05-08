@@ -29,7 +29,10 @@ installMinimaxProviderHttpMockCleanup();
 
 describe("minimax video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildMinimaxVideoGenerationProvider());
+    const provider = buildMinimaxVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.capabilities.generate?.resolutions).toEqual(["768P", "1080P"]);
+    expect(provider.capabilities.imageToVideo?.resolutions).toEqual(["768P", "1080P"]);
   });
 
   it("creates a task, polls status, and downloads the generated video", async () => {
@@ -53,8 +56,8 @@ describe("minimax video generation provider", () => {
         }),
       })
       .mockResolvedValueOnce({
-        headers: new Headers({ "content-type": "video/mp4" }),
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/webm" }),
+        arrayBuffer: async () => Buffer.from("webm-bytes"),
       });
 
     const provider = buildMinimaxVideoGenerationProvider();
@@ -64,6 +67,7 @@ describe("minimax video generation provider", () => {
       prompt: "A fox sprints across snowy hills",
       cfg: {},
       durationSeconds: 5,
+      resolution: "720P",
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledWith(
@@ -71,10 +75,12 @@ describe("minimax video generation provider", () => {
         url: "https://api.minimax.io/v1/video_generation",
         body: expect.objectContaining({
           duration: 6,
+          resolution: "768P",
         }),
       }),
     );
     expect(result.videos).toHaveLength(1);
+    expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual(
       expect.objectContaining({
         taskId: "task-123",

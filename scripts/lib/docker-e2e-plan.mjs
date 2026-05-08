@@ -75,6 +75,7 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "bootstrap-persona",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
+  "stale-source-plugin-shadow",
   "tilde-log-path",
   "versioned-runtime-deps",
 ];
@@ -369,7 +370,7 @@ function buildPlanJson(params) {
       bareImage: imageKinds.includes("bare"),
       e2eImage: imageKinds.length > 0,
       functionalImage: imageKinds.includes("functional"),
-      liveImage: scheduledLanes.some((poolLane) => poolLane.live),
+      liveImage: scheduledLanes.some((poolLane) => poolLane.needsLiveImage),
       package: lanesNeedOpenClawPackage(scheduledLanes),
     },
     profile: params.profile,

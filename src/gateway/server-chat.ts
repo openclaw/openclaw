@@ -613,8 +613,9 @@ export function createAgentEventHandler({
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
-    // Build tool payload: strip result/partialResult unless verbose=full
-    const toolPayload =
+    // Channel/node subscribers respect verbose; authenticated Control UI
+    // recipients need tool result payloads to render live tool cards.
+    const channelToolPayload =
       isToolEvent && toolVerbose !== "full"
         ? (() => {
             const data = evt.data ? { ...evt.data } : {};
@@ -655,7 +656,7 @@ export function createAgentEventHandler({
       if (isControlUiVisible && recipients && recipients.size > 0) {
         broadcastToConnIds(
           "agent",
-          sessionKey ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : toolPayload,
+          sessionKey ? { ...agentPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
           recipients,
         );
       }
@@ -669,7 +670,7 @@ export function createAgentEventHandler({
         if (sessionSubscribers.size > 0) {
           broadcastToConnIds(
             "session.tool",
-            { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) },
+            { ...agentPayload, ...buildSessionEventSnapshot(sessionKey) },
             sessionSubscribers,
             { dropIfSlow: true },
           );
@@ -692,7 +693,9 @@ export function createAgentEventHandler({
         nodeSendToSession(
           sessionKey,
           "agent",
-          isToolEvent ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
+          isToolEvent
+            ? { ...channelToolPayload, ...buildSessionEventSnapshot(sessionKey) }
+            : agentPayload,
         );
       }
       if (

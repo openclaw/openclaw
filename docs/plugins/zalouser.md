@@ -6,8 +6,6 @@ read_when:
 title: "Zalo personal plugin"
 ---
 
-# Zalo Personal (plugin)
-
 Zalo Personal support for OpenClaw via a plugin, using native `zca-js` to automate a normal Zalo user account.
 
 <Warning>
@@ -85,4 +83,4 @@ Channel message actions also support `react` for message reactions.
 ## Related
 
 - [Building plugins](/plugins/building-plugins)
-- [Community plugins](/plugins/community)
+- [ClawHub](/clawhub)

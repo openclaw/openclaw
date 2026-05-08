@@ -279,12 +279,24 @@ export async function executePreparedCliRun(
     skillsSnapshot: params.skillsSnapshot,
   });
   let claudeSkillsPluginCleanupOwned = false;
+  const baseArgsWithSkills =
+    claudeSkillsPlugin.args.length > 0
+      ? [...resolvedArgs, ...claudeSkillsPlugin.args]
+      : resolvedArgs;
+  const executionBaseArgs =
+    context.backendResolved.resolveExecutionArgs?.({
+      config: params.config,
+      workspaceDir: context.workspaceDir,
+      provider: params.provider,
+      modelId: context.modelId,
+      authProfileId: context.effectiveAuthProfileId,
+      thinkingLevel: params.thinkLevel,
+      useResume,
+      baseArgs: baseArgsWithSkills,
+    }) ?? baseArgsWithSkills;
   const args = buildCliArgs({
     backend,
-    baseArgs:
-      claudeSkillsPlugin.args.length > 0
-        ? [...resolvedArgs, ...claudeSkillsPlugin.args]
-        : resolvedArgs,
+    baseArgs: Array.from(executionBaseArgs),
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
     systemPrompt: systemPromptArg,
@@ -383,6 +395,7 @@ export async function executePreparedCliRun(
           backend,
           timeoutMs: params.timeoutMs,
           useResume,
+          trigger: params.trigger,
         });
         const hasJsonlOutput = backend.output === "jsonl";
         if (shouldUseClaudeLiveSession(context)) {

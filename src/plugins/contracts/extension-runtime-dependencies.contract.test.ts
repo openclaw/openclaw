@@ -8,6 +8,11 @@ const EXTENSION_RUNTIME_FILE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs"
 const BUILTIN_MODULES = new Set(builtinModules.map((moduleId) => moduleId.replace(/^node:/, "")));
 const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
   [
+    "extensions/canvas",
+    // The A2UI bundle probes this optional markdown renderer and falls back when absent.
+    new Set(["@a2ui/markdown-it"]),
+  ],
+  [
     "extensions/discord",
     // Prefer the pure-JS opusscript decoder, but keep the optional native decoder
     // fallback for users who install it themselves.
@@ -24,6 +29,16 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     "extensions/whatsapp",
     // Baileys loads jimp as an optional peer when it needs media thumbnails.
     new Set(["jimp"]),
+  ],
+  [
+    "extensions/memory-lancedb",
+    // LanceDB imports apache-arrow at runtime through its peer dependency.
+    new Set(["apache-arrow"]),
+  ],
+  [
+    "extensions/memory-core",
+    // Packaged memory tools run through generated OpenClaw runtime chunks that parse JSON5 config.
+    new Set(["json5"]),
   ],
   [
     "extensions/tlon",
@@ -210,6 +225,12 @@ describe("Discord dependency ownership", () => {
 });
 
 describe("extension runtime dependency manifests", () => {
+  it("keeps json5 in memory-core for packaged runtime config parsing", () => {
+    const manifest = readPackageManifest("extensions/memory-core/package.json");
+
+    expect(manifest.dependencies?.json5).toBeDefined();
+  });
+
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
     const extensionDir = toPosixPath(path.dirname(manifestPath));
 

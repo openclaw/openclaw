@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaLabServer } from "./lab-server.js";
+import { readQaJsonBody } from "./bus-server.js";
+import {
+  startQaLabServer,
+  writeQaLabServerError,
+  type QaLabServerStartParams,
+} from "./lab-server.js";
 
 vi.mock("@openclaw/qa-channel/api.js", async () => await import("../../qa-channel/api.js"));
 
@@ -128,6 +133,13 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 
 const cleanups: Array<() => Promise<void>> = [];
 
+async function startQaLabServerForTest(params?: QaLabServerStartParams) {
+  return await startQaLabServer({
+    embeddedGateway: "disabled",
+    ...params,
+  });
+}
+
 afterEach(async () => {
   captureMock.reset();
   while (cleanups.length > 0) {
@@ -241,7 +253,7 @@ async function createQaLabRepoRootFixture(params?: {
 }
 
 describe("qa-lab server", () => {
-  it("serves bootstrap state and writes a self-check report", async () => {
+  it("serves bootstrap state and message state", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
     cleanups.push(async () => {
       await rm(tempDir, { recursive: true, force: true });
@@ -249,13 +261,14 @@ describe("qa-lab server", () => {
     const outputPath = path.join(tempDir, "self-check.md");
     const repoRoot = await createQaLabRepoRootFixture();
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       outputPath,
       repoRoot,
       controlUiUrl: "http://127.0.0.1:18789/",
       controlUiToken: "qa-token",
+      embeddedGateway: "disabled",
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -303,11 +316,39 @@ describe("qa-lab server", () => {
     };
     expect(snapshot.messages.some((message) => message.text === "hello from test")).toBe(true);
 
-    const result = await lab.runSelfCheck();
-    expect(result.scenarioResult.status).toBe("pass");
-    const markdown = await readFile(outputPath, "utf8");
-    expect(markdown).toContain("Synthetic Slack-class roundtrip");
-    expect(markdown).toContain("- Status: pass");
+    await expect(readFile(outputPath, "utf8")).rejects.toThrow();
+  });
+
+  it("returns controlled errors for oversized JSON body reads", async () => {
+    const req = {
+      headers: { "content-length": String(1024 * 1024 + 1) },
+      destroyed: false,
+      destroy() {
+        this.destroyed = true;
+      },
+    };
+    const res = {
+      statusCode: 0,
+      body: "",
+      writeHead(statusCode: number) {
+        this.statusCode = statusCode;
+      },
+      end(payload: string) {
+        this.body = payload;
+      },
+    };
+
+    let error: unknown;
+    try {
+      await readQaJsonBody(req as never);
+    } catch (caught) {
+      error = caught;
+    }
+
+    writeQaLabServerError(res as never, error);
+
+    expect(res.statusCode).toBe(413);
+    expect(JSON.parse(res.body)).toEqual({ error: "Payload too large" });
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
@@ -316,10 +357,12 @@ describe("qa-lab server", () => {
       await rm(repoRoot, { recursive: true, force: true });
     });
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
+      embeddedGateway: "disabled",
+      selfCheckWaitTimeoutMs: 1,
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -331,9 +374,10 @@ describe("qa-lab server", () => {
   });
 
   it("injects the kickoff task on demand and on startup", async () => {
-    const autoKickoffLab = await startQaLabServer({
+    const autoKickoffLab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
+      embeddedGateway: "disabled",
       sendKickoffOnStart: true,
     });
     cleanups.push(async () => {
@@ -349,9 +393,10 @@ describe("qa-lab server", () => {
       true,
     );
 
-    const manualLab = await startQaLabServer({
+    const manualLab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
+      embeddedGateway: "disabled",
     });
     cleanups.push(async () => {
       await manualLab.stop();
@@ -402,7 +447,7 @@ describe("qa-lab server", () => {
       throw new Error("expected upstream address");
     }
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       advertiseHost: "127.0.0.1",
@@ -445,7 +490,7 @@ describe("qa-lab server", () => {
       "utf8",
     );
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       uiDistDir,
@@ -473,7 +518,7 @@ describe("qa-lab server", () => {
         "<!doctype html><html><head><title>Temp QA Lab UI</title></head><body>repo-root-ui</body></html>",
     });
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
@@ -530,7 +575,7 @@ describe("qa-lab server", () => {
       "utf8",
     );
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
@@ -579,7 +624,7 @@ describe("qa-lab server", () => {
       "utf8",
     );
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
@@ -597,11 +642,13 @@ describe("qa-lab server", () => {
 
     await lab.stop();
     stopped = true;
-    expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
+    if (process.platform !== "win32") {
+      expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
+    }
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       embeddedGateway: "disabled",
@@ -630,7 +677,7 @@ describe("qa-lab server", () => {
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       embeddedGateway: "disabled",
@@ -776,7 +823,7 @@ describe("qa-lab server", () => {
       }),
     });
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
     });

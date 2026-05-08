@@ -1,5 +1,4 @@
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
@@ -31,6 +30,10 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  openAIProviderUsesCodexRuntimeByDefault,
+} from "../../agents/openai-codex-routing.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -45,7 +48,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
-import { shortenHomePath } from "../../utils.js";
+import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import { type AuthProbeSummary } from "./list.probe.js";
@@ -59,6 +62,11 @@ import {
 
 type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
 type ProgressRuntime = typeof import("../../cli/progress.js");
+
+function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  return override ? resolveUserPath(override, env) : undefined;
+}
 type TerminalTableRuntime = typeof import("../../terminal/table.js");
 type ListProbeRuntime = typeof import("./list.probe.js");
 
@@ -173,8 +181,10 @@ export async function modelsStatusCommand(
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
   const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
+  const agentDir = agentId
+    ? resolveAgentDir(cfg, agentId)
+    : (resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, workspaceAgentId));
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
@@ -240,18 +250,31 @@ export async function modelsStatusCommand(
       .filter(Boolean),
   );
   const providersFromModels = new Set<string>();
-  const providersInUse = new Set<string>();
+  const providerUses: Array<{ provider: string; allowCodexRuntimeFallback: boolean }> = [];
+  const addProviderUse = (raw: string | undefined, allowCodexRuntimeFallback: boolean) => {
+    const modelRef = raw?.trim();
+    if (!modelRef) {
+      return;
+    }
+    const parsed = parseModelRef(modelRef, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
+    if (parsed?.provider) {
+      providerUses.push({
+        provider: normalizeProviderId(parsed.provider),
+        allowCodexRuntimeFallback,
+      });
+    }
+  };
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
     const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     if (parsed?.provider) {
       providersFromModels.add(normalizeProviderId(parsed.provider));
     }
   }
-  for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
-    if (parsed?.provider) {
-      providersInUse.add(normalizeProviderId(parsed.provider));
-    }
+  for (const raw of [defaultLabel, ...fallbacks]) {
+    addProviderUse(raw, true);
+  }
+  for (const raw of [imageModel, ...imageFallbacks]) {
+    addProviderUse(raw, false);
   }
 
   const providersFromEnv = new Set<string>();
@@ -338,9 +361,33 @@ export async function modelsStatusCommand(
       return hasAny;
     });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
-  const missingProvidersInUse = Array.from(providersInUse)
-    .filter((provider) => !providerAuthMap.has(provider))
-    .filter((provider) => !syntheticAuthByProvider.has(provider))
+  const hasUsableAuthForProviderInUse = (
+    provider: string,
+    options: { allowCodexRuntimeFallback: boolean },
+  ): boolean => {
+    if (providerAuthMap.has(provider) || syntheticAuthByProvider.has(provider)) {
+      return true;
+    }
+    if (!options.allowCodexRuntimeFallback) {
+      return false;
+    }
+    return (
+      openAIProviderUsesCodexRuntimeByDefault({ provider, config: cfg }) &&
+      providerAuthMap.has(OPENAI_CODEX_PROVIDER_ID)
+    );
+  };
+  const missingProvidersInUse = Array.from(
+    new Set(
+      providerUses
+        .filter(
+          (usage) =>
+            !hasUsableAuthForProviderInUse(usage.provider, {
+              allowCodexRuntimeFallback: usage.allowCodexRuntimeFallback,
+            }),
+        )
+        .map((usage) => usage.provider),
+    ),
+  )
     .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 

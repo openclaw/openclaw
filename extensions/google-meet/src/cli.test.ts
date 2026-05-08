@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { registerGoogleMeetCli } from "./cli.js";
 import { resolveGoogleMeetConfig } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
@@ -216,6 +216,11 @@ describe("google-meet CLI", () => {
     vi.unstubAllGlobals();
   });
 
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.resetModules();
+  });
+
   it("prints setup checks as text and JSON", async () => {
     {
       const stdout = captureStdout();
@@ -228,7 +233,7 @@ describe("google-meet CLI", () => {
                 {
                   id: "audio-bridge",
                   ok: true,
-                  message: "Chrome command-pair realtime audio bridge configured (pcm16-24khz)",
+                  message: "Chrome command-pair talk-back audio bridge configured (pcm16-24khz)",
                 },
               ],
             }),
@@ -236,7 +241,7 @@ describe("google-meet CLI", () => {
         }).parseAsync(["googlemeet", "setup"], { from: "user" });
         expect(stdout.output()).toContain("Google Meet setup: OK");
         expect(stdout.output()).toContain(
-          "[ok] audio-bridge: Chrome command-pair realtime audio bridge configured (pcm16-24khz)",
+          "[ok] audio-bridge: Chrome command-pair talk-back audio bridge configured (pcm16-24khz)",
         );
         expect(stdout.output()).not.toContain('"checks"');
       } finally {
@@ -675,7 +680,7 @@ describe("google-meet CLI", () => {
                 url: "https://meet.google.com/abc-defg-hij",
                 state: "active",
                 transport: "twilio",
-                mode: "realtime",
+                mode: "agent",
                 participantIdentity: "Twilio PSTN participant",
                 createdAt: "2026-04-25T00:00:00.000Z",
                 updatedAt: "2026-04-25T00:00:01.000Z",
@@ -704,7 +709,7 @@ describe("google-meet CLI", () => {
           url: "https://meet.google.com/abc-defg-hij",
           state: "active",
           transport: "chrome-node",
-          mode: "realtime",
+          mode: "agent",
           participantIdentity: "signed-in Google Chrome profile on a paired node",
           createdAt: "2026-04-25T00:00:00.000Z",
           updatedAt: "2026-04-25T00:00:01.000Z",
@@ -908,7 +913,7 @@ describe("google-meet CLI", () => {
               url: "https://meet.google.com/abc-defg-hij",
               state: "active",
               transport: "chrome-node",
-              mode: "realtime",
+              mode: "agent",
               participantIdentity: "signed-in Google Chrome profile on a paired node",
               createdAt: "2026-04-25T00:00:00.000Z",
               updatedAt: "2026-04-25T00:00:01.000Z",
@@ -964,7 +969,7 @@ describe("google-meet CLI", () => {
               url: "https://meet.google.com/abc-defg-hij",
               state: "active",
               transport: "twilio",
-              mode: "realtime",
+              mode: "agent",
               participantIdentity: "Twilio phone participant",
               createdAt: "2026-04-25T00:00:00.000Z",
               updatedAt: "2026-04-25T00:00:01.000Z",

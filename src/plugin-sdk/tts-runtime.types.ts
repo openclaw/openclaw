@@ -18,6 +18,7 @@ export type TtsAttemptReasonCode =
   | "success"
   | "no_provider_registered"
   | "not_configured"
+  | "unsupported_for_streaming"
   | "unsupported_for_telephony"
   | "timeout"
   | "provider_error";
@@ -154,6 +155,8 @@ export type TtsSynthesisResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
   persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
@@ -164,12 +167,33 @@ export type TtsSynthesisResult = {
   target?: TtsSpeechTarget;
 };
 
+export type TtsStreamResult = {
+  success: boolean;
+  audioStream?: ReadableStream<Uint8Array>;
+  error?: string;
+  latencyMs?: number;
+  provider?: string;
+  persona?: string;
+  fallbackFrom?: string;
+  attemptedProviders?: string[];
+  attempts?: TtsProviderAttempt[];
+  outputFormat?: string;
+  voiceCompatible?: boolean;
+  fileExtension?: string;
+  target?: TtsSpeechTarget;
+  release?: () => Promise<void>;
+};
+
+export type TtsSynthesisStreamResult = TtsStreamResult;
+
 export type TtsTelephonyResult = {
   success: boolean;
   audioBuffer?: Buffer;
   error?: string;
   latencyMs?: number;
   provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
   persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
@@ -179,6 +203,7 @@ export type TtsTelephonyResult = {
 };
 
 export type TextToSpeech = (params: TtsRequestParams) => Promise<TtsResult>;
+export type TextToSpeechStream = (params: TtsRequestParams) => Promise<TtsStreamResult>;
 export type TextToSpeechTelephony = (
   params: TtsTelephonyRequestParams,
 ) => Promise<TtsTelephonyResult>;
@@ -222,6 +247,8 @@ export type TtsRuntimeFacade = {
   setTtsPersona: (prefsPath: string, persona: string | null | undefined) => void;
   setTtsProvider: (prefsPath: string, provider: TtsProvider) => void;
   synthesizeSpeech: (params: TtsRequestParams) => Promise<TtsSynthesisResult>;
+  streamSpeech: (params: TtsRequestParams) => Promise<TtsSynthesisStreamResult>;
   textToSpeech: TextToSpeech;
+  textToSpeechStream: TextToSpeechStream;
   textToSpeechTelephony: TextToSpeechTelephony;
 };

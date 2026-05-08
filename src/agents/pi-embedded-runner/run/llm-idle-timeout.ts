@@ -138,6 +138,9 @@ export function resolveLlmIdleTimeoutMs(params?: {
   }
 
   if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
+    if (params?.trigger === "cron") {
+      return clampTimeoutMs(runTimeoutMs);
+    }
     return clampImplicitTimeoutMs(runTimeoutMs);
   }
 

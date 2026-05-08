@@ -63,7 +63,11 @@ export const discordChannelConfigUiHints = {
   },
   "streaming.preview.toolProgress": {
     label: "Discord Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
+  },
+  "streaming.preview.commandText": {
+    label: "Discord Draft Command Text",
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
   "streaming.progress.label": {
     label: "Discord Progress Label",
@@ -80,6 +84,10 @@ export const discordChannelConfigUiHints = {
   "streaming.progress.toolProgress": {
     label: "Discord Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+  },
+  "streaming.progress.commandText": {
+    label: "Discord Progress Command Text",
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
   "retry.attempts": {
     label: "Discord Retry Attempts",
@@ -192,6 +200,10 @@ export const discordChannelConfigUiHints = {
   "voice.reconnectGraceMs": {
     label: "Discord Voice Reconnect Grace (ms)",
     help: "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000.",
+  },
+  "voice.captureSilenceGraceMs": {
+    label: "Discord Voice Capture Silence Grace (ms)",
+    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2500.",
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
   active: boolean;
@@ -97,6 +97,18 @@ import {
   clearFeishuStreamingStartBackoffForTests,
   createFeishuReplyDispatcher,
 } from "./reply-dispatcher.js";
+
+afterAll(() => {
+  vi.doUnmock("./accounts.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./media.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./targets.js");
+  vi.doUnmock("./typing.js");
+  vi.doUnmock("./streaming-card.js");
+  vi.resetModules();
+});
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
@@ -1101,7 +1113,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
-  it("shows transient tool status on streaming cards but omits it from the final close", async () => {
+  it("shows shared transient tool status on streaming cards but omits it from the final close", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -1124,10 +1136,68 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const updateTexts = streamingInstances[0].update.mock.calls.map((call: unknown[]) =>
       typeof call[0] === "string" ? call[0] : "",
     );
-    expect(updateTexts.some((text) => text.includes("Using: web_search"))).toBe(true);
+    expect(updateTexts.some((text) => text.includes("🔎 Web Search"))).toBe(true);
     expect(streamingInstances[0].close).toHaveBeenCalledWith("final answer", {
       note: "Agent: agent",
     });
+  });
+
+  it("shows raw command detail in streaming card tool status", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    result.replyOptions.onToolStart?.({
+      name: "exec",
+      args: { command: "pnpm test -- --watch=false" },
+      detailMode: "raw",
+    });
+    result.replyOptions.onPartialReply?.({ text: "final answer" });
+    await options.onIdle?.();
+
+    const updateTexts = streamingInstances[0].update.mock.calls.map((call: unknown[]) =>
+      typeof call[0] === "string" ? call[0] : "",
+    );
+    expect(
+      updateTexts.some((text) => text.includes("🛠️ Exec: run tests, `pnpm test -- --watch=false`")),
+    ).toBe(true);
+  });
+
+  it("omits message-like tools from streaming card status", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    result.replyOptions.onToolStart?.({ name: "message" });
+    result.replyOptions.onPartialReply?.({ text: "final answer" });
+    await options.onIdle?.();
+
+    const updateTexts = streamingInstances[0].update.mock.calls.map((call: unknown[]) =>
+      typeof call[0] === "string" ? call[0] : "",
+    );
+    expect(updateTexts.some((text) => text.includes("Message"))).toBe(false);
   });
 
   it("does not suppress a later final after error closeout", async () => {

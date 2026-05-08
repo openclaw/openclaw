@@ -145,6 +145,14 @@ describe("resolveNpmPublishPlan", () => {
     });
   });
 
+  it("can publish stable correction releases directly to latest when requested", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-1", undefined, "latest")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: [],
+    });
+  });
+
   it("ignores current beta dist-tag state for stable publishes", () => {
     expect(resolveNpmPublishPlan("2026.3.29", "2026.4.1-beta.1")).toEqual({
       channel: "stable",
@@ -606,6 +614,21 @@ describe("collectReleasePackageMetadataErrors", () => {
         dependencies: { "node-llama-cpp": "3.18.1" },
       }),
     ).toContain('package.json dependencies["node-llama-cpp"] must be omitted; keep it optional.');
+  });
+
+  it("rejects local fs-safe dependency specs for npm release", () => {
+    expect(
+      collectReleasePackageMetadataErrors({
+        name: "openclaw",
+        description: "Multi-channel AI gateway with extensible messaging integrations",
+        license: "MIT",
+        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
+        bin: { openclaw: "openclaw.mjs" },
+        dependencies: { "@openclaw/fs-safe": "link:../fs-safe" },
+      }),
+    ).toContain(
+      'package.json dependencies["@openclaw/fs-safe"] must use a published semver range before npm release; found "link:../fs-safe".',
+    );
   });
 
   it("rejects node-llama-cpp as an optional dependency", () => {

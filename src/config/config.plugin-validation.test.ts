@@ -97,7 +97,7 @@ describe("config plugin validation", () => {
   let suiteHome = "";
   let badPluginDir = "";
   let enumPluginDir = "";
-  let bluebubblesPluginDir = "";
+  let chatPluginDir = "";
   let googleOverridePluginDir = "";
   let voiceCallSchemaPluginDir = "";
   let bundlePluginDir = "";
@@ -135,7 +135,7 @@ describe("config plugin validation", () => {
     await mkdirSafe(suiteHome);
     badPluginDir = path.join(suiteHome, "bad-plugin");
     enumPluginDir = path.join(suiteHome, "enum-plugin");
-    bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
+    chatPluginDir = path.join(suiteHome, "chat-plugin");
     await writePluginFixture({
       dir: badPluginDir,
       id: "bad-plugin",
@@ -163,9 +163,9 @@ describe("config plugin validation", () => {
       },
     });
     await writePluginFixture({
-      dir: bluebubblesPluginDir,
-      id: "bluebubbles-plugin",
-      channels: ["bluebubbles"],
+      dir: chatPluginDir,
+      id: "chat-plugin",
+      channels: ["chat"],
       schema: { type: "object" },
     });
     googleOverridePluginDir = path.join(suiteHome, "google");
@@ -251,6 +251,44 @@ describe("config plugin validation", () => {
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
       });
     }
+  });
+
+  it("reports catalog install hints for missing configured official external plugins", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { brave: { enabled: true } },
+          allow: ["brave"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
+    expect(res.warnings ?? []).toEqual(
+      expect.arrayContaining([
+        { path: "plugins.entries.brave", message },
+        { path: "plugins.allow", message },
+      ]),
+    );
+    expect(
+      (res.warnings ?? []).some(
+        (warning) =>
+          (warning.path === "plugins.entries.brave" || warning.path === "plugins.allow") &&
+          warning.message.includes("remove it from plugins config"),
+      ),
+    ).toBe(false);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -493,7 +531,7 @@ describe("config plugin validation", () => {
     expect(res.warnings ?? []).toContainEqual({
       path: "plugins.allow",
       message:
-        "plugin not found: discord (stale config entry ignored; remove it from plugins config)",
+        "plugin not installed: discord — install the official external plugin with: openclaw plugins install @openclaw/discord",
     });
   });
 
@@ -602,7 +640,7 @@ describe("config plugin validation", () => {
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", async () => {
     const res = validateInSuite({
       plugins: {
-        allow: ["bluebubbles", "memory-core"],
+        allow: ["imessage", "memory-core"],
         load: {
           paths: [googleOverridePluginDir],
         },
@@ -643,6 +681,49 @@ describe("config plugin validation", () => {
           issue.message.includes("invalid config"),
       );
       expect(hasIssue).toBe(true);
+    }
+  });
+
+  it("surfaces invalid Codex native plugin marketplaces as config diagnostics", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              codexPlugins: {
+                enabled: true,
+                plugins: {
+                  github: {
+                    enabled: true,
+                    marketplaceName: "not-openai-curated",
+                    pluginName: "github",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName",
+          message: expect.stringContaining("invalid config"),
+        }),
+      );
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+              "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName" &&
+            issue.allowedValues?.includes("openai-curated"),
+        ),
+      ).toBe(true);
     }
   });
 
@@ -871,8 +952,8 @@ describe("config plugin validation", () => {
 
   it("accepts plugin heartbeat targets", async () => {
     const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
-      plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
+      agents: { defaults: { heartbeat: { target: "chat" } }, list: [{ id: "pi" }] },
+      plugins: { enabled: false, load: { paths: [chatPluginDir] } },
     });
     expect(res.ok).toBe(true);
   });

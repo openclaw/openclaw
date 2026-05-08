@@ -21,7 +21,6 @@ Sources/Gateway/GatewayProblemView.swift
 Sources/Gateway/GatewayQuickSetupSheet.swift
 Sources/Gateway/GatewayServiceResolver.swift
 Sources/Gateway/GatewaySettingsStore.swift
-Sources/Gateway/GatewaySetupCode.swift
 Sources/Gateway/GatewayTrustPromptAlert.swift
 Sources/Gateway/KeychainStore.swift
 Sources/Gateway/TCPProbe.swift
