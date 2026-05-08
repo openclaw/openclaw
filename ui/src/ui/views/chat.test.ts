@@ -445,7 +445,7 @@ describe("chat loading skeleton", () => {
   it("shows the skeleton while the initial history load has no rendered content", () => {
     const container = renderChatView({ loading: true });
 
-    expect(container.querySelector(".chat-loading-skeleton")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-loading-skeleton")).toHaveLength(1);
     expect(container.querySelector(".agent-chat__welcome")).toBeNull();
   });
 
@@ -492,7 +492,7 @@ describe("chat voice controls", () => {
   it("keeps Talk visible without the stale browser dictation button", () => {
     const container = renderChatView();
 
-    expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
+    expect(container.querySelectorAll('[aria-label="Start Talk"]')).toHaveLength(1);
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
   });
 
@@ -676,7 +676,7 @@ describe("chat attachment picker", () => {
     const nextAttachments = onAttachmentsChange.mock.calls[0]?.[0] ?? [];
     expect(getChatAttachmentDataUrl(nextAttachments[0])).toMatch(/^data:application\/pdf;base64,/);
     const preview = renderChatView({ attachments: nextAttachments });
-    expect(preview.querySelector(".chat-attachment-thumb--file")).not.toBeNull();
+    expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
     expect(preview.textContent).toContain("brief.pdf");
   });
 
@@ -769,7 +769,6 @@ describe("chat welcome", () => {
     let container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
 
     const avatar = container.querySelector<HTMLElement>(".agent-chat__avatar");
-    expect(avatar).not.toBeNull();
     expect(avatar?.tagName).toBe("DIV");
     expect(avatar?.textContent).toContain("VC");
     expect(avatar?.getAttribute("aria-label")).toBe("Val");
@@ -780,7 +779,6 @@ describe("chat welcome", () => {
     });
 
     const imageAvatar = container.querySelector<HTMLImageElement>("img");
-    expect(imageAvatar).not.toBeNull();
     expect(imageAvatar?.getAttribute("src")).toBe("blob:identity-avatar");
     expect(imageAvatar?.getAttribute("alt")).toBe("Val");
 
@@ -789,7 +787,6 @@ describe("chat welcome", () => {
     const fallbackAvatar = container.querySelector<HTMLImageElement>(
       ".agent-chat__avatar--logo img",
     );
-    expect(fallbackAvatar).not.toBeNull();
     expect(fallbackAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
     expect(fallbackAvatar?.getAttribute("alt")).toBe("Val");
   });
