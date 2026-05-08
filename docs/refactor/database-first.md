@@ -149,7 +149,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - `src/config/sessions/store-backend.sqlite.ts` now stores canonical session
   entries in the per-agent database and has row-level read/upsert/delete patch
   support. Runtime upsert/patch/delete no longer scans for case variants or
-  prunes legacy alias keys; doctor/migrate owns canonicalization.
+  prunes legacy alias keys; doctor/migrate owns canonicalization. The
+  standalone JSON import helper is gone, and migration merges upsert newer rows
+  instead of replacing the whole session table.
 - Transcript events, VFS rows, and tool artifact rows now write to the per-agent
   database. The global DB keeps transcript-file path metadata for migration,
   export, and lookup.
@@ -206,6 +208,10 @@ The remaining cleanup is mostly consolidation and deletion:
   sibling JSONL location. `resolveSessionTranscriptFile` and
   `resolveAndPersistSessionFile` derive transcript identity from `agentId`,
   `sessionId`, and the stored SQLite session row.
+- Cron persistence now reconciles SQLite `cron_jobs` rows instead of
+  deleting/reinserting the whole job table on each save. Plugin target
+  writebacks update matching cron rows directly and keep `cron.jobs.state` in
+  the same state-database transaction.
 - ACP spawn no longer resolves or persists transcript JSONL file paths. Spawn
   and thread-bind setup persist the SQLite session row directly and keep the
   session id as the retained transcript identity.

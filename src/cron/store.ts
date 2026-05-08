@@ -394,14 +394,36 @@ function writeCronJobsToSqlite(storePath: string, store: CronStoreFile): void {
   const storeKey = cronStoreKey(storePath);
   runOpenClawStateWriteTransaction((database) => {
     const db = getCronJobsKysely(database.db);
-    executeSqliteQuerySync(
+    const existingRows = executeSqliteQuerySync<{ job_id: string }>(
       database.db,
-      db.deleteFrom("cron_jobs").where("store_key", "=", storeKey),
-    );
+      db.selectFrom("cron_jobs").select("job_id").where("store_key", "=", storeKey),
+    ).rows;
+    const nextJobIds = new Set(store.jobs.map((job) => job.id));
     for (const [index, job] of store.jobs.entries()) {
       executeSqliteQuerySync(
         database.db,
-        db.insertInto("cron_jobs").values(cronJobRow(storePath, job, index)),
+        db
+          .insertInto("cron_jobs")
+          .values(cronJobRow(storePath, job, index))
+          .onConflict((conflict) =>
+            conflict.columns(["store_key", "job_id"]).doUpdateSet({
+              job_json: JSON.stringify(stripRuntimeOnlyCronJobFields(job)),
+              sort_order: index,
+              updated_at: Date.now(),
+            }),
+          ),
+      );
+    }
+    for (const row of existingRows) {
+      if (nextJobIds.has(row.job_id)) {
+        continue;
+      }
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("cron_jobs")
+          .where("store_key", "=", storeKey)
+          .where("job_id", "=", row.job_id),
       );
     }
   });

@@ -2352,7 +2352,6 @@ async function migrateLegacySessions(
       {
         agentId: detected.targetAgentId,
         env: detected.env,
-        sourcePath: detected.sessions.targetStorePath,
       },
       normalized,
     );
