@@ -564,9 +564,9 @@ function parseAllowedSandboxModesFromCodexRequirements(
   if (!match) {
     return undefined;
   }
-  const rawArrayBody = match[1] ?? "";
-  const stringMatches = [...rawArrayBody.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'/g)];
-  if (stringMatches.length === 0 && rawArrayBody.replace(/#[^\n]*/g, "").trim().length > 0) {
+  const arrayBody = stripTomlLineComments(match[1] ?? "");
+  const stringMatches = [...arrayBody.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'/g)];
+  if (stringMatches.length === 0 && arrayBody.trim().length > 0) {
     return undefined;
   }
   return new Set(
@@ -574,6 +574,46 @@ function parseAllowedSandboxModesFromCodexRequirements(
       .map((entry) => normalizeRequirementsSandboxMode(entry[1] ?? entry[2] ?? ""))
       .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined),
   );
+}
+
+function stripTomlLineComments(value: string): string {
+  let output = "";
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index] ?? "";
+    if (quote) {
+      output += char;
+      if (quote === '"' && escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote === '"' && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      output += char;
+      continue;
+    }
+    if (char === "#") {
+      while (index < value.length && value[index] !== "\n") {
+        index += 1;
+      }
+      if (value[index] === "\n") {
+        output += "\n";
+      }
+      continue;
+    }
+    output += char;
+  }
+  return output;
 }
 
 function normalizeRequirementsSandboxMode(value: string): CodexAppServerSandboxMode | undefined {

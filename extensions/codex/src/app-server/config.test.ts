@@ -176,6 +176,26 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("ignores quoted sandbox modes inside requirements comments", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      requirementsToml: `allowed_sandbox_modes = [
+  "read-only",
+  # "danger-full-access",
+  "workspace-write",
+]
+`,
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
+      }),
+    );
+  });
+
   it("reads local requirements policy from the configured requirements path", () => {
     const readPaths: string[] = [];
     const runtime = resolveCodexAppServerRuntimeOptions({

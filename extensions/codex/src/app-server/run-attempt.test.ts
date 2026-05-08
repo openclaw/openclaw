@@ -674,7 +674,9 @@ describe("runCodexAppServerAttempt", () => {
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.toolsAllow = ["message", "web_search", "heartbeat_respond"];
 
-    const run = runCodexAppServerAttempt(params);
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
     await harness.waitForMethod("turn/start", 60_000);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -1953,6 +1955,7 @@ describe("runCodexAppServerAttempt", () => {
     const { waitForMethod } = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { pluginConfig: { appServer: { mode: "yolo" } } },
     );
 
     await waitForMethod("turn/start");
@@ -1974,6 +1977,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { pluginConfig: { appServer: { mode: "yolo" } } },
     );
     await waitForMethod("turn/start");
 
@@ -3107,7 +3111,9 @@ describe("runCodexAppServerAttempt", () => {
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const { requests, waitForMethod, completeTurn } = createResumeHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
     await waitForMethod("turn/start");
     await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
