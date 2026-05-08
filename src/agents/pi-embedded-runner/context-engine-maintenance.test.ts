@@ -598,7 +598,7 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(completedTasks).toHaveLength(2);
-        expect(completedTasks.every((task) => task.status === "succeeded")).toBe(true);
+        expect(completedTasks.filter((task) => task.status !== "succeeded")).toEqual([]);
 
         await foregroundTurn;
       } finally {
@@ -672,7 +672,7 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(2);
-        expect(tasks.every((task) => task.status === "succeeded")).toBe(true);
+        expect(tasks.filter((task) => task.status !== "succeeded")).toEqual([]);
       } finally {
         vi.useRealTimers();
       }
@@ -740,7 +740,9 @@ describe("runContextEngineMaintenance", () => {
           status: "cancelled",
           notifyPolicy: "silent",
         });
-        expect(tasks.some((task) => task.runId?.startsWith("turn-maint:"))).toBe(true);
+        expect(tasks.map((task) => task.runId)).toContainEqual(
+          expect.stringMatching(/^turn-maint:/),
+        );
       } finally {
         vi.useRealTimers();
       }
