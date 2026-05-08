@@ -7,7 +7,7 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
-import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state-key.js";
 
 type ManifestModelIdNormalizationLookupParams = {
   config?: OpenClawConfig;

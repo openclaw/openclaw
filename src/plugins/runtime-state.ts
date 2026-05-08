@@ -1,6 +1,10 @@
 import type { PluginRegistry } from "./registry-types.js";
+import {
+  getActivePluginRegistryWorkspaceDirFromState as getWorkspaceDirFromState,
+  PLUGIN_REGISTRY_STATE,
+} from "./runtime-state-key.js";
 
-export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+export { PLUGIN_REGISTRY_STATE };
 
 export type RuntimeTrackedPluginRegistry = PluginRegistry;
 
@@ -35,6 +39,5 @@ export function getActivePluginChannelRegistryFromState(): RuntimeTrackedPluginR
 }
 
 export function getActivePluginRegistryWorkspaceDirFromState(): string | undefined {
-  const state = getPluginRegistryState();
-  return state?.workspaceDir ?? undefined;
+  return getWorkspaceDirFromState();
 }

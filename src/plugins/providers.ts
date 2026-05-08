@@ -90,7 +90,9 @@ function resolveProviderOwnerPluginIds(
   }
   const pluginIdSet = new Set(params.pluginIds);
   const registry = loadProviderRegistrySnapshot(params);
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(
     registry,
     (plugin) => pluginIdSet.has(plugin.pluginId) && params.isEligible(plugin, normalizedConfig),
@@ -160,7 +162,9 @@ export function resolveBundledProviderCompatPluginIds(params: {
 export function resolveEnabledProviderPluginIds(params: ProviderRegistryLoadParams): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(
     registry,
     (plugin) =>
@@ -178,6 +182,8 @@ export function resolveExternalAuthProfileProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   return resolveRegistryManifestContractPluginIds({
     ...params,
@@ -192,6 +198,8 @@ function resolveRegistryManifestContractPluginIds(params: {
   env?: PluginLoadOptions["env"];
   origin?: PluginRegistryRecord["origin"];
   onlyPluginIds?: readonly string[];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   return resolveManifestRegistry({
@@ -219,6 +227,8 @@ export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
   declaredPluginIds?: ReadonlySet<string>;
 }): string[] {
   // Deprecated compatibility fallback for provider plugins that still implement
@@ -228,7 +238,9 @@ export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
     params.declaredPluginIds ?? new Set(resolveExternalAuthProfileProviderPluginIds(params));
   const registry = loadProviderRegistrySnapshot(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(
     registry,
     (plugin) =>
@@ -256,7 +268,9 @@ export function resolveDiscoveredProviderPluginIds(params: {
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
   const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(registry, (plugin) => {
     if (
       !(
@@ -313,6 +327,8 @@ export function resolveDiscoverableProviderOwnerPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
@@ -358,6 +374,8 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   return resolveProviderOwnerPluginIds({
@@ -601,10 +619,14 @@ export function resolveNonBundledProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(
     registry,
     (plugin) =>
@@ -622,10 +644,14 @@ export function resolveCatalogHookProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   const enabledProviderPluginIds = listRegistryPluginIds(
     registry,
     (plugin) =>

@@ -124,6 +124,7 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK/fs-safe: route browser, media, channel, and QA external output producers through staged fs-safe writes before final publication. (#78768)
 - Plugin SDK/fs-safe: rename the public temp workspace helpers to `tempWorkspace`, `withTempWorkspace`, `tempWorkspaceSync`, and `withTempWorkspaceSync`, matching the cleaner `@openclaw/fs-safe` API before the package is published.
 - Core/performance: trim reply payload routing, heartbeat filtering, tool display, core tool assembly, channel directory, task status, and Slack approval formatting helper chains with direct bounded scans. Thanks @vincentkoc.
+- Providers/performance: reuse the current workspace-compatible plugin metadata snapshot while planning provider runtime loads, catalog hooks, synthetic auth, and external auth profiles, reducing repeated plugin registry/index rebuilds on warm provider paths without changing provider selection and fixing snapshot misses from workspace path mismatches (#77926). Thanks @rolandrscheel.
 - Control UI/performance: keep chat, config, and channel refreshes responsive by decoupling slow history/schema/status work, reducing the client history window, and logging over-budget chat/config renders. Refs #77060, #45698, #47979, #44107. Thanks @BunsDev.
 - Gateway/diagnostics: add startup phase spans, active work labels, stale terminal bridge markers, and opt-in sync-I/O tracing in `pnpm gateway:watch` so slow Gateway turns are easier to attribute from logs and stability diagnostics.
 - QA/Mantis: add visual desktop tasks with Crabbox MP4 recording, screenshot capture, and optional image-understanding assertions, and preserve video artifacts in Mantis before/after reports.
@@ -524,7 +525,6 @@ Docs: https://docs.openclaw.ai
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.
 - Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.
 - Gateway/startup: keep model-catalog test helpers, run-session lookup code, QR pairing helpers, and TypeBox memory-tool schema construction out of hot startup import paths, reducing default gateway benchmark plugin-load and memory pressure.
-- Control UI/performance: record browser long animation frame or long task entries in the debug event log when supported, making slow dashboard renders easier to attribute from the UI.
 - Slack/streaming: add `streaming.progress.render: "rich"` for Block Kit progress drafts backed by structured progress line data.
 - Slack/streaming: keep the newest rich progress lines when Block Kit limits trim long progress drafts. Thanks @vincentkoc.
 - Channels/streaming: cap progress-draft tool lines by default so edited progress boxes avoid jumpy reflow from long wrapped lines.
@@ -555,10 +555,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenRouter: expand app-attribution categories so OpenClaw advertises coding, programming, writing, chat, and personal-agent usage on verified OpenRouter routes. Thanks @vincentkoc.
 - Plugins/update: make package upgrades swap pnpm/npm-prefix installs cleanly, keep legacy plugin install runtime chunks working, and on the beta channel fall back default-line npm plugins to default/latest when plugin beta releases are missing or fail install validation. Thanks @vincentkoc and @joshavant.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
-- Exec approvals: add a tree-sitter-backed shell command explainer for future approval and command-review surfaces. (#75004) Thanks @jesse-merhi.
-- Agents/sandbox: store sandbox container and browser registry entries as per-runtime shard files, reducing unrelated session lock contention while `openclaw doctor --fix` migrates legacy monolithic registry files. (#74831) Thanks @luckylhb90.
 - Plugins/ClawHub: annotate 429 errors from ClawHub with the reset window from `RateLimit-Reset`/`Retry-After` and append a `Sign in for higher rate limits.` hint when the request was unauthenticated, so users can see when downloads will recover and how to lift the cap. Thanks @romneyda.
-- Plugins/runtime state: add `registerIfAbsent` for atomic keyed-store dedupe claims that return whether a plugin successfully claimed a key without overwriting an existing live value. Thanks @amknight.
 - Plugin SDK: add plugin-owned `SessionEntry` slot projection and scoped trusted-policy session extension reads. (#75609; replaces part of #73384/#74483) Thanks @100yenadmin.
 - Sandbox/Windows: accept drive-absolute Docker bind sources while keeping sandbox blocked-path and allowed-root policy comparisons Windows-case-insensitive. (#42174) Thanks @6607changchun.
 
@@ -831,9 +828,7 @@ Docs: https://docs.openclaw.ai
 - Discord/status: let explicit reaction tool calls opt into tracking later tool progress with `trackToolCalls: true`, share tool display emoji mapping, and surface degraded Discord transport or gateway event-loop starvation in status output. (#76327) Thanks @joshavant.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
 - Agents/tools: skip optional media and PDF tool factories when the effective tool denylist already blocks them, avoiding unnecessary hot-path setup for tools that will be filtered out before model use. (#76773) Thanks @dorukardahan.
-- Agents/sandbox: store sandbox container and browser registry entries as per-runtime shard files, reducing unrelated session lock contention while `openclaw doctor --fix` migrates legacy monolithic registry files. (#74831) Thanks @luckylhb90.
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
-- Exec approvals: add a tree-sitter-backed shell command explainer for future approval and command-review surfaces. (#75004) Thanks @jesse-merhi.
 - QA/Mantis: add a `pnpm openclaw qa mantis discord-smoke` runner and manual GitHub workflow that verify the Mantis Discord bot can see the configured guild/channel, post a smoke message, add a reaction, and upload artifacts.
 
 ### Fixes
