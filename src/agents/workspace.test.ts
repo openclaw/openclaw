@@ -373,7 +373,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
-  it("treats hardlinked bootstrap aliases as missing", async () => {
+  it("loads hardlinked bootstrap files (nlink>1 guard disabled for read-only path)", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -385,7 +385,7 @@ describe("loadWorkspaceBootstrapFiles", () => {
       await fs.mkdir(outsideDir, { recursive: true });
       const outsideFile = path.join(outsideDir, DEFAULT_AGENTS_FILENAME);
       const linkPath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
-      await fs.writeFile(outsideFile, "outside", "utf-8");
+      await fs.writeFile(outsideFile, "shared content", "utf-8");
       try {
         await fs.link(outsideFile, linkPath);
       } catch (err) {
@@ -397,8 +397,10 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
       const files = await loadWorkspaceBootstrapFiles(workspaceDir);
       const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-      expect(agents?.missing).toBe(true);
-      expect(agents?.content).toBeUndefined();
+      // Hardlinks within or into the workspace root must load — the nlink>1 guard
+      // is only relevant for write paths (TOCTOU prevention) and is too strict here.
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toContain("shared content");
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }

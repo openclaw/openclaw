@@ -57,11 +57,16 @@ async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
 }): Promise<WorkspaceGuardedReadResult> {
+  // Bootstrap file loading is read-only; the nlink>1 hardlink guard exists to
+  // prevent TOCTOU substitution attacks on write paths and is unnecessary here.
+  // Allowing hardlinks lets operators share bootstrap files (e.g. AGENTS.md)
+  // across multiple agent workspaces via POSIX hard links.
   const opened = await openRootFile({
     absolutePath: params.filePath,
     rootPath: params.workspaceDir,
     boundaryLabel: "workspace root",
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     workspaceFileCache.delete(params.filePath);
