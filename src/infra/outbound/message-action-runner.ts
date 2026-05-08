@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
@@ -621,6 +622,26 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const hasPresentation = hasMessagePresentationBlocks(params.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(params.interactive);
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
+  const messageFile = readStringParam(params, "messageFile", { trim: false });
+  if (messageFile !== null && messageFile !== undefined && messageFile !== "") {
+    if (readStringParam(params, "message", { allowEmpty: true })) {
+      throw new Error("use --message or --message-file, not both");
+    }
+    let fileContent: string;
+    try {
+      fileContent = await fs.readFile(messageFile, "utf8");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        throw new Error(`message file not found: ${messageFile}`, { cause: err });
+      }
+      if (code === "EACCES") {
+        throw new Error(`message file is not readable: ${messageFile}`, { cause: err });
+      }
+      throw new Error(`failed to read message file: ${messageFile}`, { cause: err });
+    }
+    params.message = fileContent;
+  }
   let message =
     readStringParam(params, "message", {
       required: !mediaHint && !hasPresentation && !hasInteractive,
