@@ -41,6 +41,21 @@ function mockSuccessfulBytePlusTask(params?: { model?: string }) {
     });
 }
 
+function requireBytePlusPostBody(): Record<string, unknown> {
+  const request = postJsonRequestMock.mock.calls[0]?.[0] as
+    | { body?: Record<string, unknown> }
+    | undefined;
+  expect(request).toBeDefined();
+  if (!request) {
+    throw new Error("expected BytePlus video request");
+  }
+  expect(request.body).toBeDefined();
+  if (!request.body) {
+    throw new Error("expected BytePlus video request body");
+  }
+  return request.body;
+}
+
 describe("byteplus video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildBytePlusVideoGenerationProvider());
@@ -88,8 +103,7 @@ describe("byteplus video generation provider", () => {
       cfg: {},
     });
 
-    const request = postJsonRequestMock.mock.calls[0]?.[0] as { body?: Record<string, unknown> };
-    expect(request.body).toMatchObject({
+    expect(requireBytePlusPostBody()).toMatchObject({
       model: "seedance-1-0-lite-i2v-250428",
       resolution: "720p",
       content: [
@@ -119,8 +133,7 @@ describe("byteplus video generation provider", () => {
       cfg: {},
     });
 
-    const request = postJsonRequestMock.mock.calls[0]?.[0] as { body?: Record<string, unknown> };
-    expect(request.body).toMatchObject({
+    expect(requireBytePlusPostBody()).toMatchObject({
       model: "seedance-1-0-pro-250528",
       seed: 42,
       resolution: "480p",
