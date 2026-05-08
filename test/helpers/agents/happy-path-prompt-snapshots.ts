@@ -30,7 +30,7 @@ export const CODEX_MODEL_PROMPT_FIXTURE_DIR =
 
 const WORKSPACE_DIR = "/tmp/openclaw-happy-path/workspace";
 const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
-const SESSION_FILE = "/tmp/openclaw-happy-path/session.jsonl";
+const SESSION_FILE = "sqlite-transcript://main/openclaw-happy-path.jsonl";
 const MODEL_ID = "gpt-5.5";
 const CODEX_PROMPT_PERSONALITY = "pragmatic";
 const CODEX_MODEL_PROMPT_FIXTURE_PATH = path.join(
