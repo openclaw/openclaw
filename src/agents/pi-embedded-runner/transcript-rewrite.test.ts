@@ -271,6 +271,115 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       content: [{ type: "text", text: "summarized" }],
     });
   });
+
+  it("dedupes exact replayed user payloads when rewriting a polluted branch", () => {
+    const sessionManager = SessionManager.inMemory();
+    const heartbeatPrompt = "Read HEARTBEAT.md if it exists (workspace context)...";
+    const replayedUserMessage = asAppendMessage({
+      role: "user",
+      content: heartbeatPrompt,
+      timestamp: 1,
+    });
+    const entryIds = appendSessionMessages(sessionManager, [
+      replayedUserMessage,
+      replayedUserMessage,
+      replayedUserMessage,
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("ack"),
+        timestamp: 2,
+      }),
+    ]);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: entryIds[0],
+          message: replayedUserMessage as AgentMessage,
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const branchMessages = getBranchMessages(sessionManager);
+    expect(branchMessages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(branchMessages[0]).toMatchObject({
+      role: "user",
+      content: heartbeatPrompt,
+      timestamp: 1,
+    });
+  });
+
+  it("preserves repeated user text when message timestamps differ", () => {
+    const sessionManager = SessionManager.inMemory();
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "yes", timestamp: 1 }),
+      asAppendMessage({ role: "user", content: "yes", timestamp: 2 }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("ok"),
+        timestamp: 3,
+      }),
+    ]);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: entryIds[0],
+          message: { role: "user", content: "yes", timestamp: 1 } as AgentMessage,
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(getBranchMessages(sessionManager).map((message) => message.role)).toEqual([
+      "user",
+      "user",
+      "assistant",
+    ]);
+  });
+
+  it("dedupes replayed bootstrap custom entries and cloned compactions", () => {
+    const sessionManager = SessionManager.inMemory();
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "start", timestamp: 1 }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("kept"),
+        timestamp: 2,
+      }),
+    ]);
+    sessionManager.appendCustomEntry("openclaw:bootstrap-context:full", { hash: "same" });
+    sessionManager.appendCustomEntry("openclaw:bootstrap-context:full", { hash: "same" });
+    const firstCompactionId = sessionManager.appendCompaction("summary", entryIds[1], 9_000, {
+      readFiles: ["HEARTBEAT.md"],
+    });
+    sessionManager.appendCompaction("summary", firstCompactionId, 9_000, {
+      readFiles: ["HEARTBEAT.md"],
+    });
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: entryIds[0],
+          message: { role: "user", content: "start", timestamp: 1 } as AgentMessage,
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    const branch = sessionManager.getBranch();
+    expect(
+      branch.filter(
+        (entry) =>
+          entry.type === "custom" && entry.customType === "openclaw:bootstrap-context:full",
+      ),
+    ).toHaveLength(1);
+    expect(branch.filter((entry) => entry.type === "compaction")).toHaveLength(1);
+  });
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {
@@ -343,5 +452,50 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       cleanup();
       openSpy.mockRestore();
     }
+  });
+
+  it("persists only one copy of exact replayed user payloads during file rewrite", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
+    const sessionManager = SessionManager.create(dir, dir);
+    const replayedUserMessage = asAppendMessage({
+      role: "user",
+      content: "Read HEARTBEAT.md if it exists (workspace context)...",
+      timestamp: 1,
+    });
+    const entryIds = appendSessionMessages(sessionManager, [
+      replayedUserMessage,
+      replayedUserMessage,
+      replayedUserMessage,
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("ack"),
+        timestamp: 2,
+      }),
+    ]);
+    const sessionFile = sessionManager.getSessionFile();
+    expect(sessionFile).toBeTruthy();
+    if (!sessionFile) {
+      throw new Error("expected persisted session file");
+    }
+
+    const result = await rewriteTranscriptEntriesInSessionFile({
+      sessionFile,
+      sessionKey: "agent:main:main:heartbeat",
+      request: {
+        replacements: [
+          {
+            entryId: entryIds[0],
+            message: replayedUserMessage as AgentMessage,
+          },
+        ],
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    const rewrittenSession = SessionManager.open(sessionFile);
+    expect(getBranchMessages(rewrittenSession).map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
   });
 });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
@@ -25,6 +26,40 @@ type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
 
 function estimateMessageBytes(message: AgentMessage): number {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(value ?? null))
+    .digest("hex");
+}
+
+function computeBranchEntryReplayIdentity(entry: SessionBranchEntry): string | null {
+  if (entry.type === "message") {
+    return `message:${hashJson(entry.message)}`;
+  }
+  if (entry.type === "compaction") {
+    return `compaction:${entry.tokensBefore}:${hashJson({
+      summary: entry.summary,
+      details: entry.details,
+      fromHook: entry.fromHook,
+    })}`;
+  }
+  if (entry.type === "custom") {
+    return `custom:${entry.customType}:${hashJson(entry.data)}`;
+  }
+  if (entry.type === "custom_message") {
+    return `custom_message:${entry.customType}:${hashJson({
+      content: entry.content,
+      details: entry.details,
+      display: entry.display,
+    })}`;
+  }
+  return null;
+}
+
+function computeMessageReplayIdentity(message: AgentMessage): string {
+  return `message:${hashJson(message)}`;
 }
 
 function remapEntryId(
@@ -227,19 +262,35 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
   // re-running persistence hooks or size truncation on replayed messages.
   const appendMessage = getRawSessionAppendMessage(params.sessionManager);
   const rewrittenEntryIds = new Map<string, string>();
+  const emittedReplayIdentities = new Map<string, string>();
   for (let index = matchedIndices[0]; index < branch.length; index++) {
     const entry = branch[index];
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
-    const newEntryId =
-      replacement === undefined
-        ? appendBranchEntry({
-            sessionManager: params.sessionManager,
-            entry,
-            rewrittenEntryIds,
-            appendMessage,
-          })
-        : appendMessage(replacement as Parameters<typeof params.sessionManager.appendMessage>[0]);
+    if (replacement === undefined) {
+      const replayIdentity = computeBranchEntryReplayIdentity(entry);
+      const existingEntryId =
+        replayIdentity === null ? undefined : emittedReplayIdentities.get(replayIdentity);
+      if (existingEntryId !== undefined) {
+        rewrittenEntryIds.set(entry.id, existingEntryId);
+        continue;
+      }
+      const newEntryId = appendBranchEntry({
+        sessionManager: params.sessionManager,
+        entry,
+        rewrittenEntryIds,
+        appendMessage,
+      });
+      rewrittenEntryIds.set(entry.id, newEntryId);
+      if (replayIdentity !== null) {
+        emittedReplayIdentities.set(replayIdentity, newEntryId);
+      }
+      continue;
+    }
+    const newEntryId = appendMessage(
+      replacement as Parameters<typeof params.sessionManager.appendMessage>[0],
+    );
     rewrittenEntryIds.set(entry.id, newEntryId);
+    emittedReplayIdentities.set(computeMessageReplayIdentity(replacement), newEntryId);
   }
 
   return {
@@ -328,19 +379,34 @@ export function rewriteTranscriptEntriesInState(params: {
 
   const appendedEntries: SessionBranchEntry[] = [];
   const rewrittenEntryIds = new Map<string, string>();
+  const emittedReplayIdentities = new Map<string, string>();
   for (let index = matchedIndices[0]; index < branch.length; index++) {
     const entry = branch[index];
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
-    const newEntry =
-      replacement === undefined
-        ? appendTranscriptStateBranchEntry({
-            state: params.state,
-            entry,
-            rewrittenEntryIds,
-          })
-        : params.state.appendMessage(replacement);
+    if (replacement === undefined) {
+      const replayIdentity = computeBranchEntryReplayIdentity(entry);
+      const existingEntryId =
+        replayIdentity === null ? undefined : emittedReplayIdentities.get(replayIdentity);
+      if (existingEntryId !== undefined) {
+        rewrittenEntryIds.set(entry.id, existingEntryId);
+        continue;
+      }
+      const newEntry = appendTranscriptStateBranchEntry({
+        state: params.state,
+        entry,
+        rewrittenEntryIds,
+      });
+      rewrittenEntryIds.set(entry.id, newEntry.id);
+      appendedEntries.push(newEntry);
+      if (replayIdentity !== null) {
+        emittedReplayIdentities.set(replayIdentity, newEntry.id);
+      }
+      continue;
+    }
+    const newEntry = params.state.appendMessage(replacement);
     rewrittenEntryIds.set(entry.id, newEntry.id);
     appendedEntries.push(newEntry);
+    emittedReplayIdentities.set(computeMessageReplayIdentity(replacement), newEntry.id);
   }
 
   return {
