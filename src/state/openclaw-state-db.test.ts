@@ -157,7 +157,65 @@ describe("openclaw state database", () => {
 
     expect(columns.some((column) => column.name === "sort_order")).toBe(true);
     expect(index?.sql).toContain("sort_order ASC");
-    expect(version.user_version).toBe(17);
+    expect(version.user_version).toBe(19);
+  });
+
+  it("migrates legacy cron runtime state from kv into cron job columns", () => {
+    const stateDir = createTempStateDir();
+    const dbPath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const sqlite = requireNodeSqlite();
+    const oldDb = new sqlite.DatabaseSync(dbPath);
+    oldDb.exec(`
+      CREATE TABLE kv (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      );
+      CREATE TABLE cron_jobs (
+        store_key TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        job_json TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (store_key, job_id)
+      );
+      INSERT INTO cron_jobs (store_key, job_id, job_json, sort_order, updated_at)
+      VALUES ('/tmp/cron/jobs.json', 'job-1', '{"id":"job-1"}', 0, 1);
+      INSERT INTO kv (scope, key, value_json, updated_at)
+      VALUES (
+        'cron.jobs.state',
+        '/tmp/cron/jobs.json',
+        '{"version":1,"jobs":{"job-1":{"updatedAtMs":42,"scheduleIdentity":"every:60000","state":{"nextRunAtMs":100}}}}',
+        2
+      );
+      PRAGMA user_version = 18;
+    `);
+    oldDb.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      database.db
+        .prepare(
+          "SELECT state_json, runtime_updated_at_ms, schedule_identity FROM cron_jobs WHERE job_id = ?",
+        )
+        .get("job-1"),
+    ).toEqual({
+      state_json: '{"nextRunAtMs":100}',
+      runtime_updated_at_ms: 42,
+      schedule_identity: "every:60000",
+    });
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?")
+        .get("cron.jobs.state"),
+    ).toEqual({ count: 0 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
   });
 
   it("upgrades task delivery state with task-run cascade integrity", () => {

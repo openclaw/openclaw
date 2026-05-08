@@ -17,7 +17,7 @@ import {
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
-const OPENCLAW_STATE_SCHEMA_VERSION = 18;
+const OPENCLAW_STATE_SCHEMA_VERSION = 19;
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
@@ -115,6 +115,81 @@ function tableHasColumn(db: DatabaseSync, tableName: string, columnName: string)
   return rows.some((row) => row.name === columnName);
 }
 
+function migrateCronJobRuntimeStateColumns(db: DatabaseSync): void {
+  if (!tableHasColumn(db, "cron_jobs", "state_json")) {
+    db.exec("ALTER TABLE cron_jobs ADD COLUMN state_json TEXT NOT NULL DEFAULT '{}';");
+  }
+  if (!tableHasColumn(db, "cron_jobs", "runtime_updated_at_ms")) {
+    db.exec("ALTER TABLE cron_jobs ADD COLUMN runtime_updated_at_ms INTEGER;");
+  }
+  if (!tableHasColumn(db, "cron_jobs", "schedule_identity")) {
+    db.exec("ALTER TABLE cron_jobs ADD COLUMN schedule_identity TEXT;");
+  }
+
+  const legacyRows = db
+    .prepare("SELECT key, value_json FROM kv WHERE scope = 'cron.jobs.state'")
+    .all() as Array<{ key?: unknown; value_json?: unknown }>;
+  if (legacyRows.length === 0) {
+    return;
+  }
+
+  const update = db.prepare(`
+    UPDATE cron_jobs
+    SET
+      state_json = ?,
+      runtime_updated_at_ms = ?,
+      schedule_identity = ?,
+      updated_at = max(updated_at, ?)
+    WHERE store_key = ?
+      AND job_id = ?
+  `);
+  const now = Date.now();
+  for (const row of legacyRows) {
+    if (typeof row.key !== "string" || typeof row.value_json !== "string") {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.value_json);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      continue;
+    }
+    const jobs = (parsed as { jobs?: unknown }).jobs;
+    if (!jobs || typeof jobs !== "object" || Array.isArray(jobs)) {
+      continue;
+    }
+    for (const [jobId, entry] of Object.entries(jobs)) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        continue;
+      }
+      const record = entry as {
+        scheduleIdentity?: unknown;
+        state?: unknown;
+        updatedAtMs?: unknown;
+      };
+      const state =
+        record.state && typeof record.state === "object" && !Array.isArray(record.state)
+          ? record.state
+          : {};
+      update.run(
+        JSON.stringify(state),
+        typeof record.updatedAtMs === "number" && Number.isFinite(record.updatedAtMs)
+          ? record.updatedAtMs
+          : null,
+        typeof record.scheduleIdentity === "string" ? record.scheduleIdentity : null,
+        now,
+        row.key,
+        jobId,
+      );
+    }
+  }
+
+  db.prepare("DELETE FROM kv WHERE scope = 'cron.jobs.state'").run();
+}
+
 function rebuildTaskDeliveryStateWithForeignKey(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_delivery_state_next (
@@ -187,6 +262,9 @@ function migrateStateSchema(db: DatabaseSync, fromVersion: number): void {
   }
   if (fromVersion < 16) {
     rebuildTaskDeliveryStateWithForeignKey(db);
+  }
+  if (fromVersion < 19) {
+    migrateCronJobRuntimeStateColumns(db);
   }
 }
 

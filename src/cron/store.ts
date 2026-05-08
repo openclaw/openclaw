@@ -2,36 +2,27 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Insertable } from "kysely";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import {
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { tryCronScheduleIdentity } from "./schedule-identity.js";
 import type { CronJob, CronStoreFile } from "./types.js";
 
-const CRON_STATE_KV_SCOPE = "cron.jobs.state";
-
-type CronStateKvDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
 type CronJobsTable = OpenClawStateKyselyDatabase["cron_jobs"];
 type CronJobsDatabase = Pick<OpenClawStateKyselyDatabase, "cron_jobs">;
-type CronStoreUpdateDatabase = Pick<OpenClawStateKyselyDatabase, "cron_jobs" | "kv">;
+type CronStoreUpdateDatabase = Pick<OpenClawStateKyselyDatabase, "cron_jobs">;
 
 type CronJobRow = {
   job_id: string;
   job_json: string;
+  runtime_updated_at_ms: number | null;
+  schedule_identity: string | null;
+  state_json: string;
 };
 
 function resolveDefaultCronDir(): string {
@@ -94,65 +85,6 @@ function normalizeCronStateFile(value: unknown): CronStateFile | null {
     jobs[jobId] = normalized;
   }
   return { version: 1, jobs };
-}
-
-function readStateDatabase(storePath: string): CronStateFile | null {
-  const value = readOpenClawStateKvJson(CRON_STATE_KV_SCOPE, cronStoreKey(storePath));
-  return normalizeCronStateFile(value);
-}
-
-function readStateDatabaseSync(storePath: string): CronStateFile | null {
-  const database = openOpenClawStateDatabase();
-  const row = executeSqliteQueryTakeFirstSync<{ value_json?: string }>(
-    database.db,
-    getNodeSqliteKysely<CronStateKvDatabase>(database.db)
-      .selectFrom("kv")
-      .select("value_json")
-      .where("scope", "=", CRON_STATE_KV_SCOPE)
-      .where("key", "=", cronStoreKey(storePath)),
-  );
-  if (typeof row?.value_json !== "string") {
-    return null;
-  }
-  try {
-    return normalizeCronStateFile(JSON.parse(row.value_json));
-  } catch {
-    return null;
-  }
-}
-
-function writeStateDatabase(storePath: string, stateFile: CronStateFile) {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    CRON_STATE_KV_SCOPE,
-    cronStoreKey(storePath),
-    stateFile as unknown as OpenClawStateJsonValue,
-  );
-}
-
-function writeStateDatabaseInTransaction(params: {
-  database: import("node:sqlite").DatabaseSync;
-  storePath: string;
-  stateFile: CronStateFile;
-  updatedAt: number;
-}): void {
-  const db = getNodeSqliteKysely<CronStoreUpdateDatabase>(params.database);
-  executeSqliteQuerySync(
-    params.database,
-    db
-      .insertInto("kv")
-      .values({
-        scope: CRON_STATE_KV_SCOPE,
-        key: cronStoreKey(params.storePath),
-        value_json: JSON.stringify(params.stateFile),
-        updated_at: params.updatedAt,
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["scope", "key"]).doUpdateSet({
-          value_json: JSON.stringify(params.stateFile),
-          updated_at: params.updatedAt,
-        }),
-      ),
-  );
 }
 
 function stripRuntimeOnlyCronJobFields(job: CronJob): Record<string, unknown> {
@@ -267,7 +199,7 @@ export async function importLegacyCronStateFileToSqlite(storePath: string): Prom
   if (!stateFile) {
     return { imported: false, importedJobs: 0 };
   }
-  writeStateDatabase(storePath, stateFile);
+  const importedJobs = writeCronJobRuntimeStateToSqlite(storePath, stateFile);
   try {
     await fs.promises.rm(statePath, { force: true });
   } catch {
@@ -275,7 +207,7 @@ export async function importLegacyCronStateFileToSqlite(storePath: string): Prom
   }
   return {
     imported: true,
-    importedJobs: Object.keys(stateFile.jobs).length,
+    importedJobs,
     removedPath: statePath,
   };
 }
@@ -290,8 +222,8 @@ export async function importLegacyCronStoreToSqlite(storePath: string): Promise<
     return { imported: false, importedJobs: 0 };
   }
   const stateFile = (await loadStateFile(resolveStatePath(storePath))) ?? extractStateFile(store);
-  writeStateDatabase(storePath, stateFile);
   writeCronJobsToSqlite(storePath, store);
+  writeCronJobRuntimeStateToSqlite(storePath, stateFile);
   try {
     await fs.promises.rm(storePath, { force: true });
   } catch {
@@ -341,16 +273,30 @@ function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: CronStat
   }
 }
 
-function hydrateCronStoreFromSqlite(
-  storePath: string,
-  stateFile: CronStateFile | null,
-): CronStoreFile {
+function parseCronStateJson(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function mergeCronJobRowRuntimeState(job: CronStoreFile["jobs"][number], row: CronJobRow): void {
+  mergeStateFileEntry(job, {
+    updatedAtMs: row.runtime_updated_at_ms ?? undefined,
+    scheduleIdentity: row.schedule_identity ?? undefined,
+    state: parseCronStateJson(row.state_json),
+  });
+}
+
+function hydrateCronStoreFromSqlite(storePath: string): CronStoreFile {
   const database = openOpenClawStateDatabase();
   const rows = executeSqliteQuerySync<CronJobRow>(
     database.db,
     getCronJobsKysely(database.db)
       .selectFrom("cron_jobs")
-      .select(["job_id", "job_json"])
+      .select(["job_id", "job_json", "runtime_updated_at_ms", "schedule_identity", "state_json"])
       .where("store_key", "=", cronStoreKey(storePath))
       .orderBy("sort_order", "asc")
       .orderBy("updated_at", "asc")
@@ -367,9 +313,9 @@ function hydrateCronStoreFromSqlite(
     }
   });
   for (const job of jobs) {
-    const entry = stateFile?.jobs[job.id];
-    if (entry) {
-      mergeStateFileEntry(job, entry);
+    const row = rows.find((candidate) => candidate.job_id === job.id);
+    if (row) {
+      mergeCronJobRowRuntimeState(job, row);
     } else {
       backfillMissingRuntimeFields(job);
     }
@@ -379,20 +325,40 @@ function hydrateCronStoreFromSqlite(
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
-  return hydrateCronStoreFromSqlite(storePath, readStateDatabase(storePath));
+  return hydrateCronStoreFromSqlite(storePath);
 }
 
 export function loadCronStoreSync(storePath: string): CronStoreFile {
-  return hydrateCronStoreFromSqlite(storePath, readStateDatabaseSync(storePath));
+  return hydrateCronStoreFromSqlite(storePath);
 }
 
 function cronJobRow(storePath: string, job: CronJob, sortOrder: number): Insertable<CronJobsTable> {
+  const scheduleIdentity = tryCronScheduleIdentity(job as unknown as Record<string, unknown>);
   return {
     store_key: cronStoreKey(storePath),
     job_id: job.id,
     job_json: JSON.stringify(stripRuntimeOnlyCronJobFields(job)),
+    state_json: JSON.stringify(job.state ?? {}),
+    runtime_updated_at_ms:
+      typeof job.updatedAtMs === "number" && Number.isFinite(job.updatedAtMs)
+        ? job.updatedAtMs
+        : null,
+    schedule_identity: scheduleIdentity,
     sort_order: sortOrder,
     updated_at: Date.now(),
+  };
+}
+
+function cronStateUpdateValues(
+  job: CronJob,
+): Pick<Insertable<CronJobsTable>, "runtime_updated_at_ms" | "schedule_identity" | "state_json"> {
+  return {
+    state_json: JSON.stringify(job.state ?? {}),
+    runtime_updated_at_ms:
+      typeof job.updatedAtMs === "number" && Number.isFinite(job.updatedAtMs)
+        ? job.updatedAtMs
+        : null,
+    schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
   };
 }
 
@@ -414,6 +380,7 @@ function writeCronJobsToSqlite(storePath: string, store: CronStoreFile): void {
           .onConflict((conflict) =>
             conflict.columns(["store_key", "job_id"]).doUpdateSet({
               job_json: JSON.stringify(stripRuntimeOnlyCronJobFields(job)),
+              ...cronStateUpdateValues(job),
               sort_order: index,
               updated_at: Date.now(),
             }),
@@ -435,15 +402,46 @@ function writeCronJobsToSqlite(storePath: string, store: CronStoreFile): void {
   });
 }
 
+function writeCronJobRuntimeStateToSqlite(storePath: string, stateFile: CronStateFile): number {
+  const storeKey = cronStoreKey(storePath);
+  const updatedAt = Date.now();
+  let importedJobs = 0;
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getCronJobsKysely(database.db);
+    for (const [jobId, entry] of Object.entries(stateFile.jobs)) {
+      const result = executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("cron_jobs")
+          .set({
+            state_json: JSON.stringify(entry.state ?? {}),
+            runtime_updated_at_ms:
+              typeof entry.updatedAtMs === "number" && Number.isFinite(entry.updatedAtMs)
+                ? entry.updatedAtMs
+                : null,
+            schedule_identity:
+              typeof entry.scheduleIdentity === "string" ? entry.scheduleIdentity : null,
+            updated_at: updatedAt,
+          })
+          .where("store_key", "=", storeKey)
+          .where("job_id", "=", jobId),
+      );
+      if ((result.numAffectedRows ?? 0n) > 0n) {
+        importedJobs += 1;
+      }
+    }
+  });
+  return importedJobs;
+}
+
 export async function saveCronStore(
   storePath: string,
   store: CronStoreFile,
   opts?: { skipBackup?: boolean; stateOnly?: boolean },
 ) {
   void opts?.skipBackup;
-  const stateFile = extractStateFile(store);
-  writeStateDatabase(storePath, stateFile);
   if (opts?.stateOnly === true) {
+    writeCronJobRuntimeStateToSqlite(storePath, extractStateFile(store));
     return;
   }
   writeCronJobsToSqlite(storePath, store);
@@ -454,7 +452,6 @@ export async function updateCronStoreJobs(
   updateJob: (job: CronJob) => CronJob | undefined,
 ): Promise<{ updatedJobs: number }> {
   const store = await loadCronStore(storePath);
-  const stateFile = extractStateFile(store);
   const updates: Array<{ previousJobId: string; job: CronJob; sortOrder: number }> = [];
 
   for (const [index, job] of store.jobs.entries()) {
@@ -463,14 +460,6 @@ export async function updateCronStoreJobs(
       continue;
     }
     ensureJobStateObject(nextJob);
-    if (nextJob.id !== job.id) {
-      delete stateFile.jobs[job.id];
-    }
-    stateFile.jobs[nextJob.id] = {
-      updatedAtMs: nextJob.updatedAtMs,
-      scheduleIdentity: tryCronScheduleIdentity(nextJob as unknown as Record<string, unknown>),
-      state: nextJob.state ?? {},
-    };
     updates.push({ previousJobId: job.id, job: nextJob, sortOrder: index });
   }
 
@@ -481,12 +470,6 @@ export async function updateCronStoreJobs(
   const storeKey = cronStoreKey(storePath);
   const updatedAt = Date.now();
   runOpenClawStateWriteTransaction((database) => {
-    writeStateDatabaseInTransaction({
-      database: database.db,
-      storePath,
-      stateFile,
-      updatedAt,
-    });
     const db = getNodeSqliteKysely<CronStoreUpdateDatabase>(database.db);
     for (const update of updates) {
       if (update.previousJobId !== update.job.id) {
@@ -506,6 +489,7 @@ export async function updateCronStoreJobs(
           .onConflict((conflict) =>
             conflict.columns(["store_key", "job_id"]).doUpdateSet({
               job_json: JSON.stringify(stripRuntimeOnlyCronJobFields(update.job)),
+              ...cronStateUpdateValues(update.job),
               sort_order: update.sortOrder,
               updated_at: updatedAt,
             }),
