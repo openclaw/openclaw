@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
@@ -84,6 +84,16 @@ const cardRenderConfig: ClawdbotConfig = {
     },
   },
 };
+
+afterAll(() => {
+  vi.doUnmock("./media.js");
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./drive.js");
+  vi.doUnmock("./comment-reaction.js");
+  vi.resetModules();
+});
 
 function resetOutboundMocks() {
   vi.clearAllMocks();
@@ -178,7 +188,6 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       throw new Error("feishuOutbound.chunker missing");
     }
 
-    expect(() => chunker("hello world", 5)).not.toThrow();
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 

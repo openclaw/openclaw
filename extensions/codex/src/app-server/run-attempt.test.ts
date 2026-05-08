@@ -4,16 +4,13 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   abortAgentHarnessRun,
-  queueAgentHarnessMessage,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness";
-import {
-  buildAgentRuntimePlan,
   embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
+  queueAgentHarnessMessage,
   resetAgentEventsForTest,
   type AgentEventPayload,
+  type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
@@ -22,6 +19,16 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import {
+  buildCodexAppInventoryCacheKey,
+  defaultCodexAppInventoryCache,
+} from "./app-inventory-cache.js";
+import {
+  resolveCodexAppServerEnvApiKeyCacheKey,
+  resolveCodexAppServerHomeDir,
+} from "./auth-bridge.js";
+import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
@@ -57,36 +64,30 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
   } as EmbeddedRunAttemptParams;
 }
 
-function createParamsWithRuntimePlan(
-  sessionFile: string,
-  workspaceDir: string,
-): EmbeddedRunAttemptParams {
-  const params = createParams(sessionFile, workspaceDir);
+function createCodexRuntimePlanFixture(): NonNullable<EmbeddedRunAttemptParams["runtimePlan"]> {
   return {
-    ...params,
-    runtimePlan: buildCodexRuntimePlan(params, workspaceDir),
-  };
-}
-
-function buildCodexRuntimePlan(params: EmbeddedRunAttemptParams, workspaceDir: string) {
-  return buildAgentRuntimePlan({
-    provider: params.provider,
-    modelId: params.modelId,
-    model: params.model,
-    modelApi: params.model.api,
-    harnessId: "codex",
-    harnessRuntime: "codex",
-    config: params.config,
-    workspaceDir,
-    agentDir: tempDir,
-    thinkingLevel: params.thinkLevel,
-  });
+    auth: {},
+    observability: {
+      resolvedRef: "codex/gpt-5.4-codex",
+      provider: "codex",
+      modelId: "gpt-5.4-codex",
+      harnessId: "codex",
+    },
+    prompt: {
+      resolveSystemPromptContribution: () => undefined,
+    },
+    tools: {
+      normalize: (tools: unknown[]) => tools,
+      logDiagnostics: () => undefined,
+    },
+  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
 }
 
 function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
       id: threadId,
+      sessionId: "session-1",
       forkedFromId: null,
       preview: "",
       ephemeral: false,
@@ -218,7 +219,7 @@ function createAppServerHarness(
   return {
     request,
     requests,
-    async waitForMethod(method: string) {
+    async waitForMethod(method: string, timeoutMs = 30_000) {
       await vi.waitFor(
         () => {
           if (!requests.some((entry) => entry.method === method)) {
@@ -230,7 +231,7 @@ function createAppServerHarness(
             );
           }
         },
-        { interval: 1, timeout: 30_000 },
+        { interval: 1, timeout: timeoutMs },
       );
     },
     async notify(notification: CodexServerNotification) {
@@ -326,6 +327,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
       headers: {},
     },
     requestTimeoutMs: 60_000,
+    turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
@@ -367,6 +369,125 @@ function createNamedDynamicTool(
   };
 }
 
+function createRuntimeDynamicTool(name: string) {
+  return {
+    name,
+    description: `${name} test tool`,
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    execute: vi.fn(async () => ({
+      content: [{ type: "text" as const, text: `${name} done` }],
+      details: {},
+    })),
+  } as never;
+}
+
+function createPluginAppConfigPatch() {
+  return {
+    apps: {
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+      "google-calendar-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: "prompt",
+      },
+    },
+  };
+}
+
+function createPluginAppPolicyContext() {
+  return {
+    fingerprint: "plugin-policy-1",
+    apps: {
+      "google-calendar-app": {
+        configKey: "google-calendar",
+        marketplaceName: "openai-curated" as const,
+        pluginName: "google-calendar",
+        allowDestructiveActions: false,
+        mcpServerNames: ["google-calendar"],
+      },
+    },
+    pluginAppIds: {
+      "google-calendar": ["google-calendar-app"],
+    },
+  };
+}
+
+function createTwoPluginAppConfigPatch() {
+  return {
+    apps: {
+      ...createPluginAppConfigPatch().apps,
+      "gmail-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: "prompt",
+      },
+    },
+  };
+}
+
+function createTwoPluginAppPolicyContext() {
+  return {
+    fingerprint: "plugin-policy-2",
+    apps: {
+      ...createPluginAppPolicyContext().apps,
+      "gmail-app": {
+        configKey: "gmail",
+        marketplaceName: "openai-curated" as const,
+        pluginName: "gmail",
+        allowDestructiveActions: false,
+        mcpServerNames: ["gmail"],
+      },
+    },
+    pluginAppIds: {
+      ...createPluginAppPolicyContext().pluginAppIds,
+      gmail: ["gmail-app"],
+    },
+  };
+}
+
+function createTwoCalendarAppConfigPatch() {
+  return {
+    apps: {
+      ...createPluginAppConfigPatch().apps,
+      "google-calendar-secondary-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: "prompt",
+      },
+    },
+  };
+}
+
+function createTwoCalendarAppPolicyContext() {
+  return {
+    fingerprint: "plugin-policy-calendar-2",
+    apps: {
+      ...createPluginAppPolicyContext().apps,
+      "google-calendar-secondary-app": {
+        configKey: "google-calendar",
+        marketplaceName: "openai-curated" as const,
+        pluginName: "google-calendar",
+        allowDestructiveActions: false,
+        mcpServerNames: ["google-calendar"],
+      },
+    },
+    pluginAppIds: {
+      "google-calendar": ["google-calendar-app", "google-calendar-secondary-app"],
+    },
+  };
+}
+
 type AppServerRequestHandler = (request: {
   id: string | number;
   method: string;
@@ -374,13 +495,28 @@ type AppServerRequestHandler = (request: {
 }) => Promise<unknown>;
 
 function extractRelayIdFromThreadRequest(params: unknown): string {
-  const command = (
-    params as {
-      config?: {
-        "hooks.PreToolUse"?: Array<{ hooks?: Array<{ command?: string }> }>;
-      };
+  const config = (params as { config?: Record<string, unknown> }).config;
+  let command: string | undefined;
+  for (const key of [
+    "hooks.PreToolUse",
+    "hooks.PostToolUse",
+    "hooks.PermissionRequest",
+    "hooks.Stop",
+  ]) {
+    const entries = config?.[key];
+    if (!Array.isArray(entries)) {
+      continue;
     }
-  ).config?.["hooks.PreToolUse"]?.[0]?.hooks?.[0]?.command;
+    for (const entry of entries as Array<{ hooks?: Array<{ command?: string }> }>) {
+      command = entry.hooks?.find((hook) => typeof hook.command === "string")?.command;
+      if (command) {
+        break;
+      }
+    }
+    if (command) {
+      break;
+    }
+  }
   const match = command?.match(/--relay-id ([^ ]+)/);
   if (!match?.[1]) {
     throw new Error(`relay id missing from command: ${command}`);
@@ -392,6 +528,8 @@ describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
     resetAgentEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
+    vi.stubEnv("CODEX_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "");
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-run-"));
   });
 
@@ -402,6 +540,7 @@ describe("runCodexAppServerAttempt", () => {
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetAgentEventsForTest();
     resetGlobalHookRunner();
+    defaultCodexAppInventoryCache.clear();
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -498,6 +637,16 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
+    const tools = ["exec", "apply_patch", "read", "message"].map((name) => ({ name }));
+
+    expect(
+      __testing
+        .filterCodexDynamicToolsForAllowlist(tools, [" BASH ", "apply-patch", "READ"])
+        .map((tool) => tool.name),
+    ).toEqual(["exec", "apply_patch", "read"]);
+  });
+
   it("forces the message dynamic tool for message-tool-only source replies", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -507,6 +656,53 @@ describe("runCodexAppServerAttempt", () => {
 
     params.sourceReplyDeliveryMode = "automatic";
     expect(__testing.shouldForceMessageTool(params)).toBe(false);
+  });
+
+  it("starts Codex threads with searchable OpenClaw dynamic tools by default", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+      createRuntimeDynamicTool("heartbeat_respond"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = ["message", "web_search", "heartbeat_respond"];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
+    const dynamicTools =
+      (startRequest?.params as { dynamicTools?: Array<Record<string, unknown>> } | undefined)
+        ?.dynamicTools ?? [];
+    const message = dynamicTools.find((tool) => tool.name === "message");
+    const webSearch = dynamicTools.find((tool) => tool.name === "web_search");
+    const heartbeat = dynamicTools.find((tool) => tool.name === "heartbeat_respond");
+
+    expect(message).not.toHaveProperty("namespace");
+    expect(message).not.toHaveProperty("deferLoading");
+    expect(webSearch).toEqual(
+      expect.objectContaining({
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
+    expect(heartbeat).toEqual(
+      expect.objectContaining({
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
@@ -737,7 +933,9 @@ describe("runCodexAppServerAttempt", () => {
     );
     params.timeoutMs = 60_000;
 
-    const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 5 });
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 5 } },
+    });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
 
     await expect(
@@ -779,6 +977,199 @@ describe("runCodexAppServerAttempt", () => {
       { interval: 1 },
     );
     expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+  });
+
+  it("keeps waiting when Codex emits a raw assistant item after a dynamic tool response", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 200,
+    });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    await expect(
+      handleRequest?.({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", text: "already sent" },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    await notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          id: "raw-status-1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "I'm writing the report now." }],
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
+
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
+    expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
+  });
+
+  it("logs raw assistant item context when the terminal watchdog fires", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 5,
+    });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    await expect(
+      handleRequest?.({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", text: "already sent" },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    await notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          id: "raw-status-1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "I'm writing the report now." }],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server turn idle timed out waiting for terminal event",
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        timeoutMs: 5,
+        lastActivityReason: "notification:rawResponseItem/completed",
+        lastNotificationMethod: "rawResponseItem/completed",
+        lastNotificationItemId: "raw-status-1",
+        lastNotificationItemType: "message",
+        lastNotificationItemRole: "assistant",
+        lastAssistantTextPreview: "I'm writing the report now.",
+      }),
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      "codex app-server turn idle timed out waiting for completion",
+      expect.anything(),
+    );
   });
 
   it("releases the session when Codex accepts a turn but never sends progress", async () => {
@@ -935,11 +1326,13 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
     const harness = createStartedThreadHarness();
 
-    const params = createParamsWithRuntimePlan(sessionFile, workspaceDir);
+    const params = createParams(sessionFile, workspaceDir);
+    params.runtimePlan = createCodexRuntimePlanFixture();
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await vi.waitFor(() => expect(llmInput).toHaveBeenCalled(), { interval: 1 });
+    expect(llmInput).toHaveBeenCalled();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(llmInput.mock.calls).toEqual(
       expect.arrayContaining([
@@ -976,8 +1369,8 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.assistantTexts).toEqual(["hello back"]);
-    await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(llmOutput).toHaveBeenCalledTimes(1);
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
     expect(agentEvents).toEqual(
       expect.arrayContaining([
@@ -1158,6 +1551,85 @@ describe("runCodexAppServerAttempt", () => {
       }),
     );
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("lets Codex app-server approval modes own native permission requests by default", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+        },
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    expect(startRequest?.params).toEqual(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          "features.codex_hooks": true,
+          "hooks.PreToolUse": expect.any(Array),
+          "hooks.PostToolUse": expect.any(Array),
+          "hooks.Stop": expect.any(Array),
+        }),
+      }),
+    );
+    expect(startRequest?.params).toEqual(
+      expect.objectContaining({
+        config: expect.not.objectContaining({
+          "hooks.PermissionRequest": expect.anything(),
+        }),
+      }),
+    );
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
+      allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("preserves explicit native permission request relay events in app-server approval modes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+        },
+      },
+      nativeHookRelay: {
+        enabled: true,
+        events: ["permission_request"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    expect(startRequest?.params).toEqual(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          "features.codex_hooks": true,
+          "hooks.PermissionRequest": expect.any(Array),
+        }),
+      }),
+    );
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
+      allowedEvents: ["permission_request"],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -1387,7 +1859,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
 
     expect(result.promptError).toBe("codex exploded");
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
     expect(agentEvents).toEqual(
       expect.arrayContaining([
@@ -1442,13 +1914,14 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    await expect(
-      runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir)),
-    ).rejects.toThrow("turn start exploded");
+    const params = createParams(sessionFile, workspaceDir);
+    params.runtimePlan = createCodexRuntimePlanFixture();
 
-    await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
-    await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn start exploded");
+
+    expect(llmInput).toHaveBeenCalledTimes(1);
+    expect(llmOutput).toHaveBeenCalledTimes(1);
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     expect(llmOutput).toHaveBeenCalledWith(
       expect.objectContaining({
         assistantTexts: [],
@@ -1482,6 +1955,7 @@ describe("runCodexAppServerAttempt", () => {
     const { waitForMethod } = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { pluginConfig: { appServer: { mode: "yolo" } } },
     );
 
     await waitForMethod("turn/start");
@@ -1489,7 +1963,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const result = await run;
     expect(result.aborted).toBe(true);
-    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(agentEnd).toHaveBeenCalledTimes(1);
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         success: false,
@@ -1503,6 +1977,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(
       createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { pluginConfig: { appServer: { mode: "yolo" } } },
     );
     await waitForMethod("turn/start");
 
@@ -2034,6 +2509,526 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
 
+  it("passes session plugin app policy context to elicitation handling", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    };
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: readCodexPluginConfig(pluginConfig),
+    });
+    defaultCodexAppInventoryCache.clear();
+    await defaultCodexAppInventoryCache.refreshNow({
+      key: buildCodexAppInventoryCacheKey({
+        codexHome: resolveCodexAppServerHomeDir(agentDir),
+        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+      }),
+      request: async () => ({
+        data: [
+          {
+            id: "google-calendar-app",
+            name: "Google Calendar",
+            description: null,
+            logoUrl: null,
+            logoUrlDark: null,
+            distributionChannel: null,
+            branding: null,
+            appMetadata: null,
+            labels: null,
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: true,
+            pluginDisplayNames: [],
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const bridgeSpy = vi
+      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
+      .mockResolvedValue({
+        action: "decline",
+        content: null,
+        _meta: null,
+      });
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugin/list") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-curated",
+              path: "/marketplaces/openai-curated",
+              interface: null,
+              plugins: [
+                {
+                  id: "google-calendar",
+                  name: "google-calendar",
+                  source: { type: "remote" },
+                  installed: true,
+                  enabled: true,
+                  installPolicy: "AVAILABLE",
+                  authPolicy: "ON_USE",
+                  availability: "AVAILABLE",
+                  interface: null,
+                },
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+          featuredPluginIds: [],
+        };
+      }
+      if (method === "plugin/read") {
+        return {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/marketplaces/openai-curated",
+            summary: {
+              id: "google-calendar",
+              name: "google-calendar",
+              source: { type: "remote" },
+              installed: true,
+              enabled: true,
+              installPolicy: "AVAILABLE",
+              authPolicy: "ON_USE",
+              availability: "AVAILABLE",
+              interface: null,
+            },
+            description: null,
+            skills: [],
+            apps: [
+              {
+                id: "google-calendar-app",
+                name: "Google Calendar",
+                description: null,
+                installUrl: null,
+                needsAuth: false,
+              },
+            ],
+            mcpServers: ["google-calendar"],
+          },
+        };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    const run = runCodexAppServerAttempt(params, { pluginConfig });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+
+    const result = await handleRequest?.({
+      id: "request-elicitation-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "google-calendar",
+        mode: "form",
+      },
+    });
+
+    expect(result).toEqual({
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+    expect(bridgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        pluginAppPolicyContext: expect.objectContaining({
+          apps: {
+            "google-calendar-app": expect.objectContaining({
+              pluginName: "google-calendar",
+              mcpServerNames: ["google-calendar"],
+            }),
+          },
+        }),
+      }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "thread/start",
+      expect.objectContaining({
+        approvalPolicy: {
+          granular: expect.objectContaining({
+            mcp_elicitations: true,
+          }),
+        },
+      }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "turn/start",
+      expect.objectContaining({
+        approvalPolicy: {
+          granular: expect.objectContaining({
+            mcp_elicitations: true,
+          }),
+        },
+      }),
+      expect.anything(),
+    );
+
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+  });
+
+  it("keys plugin app inventory by the resolved Codex account", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const authProfileId = "openai-codex:work";
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    };
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: readCodexPluginConfig(pluginConfig),
+    });
+    defaultCodexAppInventoryCache.clear();
+    await defaultCodexAppInventoryCache.refreshNow({
+      key: buildCodexAppInventoryCacheKey({
+        codexHome: resolveCodexAppServerHomeDir(agentDir),
+        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+        authProfileId,
+        accountId: "account-work",
+      }),
+      request: async () => ({
+        data: [
+          {
+            id: "google-calendar-app",
+            name: "Google Calendar",
+            description: null,
+            logoUrl: null,
+            logoUrlDark: null,
+            distributionChannel: null,
+            branding: null,
+            appMetadata: null,
+            labels: null,
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: true,
+            pluginDisplayNames: [],
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
+      if (method === "plugin/list") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-curated",
+              path: "/marketplaces/openai-curated",
+              interface: null,
+              plugins: [
+                {
+                  id: "google-calendar",
+                  name: "google-calendar",
+                  source: { type: "remote" },
+                  installed: true,
+                  enabled: true,
+                  installPolicy: "AVAILABLE",
+                  authPolicy: "ON_USE",
+                  availability: "AVAILABLE",
+                  interface: null,
+                },
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+          featuredPluginIds: [],
+        };
+      }
+      if (method === "plugin/read") {
+        return {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/marketplaces/openai-curated",
+            summary: {
+              id: "google-calendar",
+              name: "google-calendar",
+              source: { type: "remote" },
+              installed: true,
+              enabled: true,
+              installPolicy: "AVAILABLE",
+              authPolicy: "ON_USE",
+              availability: "AVAILABLE",
+              interface: null,
+            },
+            description: null,
+            skills: [],
+            apps: [
+              {
+                id: "google-calendar-app",
+                name: "Google Calendar",
+                description: null,
+                installUrl: null,
+                needsAuth: false,
+              },
+            ],
+            mcpServers: ["google-calendar"],
+          },
+        };
+      }
+      if (method === "app/list") {
+        throw new Error("app/list should use the account-keyed cache entry");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+    params.authProfileId = authProfileId;
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        [authProfileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          accountId: "account-work",
+          email: "work@example.test",
+        },
+      },
+    };
+
+    const run = runCodexAppServerAttempt(params, { pluginConfig });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        {
+          method: "thread/start",
+          params: expect.objectContaining({
+            config: expect.objectContaining({
+              apps: expect.objectContaining({
+                "google-calendar-app": expect.objectContaining({ enabled: true }),
+              }),
+            }),
+          }),
+        },
+      ]),
+    );
+    expect(requests.map((entry) => entry.method)).not.toContain("app/list");
+  });
+
+  it("keys plugin app inventory by inherited API key fallback credentials", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    };
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: readCodexPluginConfig(pluginConfig),
+    });
+    defaultCodexAppInventoryCache.clear();
+    await defaultCodexAppInventoryCache.refreshNow({
+      key: buildCodexAppInventoryCacheKey({
+        codexHome: resolveCodexAppServerHomeDir(agentDir),
+        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+        envApiKeyFingerprint: resolveCodexAppServerEnvApiKeyCacheKey({
+          startOptions: appServer.start,
+          baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
+        }),
+      }),
+      request: async () => ({
+        data: [
+          {
+            id: "google-calendar-app",
+            name: "Google Calendar",
+            description: null,
+            logoUrl: null,
+            logoUrlDark: null,
+            distributionChannel: null,
+            branding: null,
+            appMetadata: null,
+            labels: null,
+            installUrl: null,
+            isAccessible: true,
+            isEnabled: true,
+            pluginDisplayNames: [],
+          },
+        ],
+        nextCursor: null,
+      }),
+    });
+    vi.stubEnv("CODEX_API_KEY", "new-codex-env-key");
+    vi.stubEnv("OPENAI_API_KEY", "");
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
+      if (method === "app/list") {
+        return {
+          data: [
+            {
+              id: "google-calendar-app",
+              name: "Google Calendar",
+              description: null,
+              logoUrl: null,
+              logoUrlDark: null,
+              distributionChannel: null,
+              branding: null,
+              appMetadata: null,
+              labels: null,
+              installUrl: null,
+              isAccessible: true,
+              isEnabled: true,
+              pluginDisplayNames: [],
+            },
+          ],
+          nextCursor: null,
+        };
+      }
+      if (method === "plugin/list") {
+        return {
+          marketplaces: [
+            {
+              name: "openai-curated",
+              path: "/marketplaces/openai-curated",
+              interface: null,
+              plugins: [
+                {
+                  id: "google-calendar",
+                  name: "google-calendar",
+                  source: { type: "remote" },
+                  installed: true,
+                  enabled: true,
+                  installPolicy: "AVAILABLE",
+                  authPolicy: "ON_USE",
+                  availability: "AVAILABLE",
+                  interface: null,
+                },
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [],
+          featuredPluginIds: [],
+        };
+      }
+      if (method === "plugin/read") {
+        return {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/marketplaces/openai-curated",
+            summary: {
+              id: "google-calendar",
+              name: "google-calendar",
+              source: { type: "remote" },
+              installed: true,
+              enabled: true,
+              installPolicy: "AVAILABLE",
+              authPolicy: "ON_USE",
+              availability: "AVAILABLE",
+              interface: null,
+            },
+            description: null,
+            skills: [],
+            apps: [
+              {
+                id: "google-calendar-app",
+                name: "Google Calendar",
+                description: null,
+                installUrl: null,
+                needsAuth: false,
+              },
+            ],
+            mcpServers: ["google-calendar"],
+          },
+        };
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = agentDir;
+
+    const run = runCodexAppServerAttempt(params, { pluginConfig });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(requests.map((entry) => entry.method)).toContain("app/list");
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        {
+          method: "thread/start",
+          params: expect.objectContaining({
+            config: expect.objectContaining({
+              apps: expect.objectContaining({
+                "google-calendar-app": expect.objectContaining({ enabled: true }),
+              }),
+            }),
+          }),
+        },
+      ]),
+    );
+  });
+
   it("times out app-server startup before thread setup can hang forever", async () => {
     __testing.setCodexAppServerClientFactoryForTests(() => new Promise<never>(() => undefined));
     const params = createParams(
@@ -2116,7 +3111,9 @@ describe("runCodexAppServerAttempt", () => {
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const { requests, waitForMethod, completeTurn } = createResumeHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
     await waitForMethod("turn/start");
     await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
@@ -2434,6 +3431,530 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("merges native hook relay config with plugin app config when starting a thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-plugins");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-1",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: pluginAppPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config: { "features.codex_hooks": true, hooks: { PreToolUse: [] } },
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: {
+            "features.codex_hooks": true,
+            hooks: { PreToolUse: [] },
+            ...createPluginAppConfigPatch(),
+          },
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-plugins",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext,
+    });
+  });
+
+  it("revalidates compatible plugin app bindings without resending app config", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start" || method === "thread/resume") {
+        return threadStartResult("thread-plugins");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-1",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: pluginAppPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config: { "features.codex_hooks": true },
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: buildPluginThreadConfig,
+      },
+    });
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      config: { "features.codex_hooks": true },
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: {
+            "features.codex_hooks": true,
+            ...createPluginAppConfigPatch(),
+          },
+        }),
+      ],
+      [
+        "thread/resume",
+        expect.objectContaining({
+          config: { "features.codex_hooks": true },
+        }),
+      ],
+    ]);
+  });
+
+  it("starts a new plugin app thread when full binding revalidation removes an app", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext(),
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-revalidated");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const emptyPolicyContext = { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} };
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: {
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+        },
+      },
+      fingerprint: "plugin-apps-empty",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: emptyPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: {
+            apps: {
+              _default: {
+                enabled: false,
+                destructive_enabled: false,
+                open_world_enabled: false,
+              },
+            },
+          },
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-revalidated",
+      pluginAppsFingerprint: "plugin-apps-empty",
+      pluginAppPolicyContext: emptyPolicyContext,
+    });
+  });
+
+  it("keeps the existing plugin app binding when revalidation fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build: async () => {
+          throw new Error("plugin inventory unavailable");
+        },
+      },
+    });
+
+    expect(request.mock.calls).toEqual([
+      ["thread/resume", expect.not.objectContaining({ config: expect.anything() })],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext,
+    });
+  });
+
+  it("rebuilds an empty plugin app binding after app inventory recovers", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-empty",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-recovered");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-1",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: pluginAppPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: createPluginAppConfigPatch(),
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-recovered",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppPolicyContext,
+    });
+  });
+
+  it("keeps an empty plugin app binding when recovery still produces the same config", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const emptyPolicyContext = { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} };
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-empty",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: emptyPolicyContext,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: {
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+        },
+      },
+      fingerprint: "plugin-apps-empty",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: emptyPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      ["thread/resume", expect.not.objectContaining({ config: expect.anything() })],
+    ]);
+  });
+
+  it("rebuilds a partial plugin app binding after another plugin recovers", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-partial",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext(),
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-recovered");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const recoveredPolicyContext = createTwoPluginAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createTwoPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-2",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: recoveredPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar", "gmail"],
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: createTwoPluginAppConfigPatch(),
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-recovered",
+      pluginAppsFingerprint: "plugin-apps-config-2",
+      pluginAppPolicyContext: recoveredPolicyContext,
+    });
+  });
+
+  it("rebuilds a partial plugin app binding after another app from the same plugin recovers", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-partial",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext: {
+        ...createPluginAppPolicyContext(),
+        pluginAppIds: {
+          "google-calendar": ["google-calendar-app", "google-calendar-secondary-app"],
+        },
+      },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-recovered");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const recoveredPolicyContext = createTwoCalendarAppPolicyContext();
+    const buildPluginThreadConfig = vi.fn(async () => ({
+      enabled: true,
+      configPatch: createTwoCalendarAppConfigPatch(),
+      fingerprint: "plugin-apps-config-calendar-2",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: recoveredPolicyContext,
+      diagnostics: [],
+    }));
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: createTwoCalendarAppConfigPatch(),
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-recovered",
+      pluginAppsFingerprint: "plugin-apps-config-calendar-2",
+      pluginAppPolicyContext: recoveredPolicyContext,
+    });
+  });
+
+  it("starts a new configured thread for legacy bindings missing plugin app metadata", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-plugins");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const pluginAppPolicyContext = createPluginAppPolicyContext();
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        build: async () => ({
+          enabled: true,
+          configPatch: createPluginAppConfigPatch(),
+          fingerprint: "plugin-apps-config-1",
+          inputFingerprint: "plugin-apps-input-1",
+          policyContext: pluginAppPolicyContext,
+          diagnostics: [],
+        }),
+      },
+    });
+
+    expect(request.mock.calls).toEqual([
+      [
+        "thread/start",
+        expect.objectContaining({
+          config: createPluginAppConfigPatch(),
+        }),
+      ],
+    ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-plugins",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppPolicyContext,
+    });
+  });
+
   it("starts a new Codex thread when dynamic tool schemas change", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2492,7 +4013,7 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
-      serviceTier: "fast",
+      serviceTier: "priority",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
@@ -2504,7 +4025,7 @@ describe("runCodexAppServerAttempt", () => {
             approvalPolicy: "on-request",
             approvalsReviewer: "guardian_subagent",
             sandboxPolicy: { type: "dangerFullAccess" },
-            serviceTier: "fast",
+            serviceTier: "priority",
             model: "gpt-5.4-codex",
           }),
         },
@@ -2512,7 +4033,7 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
-  it("drops invalid legacy service tiers before app-server resume and turn requests", async () => {
+  it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
@@ -2532,13 +4053,48 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    expect(resumeRequest?.params).toEqual(
-      expect.not.objectContaining({ serviceTier: expect.anything() }),
-    );
+    expect(resumeRequest?.params).toEqual(expect.objectContaining({ serviceTier: "priority" }));
     const turnRequest = requests.find((request) => request.method === "turn/start");
-    expect(turnRequest?.params).toEqual(
-      expect.not.objectContaining({ serviceTier: expect.anything() }),
-    );
+    expect(turnRequest?.params).toEqual(expect.objectContaining({ serviceTier: "priority" }));
+  });
+
+  it("keys plugin app inventory by websocket credentials without exposing them", () => {
+    const first = __testing.resolveCodexPluginAppCacheEndpoint({
+      start: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "token-first",
+        headers: { Authorization: "Bearer first" },
+      },
+      requestTimeoutMs: 60_000,
+      turnCompletionIdleTimeoutMs: 5,
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    });
+    const second = __testing.resolveCodexPluginAppCacheEndpoint({
+      start: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "token-second",
+        headers: { Authorization: "Bearer second" },
+      },
+      requestTimeoutMs: 60_000,
+      turnCompletionIdleTimeoutMs: 5,
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    });
+
+    expect(first).not.toEqual(second);
+    expect(first).not.toContain("token-first");
+    expect(first).not.toContain("Bearer first");
+    expect(second).not.toContain("token-second");
+    expect(second).not.toContain("Bearer second");
   });
 
   it("builds resume and turn params from the currently selected OpenClaw model", () => {
@@ -2551,6 +4107,7 @@ describe("runCodexAppServerAttempt", () => {
         headers: {},
       },
       requestTimeoutMs: 60_000,
+      turnCompletionIdleTimeoutMs: 60_000,
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
@@ -2607,6 +4164,9 @@ describe("runCodexAppServerAttempt", () => {
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
       "The purpose of heartbeats is to make you feel magical and proactive.",
     );
+    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
+      "If `heartbeat_respond` is not already available and `tool_search` is available",
+    );
 
     params.trigger = "user";
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toBeNull();
@@ -2642,6 +4202,7 @@ describe("runCodexAppServerAttempt", () => {
           headers: {},
         },
         requestTimeoutMs: 60_000,
+        turnCompletionIdleTimeoutMs: 60_000,
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "workspace-write",

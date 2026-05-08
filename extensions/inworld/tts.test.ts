@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -44,9 +44,56 @@ function readRequestBody(request: GuardRequest): string {
   return body;
 }
 
+const guardedSuccessReleaseCases = [
+  {
+    name: "listInworldVoices",
+    run: async () => {
+      const { release } = queueGuardedResponse(
+        new Response(JSON.stringify({ voices: [] }), { status: 200 }),
+      );
+
+      await listInworldVoices({ apiKey: "test-key" });
+      return release;
+    },
+  },
+  {
+    name: "inworldTTS",
+    run: async () => {
+      const chunk = Buffer.from("audio").toString("base64");
+      const { release } = queueGuardedResponse(
+        new Response(JSON.stringify({ result: { audioContent: chunk } }), { status: 200 }),
+      );
+
+      await inworldTTS({ text: "test", apiKey: "test-key" });
+      return release;
+    },
+  },
+];
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
+
+describe("Inworld guarded dispatcher lifecycle", () => {
+  afterEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  it.each(guardedSuccessReleaseCases)(
+    "$name releases the guarded dispatcher after success",
+    async ({ run }) => {
+      const release = await run();
+
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
 describe("listInworldVoices", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockClear();
+    fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -143,21 +190,11 @@ describe("listInworldVoices", () => {
 
     expect(lastGuardRequest().url).toBe("https://api.inworld.ai/voices/v1/voices?languages=EN_US");
   });
-
-  it("releases the guarded dispatcher after success", async () => {
-    const { release } = queueGuardedResponse(
-      new Response(JSON.stringify({ voices: [] }), { status: 200 }),
-    );
-
-    await listInworldVoices({ apiKey: "test-key" });
-
-    expect(release).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("inworldTTS", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockClear();
+    fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -290,17 +327,6 @@ describe("inworldTTS", () => {
 
     const buffer = await inworldTTS({ text: "test", apiKey: "test-key" });
     expect(buffer).toEqual(Buffer.from("audio"));
-  });
-
-  it("releases the guarded dispatcher after success", async () => {
-    const chunk = Buffer.from("audio").toString("base64");
-    const { release } = queueGuardedResponse(
-      new Response(JSON.stringify({ result: { audioContent: chunk } }), { status: 200 }),
-    );
-
-    await inworldTTS({ text: "test", apiKey: "test-key" });
-
-    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("releases the guarded dispatcher after failure", async () => {

@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { piSdkMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { piSdkMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
+  directSessionReq as directSessionHandlerReq,
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
@@ -351,7 +352,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(modelPatched.payload?.resolved?.modelProvider).toBe("openai");
   expect(modelPatched.payload?.resolved?.model).toBe("gpt-test-a");
   expect(modelPatched.payload?.resolved?.agentRuntime).toEqual({
-    id: "pi",
+    id: "codex",
     source: "implicit",
   });
 
@@ -369,7 +370,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   );
   expect(mainAfterModelPatch?.modelProvider).toBe("openai");
   expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
-  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
+  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "codex", source: "implicit" });
 
   const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
     key: "agent:main:main",
@@ -434,4 +435,49 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect((badThinking.error as { message?: unknown } | undefined)?.message ?? "").toMatch(
     /invalid thinkinglevel/i,
   );
+});
+
+test("sessions.list configuredAgentsOnly hides disk-discovered unregistered agent stores", async () => {
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
+  }
+  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.sessionConfig = {
+    store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+  };
+
+  const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+  const diskOnlyStorePath = path.join(stateDir, "agents", "local", "sessions", "sessions.json");
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(diskOnlyStorePath), { recursive: true });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify({ main: { sessionId: "sess-main", updatedAt: 20 } }, null, 2),
+    "utf-8",
+  );
+  await fs.writeFile(
+    diskOnlyStorePath,
+    JSON.stringify({ main: { sessionId: "sess-local", updatedAt: 10 } }, null, 2),
+    "utf-8",
+  );
+
+  const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    { includeGlobal: false, includeUnknown: false },
+  );
+  expect(broad.ok).toBe(true);
+  expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
+    "agent:main:main",
+    "agent:local:main",
+  ]);
+
+  const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+    "sessions.list",
+    { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
+  );
+  expect(configuredOnly.ok).toBe(true);
+  expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
+    "agent:main:main",
+  ]);
 });

@@ -5,12 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../types.ts";
 import { renderSessions, type SessionsProps } from "./sessions.ts";
 
-function buildResult(session: SessionsListResult["sessions"][number]): SessionsListResult {
+function buildResult(
+  session: SessionsListResult["sessions"][number],
+  defaults?: Partial<SessionsListResult["defaults"]>,
+): SessionsListResult {
   return {
     ts: Date.now(),
     path: "(multiple)",
     count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
+    defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
     sessions: [session],
   };
 }
@@ -229,7 +232,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("maximum");
+    ).toBe("Override: maximum");
 
     thinking!.value = "max";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -260,7 +263,47 @@ describe("sessions view", () => {
 
     const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
     expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(
+      Array.from(thinking?.options ?? [])
+        .find((option) => option.value === "adaptive")
+        ?.textContent?.trim(),
+    ).toBe("Override: adaptive");
+  });
+
+  it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult(
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+            {
+              modelProvider: "openai-codex",
+              model: "gpt-5.5",
+              thinkingDefault: "high",
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "high", label: "high" },
+              ],
+            },
+          ),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
+    expect(thinking?.value).toBe("");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: high");
+    expect(Array.from(thinking?.options ?? []).map((option) => option.textContent?.trim())).toEqual(
+      ["Inherited: high", "Off", "Override: high"],
+    );
   });
 
   it("keeps legacy binary thinking labels patching canonical ids", async () => {
@@ -289,7 +332,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "low")
         ?.textContent?.trim(),
-    ).toBe("on");
+    ).toBe("Override: on");
 
     thinking!.value = "low";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -649,11 +692,11 @@ describe("sessions view", () => {
     const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
     expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).some((option) => option.value === "full")).toBe(true);
+    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toContain("full");
     expect(reasoning?.value).toBe("custom-mode");
-    expect(
-      Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
-    ).toBe(true);
+    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toContain(
+      "custom-mode",
+    );
 
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
@@ -717,8 +760,10 @@ describe("sessions view", () => {
     const showAll = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Show all",
     );
-    expect(showAll).toBeTruthy();
-    showAll?.click();
+    if (!showAll) {
+      throw new Error("Expected filtered empty state to render a Show all button");
+    }
+    showAll.click();
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
 

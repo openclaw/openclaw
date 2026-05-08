@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listEnabledGoogleChatAccounts = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccount = vi.hoisted(() => vi.fn());
@@ -43,7 +43,15 @@ describe("googlechat message actions", () => {
     vi.clearAllMocks();
   });
 
-  it("describes send and reaction actions only when enabled accounts exist", async () => {
+  afterAll(() => {
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./api.js");
+    vi.doUnmock("./runtime.js");
+    vi.doUnmock("./targets.js");
+    vi.resetModules();
+  });
+
+  it("describes send and reaction actions only when enabled accounts exist", () => {
     listEnabledGoogleChatAccounts.mockReturnValueOnce([]);
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
 
