@@ -29,6 +29,13 @@ type LmstudioModelsResponseWire = {
   models?: LmstudioModelWire[];
 };
 
+function resolveLmstudioLoadTtlSeconds(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  return undefined;
+}
+
 type DiscoverLmstudioModelsParams = {
   baseUrl: string;
   apiKey: string;
@@ -180,6 +187,7 @@ export async function ensureLmstudioModelLoaded(params: {
   ssrfPolicy?: SsrFPolicy;
   modelKey: string;
   requestedContextLength?: number;
+  ttlSeconds?: number;
   timeoutMs?: number;
   /** Injectable fetch implementation; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
@@ -229,6 +237,13 @@ export async function ensureLmstudioModelLoaded(params: {
   if (loadedContextWindow !== null && loadedContextWindow >= contextLengthForLoad) {
     return;
   }
+  const ttlSeconds = resolveLmstudioLoadTtlSeconds(params.ttlSeconds);
+  const loadBody = {
+    model: modelKey,
+    // Ask LM Studio to load with our default target, capped to the model's own limit.
+    context_length: contextLengthForLoad,
+    ...(ttlSeconds !== undefined ? { ttl: ttlSeconds } : {}),
+  };
 
   const { response, release } = await fetchLmstudioEndpoint({
     url: `${baseUrl}/api/v1/models/load`,
@@ -239,11 +254,7 @@ export async function ensureLmstudioModelLoaded(params: {
         headers: params.headers,
         json: true,
       }),
-      body: JSON.stringify({
-        model: modelKey,
-        // Ask LM Studio to load with our default target, capped to the model's own limit.
-        context_length: contextLengthForLoad,
-      }),
+      body: JSON.stringify(loadBody),
     },
     timeoutMs,
     fetchImpl: params.fetchImpl,

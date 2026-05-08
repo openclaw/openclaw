@@ -127,6 +127,21 @@ function shouldPreloadLmstudioModels(value: unknown): boolean {
   return params?.preload !== false;
 }
 
+function resolveLmstudioLoadTtlSecondsFromConfig(value: unknown): number | undefined {
+  const providerConfig = toRecord(value);
+  const params = toRecord(providerConfig?.params);
+  const configured = params?.ttlSeconds;
+  if (
+    typeof configured === "number" &&
+    Number.isFinite(configured) &&
+    Number.isInteger(configured) &&
+    configured > 0
+  ) {
+    return configured;
+  }
+  return undefined;
+}
+
 function withLmstudioUsageCompat(model: StreamModel): StreamModel {
   return {
     ...model,
@@ -220,7 +235,9 @@ function promoteLmstudioPlainTextToolCalls(
     if (!parsed) {
       return undefined;
     }
-    nextContent.push(...parsed.map(createLmstudioToolCallBlock));
+    for (const block of parsed) {
+      nextContent.push(createLmstudioToolCallBlock(block));
+    }
     promoted = true;
   }
 
@@ -346,14 +363,18 @@ function createPreloadKey(params: {
   baseUrl: string;
   modelKey: string;
   requestedContextLength?: number;
+  ttlSeconds?: number;
 }) {
-  return `${params.baseUrl}::${params.modelKey}::${params.requestedContextLength ?? "default"}`;
+  return `${params.baseUrl}::${params.modelKey}::${params.requestedContextLength ?? "default"}::${
+    params.ttlSeconds ?? "default"
+  }`;
 }
 
 async function ensureLmstudioModelLoadedBestEffort(params: {
   baseUrl: string;
   modelKey: string;
   requestedContextLength?: number;
+  ttlSeconds?: number;
   options: StreamOptions;
   ctx: ProviderWrapStreamFnContext;
   modelHeaders?: Record<string, string>;
@@ -384,6 +405,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
     modelKey: params.modelKey,
     requestedContextLength: params.requestedContextLength,
+    ttlSeconds: params.ttlSeconds,
   });
 }
 
@@ -410,10 +432,12 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       typeof model.baseUrl === "string" ? model.baseUrl : providerBaseUrl,
     );
     const requestedContextLength = resolveRequestedContextLength(model);
+    const ttlSeconds = resolveLmstudioLoadTtlSecondsFromConfig(providerConfig);
     const preloadKey = createPreloadKey({
       baseUrl: resolvedBaseUrl,
       modelKey,
       requestedContextLength,
+      ttlSeconds,
     });
 
     const cooldownEntry = isPreloadCoolingDown(preloadKey, Date.now());
@@ -427,6 +451,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
               baseUrl: resolvedBaseUrl,
               modelKey,
               requestedContextLength,
+              ttlSeconds,
               options,
               ctx,
               modelHeaders: resolveModelHeaders(model),

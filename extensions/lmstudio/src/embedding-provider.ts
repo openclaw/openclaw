@@ -46,6 +46,25 @@ function hasAuthorizationHeader(headers: Record<string, string> | undefined): bo
   );
 }
 
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function resolveLmstudioLoadTtlSecondsFromConfig(value: unknown): number | undefined {
+  const providerConfig = toRecord(value);
+  const params = toRecord(providerConfig?.params);
+  const configured = params?.ttlSeconds;
+  if (
+    typeof configured === "number" &&
+    Number.isFinite(configured) &&
+    Number.isInteger(configured) &&
+    configured > 0
+  ) {
+    return configured;
+  }
+  return undefined;
+}
+
 /** Resolves API key (real or synthetic placeholder) from runtime/provider auth config. */
 async function resolveLmstudioApiKey(
   options: MemoryEmbeddingProviderCreateOptions,
@@ -69,6 +88,7 @@ export async function createLmstudioEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: LmstudioEmbeddingClient }> {
   const providerConfig = options.config.models?.providers?.lmstudio;
+  const ttlSeconds = resolveLmstudioLoadTtlSecondsFromConfig(providerConfig);
   const providerBaseUrl = providerConfig?.baseUrl?.trim();
   const isFallbackActivation = options.fallback === "lmstudio" && options.provider !== "lmstudio";
   const remoteBaseUrl = options.remote?.baseUrl?.trim();
@@ -127,6 +147,7 @@ export async function createLmstudioEmbeddingProvider(
       ssrfPolicy,
       modelKey: model,
       timeoutMs: 120_000,
+      ttlSeconds,
     });
   } catch (error) {
     log.warn("lmstudio embeddings warmup failed; continuing without preload", {
