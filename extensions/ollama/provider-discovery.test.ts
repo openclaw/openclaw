@@ -28,6 +28,16 @@ describe("Ollama provider", () => {
   const countFetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>, suffix: string): number =>
     fetchCallUrls(fetchMock).reduce((count, url) => count + (url.endsWith(suffix) ? 1 : 0), 0);
 
+  const countWarnCallsIncluding = (warnSpy: ReturnType<typeof vi.spyOn>, text: string): number => {
+    let count = 0;
+    for (const [message] of warnSpy.mock.calls) {
+      if (String(message).includes(text)) {
+        count++;
+      }
+    }
+    return count;
+  };
+
   const expectDiscoveryCallCounts = (
     fetchMock: ReturnType<typeof vi.fn>,
     params: { tags: number; show: number },
@@ -274,9 +284,7 @@ describe("Ollama provider", () => {
         env: { VITEST: "", NODE_ENV: "development" },
       });
 
-      expect(
-        warnSpy.mock.calls.filter(([message]) => String(message).includes("Ollama")).length,
-      ).toBeGreaterThan(0);
+      expect(countWarnCallsIncluding(warnSpy, "Ollama")).toBeGreaterThan(0);
       warnSpy.mockRestore();
     });
   });
