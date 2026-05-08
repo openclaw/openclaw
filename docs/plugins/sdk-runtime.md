@@ -92,10 +92,11 @@ Provider and channel execution paths must use the active runtime config snapshot
 
     // Run an embedded agent turn
     const agentDir = api.runtime.agent.resolveAgentDir(cfg);
+    const sessionId = "my-plugin-task-1";
     const result = await api.runtime.agent.runEmbeddedAgent({
-      sessionId: "my-plugin:task-1",
+      sessionId,
       runId: crypto.randomUUID(),
-      sessionFile: path.join(agentDir, "sessions", "my-plugin-task-1.jsonl"),
+      sessionFile: createSqliteSessionTranscriptLocator({ agentId, sessionId }),
       workspaceDir: api.runtime.agent.resolveAgentWorkspaceDir(cfg),
       prompt: "Summarize the latest changes",
       timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
