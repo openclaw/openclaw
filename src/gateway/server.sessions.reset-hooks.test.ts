@@ -403,7 +403,8 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
   expect(startEvent).toMatchObject({
     resumedFrom: "sess-parent-hooks",
   });
-  expect((startEvent as { sessionId?: string } | undefined)?.sessionId).toEqual(expect.any(String));
+  expect((startEvent as { sessionId?: string } | undefined)?.sessionId).toBeTypeOf("string");
+  expect((startEvent as { sessionId?: string } | undefined)?.sessionId).not.toBe("");
   expect((startEvent as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
     /^agent:main:dashboard:/,
   );

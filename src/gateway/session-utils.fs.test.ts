@@ -1302,7 +1302,7 @@ describe("readSessionMessages", () => {
       pluginId: "hitl-test-hooks",
     });
 
-    expect(messageId).toEqual(expect.any(String));
+    expect(messageId).toBeTypeOf("string");
     expect(messageId.length).toBeGreaterThan(0);
     const out = readSessionMessages(sessionId, storePath, sessionFile);
     expect(
