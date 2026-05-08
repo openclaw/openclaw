@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
 const {
@@ -30,6 +31,8 @@ import {
 
 describe("resolveSessionKeyForTranscriptFile", () => {
   const now = 1_700_000_000_000;
+  const locator = (sessionId: string, agentId = "main") =>
+    createSqliteSessionTranscriptLocator({ agentId, sessionId });
 
   beforeEach(() => {
     clearSessionTranscriptKeyCacheForTests();
@@ -56,18 +59,18 @@ describe("resolveSessionKeyForTranscriptFile", () => {
     });
     resolveSessionTranscriptCandidatesMock.mockImplementation((sessionId: string) => {
       if (sessionId === "sess-1") {
-        return ["/tmp/one.jsonl"];
+        return [locator("sess-1")];
       }
       if (sessionId === "sess-2") {
-        return ["/tmp/two.jsonl"];
+        return [locator("sess-2")];
       }
       return [];
     });
 
-    expect(resolveSessionKeyForTranscriptFile("/tmp/two.jsonl")).toBe("agent:main:two");
+    expect(resolveSessionKeyForTranscriptFile(locator("sess-2"))).toBe("agent:main:two");
     expect(resolveSessionTranscriptCandidatesMock).toHaveBeenCalledTimes(2);
 
-    expect(resolveSessionKeyForTranscriptFile("/tmp/two.jsonl")).toBe("agent:main:two");
+    expect(resolveSessionKeyForTranscriptFile(locator("sess-2"))).toBe("agent:main:two");
     expect(resolveSessionTranscriptCandidatesMock).toHaveBeenCalledTimes(3);
   });
 
@@ -83,30 +86,30 @@ describe("resolveSessionKeyForTranscriptFile", () => {
     resolveSessionTranscriptCandidatesMock.mockImplementation(
       (sessionId: string, sessionFile?: string) => {
         if (sessionId === "sess-alpha") {
-          return ["/tmp/alpha.jsonl"];
+          return [locator("sess-alpha")];
         }
         if (sessionId === "sess-beta") {
-          return sessionFile ? [sessionFile] : ["/tmp/shared.jsonl"];
+          return sessionFile ? [sessionFile] : [locator("shared")];
         }
         if (sessionId === "sess-alpha-2") {
-          return ["/tmp/shared.jsonl"];
+          return [locator("shared")];
         }
         return [];
       },
     );
 
-    expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:beta");
+    expect(resolveSessionKeyForTranscriptFile(locator("shared"))).toBe("agent:main:beta");
 
     store = {
       "agent:main:alpha": { sessionId: "sess-alpha-2", updatedAt: now + 1 },
       "agent:main:beta": {
         sessionId: "sess-beta",
         updatedAt: now + 1,
-        sessionFile: "/tmp/beta.jsonl",
+        sessionFile: locator("sess-beta"),
       },
     };
 
-    expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:alpha");
+    expect(resolveSessionKeyForTranscriptFile(locator("shared"))).toBe("agent:main:alpha");
   });
 
   it("returns undefined for blank transcript paths", () => {
@@ -123,9 +126,9 @@ describe("resolveSessionKeyForTranscriptFile", () => {
       databasePath: "(multiple)",
       entries: store,
     });
-    resolveSessionTranscriptCandidatesMock.mockReturnValue(["/tmp/shared.jsonl"]);
+    resolveSessionTranscriptCandidatesMock.mockReturnValue([locator("run-dup")]);
 
-    expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:acp:run-dup");
+    expect(resolveSessionKeyForTranscriptFile(locator("run-dup"))).toBe("agent:main:acp:run-dup");
   });
 
   it("prefers the freshest matching session when different sessionIds share a transcript path", () => {
@@ -137,16 +140,16 @@ describe("resolveSessionKeyForTranscriptFile", () => {
       databasePath: "(multiple)",
       entries: store,
     });
-    resolveSessionTranscriptCandidatesMock.mockReturnValue(["/tmp/shared.jsonl"]);
+    resolveSessionTranscriptCandidatesMock.mockReturnValue([locator("shared")]);
 
-    expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:newer");
+    expect(resolveSessionKeyForTranscriptFile(locator("shared"))).toBe("agent:main:newer");
   });
 
   it("evicts oldest entry when cache exceeds 256 entries (#63643)", () => {
     // Fill cache with 256 unique transcript paths
     for (let i = 0; i < 256; i++) {
       const sessionKey = `agent:main:session-${i}`;
-      const transcriptPath = `/tmp/session-${i}.jsonl`;
+      const transcriptPath = locator(`session-${i}`);
       const store = {
         [sessionKey]: { sessionId: `sid-${i}`, updatedAt: now + i },
       } satisfies Record<string, SessionEntry>;
@@ -160,7 +163,7 @@ describe("resolveSessionKeyForTranscriptFile", () => {
 
     // Now add the 257th — should evict session-0
     const overflowKey = "agent:main:session-overflow";
-    const overflowPath = "/tmp/session-overflow.jsonl";
+    const overflowPath = locator("session-overflow");
     const overflowStore = {
       [overflowKey]: { sessionId: "sid-overflow", updatedAt: now + 999 },
     } satisfies Record<string, SessionEntry>;
@@ -179,6 +182,6 @@ describe("resolveSessionKeyForTranscriptFile", () => {
       entries: overflowStore,
     });
     resolveSessionTranscriptCandidatesMock.mockReturnValue([]);
-    expect(resolveSessionKeyForTranscriptFile("/tmp/session-0.jsonl")).toBeUndefined();
+    expect(resolveSessionKeyForTranscriptFile(locator("session-0"))).toBeUndefined();
   });
 });
