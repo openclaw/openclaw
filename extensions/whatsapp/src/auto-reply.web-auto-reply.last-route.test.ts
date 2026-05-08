@@ -24,10 +24,10 @@ vi.mock("./auto-reply/monitor/last-route.js", async () => {
   };
 });
 
-function makeCfg(storePath: string): OpenClawConfig {
+function makeCfg(): OpenClawConfig {
   return {
     channels: { whatsapp: { allowFrom: ["*"] } },
-    session: { store: storePath },
+    session: {},
   };
 }
 
@@ -62,6 +62,12 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
   });
 
   return { handler, backgroundTasks };
+}
+
+function createLastRouteHarness() {
+  const replyResolver = vi.fn().mockResolvedValue(undefined);
+  const cfg = makeCfg();
+  return createHandlerForTest({ cfg, replyResolver });
 }
 
 function buildInboundMessage(params: {
@@ -116,11 +122,7 @@ describe("web auto-reply last-route", () => {
       [mainSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
-    const cfg = makeCfg(store.storePath);
-    const { handler, backgroundTasks } = createHandlerForTest({
-      cfg,
-      replyResolver: vi.fn().mockResolvedValue(undefined),
-    });
+    const { handler, backgroundTasks } = createLastRouteHarness();
 
     await handler(
       buildInboundMessage({
@@ -215,11 +217,7 @@ describe("web auto-reply last-route", () => {
       [groupSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
-    const cfg = makeCfg(store.storePath);
-    const { handler, backgroundTasks } = createHandlerForTest({
-      cfg,
-      replyResolver: vi.fn().mockResolvedValue(undefined),
-    });
+    const { handler, backgroundTasks } = createLastRouteHarness();
 
     await handler(
       buildInboundMessage({
