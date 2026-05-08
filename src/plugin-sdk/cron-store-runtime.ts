@@ -1,1 +1,6 @@
-export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
+export {
+  loadCronStore,
+  resolveCronStorePath,
+  saveCronStore,
+  updateCronStoreJobs,
+} from "../cron/store.js";

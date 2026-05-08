@@ -11,6 +11,7 @@ import {
   loadLegacyCronStoreForMigration,
   resolveCronStorePath,
   saveCronStore,
+  updateCronStoreJobs,
 } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
@@ -174,6 +175,36 @@ describe("cron store", () => {
     const loaded = await loadCronStore(storePath);
     expect(loaded.jobs.map((job) => job.id)).toEqual(["job-1"]);
     expect(loaded.jobs[0]?.state).toEqual({});
+  });
+
+  it("updates matching cron rows without rewriting the whole store", async () => {
+    const { storePath } = await makeStorePath();
+    const first = makeStore("job-1", true);
+    const second = makeStore("job-2", true);
+    second.jobs[0].delivery = { channel: "telegram", to: "@old" } as never;
+    first.jobs.push(second.jobs[0]);
+    await saveCronStore(storePath, first);
+
+    const result = await updateCronStoreJobs(storePath, (job) => {
+      if (job.id !== "job-2") {
+        return undefined;
+      }
+      return {
+        ...job,
+        delivery: { channel: "telegram", to: "-100123" } as never,
+      };
+    });
+
+    const loaded = await loadCronStore(storePath);
+    expect(result).toEqual({ updatedJobs: 1 });
+    expect(loaded.jobs.map((job) => job.id)).toEqual(["job-1", "job-2"]);
+    expect(loaded.jobs[0]).toMatchObject({ id: "job-1" });
+    expect("delivery" in (loaded.jobs[0] ?? {})).toBe(false);
+    expect(loaded.jobs[1]).toMatchObject({
+      id: "job-2",
+      delivery: { channel: "telegram", to: "-100123" },
+    });
+    await expect(fs.stat(storePath)).rejects.toThrow();
   });
 
   it("imports legacy jobs.json into SQLite and removes the source file", async () => {

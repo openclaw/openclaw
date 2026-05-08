@@ -268,6 +268,8 @@ The remaining cleanup is mostly consolidation and deletion:
   JSON writers or readers. Runtime uses `cron_jobs`, `kv` scope
   `cron.jobs.state`, and `cron_run_logs`; doctor imports legacy `jobs.json`,
   `jobs-state.json`, and `runs/*.jsonl` files and removes the imported sources.
+  Plugin target writebacks update matching `cron_jobs` rows instead of loading
+  and replacing the whole cron store.
 - Discord model-picker preferences, command-deploy hashes, and thread bindings
   now use shared SQLite plugin state. Their legacy JSON import plans live in the
   Discord plugin setup/doctor migration surface, not in core migration code.

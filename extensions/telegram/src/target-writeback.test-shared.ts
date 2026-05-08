@@ -10,9 +10,8 @@ const replaceConfigFile: AsyncUnknownMock = vi.fn(async (params: unknown) => {
   const record = params as { nextConfig?: unknown; writeOptions?: unknown };
   await writeConfigFile(record.nextConfig, record.writeOptions);
 });
-const loadCronStore: AsyncUnknownMock = vi.fn();
 const resolveCronStorePath: UnknownMock = vi.fn();
-const saveCronStore: AsyncUnknownMock = vi.fn();
+const updateCronStoreJobs: AsyncUnknownMock = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/config-mutation", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-mutation")>(
@@ -32,11 +31,35 @@ vi.mock("openclaw/plugin-sdk/cron-store-runtime", async () => {
   );
   return {
     ...actual,
-    loadCronStore,
     resolveCronStorePath,
-    saveCronStore,
+    updateCronStoreJobs,
   };
 });
+
+function mockCronJobUpdate(jobs: Array<Record<string, unknown>>) {
+  const updatedJobs: Array<Record<string, unknown>> = [];
+  updateCronStoreJobs.mockImplementation(async (_storePath, updateJob) => {
+    let updatedCount = 0;
+    updatedJobs.length = 0;
+    for (const job of jobs) {
+      const nextJob = (updateJob as (job: Record<string, unknown>) => unknown)({
+        ...job,
+        delivery:
+          job.delivery && typeof job.delivery === "object"
+            ? { ...(job.delivery as Record<string, unknown>) }
+            : job.delivery,
+      });
+      if (nextJob) {
+        updatedCount += 1;
+        updatedJobs.push(nextJob as Record<string, unknown>);
+      } else {
+        updatedJobs.push(job);
+      }
+    }
+    return { updatedJobs: updatedCount };
+  });
+  return updatedJobs;
+}
 
 export function installMaybePersistResolvedTelegramTargetTests(params?: {
   includeGatewayScopeCases?: boolean;
@@ -52,10 +75,10 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
       readConfigFileSnapshotForWrite.mockReset();
       replaceConfigFile.mockClear();
       writeConfigFile.mockReset();
-      loadCronStore.mockReset();
       resolveCronStorePath.mockReset();
-      saveCronStore.mockReset();
+      updateCronStoreJobs.mockReset();
       resolveCronStorePath.mockReturnValue("/tmp/cron/jobs.json");
+      updateCronStoreJobs.mockResolvedValue({ updatedJobs: 0 });
     });
 
     it("skips writeback when target is already numeric", async () => {
@@ -66,7 +89,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
       });
 
       expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-      expect(loadCronStore).not.toHaveBeenCalled();
+      expect(updateCronStoreJobs).not.toHaveBeenCalled();
     });
 
     if (params?.includeGatewayScopeCases) {
@@ -82,8 +105,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
 
         expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
         expect(writeConfigFile).not.toHaveBeenCalled();
-        expect(loadCronStore).not.toHaveBeenCalled();
-        expect(saveCronStore).not.toHaveBeenCalled();
+        expect(updateCronStoreJobs).not.toHaveBeenCalled();
       });
 
       it("skips config and cron writeback for gateway callers with an empty scope set", async () => {
@@ -98,8 +120,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
 
         expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
         expect(writeConfigFile).not.toHaveBeenCalled();
-        expect(loadCronStore).not.toHaveBeenCalled();
-        expect(saveCronStore).not.toHaveBeenCalled();
+        expect(updateCronStoreJobs).not.toHaveBeenCalled();
       });
     }
 
@@ -121,13 +142,10 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         },
         writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
       });
-      loadCronStore.mockResolvedValue({
-        version: 1,
-        jobs: [
-          { id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } },
-          { id: "b", delivery: { channel: "slack", to: "C123" } },
-        ],
-      });
+      const updatedJobs = mockCronJobUpdate([
+        { id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } },
+        { id: "b", delivery: { channel: "slack", to: "C123" } },
+      ]);
 
       await maybePersistResolvedTelegramTarget({
         cfg: {
@@ -153,16 +171,12 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         }),
         expect.objectContaining({ expectedConfigPath: "/tmp/openclaw.json" }),
       );
-      expect(saveCronStore).toHaveBeenCalledTimes(1);
-      expect(saveCronStore).toHaveBeenCalledWith(
-        "/tmp/cron/jobs.json",
-        expect.objectContaining({
-          jobs: [
-            { id: "a", delivery: { channel: "telegram", to: "-100123" } },
-            { id: "b", delivery: { channel: "slack", to: "C123" } },
-          ],
-        }),
-      );
+      expect(updateCronStoreJobs).toHaveBeenCalledTimes(1);
+      expect(updateCronStoreJobs).toHaveBeenCalledWith("/tmp/cron/jobs.json", expect.any(Function));
+      expect(updatedJobs).toEqual([
+        { id: "a", delivery: { channel: "telegram", to: "-100123" } },
+        { id: "b", delivery: { channel: "slack", to: "C123" } },
+      ]);
     });
 
     it("preserves topic suffix style in writeback target", async () => {
@@ -178,7 +192,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         },
         writeOptions: {},
       });
-      loadCronStore.mockResolvedValue({ version: 1, jobs: [] });
+      updateCronStoreJobs.mockResolvedValue({ updatedJobs: 0 });
 
       await maybePersistResolvedTelegramTarget({
         cfg: {} as OpenClawConfig,
@@ -211,10 +225,9 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         },
         writeOptions: {},
       });
-      loadCronStore.mockResolvedValue({
-        version: 1,
-        jobs: [{ id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } }],
-      });
+      const updatedJobs = mockCronJobUpdate([
+        { id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } },
+      ]);
 
       await maybePersistResolvedTelegramTarget({
         cfg: {} as OpenClawConfig,
@@ -232,12 +245,8 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         }),
         expect.any(Object),
       );
-      expect(saveCronStore).toHaveBeenCalledWith(
-        "/tmp/cron/jobs.json",
-        expect.objectContaining({
-          jobs: [{ id: "a", delivery: { channel: "telegram", to: "-100123" } }],
-        }),
-      );
+      expect(updateCronStoreJobs).toHaveBeenCalledWith("/tmp/cron/jobs.json", expect.any(Function));
+      expect(updatedJobs).toEqual([{ id: "a", delivery: { channel: "telegram", to: "-100123" } }]);
     });
   });
 }
