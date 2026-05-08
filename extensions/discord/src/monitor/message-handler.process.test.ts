@@ -1725,8 +1725,8 @@ describe("processDiscordMessage draft streaming", () => {
         kind: "analysis",
         title: "Reasoning",
       });
-      await params?.replyOptions?.onReasoningStream?.({ text: "Reading " });
-      await params?.replyOptions?.onReasoningStream?.({ text: "the event projector" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Reading" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Reading the event projector" });
       return createNoQueuedDispatchResult();
     });
 
@@ -1744,7 +1744,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n🛠️ Exec\n• Reading the event projector",
+      "Clawing...\n🛠️ Exec\n• _Reading the event projector_",
     );
     expect(draftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Reasoning"));
   });
@@ -1754,9 +1754,9 @@ describe("processDiscordMessage draft streaming", () => {
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await params?.replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_Checking files_" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Checking files" });
       await params?.replyOptions?.onReasoningStream?.({
-        text: "Reasoning:\n_Checking files and tests_",
+        text: "Checking files and tests",
       });
       return createNoQueuedDispatchResult();
     });

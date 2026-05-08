@@ -964,7 +964,7 @@ describe("shared Node TLS env defaults focused", () => {
   });
 
   it("defaults NODE_EXTRA_CA_CERTS on Linux when NVM_DIR is set", () => {
-    const expected = resolveLinuxSystemCaBundle();
+    const expected = resolveLinuxSystemCaBundle({ platform: "linux" });
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", NVM_DIR: "/home/user/.nvm" },
       port: 18789,
@@ -975,7 +975,7 @@ describe("shared Node TLS env defaults focused", () => {
   });
 
   it("defaults NODE_EXTRA_CA_CERTS on Linux when execPath is under nvm", () => {
-    const expected = resolveLinuxSystemCaBundle();
+    const expected = resolveLinuxSystemCaBundle({ platform: "linux" });
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
       platform: "linux",

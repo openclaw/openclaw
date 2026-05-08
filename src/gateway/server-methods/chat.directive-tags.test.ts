@@ -927,7 +927,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.dispatchedReplies = [
       {
         kind: "final",
-        payload: { text: "Reasoning:\n_step_", isReasoning: true },
+        payload: { text: "step", isReasoning: true },
       },
       {
         kind: "final",
