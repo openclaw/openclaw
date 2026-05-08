@@ -34,6 +34,15 @@ export type PluginBlobStore<TMetadata = Record<string, unknown>> = {
   clear(): Promise<void>;
 };
 
+export type PluginBlobSyncStore<TMetadata = Record<string, unknown>> = {
+  register(key: string, metadata: TMetadata, blob: Buffer, opts?: { ttlMs?: number }): void;
+  lookup(key: string): PluginBlobEntry<TMetadata> | undefined;
+  consume(key: string): PluginBlobEntry<TMetadata> | undefined;
+  delete(key: string): boolean;
+  entries(): PluginBlobEntry<TMetadata>[];
+  clear(): void;
+};
+
 const NAMESPACE_PATTERN = /^[a-z0-9][a-z0-9._-]*$/iu;
 const MAX_NAMESPACE_BYTES = 128;
 const MAX_KEY_BYTES = 512;
@@ -150,18 +159,47 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
 ): PluginBlobStore<TMetadata> {
+  const syncStore = createPluginBlobSyncStore<TMetadata>(pluginId, options);
+  return {
+    async register(key, metadata, blob, opts) {
+      syncStore.register(key, metadata, blob, opts);
+    },
+    async lookup(key) {
+      return syncStore.lookup(key);
+    },
+    async consume(key) {
+      return syncStore.consume(key);
+    },
+    async delete(key) {
+      return syncStore.delete(key);
+    },
+    async entries() {
+      return syncStore.entries();
+    },
+    async clear() {
+      syncStore.clear();
+    },
+  };
+}
+
+export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
+  pluginId: string,
+  options: OpenKeyedStoreOptions,
+): PluginBlobSyncStore<TMetadata> {
   if (pluginId.startsWith("core:")) {
     throw new Error("Plugin ids starting with 'core:' are reserved for core consumers.");
   }
   const namespace = validateNamespace(options.namespace);
   const maxEntries = validateMaxEntries(options.maxEntries);
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
+  const env = options.env;
+  const databaseOptions = env ? { env } : {};
   assertConsistentOptions(pluginId, namespace, { maxEntries, defaultTtlMs });
 
   const now = () => Date.now();
 
   return {
-    async register(key, metadata, blob, opts) {
+    register(key, metadata, blob, opts) {
       const normalizedKey = validateKey(key);
       const metadataJson = assertJsonMetadata(metadata);
       const createdAt = now();
@@ -202,7 +240,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
             .where("expires_at", "<=", createdAt),
         );
 
-        const countRow = executeSqliteQueryTakeFirstSync<{ count?: number | bigint }>(
+        const countRow = executeSqliteQueryTakeFirstSync(
           database.db,
           db
             .selectFrom("plugin_blob_entries")
@@ -214,7 +252,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
         const count = Number(countRow?.count ?? 0);
         const overflow = count - maxEntries;
         if (overflow > 0) {
-          const overflowRows = executeSqliteQuerySync<{ entry_key: string }>(
+          const overflowRows = executeSqliteQuerySync(
             database.db,
             db
               .selectFrom("plugin_blob_entries")
@@ -244,12 +282,12 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
             );
           }
         }
-      });
+      }, databaseOptions);
     },
-    async lookup(key) {
+    lookup(key) {
       const normalizedKey = validateKey(key);
-      const database = openOpenClawStateDatabase();
-      const row = executeSqliteQueryTakeFirstSync<BlobRow>(
+      const database = openOpenClawStateDatabase(databaseOptions);
+      const row = executeSqliteQueryTakeFirstSync(
         database.db,
         getPluginBlobKysely(database.db)
           .selectFrom("plugin_blob_entries")
@@ -261,11 +299,11 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
       );
       return row ? rowToEntry<TMetadata>(row) : undefined;
     },
-    async consume(key) {
+    consume(key) {
       const normalizedKey = validateKey(key);
       const row = runOpenClawStateWriteTransaction((database) => {
         const db = getPluginBlobKysely(database.db);
-        const found = executeSqliteQueryTakeFirstSync<BlobRow>(
+        const found = executeSqliteQueryTakeFirstSync(
           database.db,
           db
             .selectFrom("plugin_blob_entries")
@@ -284,26 +322,28 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
             .where("entry_key", "=", normalizedKey),
         );
         return found;
-      });
+      }, databaseOptions);
       return row ? rowToEntry<TMetadata>(row) : undefined;
     },
-    async delete(key) {
+    delete(key) {
       const normalizedKey = validateKey(key);
-      const result = runOpenClawStateWriteTransaction((database) =>
-        executeSqliteQuerySync(
-          database.db,
-          getPluginBlobKysely(database.db)
-            .deleteFrom("plugin_blob_entries")
-            .where("plugin_id", "=", pluginId)
-            .where("namespace", "=", namespace)
-            .where("entry_key", "=", normalizedKey),
-        ),
+      const result = runOpenClawStateWriteTransaction(
+        (database) =>
+          executeSqliteQuerySync(
+            database.db,
+            getPluginBlobKysely(database.db)
+              .deleteFrom("plugin_blob_entries")
+              .where("plugin_id", "=", pluginId)
+              .where("namespace", "=", namespace)
+              .where("entry_key", "=", normalizedKey),
+          ),
+        databaseOptions,
       );
       return Number(result.numAffectedRows ?? 0) > 0;
     },
-    async entries() {
-      const database = openOpenClawStateDatabase();
-      const rows = executeSqliteQuerySync<BlobRow>(
+    entries() {
+      const database = openOpenClawStateDatabase(databaseOptions);
+      const rows = executeSqliteQuerySync(
         database.db,
         getPluginBlobKysely(database.db)
           .selectFrom("plugin_blob_entries")
@@ -316,7 +356,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
       ).rows;
       return rows.map((row) => rowToEntry<TMetadata>(row));
     },
-    async clear() {
+    clear() {
       runOpenClawStateWriteTransaction((database) => {
         executeSqliteQuerySync(
           database.db,
@@ -325,7 +365,7 @@ export function createPluginBlobStore<TMetadata = Record<string, unknown>>(
             .where("plugin_id", "=", pluginId)
             .where("namespace", "=", namespace),
         );
-      });
+      }, databaseOptions);
     },
   };
 }
