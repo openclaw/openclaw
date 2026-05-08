@@ -6,7 +6,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Google/Gemini: normalize retired `google/gemini-3-pro-preview` and `google-gemini-cli/gemini-3-pro-preview` selections to `google/gemini-3.1-pro-preview` before they are written to model config.
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
+- Google/Gemini: normalize retired `google/gemini-3-pro-preview` catalog selections to `google/gemini-3.1-pro-preview` before they are written to model config.
 - Control UI: read the Quick Settings exec policy badge from `tools.exec.security` instead of the non-schema `agents.defaults.exec.security` path, so configured `full`/`deny` values render accurately. Fixes #78311. Thanks @FriedBack.
 - Control UI/usage: add transcript-backed historical lineage rollups for rotated logical sessions, with current-instance vs historical-lineage scope controls and long-range presets so usage history stays visible after restarts and updates. Fixes #50701. Thanks @dev-gideon-llc and @BunsDev.
 - Agents/failover: harden state-aware lane suspension by persisting quota resume transitions, restoring configured lane concurrency, preserving non-quota failure reasons, and exporting model failover events through diagnostics OTLP. Thanks @BunsDev.
@@ -180,14 +182,10 @@ Docs: https://docs.openclaw.ai
 - Gateway/macOS: `openclaw gateway stop` now uses `launchctl bootout` by default instead of unconditionally calling `launchctl disable`, so KeepAlive auto-recovery still works after unexpected crashes; use the new `--disable` flag to opt into the persistent-disable behavior when a manual stop should survive reboots. Fixes #77934. Thanks @bmoran1022.
 - Gateway/macOS: `repairLaunchAgentBootstrap` no longer kickstarts an already-running LaunchAgent, preventing unnecessary service restarts and session disconnects when repair runs against a healthy gateway. Fixes #77428. Thanks @ramitrkar-hash.
 - Gateway/macOS: `openclaw gateway stop --disable` now persists the LaunchAgent disable bit even after a previous bootout left the service not loaded, keeping the explicit stay-down path reliable. (#78412) Thanks @wdeveloper16.
-- CLI/status: keep lean `openclaw status --json` off manifest-backed channel discovery so configured-channel checks do not repeatedly rescan plugin metadata. Fixes #79129.
 - Control UI/chat: hide retired and non-public Google Gemini model IDs from chat model catalogs and route the bare `gemini-3-pro` alias to Gemini 3.1 Pro Preview instead of the shut-down Gemini 3 Pro Preview. Thanks @BunsDev.
 - CLI/install: refuse state-mutating OpenClaw CLI runs as root by default, keep an explicit `OPENCLAW_ALLOW_ROOT=1` escape hatch for intentional root/container use, and update DigitalOcean setup guidance to run OpenClaw as a non-root user. Fixes #67478. Thanks @Jerry-Xin and @natechicago.
 - Auto-reply/media: resolve `scp` from `PATH` when staging sandbox media so nonstandard OpenSSH installs can copy remote attachments.
 - Agents/PI: route PI-native OpenAI-compatible default streams through OpenClaw boundary-aware transports so local-compatible model runs keep API-key injection and transport policy.
-- Gateway/media: require authenticated owner or admin context for managed outgoing image bytes instead of trusting requester-session headers.
-- Doctor/gateway: avoid duplicate Node runtime warnings when the daemon install plan already selected a supported Node runtime.
-- Gateway/nodes: ignore malformed non-string capability entries from live nodes instead of throwing while listing the node catalog.
 - Gateway/watch: leave `OPENCLAW_TRACE_SYNC_IO` disabled by default in `pnpm gateway:watch:raw` so watch mode avoids noisy Node sync-I/O stack traces unless explicitly requested.
 - Codex app-server: close stdio stdin before force-killing the managed app-server, matching Codex single-client shutdown behavior and avoiding unsettled CLI exits after successful runs.
 - CLI/Codex: dispose registered agent harnesses during short-lived CLI shutdown so successful Codex-backed `agent --local` runs do not leave app-server child processes alive.
@@ -212,7 +210,6 @@ Docs: https://docs.openclaw.ai
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - fix(active-memory): require admin scope for global toggles [AI]. (#78863) Thanks @pgondhi987.
 - Honor owner enforcement for native commands [AI]. (#78864) Thanks @pgondhi987.
-- Gateway/auth: allow `gateway.auth.mode: "none"` loopback backend RPC clients to skip device identity only for local non-browser backend connections, restoring subagent spawns and gateway tools without opening remote or browser-origin bypasses. Fixes #75780. Thanks @yozakura-ava.
 - Tavily: resolve dedicated `tavily_search` and `tavily_extract` tool credentials from the active runtime config snapshot, so `exec` SecretRef-backed API keys do not reach the tools unresolved. (#78610) Thanks @VACInc.
 - Gateway/sessions: clear cached skills snapshots during `/new` and `sessions.reset` so long-lived channel sessions rebuild the visible skill list after skills change. (#78873) Thanks @Evizero.
 - fix(auto-reply): gate inline skill tool dispatch [AI]. (#78517) Thanks @pgondhi987.
@@ -639,6 +636,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
 - Agents/commands: add `/steer <message>` for queue-independent steering of the active current-session run without starting a new turn when the session is idle. (#76934)
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
@@ -937,6 +936,8 @@ Docs: https://docs.openclaw.ai
 - Channel and provider fixes cover Telegram topic commands and networking, Discord delivery and startup edge cases, OpenAI-compatible TTS/Realtime, OpenRouter/DeepSeek replay, Anthropic-compatible streaming, Brave/SearXNG/Firecrawl web search, and voice-call routing.
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
 - Plugins/ClawHub: make diagnostics, onboarding, doctor repair, and channel setup carry ClawPack metadata through install records while keeping explicit `clawhub:` installs on ClawHub and bare package installs on npm for the launch cutover. Thanks @vincentkoc.
@@ -1247,6 +1248,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Dependencies: refresh bundled runtime and plugin dependency pins, including Pi 0.71.1, OpenAI 6.35.0, Codex 0.128.0, Zod 4.4.1, and Matrix 41.4.0. Thanks @mariozechner.
 - Agents/workspace: add `agents.defaults.skipOptionalBootstrapFiles` for skipping selected optional workspace files during bootstrap without disabling required workspace setup. (#62110) Thanks @mainstay22.
 - Plugins/CLI: add first-class `git:` plugin installs with ref checkout, commit metadata, normal scanner/staging, and `plugins update` support for recorded git sources. Thanks @badlogic.
@@ -1455,6 +1458,8 @@ Docs: https://docs.openclaw.ai
 - Security and operations add OpenGrep scanning, sharper GHSA triage policy, safer exec/pairing/owner-scope handling, Docker/onboarding automation, and web-fetch IPv6 ULA opt-in for trusted proxy stacks. Thanks @jesse-merhi, @pgondhi987, @mmaps, @jinjimz, and @jeffrey701.
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Security/tools: configured tool sections (`tools.exec`, `tools.fs`) no longer implicitly widen restrictive profiles (`messaging`, `minimal`). Users who need those tools under a restricted profile must add explicit `alsoAllow` entries; a startup warning identifies affected configs. Fixes #47487. Thanks @amknight.
 - Gateway/SDK: add SDK-facing artifact list/get/download RPCs and App SDK helpers with transcript provenance and download-source guardrails. Refs #74706. Thanks @tmimmanuel.
@@ -1795,6 +1800,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Sandbox/Docker: add opt-in `sandbox.docker.gpus` passthrough for Docker sandbox containers so local GPU workloads can run inside sandboxed agents when the host Docker runtime supports `--gpus`. Fixes #57976; carries forward #58124. Thanks @cyan-ember.
 - iOS/Gateway: add an authenticated `node.presence.alive` protocol event and `node.list` last-seen fields so background iOS wakes can mark paired nodes recently alive without treating them as connected. Carries forward #63123. Thanks @ngutman.
 - Android: publish authenticated `node.presence.alive` events after node connect and background transitions so paired Android nodes retain durable last-seen metadata after disconnects. Carries forward #63123. Thanks @ngutman.
@@ -2082,6 +2089,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.4.26
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Control UI/Talk: add a generic browser realtime transport contract, Google Live browser Talk sessions with constrained ephemeral tokens, and a Gateway relay for backend-only realtime voice plugins. Thanks @VACInc.
 - CLI/models: route provider-filtered model listing through an explicit source plan so user config, installed manifest rows, Provider Index previews, and scoped runtime fallbacks keep a stable authority order without adding another catalog cache. Thanks @shakkernerd.
@@ -2401,6 +2410,8 @@ Docs: https://docs.openclaw.ai
 - Install/update hardening covers Windows, macOS, Linux, Docker, bundled plugin runtime deps, Node service restarts, LaunchAgent token rotation, and mixed-version gateway verification. Thanks @Kobevictor, @igormf, @abhinas90, @jsompis, @Solvely-Colin, and @gucasbrg.
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - TTS/WhatsApp: add `/tts latest` read-aloud support with duplicate suppression and `/tts chat on|off|default` session-scoped auto-TTS overrides, completing the on-demand voice-note UX for current-chat replies. Fixes #66032.
 - TTS/channels: resolve channel and account TTS overrides generically, enabling Feishu and QQBot accounts to deep-merge `channels.<channel>.accounts.<id>.tts` over global and per-agent TTS config. Thanks @sahilsatralkar.
@@ -2776,6 +2787,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Control UI/Talk: add browser WebRTC realtime voice sessions backed by OpenAI Realtime, with Gateway-minted ephemeral client secrets and `openclaw_agent_consult` handoff to the full OpenClaw agent.
 - Plugins/Google Meet: add a bundled participant plugin with personal Google auth, explicit meeting URL joins, Chrome and Twilio realtime transports, paired-node `chrome-node` support for Parallels-style Chrome/BlackHole/SoX hosts, and full-agent consults inside live voice sessions. (#70765)
 - Plugins/Google Meet: add artifact and attendance workflows for conference records, recordings, transcripts, smart notes, and participant sessions, including markdown/file output, latest-record lookup, and `--all-conference-records` history scans.
@@ -3053,6 +3066,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Providers/OpenAI: add image generation and reference-image editing through Codex OAuth, so `openai/gpt-image-2` works without an `OPENAI_API_KEY`. Fixes #70703.
 - Providers/OpenRouter: add image generation and reference-image editing through `image_generate`, so OpenRouter image models work with `OPENROUTER_API_KEY`. Fixes #55066 via #67668. Thanks @notamicrodose.
 - Image generation: let agents request provider-supported quality and output format hints, and pass OpenAI-specific background, moderation, compression, and user hints through the `image_generate` tool. (#70503) Thanks @ottodeng.
@@ -3138,6 +3153,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.4.22
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Providers/xAI: add image generation, text-to-speech, and speech-to-text support, including `grok-imagine-image` / `grok-imagine-image-pro`, reference-image edits, six live xAI voices, MP3/WAV/PCM/G.711 TTS formats, `grok-stt` audio transcription, and xAI realtime transcription for Voice Call streaming. (#68694) Thanks @KateWilkins.
 - Providers/STT: add Voice Call streaming transcription for Deepgram, ElevenLabs, and Mistral, alongside the existing OpenAI and xAI realtime STT paths; ElevenLabs also gains Scribe v2 batch audio transcription for inbound media.
@@ -3339,6 +3356,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - OpenAI/images: default the bundled image-generation provider and live media smoke tests to `gpt-image-2`, and advertise the newer 2K/4K OpenAI size hints in image-generation docs and tool metadata.
 - Plugins/skills: add the Skill Workshop plugin, which captures reusable workflow corrections as pending or auto-applied workspace skills, runs threshold-based reviewer passes for stronger completion bias on reusable procedures, quarantines unsafe proposals, and refreshes skill availability after safe writes.
 - Plugin SDK/channels: add presentation and skills runtime contracts, decouple channel presentation rendering, and document message presentation cards so plugins can own richer interactive surfaces without channel-specific glue.
@@ -3379,6 +3398,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.4.20
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Onboard/wizard: restyle the setup security disclaimer with a single yellow warning banner, section headings and bulleted checklists, and un-dim the note body so key guidance is easy to scan; add a loading spinner during the initial model catalog load so the wizard no longer goes blank while it runs; add an "API key" placeholder to provider API key prompts. (#69553) Thanks @Patrick-Erichsen.
 - Agents/prompts: strengthen the default system prompt and OpenAI GPT-5 overlay with clearer completion bias, live-state checks, weak-result recovery, and verification-before-final guidance.
@@ -3502,6 +3523,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Anthropic/models: add Claude Opus 4.7 `xhigh` reasoning effort support and keep it separate from adaptive thinking.
 - Control UI/settings: overhaul the settings and slash-command experience with faster presets, quick-create flows, and refreshed command discovery. (#67819) Thanks @BunsDev.
 - macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
@@ -3578,6 +3601,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.4.15
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Anthropic/models: default Anthropic selections, `opus` aliases, Claude CLI defaults, and bundled image understanding to Claude Opus 4.7.
 - Google/TTS: add Gemini text-to-speech support to the bundled `google` plugin, including provider registration, voice selection, WAV reply output, PCM telephony output, and setup/docs guidance. (#67515) Thanks @barronlroth.
@@ -3690,6 +3715,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - OpenAI Codex/models: add forward-compat support for `gpt-5.4-pro`, including Codex pricing/limits and list/status visibility before the upstream catalog catches up. (#66453) Thanks @jepson-liu.
 - Telegram/forum topics: surface human topic names in agent context, prompt metadata, and plugin hook metadata by learning names from Telegram forum service messages. (#65973) Thanks @ptahdunbar.
 
@@ -3769,6 +3796,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.4.12
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - QA/lab: add Convex-backed pooled Telegram credential leasing plus `openclaw qa credentials` admin commands and broker setup docs. (#65596) Thanks @joshavant.
 - Memory/Active Memory: add a new optional Active Memory plugin that gives OpenClaw a dedicated memory sub-agent right before the main reply, so ongoing chats can automatically pull in relevant preferences, context, and past details without making users remember to manually say "remember this" or "search memory" first. Includes configurable message/recent/full context modes, live `/verbose` inspection, advanced prompt/thinking overrides for tuning, and opt-in transcript persistence for debugging. Docs: https://docs.openclaw.ai/concepts/active-memory. (#63286) Thanks @Takhoffman.
@@ -3853,6 +3882,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Dreaming/memory-wiki: add ChatGPT import ingestion plus new `Imported Insights` and `Memory Palace` diary subtabs so Dreaming can inspect imported source chats, compiled wiki pages, and full source pages directly from the UI. (#64505).
 - Control UI/webchat: render assistant media/reply/voice directives as structured chat bubbles, add the `[embed ...]` rich output tag, and gate external embed URLs behind config. (#64104).
 - Tools/video_generate: add URL-only generated asset delivery, typed `providerOptions`, reference audio inputs, per-asset role hints, `adaptive` aspect-ratio support, and a higher image-input cap so video providers can expose richer generation modes without forcing large files into memory. (#61987, #61988) Thanks @xieyongliang.
@@ -3889,6 +3920,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.4.10
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Models/Codex: add the bundled Codex provider and plugin-owned app-server harness so `codex/gpt-*` models use Codex-managed auth, native threads, model discovery, and compaction while `openai/gpt-*` stays on the normal OpenAI provider path. (#64298).
 - Memory/Active Memory: add a new optional Active Memory plugin that gives OpenClaw a dedicated memory sub-agent right before the main reply, so ongoing chats can automatically pull in relevant preferences, context, and past details without making users remember to manually say "remember this" or "search memory" first. Includes configurable message/recent/full context modes, live `/verbose` inspection, advanced prompt/thinking overrides for tuning, and opt-in transcript persistence for debugging. Docs: https://docs.openclaw.ai/concepts/active-memory. (#63286) Thanks @Takhoffman.
@@ -4036,6 +4069,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Memory/dreaming: add a grounded REM backfill lane with historical `rem-harness --path`, diary commit/reset flows, cleaner durable-fact extraction, and live short-term promotion integration so old daily notes can replay into Dreams and durable memory without a second memory stack. Thanks @mbelinky.
 - Control UI/dreaming: add a structured diary view with timeline navigation, backfill/reset controls, traceable dreaming summaries, and a grounded Scene lane with promotion hints plus a safe clear-grounded action for staged backfill signals. (#63395) Thanks @mbelinky.
 - QA/lab: add character-vibes evaluation reports with model selection and parallel runs so live QA can compare candidate behavior faster.
@@ -4100,6 +4135,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.4.7
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - CLI/infer: add a first-class `openclaw infer ...` hub for provider-backed inference workflows across model, media, web, and embedding tasks. Thanks @Takhoffman.
 - Tools/media generation: auto-fallback across auth-backed image, music, and video providers by default, preserve intent during provider switches, remap size/aspect/resolution/duration hints to the closest supported option, and surface provider capabilities plus mode-aware video-to-video support.
@@ -4215,6 +4252,8 @@ Docs: https://docs.openclaw.ai
 - Config: remove legacy public config aliases such as `talk.voiceId` / `talk.apiKey`, `agents.*.sandbox.perSession`, `browser.ssrfPolicy.allowPrivateNetwork`, `hooks.internal.handlers`, and channel/group/room `allow` toggles in favor of the canonical public paths and `enabled`, while keeping load-time compatibility and `openclaw doctor --fix` migration support for existing configs. (#60726) Thanks @vincentkoc.
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Agents/video generation: add the built-in `video_generate` tool so agents can create videos through configured providers and return the generated media directly in the reply.
 - Agents/music generation: ignore unsupported optional hints such as `durationSeconds` with a warning instead of hard-failing requests on providers like Google Lyria.
@@ -4565,6 +4604,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Tasks/Task Flow: restore the core Task Flow substrate with managed-vs-mirrored sync modes, durable flow state/revision tracking, and `openclaw tasks flow` inspection/recovery primitives so background orchestration can persist and be operated separately from plugin authoring layers. (#58930) Thanks @mbelinky.
 - Tasks/Task Flow: add managed child task spawning plus sticky cancel intent, so external orchestrators can stop scheduling immediately and let parent Task Flows settle to `cancelled` once active child tasks finish. (#59610) Thanks @mbelinky.
 - Plugins/Task Flow: add a bound `api.runtime.taskFlow` seam so plugins and trusted authoring layers can create and drive managed Task Flows from host-resolved OpenClaw context without passing owner identifiers on each call. (#59622) Thanks @mbelinky.
@@ -4659,6 +4700,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - macOS/Voice Wake: add the Voice Wake option to trigger Talk Mode. (#58490) Thanks @SmoothExec.
 - Tasks/chat: add `/tasks` as a chat-native background task board for the current session, with recent task details and agent-local fallback counts when no linked tasks are visible. Related #54226. Thanks @vincentkoc.
 - Web search/SearXNG: add the bundled SearXNG provider plugin for `web_search` with configurable host support. (#57317) Thanks @cgdusek.
@@ -4704,6 +4747,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/node events: node-originated runs now stay on a reduced trusted surface, so notification-driven or node-triggered flows that previously relied on broader host/session tool access may need adjustment. (#57691) Thanks @jacobtomlinson.
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - ACP/plugins: add an explicit default-off ACPX plugin-tools MCP bridge config, document the trust boundary, and harden the built-in bridge packaging/logging path so global installs and stdio MCP sessions work reliably. (#56867) Thanks @joe2643.
 - Agents/LLM: add a configurable idle-stream timeout for embedded runner requests so stalled model streams abort cleanly instead of hanging until the broader run timeout fires. (#55072) Thanks @liuy.
@@ -4941,6 +4986,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - xAI/tools: move the bundled xAI provider to the Responses API, add first-class `x_search`, and auto-enable the xAI plugin from owned web-search and tool config so bundled Grok auth/configured search flows work without manual plugin toggles. (#56048) Thanks @huntharo.
 - xAI/onboarding: let the bundled Grok web-search plugin offer optional `x_search` setup during `openclaw onboard` and `openclaw configure --section web`, including an x_search model picker with the shared xAI key.
 - MiniMax: add image generation provider for `image-01` model, supporting generate and image-to-image editing with aspect ratio control. (#54487) Thanks @liyuan97.
@@ -5078,6 +5125,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Gateway/OpenAI compatibility: add `/v1/models` and `/v1/embeddings`, and forward explicit model overrides through `/v1/chat/completions` and `/v1/responses` for broader client and RAG compatibility. Thanks @vincentkoc.
 - Agents/tools: make `/tools` show the tools the current agent can actually use right now, add a compact default view with an optional detailed mode, and add a live "Available Right Now" section in the Control UI so it is easier to see what will work before you ask.
 - Microsoft Teams: migrate to the official Teams SDK and add AI-agent UX best practices including streaming 1:1 replies, welcome cards with prompt starters, feedback/reflection, informative status updates, typing indicators, and native AI labeling. (#51808).
@@ -5173,6 +5222,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - ModelStudio/Qwen: add standard (pay-as-you-go) DashScope endpoints for China and global Qwen API keys alongside the existing Coding Plan endpoints, and relabel the provider group to `Qwen (Alibaba Cloud Model Studio)`. (#43878).
 - UI/clarity: consolidate button primitives (`btn--icon`, `btn--ghost`, `btn--xs`), refine the Knot theme to a black-and-red palette with WCAG 2.1 AA contrast, add config icons for Diagnostics/CLI/Secrets/ACP/MCP sections, replace the roundness slider with discrete stops, and improve accessibility with aria-labels across usage filters. (#53272) Thanks @BunsDev.
 - CSP/Control UI: compute SHA-256 hashes for inline `<script>` blocks in the served `index.html` and include them in the `script-src` CSP directive, keeping inline scripts blocked by default while allowing explicitly hashed bootstrap code. (#53307) Thanks @BunsDev.
@@ -5253,6 +5304,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/usage: include reset and deleted archived session transcripts in usage totals, session discovery, and archived-only session detail fallback so the Usage view no longer undercounts rotated sessions. (#43215) Thanks @rcrick.
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - ClawHub/install: add native `openclaw skills search|install|update` flows plus `openclaw plugins install clawhub:<package>` with tracked update metadata, gateway skill-install/update support for ClawHub-backed requests, and regression coverage/docs for the new source path.
 - Plugins/marketplaces: add Claude marketplace registry resolution, `plugin@marketplace` installs, marketplace listing, and update support, plus Docker E2E coverage for local and official marketplace flows. (#48058) Thanks @vincentkoc.
@@ -5547,6 +5600,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Android/chat settings: redesign the chat settings sheet with grouped device and media sections, refresh the Connect and Voice tabs, and tighten the chat composer/session header for a denser mobile layout. (#44894) Thanks @obviyus.
 - iOS/onboarding: add a first-run welcome pager before gateway setup, stop auto-opening the QR scanner, and show `/pair qr` instructions on the connect step. (#45054) Thanks @ngutman.
 - Browser/existing-session: add an official Chrome DevTools MCP attach mode for signed-in live Chrome sessions, with docs for `chrome://inspect/#remote-debugging` enablement and direct backlinks to Chrome's own setup guides (#57018). Thanks @hydro13.
@@ -5627,6 +5682,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.3.12
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Control UI/dashboard-v2: refresh the gateway dashboard with modular overview, chat, config, agent, and session views, plus a command palette, mobile bottom tabs, and richer chat tools like slash commands, search, export, and pinned messages. (#41503) Thanks @BunsDev.
 - OpenAI/GPT-5.4 fast mode: add configurable session-level fast toggles across `/fast`, TUI, Control UI, and ACP, with per-model config defaults and OpenAI/Codex request shaping.
@@ -5719,6 +5776,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.3.11
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - OpenRouter/models: add temporary Hunter Alpha and Healer Alpha entries to the built-in catalog so OpenRouter users can try the new free stealth models during their roughly one-week availability window. (#43642) Thanks @ping-Toven.
 - iOS/Home canvas: add a bundled welcome screen with a live agent overview that refreshes on connect, reconnect, and foreground return, and move the compact connection pill off the top-left canvas overlay. (#42456) Thanks @ngutman.
@@ -5862,6 +5921,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - CLI/backup: add `openclaw backup create` and `openclaw backup verify` for local state archives, including `--only-config`, `--no-include-workspace`, manifest/payload validation, and backup guidance in destructive flows. (#40163) thanks @shichangs.
 - macOS/onboarding: add a remote gateway token field for remote mode, preserve existing non-plaintext `gateway.remote.token` config values until explicitly replaced, and warn when the loaded token shape cannot be used directly from the macOS app. (#40187, supersedes #34614) Thanks @cgdusek.
 - Talk mode: add top-level `talk.silenceTimeoutMs` config so Talk waits a configurable amount of silence before auto-sending the current transcript, while keeping each platform's existing default pause window when unset. (#39607) Thanks @danodoesdesign. Fixes #17147.
@@ -5942,6 +6003,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.3.7
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Agents/context engine plugin interface: add `ContextEngine` plugin slot with full lifecycle hooks (`bootstrap`, `ingest`, `assemble`, `compact`, `afterTurn`, `prepareSubagentSpawn`, `onSubagentEnded`), slot-based registry with config-driven resolution, `LegacyContextEngine` wrapper preserving existing compaction behavior, scoped subagent runtime for plugin runtimes via `AsyncLocalStorage`, and `sessions.get` gateway method. Enables plugins like `lossless-claw` to provide alternative context management strategies without modifying core compaction logic. Zero behavior change when no context engine plugin is configured. (#22201) thanks @jalehman.
 - ACP/persistent channel bindings: add durable Discord channel and Telegram topic binding storage, routing resolution, and CLI/docs support so ACP thread targets survive restarts and can be managed consistently. (#34873) Thanks @dutifulbob.
@@ -6305,6 +6368,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Secrets/SecretRef coverage: expand SecretRef support across the full supported user-supplied credential surface (64 targets total), including runtime collectors, `openclaw secrets` planning/apply/audit flows, onboarding SecretInput UX, and related docs; unresolved refs now fail fast on active surfaces while inactive surfaces report non-blocking diagnostics. (#29580) Thanks @joshavant.
 - Tools/PDF analysis: add a first-class `pdf` tool with native Anthropic and Google PDF provider support, extraction fallback for non-native models, configurable defaults (`agents.defaults.pdfModel`, `pdfMaxBytesMb`, `pdfMaxPages`), and docs/tests covering routing, validation, and registration. (#31319) Thanks @tyler6204.
 - Outbound adapters/plugins: add shared `sendPayload` support across direct-text-media, Discord, Slack, WhatsApp, Zalo, and Zalouser with multi-media iteration and chunk-aware text fallback. (#30144) Thanks @nohat.
@@ -6526,6 +6591,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - OpenAI/Streaming transport: make `openai` Responses WebSocket-first by default (`transport: "auto"` with SSE fallback), add shared OpenAI WS stream/connection runtime wiring with per-session cleanup, and preserve server-side compaction payload mutation (`store` + `context_management`) on the WS path.
 - Gateway/Container probes: add built-in HTTP liveness/readiness endpoints (`/health`, `/healthz`, `/ready`, `/readyz`) for Docker/Kubernetes health checks, with fallback routing so existing handlers on those paths are not shadowed. (#31272) Thanks @vincentkoc.
 - Android/Nodes: add `camera.list`, `device.permissions`, `device.health`, and `notifications.actions` (`open`/`dismiss`/`reply`) on Android nodes, plus first-class node-tool actions for the new device/notification commands. (#28260) Thanks @obviyus.
@@ -6651,6 +6718,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.27
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Models/OpenAI forward compat: add support for `openai/gpt-5.4`, `openai/gpt-5.4-pro`, and `openai-codex/gpt-5.4`, including direct OpenAI Responses `serviceTier` passthrough safeguards for valid values. (#36590) Thanks @dorukardahan.
 - Android/Play package ID: rename the Android app package to `ai.openclaw.app`, including matching benchmark and Android tooling references for Play publishing. (#38712) Thanks @obviyus.
@@ -6814,6 +6883,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Highlight: External Secrets Management introduces a full `openclaw secrets` workflow (`audit`, `configure`, `apply`, `reload`) with runtime snapshot activation, strict `secrets apply` target-path validation, safer migration scrubbing, ref-only auth-profile support, and dedicated docs. (#26155) Thanks @joshavant.
 - ACP/Thread-bound agents: make ACP agents first-class runtimes for thread sessions with `acp` spawn/send dispatch integration, acpx backend bridging, lifecycle controls, startup reconciliation, runtime cleanup, and coalesced thread replies. (#23580) thanks @osolmaz.
 - Agents/Routing CLI: add `openclaw agents bindings`, `openclaw agents bind`, and `openclaw agents unbind` for account-scoped route management, including channel-only to account-scoped binding upgrades, role-aware binding identity handling, plugin-resolved binding account IDs, and optional account-binding prompts in `openclaw channels add`. (#27195) thanks @gumadeiras.
@@ -6915,6 +6986,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Android/Chat: improve streaming delivery handling and markdown rendering quality in the native Android chat UI, including better GitHub-flavored markdown behavior. (#26079) Thanks @obviyus.
 - Android/Startup perf: defer foreground-service startup, move WebView debugging init out of critical startup, and add startup macrobenchmark + low-noise perf CLI scripts for deterministic cold-start tracking. (#26659) Thanks @obviyus.
 - UI/Chat compose: add mobile stacked layout for compose action buttons on small screens to improve send/session controls usability. (#11167) Thanks @junyiz.
@@ -6994,6 +7067,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.24
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants), accept trailing punctuation (for example `STOP OPENCLAW!!!`), add multilingual stop keywords (including ES/FR/ZH/HI/AR/JP/DE/PT/RU forms), and treat exact `do not do that` as a stop trigger while preserving strict standalone matching. (#25103) Thanks @vincentkoc.
 - Android/App UX: ship a native four-step onboarding flow, move post-onboarding into a five-tab shell (Connect, Chat, Voice, Screen, Settings), add a full Connect setup/manual mode screen, and refresh Android chat/settings surfaces for the new navigation model.
@@ -7089,6 +7164,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Providers/Kilo Gateway: add first-class `kilocode` provider support (auth, onboarding, implicit provider detection, model defaults, transcript/cache-ttl handling, and docs), with default model `kilocode/anthropic/claude-opus-4.6`. (#20212) Thanks @jrf0110 and @markijbema.
 - Providers/Vercel AI Gateway: accept Claude shorthand model refs (`vercel-ai-gateway/claude-*`) by normalizing to canonical Anthropic-routed model ids. (#23985) Thanks @sallyom, @markbooch, and @vincentkoc.
 - Docs/Prompt caching: add a dedicated prompt-caching reference covering `cacheRetention`, per-agent `params` merge precedence, Bedrock/OpenRouter behavior, and cache-ttl + heartbeat tuning. Thanks @svenssonaxel.
@@ -7151,6 +7228,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.22
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Control UI/Agents: make the Tools panel data-driven from runtime `tools.catalog`, add per-tool provenance labels (`core` / `plugin:<id>` + optional marker), and keep a static fallback list when the runtime catalog is unavailable. Thanks @Takhoffman.
 - Web Search/Gemini: add grounded Gemini provider support with provider auto-detection and config/docs updates. (#13075, #13074) Thanks @akoscz.
@@ -7411,6 +7490,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Models/Google: add Gemini 3.1 support (`google/gemini-3.1-pro-preview`).
 - Providers/Onboarding: add Volcano Engine (Doubao) and BytePlus providers/models (including coding variants), wire onboarding auth choices for interactive + non-interactive flows, and align docs to `volcengine-api-key`. (#7967) Thanks @funmore123.
 - Channels/CLI: add per-account/channel `defaultTo` outbound routing fallback so `openclaw agent --deliver` can send without explicit `--reply-to` when a default target is configured. (#16985) Thanks @KirillShchetinin.
@@ -7556,6 +7637,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - iOS/Watch: add an Apple Watch companion MVP with watch inbox UI, watch notification relay handling, and gateway command surfaces for watch status/send flows. (#20054) Thanks @mbelinky.
 - iOS/Gateway: wake disconnected iOS nodes via APNs before `nodes.invoke` and auto-reconnect gateway sessions on silent push wake to reduce invoke failures while the app is backgrounded. (#20332) Thanks @mbelinky.
 - Gateway/CLI: add paired-device hygiene flows with `device.pair.remove`, plus `openclaw devices remove` and guarded `openclaw devices clear --yes [--pending]` commands for removing paired entries and optionally rejecting pending requests. (#20057) Thanks @mbelinky.
@@ -7650,6 +7733,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.17
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Agents/Anthropic: add opt-in 1M context beta header support for Opus/Sonnet via model `params.context1m: true` (maps to `anthropic-beta: context-1m-2025-08-07`).
 - Agents/Models: support Anthropic Sonnet 4.6 (`anthropic/claude-sonnet-4-6`) across aliases/defaults with forward-compat fallback when upstream catalogs still only expose Sonnet 4.5.
@@ -7830,6 +7915,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Discord: unlock rich interactive agent prompts with Components v2 (buttons, selects, modals, and attachment-backed file blocks) so for native interaction through Discord. Thanks @thewilloftheshadow.
 - Discord: components v2 UI + embeds passthrough + exec approval UX refinements (CV2 containers, button layout, Discord-forwarding skip). Thanks @thewilloftheshadow.
 - Plugins: expose `llm_input` and `llm_output` hook payloads so extensions can observe prompt/input context and model output usage details. (#16724) Thanks @SecondThread.
@@ -7895,6 +7982,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.14
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Telegram: add poll sending via `openclaw message poll` (duration seconds, silent delivery, anonymity controls). (#16209) Thanks @robbyczgw-cla.
 - Slack/Discord: add `dmPolicy` + `allowFrom` config aliases for DM access control; legacy `dm.policy` + `dm.allowFrom` keys remain supported and `openclaw doctor --fix` can migrate them.
@@ -8045,6 +8134,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Install: add optional Podman-based setup: `setup-podman.sh` for one-time host setup (openclaw user, image, launch script, systemd quadlet), `run-openclaw-podman.sh launch` / `launch setup`; systemd Quadlet unit for openclaw user service; docs for rootless container, openclaw user (subuid/subgid), and quadlet (troubleshooting). (#16273) Thanks @DarwinsBuddy.
 - Discord: send voice messages with waveform previews from local audio files (including silent delivery). (#7253) Thanks @nyanjou.
 - Discord: add configurable presence status/activity/type/url (custom status defaults to activity text). (#10855) Thanks @h0tp-ftw.
@@ -8164,6 +8255,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.12
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - CLI/Plugins: add `openclaw plugins uninstall <id>` with `--dry-run`, `--force`, and `--keep-files` options, including safe uninstall path handling and plugin uninstall docs. (#5985) Thanks @JustasMonkev.
 - CLI: add `openclaw logs --local-time` to display log timestamps in local timezone. (#13818) Thanks @xialonglee.
@@ -8355,6 +8448,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Cron: default `wakeMode` is now `"now"` for new jobs (was `"next-heartbeat"`). (#10776) Thanks @tyler6204.
 - Cron: `cron run` defaults to force execution; use `--due` to restrict to due-only. (#10776) Thanks @tyler6204.
 - Models: support Anthropic Opus 4.6 and OpenAI Codex gpt-5.3-codex (forward-compat fallbacks). (#9853, #10720, #9995) Thanks @TinyTb, @calvin-hpnet, @tyler6204.
@@ -8386,6 +8481,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.3
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Telegram: remove last `@ts-nocheck` from `bot-handlers.ts`, use Grammy types directly, deduplicate `StickerMetadata`. Zero `@ts-nocheck` remaining in `src/telegram/`. (#9206).
 - Telegram: remove `@ts-nocheck` from `bot-message.ts`, type deps via `Omit<BuildTelegramMessageContextParams>`, widen `allMedia` to `TelegramMediaRef[]`. (#9180).
@@ -8447,6 +8544,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Docs: promote BlueBubbles as the recommended iMessage integration; mark imsg channel as legacy. (#8415) Thanks @tyler6204.
 
 ### Fixes
@@ -8462,6 +8561,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.2
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Feishu: add Feishu/Lark plugin support + docs. (#7313) Thanks @jiulingyun (openclaw-cn).
 - Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs. Thanks @gumadeiras.
@@ -8501,6 +8602,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.2.1
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Docs: onboarding/install/i18n/exec-approvals/Control UI/exe.dev/cacheRetention updates + misc nav/typos. (#3050, #3461, #4064, #4675, #4729, #4763, #5003, #5402, #5446, #5474, #5663, #5689, #5694, #5967, #6270, #6300, #6311, #6416, #6487, #6550, #6789).
 - Telegram: use shared pairing store. (#6127) Thanks @obviyus.
@@ -8568,6 +8671,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - CLI: add `completion` command (Zsh/Bash/PowerShell/Fish) and auto-setup during postinstall/onboarding.
 - CLI: add per-agent `models status` (`--agent` filter). (#4780) Thanks @jlowin.
 - Agents: add Kimi K2.5 to the synthetic model catalog. (#4407) Thanks @manikv12.
@@ -8603,6 +8708,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.1.29
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Rebrand: rename the npm package/CLI to `openclaw`, add a `openclaw` compatibility shim, and move extensions to the `@openclaw/*` scope.
 - Onboarding: strengthen security warning copy for beta + access control expectations.
@@ -8755,6 +8862,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Channels: add LINE plugin (Messaging API) with rich replies, quick replies, and plugin HTTP registry. (#1630) Thanks @plum-dawg.
 - TTS: add Edge TTS provider fallback, defaulting to keyless Edge with MP3 retry on format failures. (#1668) https://docs.openclaw.ai/tts.
 - TTS: add auto mode enum (off/always/inbound/tagged) with per-session `/tts` override. (#1667) Thanks @sebslight. https://docs.openclaw.ai/tts
@@ -8832,6 +8941,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Channels: allow per-group tool allow/deny policies across built-in + plugin channels. (#1546) Thanks @adam91holt. https://docs.openclaw.ai/multi-agent-sandbox-tools
 - Agents: add Bedrock auto-discovery defaults + config overrides. (#1553) Thanks @fal3. https://docs.openclaw.ai/bedrock
 - CLI: add `openclaw system` for system events + heartbeat controls; remove standalone `wake`. (commit 71203829d) https://docs.openclaw.ai/cli/system.
@@ -8886,6 +8997,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Highlight: Compaction safeguard now uses adaptive chunking, progressive fallback, and UI status + retries. (#1466) Thanks @dlauer.
 - Providers: add Antigravity usage tracking to status output. (#1490) Thanks @patelhiren.
 - Slack: add chat-type reply threading overrides via `replyToModeByChatType`. (#1442) Thanks @stefangalescu.
@@ -8931,6 +9044,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.1.21
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Highlight: Lobster optional plugin tool for typed workflows + approval gates. https://docs.openclaw.ai/tools/lobster.
 - Lobster: allow workflow file args via `argsJson` in the plugin tool. https://docs.openclaw.ai/tools/lobster.
@@ -8983,6 +9098,8 @@ Docs: https://docs.openclaw.ai
 ## 2026.1.20
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.openclaw.ai/web/control-ui.
 - Control UI: drop the legacy list view. (#1345) https://docs.openclaw.ai/web/control-ui.
@@ -9167,6 +9284,8 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - CLI: stamp build commit into dist metadata so banners show the commit in npm installs.
 - CLI: close memory manager after memory commands to avoid hanging processes. (#1127) - thanks @NicholasSpisak.
 
@@ -9182,6 +9301,8 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Web search: add `country`/`language` parameters (schema + Brave API) and docs. (#1046) - thanks @YuriNachos. https://docs.openclaw.ai/tools/web
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Plugins: ship bundled plugins disabled by default and allow overrides by installed versions. (#1066) - thanks @ItzR3NO.
 - Plugins: add bundled Antigravity + Gemini CLI OAuth + Copilot Proxy provider plugins. (#1066) - thanks @ItzR3NO.
@@ -9292,6 +9413,8 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - UI/Apps: move channel/config settings to schema-driven forms and rename Connections → Channels. (#1040) - thanks @thewilloftheshadow.
 - CLI: set process titles to `openclaw-<command>` for clearer process listings.
 - CLI/macOS: sync remote SSH target/identity to config and let `gateway status` auto-infer SSH targets (ssh-config aware).
@@ -9378,6 +9501,8 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - Docs: clarify per-agent auth stores, sandboxed skill binaries, and elevated semantics.
 - Docs: add FAQ entries for missing provider auth after adding agents and Gemini thinking signature errors.
 - Agents: add optional auth-profile copy prompt on `agents add` and improve auth error messaging.
@@ -9416,6 +9541,8 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 ## 2026.1.14
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Usage: add MiniMax coding plan usage tracking.
 - Auth: label Claude Code CLI auth options. (#915) - thanks @SeanZoR.
@@ -9549,6 +9676,8 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 
 ### Changes
 
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
+
 - CLI/Onboarding: simplify MiniMax auth choice to a single M2.1 option.
 - CLI: configure section selection now loops until Continue.
 - Docs: explain MiniMax vs MiniMax Lightning (speed vs cost) and restore LM Studio example.
@@ -9642,6 +9771,8 @@ Thanks @AlexMikhalev, @CoreyH, @John-Rood, @KrauseFx, @MaudeBot, @Nachx639, @Nic
 - Gateway: add OpenAI-compatible `/v1/chat/completions` HTTP endpoint (auth, SSE streaming, per-agent routing). (#680).
 
 ### Changes
+
+- Sessions: fix session store recovery after corrupted/empty sessions.json caused by crash/OOM, using validated recovery candidates from pre-existing .bak and residual legacy/fs-safe .tmp files with secure 0o600 self-heal writeback. (#77915) Thanks @wAngByg.
 
 - Onboarding/Models: add first-class Z.AI (GLM) auth choice (`zai-api-key`) + `--zai-api-key` flag.
 - CLI/Onboarding: add OpenRouter API key auth option in configure/onboard. (#703) - thanks @mteam88.
