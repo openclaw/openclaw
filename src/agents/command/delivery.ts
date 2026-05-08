@@ -385,7 +385,8 @@ export async function deliverAgentCommandResult(params: {
     deliver &&
     deliveryChannel &&
     !isInternalMessageChannel(deliveryChannel) &&
-    deliveryPayloads.length > 0
+    deliveryPayloads.length > 0 &&
+    !hadPreflightError
   ) {
     if (deliveryTarget) {
       deliveryAttempted = true;
@@ -413,7 +414,13 @@ export async function deliverAgentCommandResult(params: {
         // since catching silent failures is this patch's primary goal. A future
         // change to deliverOutboundPayloads could expose cancellation metadata to
         // distinguish the two cases.
-        deliverySucceeded = results.length > 0;
+        //
+        // Partial failures also count as not-succeeded: matches upstream's
+        // pre-PR `!deliveryHadError` semantics so `agent-command.ts` keeps the
+        // durable `pendingFinalDelivery` retry marker when any payload errored
+        // under best-effort. Without this, a partial-failure final-delivery
+        // would never be retried after restart.
+        deliverySucceeded = results.length > 0 && !hadPartialFailure;
       } catch (err) {
         if (!bestEffortDeliver) {
           throw err;
@@ -435,14 +442,21 @@ export async function deliverAgentCommandResult(params: {
         ? "channel resolved to internal"
         : !deliveryTarget
           ? "no delivery target resolved"
-          : deliveryThrewError
-            ? "delivery threw an error"
-            : "delivery returned zero results";
-    runtime.log(
+          : hadPreflightError
+            ? "preflight rejected delivery target"
+            : deliveryThrewError
+              ? "delivery threw an error"
+              : hadPartialFailure
+                ? "partial failure during best-effort delivery"
+                : "delivery returned zero results";
+    const message =
       `[delivery] delivery requested but not completed: ${reason} ` +
-        `(session=${effectiveSessionKey ?? "unknown"} channel=${deliveryChannel ?? "none"} ` +
-        `target=${deliveryTarget ?? "none"} payloads=${deliveryPayloads.length})`,
-    );
+      `(session=${effectiveSessionKey ?? "unknown"} channel=${deliveryChannel ?? "none"} ` +
+      `target=${deliveryTarget ?? "none"} payloads=${deliveryPayloads.length})`;
+    runtime.error?.(message);
+    if (!runtime.error) {
+      runtime.log(message);
+    }
   }
 
   const deliveryStatusResult = deliver
@@ -458,6 +472,11 @@ export async function deliverAgentCommandResult(params: {
   return {
     payloads: normalizedPayloads,
     meta: resultMeta,
+    // Backward-compat field for `src/agents/agent-command.ts` which reads
+    // `deliveryResult?.deliverySucceeded === true` to decide whether to
+    // clear the durable `pendingFinalDelivery` retry marker. Keeping this
+    // top-level alongside `deliveryStatus` avoids touching agent-command.ts.
+    deliverySucceeded,
     deliveryStatus: deliveryStatusResult,
   };
 }

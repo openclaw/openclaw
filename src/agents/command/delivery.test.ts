@@ -447,6 +447,15 @@ function logMessages(runtime: ReturnType<typeof createRuntime>): string[] {
   return runtime.log.mock.calls.map((c: unknown[]) => String(c[0]));
 }
 
+// The `[delivery] delivery requested but not completed` warning is routed to
+// runtime.error (with runtime.log fallback when error is unavailable). Tests
+// that look for that warning should use this helper rather than logMessages.
+function diagnosticMessages(runtime: ReturnType<typeof createRuntime>): string[] {
+  return [...runtime.error.mock.calls, ...runtime.log.mock.calls].map((c: unknown[]) =>
+    String(c[0]),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -477,6 +486,9 @@ describe("deliverAgentCommandResult — delivery status tracking", () => {
       attempted: true,
       succeeded: true,
     });
+    // Backward-compat field consumed by agent-command.ts to clear
+    // pendingFinalDelivery — must mirror deliveryStatus.succeeded.
+    expect(result.deliverySucceeded).toBe(true);
     // No warning log on success
     expect(logMessages(runtime).some((msg) => msg.includes("[delivery]"))).toBe(false);
   });
@@ -510,8 +522,9 @@ describe("deliverAgentCommandResult — delivery status tracking", () => {
       attempted: false,
       succeeded: false,
     });
+    expect(result.deliverySucceeded).toBe(false);
     expect(
-      logMessages(runtime).some((msg) =>
+      diagnosticMessages(runtime).some((msg) =>
         msg.includes("[delivery] delivery requested but not completed"),
       ),
     ).toBe(true);
@@ -533,9 +546,9 @@ describe("deliverAgentCommandResult — delivery status tracking", () => {
       attempted: true,
       succeeded: false,
     });
-    expect(logMessages(runtime).some((msg) => msg.includes("delivery returned zero results"))).toBe(
-      true,
-    );
+    expect(
+      diagnosticMessages(runtime).some((msg) => msg.includes("delivery returned zero results")),
+    ).toBe(true);
   });
 
   it("catches thrown error in bestEffort mode without re-throwing", async () => {
@@ -597,7 +610,7 @@ describe("deliverAgentCommandResult — delivery status tracking", () => {
     expect(result.deliveryStatus).toBeUndefined();
   });
 
-  it("returns succeeded=true with hadPartialFailure when onError fires but results exist", async () => {
+  it("returns succeeded=false with hadPartialFailure when onError fires under best-effort", async () => {
     deliverSpy.mockImplementation(async (opts) => {
       // Simulate partial failure: onError fires for one payload, but results still returned
       opts.onError?.(new Error("Payload 2 failed"), { text: "hello" } as never);
@@ -609,16 +622,25 @@ describe("deliverAgentCommandResult — delivery status tracking", () => {
       deliver: true,
       channel: "discord",
       to: "channel:123456",
+      bestEffortDeliver: true,
     });
 
+    // Partial failures count as not-succeeded so `agent-command.ts` keeps the
+    // durable `pendingFinalDelivery` retry marker; matches upstream's pre-PR
+    // `!deliveryHadError` semantics.
     expect(result.deliveryStatus).toEqual({
       requested: true,
       attempted: true,
-      succeeded: true,
+      succeeded: false,
       hadPartialFailure: true,
     });
-    // No [delivery] warning — succeeded is true
-    expect(logMessages(runtime).some((msg) => msg.includes("[delivery]"))).toBe(false);
+    expect(result.deliverySucceeded).toBe(false);
+    // [delivery] warning fires because succeeded is false
+    expect(
+      diagnosticMessages(runtime).some((msg) =>
+        msg.includes("[delivery] delivery requested but not completed"),
+      ),
+    ).toBe(true);
   });
 
   it("logs warning when channel resolves to internal", async () => {
@@ -642,8 +664,68 @@ describe("deliverAgentCommandResult — delivery status tracking", () => {
       succeeded: false,
       error: true,
     });
-    expect(logMessages(runtime).some((msg) => msg.includes("channel resolved to internal"))).toBe(
+    expect(
+      diagnosticMessages(runtime).some((msg) => msg.includes("channel resolved to internal")),
+    ).toBe(true);
+  });
+
+  it("reports preflight rejection (not zero results) when explicit target fails resolution", async () => {
+    // Simulate best-effort preflight rejection: deliveryPlan still resolves a
+    // target string, but resolveAgentOutboundTarget returns ok:false. The
+    // delivery code marks hadPreflightError and skips the deliver call; the
+    // diagnostic must report the preflight reason, not "zero results".
+    outboundTargetSpy.mockReturnValue({
+      resolvedTarget: {
+        ok: false as const,
+        error: new Error("target rejected by plugin"),
+      } as ReturnType<typeof agentDeliveryModule.resolveAgentOutboundTarget>["resolvedTarget"],
+      resolvedTo: "channel:123456",
+      targetMode: "explicit" as const,
+    });
+
+    const { result, runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "discord",
+      to: "channel:123456",
+    });
+
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(result.deliveryStatus).toEqual({
+      requested: true,
+      attempted: false,
+      succeeded: false,
+      error: true,
+    });
+    const diagnostics = diagnosticMessages(runtime);
+    expect(diagnostics.some((msg) => msg.includes("preflight rejected delivery target"))).toBe(
       true,
     );
+    expect(diagnostics.some((msg) => msg.includes("delivery returned zero results"))).toBe(false);
+  });
+
+  it("emits the [delivery] warning on stderr (runtime.error), not stdout", async () => {
+    // Diagnostics belong on stderr so scripts that pipe stdout for payload
+    // text don't conflate it with delivery status. Tested by verifying
+    // runtime.error received the message and runtime.log did not.
+    deliverSpy.mockResolvedValue([]);
+
+    const { runtime } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      channel: "discord",
+      to: "channel:123456",
+    });
+
+    const errorMessages = runtime.error.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(
+      errorMessages.some((msg) => msg.includes("[delivery] delivery requested but not completed")),
+    ).toBe(true);
+    expect(
+      logMessages(runtime).some((msg) =>
+        msg.includes("[delivery] delivery requested but not completed"),
+      ),
+    ).toBe(false);
   });
 });
