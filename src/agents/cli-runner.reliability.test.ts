@@ -8,6 +8,7 @@ import {
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { upsertSessionEntry } from "../config/sessions.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
@@ -39,6 +40,12 @@ vi.mock("../tts/tts.js", () => ({
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+const TEST_SESSION_ID = "s1";
+const TEST_SESSION_KEY = "agent:main:main";
+const TEST_SESSION_FILE = createSqliteSessionTranscriptLocator({
+  agentId: "main",
+  sessionId: TEST_SESSION_ID,
+});
 
 type HookRunnerGlobalStateForTest = {
   hookRunner: unknown;
@@ -62,19 +69,19 @@ function setHookRunnerForTest(hookRunner: unknown): void {
 function createSessionFile(params?: { history?: Array<{ role: "user"; content: string }> }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
-  const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
+  const sessionFile = TEST_SESSION_FILE;
   upsertSessionEntry({
     agentId: "main",
-    sessionKey: "agent:main:main",
+    sessionKey: TEST_SESSION_KEY,
     entry: {
-      sessionId: "s1",
+      sessionId: TEST_SESSION_ID,
       sessionFile,
       updatedAt: Date.now(),
     },
   });
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
-    sessionId: "s1",
+    sessionId: TEST_SESSION_ID,
     transcriptPath: sessionFile,
     events: [
       {
@@ -118,9 +125,9 @@ function buildPreparedContext(params?: {
   };
   return {
     params: {
-      sessionId: "s1",
+      sessionId: TEST_SESSION_ID,
       sessionKey: params?.sessionKey,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile: TEST_SESSION_FILE,
       workspaceDir: "/tmp",
       prompt: "hi",
       provider: "codex-cli",
