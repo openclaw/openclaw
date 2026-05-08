@@ -1186,15 +1186,6 @@ export const dispatchTelegramMessage = async ({
                       hadErrorReplyFailureOrSkip = true;
                     }
 
-                    // Track media URLs from block replies so final replies
-                    // can skip duplicates (non-streaming MEDIA: dedup).
-                    if (info.kind === "block" && payload.mediaUrls?.length) {
-                      for (const url of payload.mediaUrls) {
-                        sentBlockMediaUrls.add(url);
-                      }
-                    }
-
-                    // Filter out media already sent via block reply.
                     const deduped =
                       info.kind === "final"
                         ? deduplicateBlockSentMedia(payload, sentBlockMediaUrls)
@@ -1251,6 +1242,7 @@ export const dispatchTelegramMessage = async ({
                       reasoningStepState.resetForNextStep();
                     };
 
+                    let blockDelivered = false;
                     for (const segment of segments) {
                       if (
                         segment.lane === "answer" &&
@@ -1285,6 +1277,7 @@ export const dispatchTelegramMessage = async ({
                       if (info.kind === "final") {
                         emitPreviewFinalizedHook(result);
                       }
+                      blockDelivered = blockDelivered || result.kind !== "skipped";
                       if (segment.lane === "reasoning") {
                         if (result.kind !== "skipped") {
                           reasoningStepState.noteReasoningDelivered();
@@ -1296,22 +1289,33 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.resetForNextStep();
                       }
                     }
+                    const trackBlockMedia = (delivered: boolean) => {
+                      if (delivered && info.kind === "block" && payload.mediaUrls?.length) {
+                        for (const url of payload.mediaUrls) {
+                          sentBlockMediaUrls.add(url);
+                        }
+                      }
+                    };
+
                     if (segments.length > 0) {
+                      trackBlockMedia(blockDelivered);
                       return;
                     }
                     if (split.suppressedReasoningOnly) {
+                      let delivered = false;
                       if (reply.hasMedia) {
                         const payloadWithoutSuppressedReasoning =
                           typeof effectivePayload.text === "string"
                             ? { ...effectivePayload, text: "" }
                             : effectivePayload;
-                        await sendPayload(payloadWithoutSuppressedReasoning, {
+                        delivered = await sendPayload(payloadWithoutSuppressedReasoning, {
                           durable: info.kind === "final",
                         });
                       }
                       if (info.kind === "final") {
                         await flushBufferedFinalAnswer();
                       }
+                      trackBlockMedia(delivered);
                       return;
                     }
 
@@ -1327,10 +1331,13 @@ export const dispatchTelegramMessage = async ({
                       }
                       return;
                     }
-                    await sendPayload(effectivePayload, { durable: info.kind === "final" });
+                    const delivered = await sendPayload(effectivePayload, {
+                      durable: info.kind === "final",
+                    });
                     if (info.kind === "final") {
                       await flushBufferedFinalAnswer();
                     }
+                    trackBlockMedia(delivered);
                   },
                   onSkip: (payload, info) => {
                     if (payload.isError === true) {
