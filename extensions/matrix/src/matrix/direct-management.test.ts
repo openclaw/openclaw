@@ -22,6 +22,29 @@ function createClient(overrides: Partial<MatrixClient> = {}): MatrixClient {
 }
 
 describe("inspectMatrixDirectRooms", () => {
+  it("discovers newer strict joined DM rooms even when an older strict m.direct mapping exists", async () => {
+    // Regression for openclaw/openclaw#79514: a stale `m.direct` mapping
+    // pointing at an older strict DM room must not suppress discovery of
+    // newer joined strict 2-member DM rooms with the same remote user.
+    const client = createClient({
+      getAccountData: vi.fn(async () => ({
+        "@alice:example.org": ["!old:example.org"],
+      })),
+      getJoinedRooms: vi.fn(async () => ["!old:example.org", "!new:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+    });
+
+    const result = await inspectMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    // Existing strict mapped room still wins for activeRoomId (preserves
+    // prior preference), but the newer strict joined room is now surfaced.
+    expect(result.activeRoomId).toBe("!old:example.org");
+    expect(result.discoveredStrictRoomIds).toEqual(["!new:example.org"]);
+  });
+
   it("prefers strict mapped rooms over discovered rooms", async () => {
     const client = createClient({
       getAccountData: vi.fn(async () => ({
@@ -188,6 +211,37 @@ describe("repairMatrixDirectRooms", () => {
       EventType.Direct,
       expect.objectContaining({
         "@alice:example.org": ["!created:example.org"],
+      }),
+    );
+  });
+
+  it("surfaces newer strict joined DM rooms into m.direct alongside the existing mapping", async () => {
+    // Regression for openclaw/openclaw#79514: repair must promote
+    // newly-discovered strict joined DM rooms into m.direct so downstream
+    // DM detection (client.dms.isDm) recognises them, instead of leaving
+    // them invisible because an older strict mapping already exists.
+    const setAccountData = vi.fn(async () => undefined);
+    const client = createClient({
+      getAccountData: vi.fn(async () => ({
+        "@alice:example.org": ["!old:example.org"],
+      })),
+      getJoinedRooms: vi.fn(async () => ["!old:example.org", "!new:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      setAccountData,
+    });
+
+    const result = await repairMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.activeRoomId).toBe("!old:example.org");
+    expect(result.createdRoomId).toBeNull();
+    expect(result.discoveredStrictRoomIds).toEqual(["!new:example.org"]);
+    expect(setAccountData).toHaveBeenCalledWith(
+      EventType.Direct,
+      expect.objectContaining({
+        "@alice:example.org": ["!old:example.org", "!new:example.org"],
       }),
     );
   });

@@ -100,14 +100,6 @@ function normalizeRoomIdList(values: readonly string[]): string[] {
   return normalized;
 }
 
-function hasPrimaryMatrixDirectRoomMapping(params: {
-  directContent: MatrixDirectAccountData;
-  remoteUserId: string;
-  roomId: string;
-}): boolean {
-  return normalizeMappedRoomIds(params.directContent, params.remoteUserId)[0] === params.roomId;
-}
-
 function resolveDirectAccountDataWriteQueue(client: MatrixClient): KeyedAsyncQueue {
   const existing = directAccountDataWriteQueues.get(client);
   if (existing) {
@@ -123,6 +115,18 @@ async function writeMatrixDirectRoomMapping(params: {
   remoteUserId: string;
   roomId: string;
 }): Promise<MatrixDirectRoomMappingWriteResult> {
+  return await writeMatrixDirectRoomMappings({
+    client: params.client,
+    remoteUserId: params.remoteUserId,
+    roomIds: [params.roomId],
+  });
+}
+
+async function writeMatrixDirectRoomMappings(params: {
+  client: MatrixClient;
+  remoteUserId: string;
+  roomIds: readonly string[];
+}): Promise<MatrixDirectRoomMappingWriteResult> {
   return await resolveDirectAccountDataWriteQueue(params.client).enqueue(
     DIRECT_ACCOUNT_DATA_QUEUE_KEY,
     async () => {
@@ -130,13 +134,13 @@ async function writeMatrixDirectRoomMapping(params: {
       const directContentAfter = buildNextDirectContent({
         directContent: directContentBefore,
         remoteUserId: params.remoteUserId,
-        roomId: params.roomId,
+        roomIds: params.roomIds,
       });
-      const changed = !hasPrimaryMatrixDirectRoomMapping({
-        directContent: directContentBefore,
-        remoteUserId: params.remoteUserId,
-        roomId: params.roomId,
-      });
+      const beforeRooms = normalizeMappedRoomIds(directContentBefore, params.remoteUserId);
+      const afterRooms = normalizeMappedRoomIds(directContentAfter, params.remoteUserId);
+      const changed =
+        beforeRooms.length !== afterRooms.length ||
+        beforeRooms.some((roomId, index) => roomId !== afterRooms[index]);
       if (changed) {
         await params.client.setAccountData(EventType.Direct, directContentAfter);
       }
@@ -178,10 +182,10 @@ async function classifyDirectRoomCandidate(params: {
 function buildNextDirectContent(params: {
   directContent: MatrixDirectAccountData;
   remoteUserId: string;
-  roomId: string;
+  roomIds: readonly string[];
 }): MatrixDirectAccountData {
   const current = normalizeMappedRoomIds(params.directContent, params.remoteUserId);
-  const nextRooms = normalizeRoomIdList([params.roomId, ...current]);
+  const nextRooms = normalizeRoomIdList([...params.roomIds, ...current]);
   return {
     ...params.directContent,
     [params.remoteUserId]: nextRooms,
@@ -276,8 +280,12 @@ export async function inspectMatrixDirectRooms(params: {
   );
   const mappedStrict = mappedRooms.find((room) => room.strict);
 
+  // Always discover joined strict DM rooms, even when a mapped strict room
+  // already exists. A stale `m.direct` mapping must not suppress discovery
+  // of newer valid strict 2-member DM rooms with the same remote user (see
+  // openclaw/openclaw#79514).
   let joinedRooms: string[] = [];
-  if (!mappedStrict && typeof params.client.getJoinedRooms === "function") {
+  if (typeof params.client.getJoinedRooms === "function") {
     try {
       const resolved = await params.client.getJoinedRooms();
       joinedRooms = Array.isArray(resolved) ? resolved : [];
@@ -331,10 +339,14 @@ export async function repairMatrixDirectRooms(params: {
       encrypted: params.encrypted === true,
     }));
   const createdRoomId = inspected.activeRoomId ? null : activeRoomId;
-  const mappingWrite = await writeMatrixDirectRoomMapping({
+  // Persist the active room first (preserves primary-mapping semantics) and
+  // also surface any newly-discovered strict joined DM rooms into m.direct so
+  // downstream DM detection (client.dms.isDm) recognises them as DMs without
+  // requiring another repair pass (see openclaw/openclaw#79514).
+  const mappingWrite = await writeMatrixDirectRoomMappings({
     client: params.client,
     remoteUserId,
-    roomId: activeRoomId,
+    roomIds: [activeRoomId, ...inspected.discoveredStrictRoomIds],
   });
   return {
     ...inspected,
