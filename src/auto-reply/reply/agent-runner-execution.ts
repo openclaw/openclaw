@@ -380,6 +380,13 @@ function buildRateLimitCooldownMessage(err: unknown): string {
   if (codexUsageLimitMessage) {
     return codexUsageLimitMessage;
   }
+  if (isFallbackSummaryError(err) && isPureBillingSummary(err)) {
+    return BILLING_ERROR_USER_MESSAGE;
+  }
+  const message = formatErrorMessage(err);
+  if (isBillingErrorMessage(message)) {
+    return BILLING_ERROR_USER_MESSAGE;
+  }
   if (!isFallbackSummaryError(err)) {
     return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
   }
