@@ -46,23 +46,23 @@ async function createTestStateDir(prefix: string): Promise<string> {
   return root;
 }
 
-function resolveTestStorePath(root: string, agentId = "main"): string {
-  return path.join(root, "agents", agentId, "sessions", "sessions.json");
-}
+type TestSessionRowsTarget = {
+  agentId: string;
+  sessionsDir: string;
+};
 
-function resolveAgentIdFromStorePath(storePath: string): string {
-  const sessionsDir = path.dirname(path.resolve(storePath));
-  if (path.basename(sessionsDir) !== "sessions") {
-    return "main";
-  }
-  return path.basename(path.dirname(sessionsDir)) || "main";
+function resolveTestSessionRowsTarget(root: string, agentId = "main"): TestSessionRowsTarget {
+  return {
+    agentId,
+    sessionsDir: path.join(root, "agents", agentId, "sessions"),
+  };
 }
 
 async function replaceTestSessionRows(
-  storePath: string,
+  target: TestSessionRowsTarget,
   store: Record<string, SessionEntry>,
 ): Promise<void> {
-  const agentId = resolveAgentIdFromStorePath(storePath);
+  const { agentId } = target;
   for (const { sessionKey } of listSessionEntries({ agentId })) {
     deleteSessionEntry({ agentId, sessionKey });
   }
@@ -71,8 +71,8 @@ async function replaceTestSessionRows(
   }
 }
 
-function readTestSessionRows(storePath: string): Record<string, SessionEntry> {
-  const agentId = resolveAgentIdFromStorePath(storePath);
+function readTestSessionRows(target: TestSessionRowsTarget): Record<string, SessionEntry> {
+  const { agentId } = target;
   return Object.fromEntries(
     listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
@@ -188,7 +188,7 @@ const loadCronStoreMock = vi.fn();
 vi.mock("../../cron/store.js", () => {
   return {
     loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
-    resolveCronStorePath: (storePath?: string) => storePath ?? "/tmp/openclaw-cron-store.json",
+    resolveCronStorePath: (statePath?: string) => statePath ?? "/tmp/openclaw-cron-store.json",
   };
 });
 
@@ -270,11 +270,11 @@ afterEach(async () => {
 
 describe("runReplyAgent auto-compaction token update", () => {
   async function seedSessionStore(params: {
-    storePath: string;
+    target: TestSessionRowsTarget;
     sessionKey: string;
     entry: Record<string, unknown>;
   }) {
-    await replaceTestSessionRows(params.storePath, {
+    await replaceTestSessionRows(params.target, {
       [params.sessionKey]: params.entry as SessionEntry,
     });
   }
@@ -327,7 +327,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     tmpPrefix: string;
   }) {
     const tmp = await createTestStateDir(params.tmpPrefix);
-    const storePath = resolveTestStorePath(tmp);
+    const sessionRowsTarget = resolveTestSessionRowsTarget(tmp);
     const sessionKey = "main";
     const sessionEntry = {
       sessionId: "session",
@@ -335,7 +335,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       totalTokens: 50_000,
     };
 
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    await seedSessionStore({ target: sessionRowsTarget, sessionKey, entry: sessionEntry });
 
     runEmbeddedPiAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
@@ -382,7 +382,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       unsubscribe?.();
     }
 
-    const stored = readTestSessionRows(storePath);
+    const stored = readTestSessionRows(sessionRowsTarget);
     const usageEvent = diagnostics.find((event) => event.type === "model.usage");
     return { sessionKey, stored, usageEvent };
   }
@@ -710,7 +710,7 @@ describe("runReplyAgent block streaming", () => {
 describe("runReplyAgent Active Memory inline debug", () => {
   it("appends inline Active Memory status payload when verbose is enabled", async () => {
     const tmp = await createTestStateDir("openclaw-active-memory-inline-");
-    const storePath = resolveTestStorePath(tmp);
+    const sessionRowsTarget = resolveTestSessionRowsTarget(tmp);
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -718,10 +718,10 @@ describe("runReplyAgent Active Memory inline debug", () => {
       verboseLevel: "on",
     };
 
-    await replaceTestSessionRows(storePath, { [sessionKey]: sessionEntry });
+    await replaceTestSessionRows(sessionRowsTarget, { [sessionKey]: sessionEntry });
 
     runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      const latest = readTestSessionRows(storePath);
+      const latest = readTestSessionRows(sessionRowsTarget);
       latest[sessionKey] = {
         ...latest[sessionKey],
         pluginDebugEntries: [
@@ -734,7 +734,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
           },
         ],
       };
-      await replaceTestSessionRows(storePath, latest);
+      await replaceTestSessionRows(sessionRowsTarget, latest);
       return {
         payloads: [{ text: "Normal reply" }],
         meta: {},
@@ -810,7 +810,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
 
   it("appends inline Active Memory status and trace payloads when verbose and trace are enabled", async () => {
     const tmp = await createTestStateDir("openclaw-active-memory-inline-");
-    const storePath = resolveTestStorePath(tmp);
+    const sessionRowsTarget = resolveTestSessionRowsTarget(tmp);
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -819,10 +819,10 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "on",
     };
 
-    await replaceTestSessionRows(storePath, { [sessionKey]: sessionEntry });
+    await replaceTestSessionRows(sessionRowsTarget, { [sessionKey]: sessionEntry });
 
     runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      const latest = readTestSessionRows(storePath);
+      const latest = readTestSessionRows(sessionRowsTarget);
       latest[sessionKey] = {
         ...latest[sessionKey],
         pluginDebugEntries: [
@@ -835,7 +835,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
           },
         ],
       };
-      await replaceTestSessionRows(storePath, latest);
+      await replaceTestSessionRows(sessionRowsTarget, latest);
       return {
         payloads: [{ text: "Normal reply" }],
         meta: {},
@@ -911,7 +911,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
 
   it("appends inline Active Memory trace payload when only trace is enabled", async () => {
     const tmp = await createTestStateDir("openclaw-active-memory-inline-");
-    const storePath = resolveTestStorePath(tmp);
+    const sessionRowsTarget = resolveTestSessionRowsTarget(tmp);
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -919,10 +919,10 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "on",
     };
 
-    await replaceTestSessionRows(storePath, { [sessionKey]: sessionEntry });
+    await replaceTestSessionRows(sessionRowsTarget, { [sessionKey]: sessionEntry });
 
     runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      const latest = readTestSessionRows(storePath);
+      const latest = readTestSessionRows(sessionRowsTarget);
       latest[sessionKey] = {
         ...latest[sessionKey],
         pluginDebugEntries: [
@@ -935,7 +935,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
           },
         ],
       };
-      await replaceTestSessionRows(storePath, latest);
+      await replaceTestSessionRows(sessionRowsTarget, latest);
       return {
         payloads: [{ text: "Normal reply" }],
         meta: {},
@@ -1011,8 +1011,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
 
   it("appends raw trace payloads when trace raw is enabled", async () => {
     const tmp = await createTestStateDir("openclaw-trace-raw-usage-");
-    const storePath = resolveTestStorePath(tmp);
-    const sessionFile = path.join(path.dirname(storePath), "session.jsonl");
+    const sessionRowsTarget = resolveTestSessionRowsTarget(tmp);
+    const sessionFile = path.join(sessionRowsTarget.sessionsDir, "session.jsonl");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1021,7 +1021,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       compactionCount: 3,
     };
 
-    await replaceTestSessionRows(storePath, { [sessionKey]: sessionEntry });
+    await replaceTestSessionRows(sessionRowsTarget, { [sessionKey]: sessionEntry });
     seedTestTranscript(sessionFile, [
       {
         message: {
@@ -1235,8 +1235,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
 
   it("does not emit persisted trace output to an unauthorized sender", async () => {
     const tmp = await createTestStateDir("openclaw-trace-raw-unauthorized-");
-    const storePath = resolveTestStorePath(tmp);
-    const sessionFile = path.join(path.dirname(storePath), "session.jsonl");
+    const sessionRowsTarget = resolveTestSessionRowsTarget(tmp);
+    const sessionFile = path.join(sessionRowsTarget.sessionsDir, "session.jsonl");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1244,7 +1244,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "raw",
     };
 
-    await replaceTestSessionRows(storePath, { [sessionKey]: sessionEntry });
+    await replaceTestSessionRows(sessionRowsTarget, { [sessionKey]: sessionEntry });
     seedTestTranscript(sessionFile);
 
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
@@ -1330,8 +1330,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
 
   it("shows session and last-turn usage totals without per-call usage blocks", async () => {
     const tmp = await createTestStateDir("openclaw-trace-raw-usage-");
-    const storePath = resolveTestStorePath(tmp);
-    const sessionFile = path.join(path.dirname(storePath), "session.jsonl");
+    const sessionRowsTarget = resolveTestSessionRowsTarget(tmp);
+    const sessionFile = path.join(sessionRowsTarget.sessionsDir, "session.jsonl");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1339,7 +1339,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "raw",
     };
 
-    await replaceTestSessionRows(storePath, { [sessionKey]: sessionEntry });
+    await replaceTestSessionRows(sessionRowsTarget, { [sessionKey]: sessionEntry });
     seedTestTranscript(sessionFile, [
       {
         message: {
@@ -1437,8 +1437,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
 
   it("escapes markdown fence delimiters inside raw trace blocks", async () => {
     const tmp = await createTestStateDir("openclaw-trace-raw-fence-");
-    const storePath = resolveTestStorePath(tmp);
-    const sessionFile = path.join(path.dirname(storePath), "session.jsonl");
+    const sessionRowsTarget = resolveTestSessionRowsTarget(tmp);
+    const sessionFile = path.join(sessionRowsTarget.sessionsDir, "session.jsonl");
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1446,7 +1446,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       traceLevel: "raw",
     };
 
-    await replaceTestSessionRows(storePath, { [sessionKey]: sessionEntry });
+    await replaceTestSessionRows(sessionRowsTarget, { [sessionKey]: sessionEntry });
     seedTestTranscript(sessionFile);
 
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
@@ -1533,14 +1533,14 @@ describe("runReplyAgent Active Memory inline debug", () => {
 
   it("does not append inline debug when verbose is disabled", async () => {
     const tmp = await createTestStateDir("openclaw-active-memory-inline-");
-    const storePath = resolveTestStorePath(tmp);
+    const sessionRowsTarget = resolveTestSessionRowsTarget(tmp);
     const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
     };
 
-    await replaceTestSessionRows(storePath, { [sessionKey]: sessionEntry });
+    await replaceTestSessionRows(sessionRowsTarget, { [sessionKey]: sessionEntry });
 
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Normal reply" }],
@@ -1872,10 +1872,7 @@ describe("runReplyAgent claude-cli routing", () => {
 });
 
 describe("runReplyAgent messaging tool dedupe", () => {
-  function createRun(
-    messageProvider = "slack",
-    opts: { storePath?: string; sessionKey?: string } = {},
-  ) {
+  function createRun(messageProvider = "slack", opts: { sessionKey?: string } = {}) {
     const typing = createMockTypingController();
     const sessionKey = opts.sessionKey ?? "main";
     const sessionCtx = {
