@@ -73,6 +73,9 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "Be accurate, brief, and speakable.",
 ].join(" ");
 
+/** Timeout for background consult runs (email-first and timeout-exceeded paths). */
+const BACKGROUND_CONSULT_TIMEOUT_MS = 3_600_000;
+
 let telnyxProviderPromise: Promise<TelnyxProviderModule> | undefined;
 let twilioProviderPromise: Promise<TwilioProviderModule> | undefined;
 let plivoProviderPromise: Promise<PlivoProviderModule> | undefined;
@@ -414,7 +417,7 @@ export async function createVoiceCallRuntime(params: {
             );
             const consultPromise = consultRealtimeVoiceAgent({
               ...consultParams,
-              timeoutMs: undefined,
+              timeoutMs: BACKGROUND_CONSULT_TIMEOUT_MS,
             });
             consultPromise
               .then((result: { text: string }) => {
@@ -449,7 +452,7 @@ export async function createVoiceCallRuntime(params: {
             );
             const consultPromise = consultRealtimeVoiceAgent({
               ...consultParams,
-              timeoutMs: undefined,
+              timeoutMs: BACKGROUND_CONSULT_TIMEOUT_MS,
             });
             const result = await Promise.race([
               consultPromise.then((r: { text: string }) => ({ kind: "result" as const, value: r })),
