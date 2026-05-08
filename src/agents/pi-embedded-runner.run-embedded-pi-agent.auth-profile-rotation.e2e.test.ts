@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import {
@@ -30,6 +32,15 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   ),
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
+
+const TEST_SESSION_ID = "session-test";
+
+function createTestSessionTranscriptLocator(sessionKey?: string): string {
+  return createSqliteSessionTranscriptLocator({
+    agentId: resolveAgentIdFromSessionKey(sessionKey),
+    sessionId: TEST_SESSION_ID,
+  });
+}
 
 const installRunEmbeddedMocks = () => {
   installEmbeddedRunnerBaseE2eMocks();
@@ -94,6 +105,8 @@ let cleanupLogCapture: (() => void) | undefined;
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
 let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
 const originalFetch = globalThis.fetch;
+let stateDir: string | undefined;
+let previousOpenClawStateDir: string | undefined;
 
 beforeAll(async () => {
   vi.resetModules();
@@ -115,7 +128,10 @@ async function runEmbeddedPiAgentInline(
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  previousOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+  stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-state-"));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
   runEmbeddedAttemptMock.mockImplementation(async () => {
@@ -133,7 +149,7 @@ beforeEach(() => {
   sleepWithAbortMock.mockClear();
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
   authProfileUsageTesting.setDepsForTest(null);
   cleanupLogCapture?.();
@@ -141,6 +157,16 @@ afterEach(() => {
   setLoggerOverrideFn(null);
   resetLoggerFn();
   closeOpenClawStateDatabaseForTest();
+  if (stateDir) {
+    await fs.rm(stateDir, { recursive: true, force: true });
+    stateDir = undefined;
+  }
+  if (previousOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousOpenClawStateDir;
+  }
+  previousOpenClawStateDir = undefined;
 });
 
 const baseUsage = {
@@ -180,7 +206,7 @@ const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunA
     timedOutDuringToolExecution: false,
     promptError: null,
     promptErrorSource: null,
-    sessionIdUsed: "session:test",
+    sessionIdUsed: TEST_SESSION_ID,
     systemPromptReport: undefined,
     messagesSnapshot: [],
     assistantTexts: [],
@@ -439,9 +465,9 @@ async function runAutoPinnedOpenAiTurn(params: {
   config?: OpenClawConfig;
 }) {
   await runEmbeddedPiAgentInline({
-    sessionId: "session:test",
+    sessionId: TEST_SESSION_ID,
     sessionKey: params.sessionKey,
-    sessionFile: path.join(params.workspaceDir, "session.jsonl"),
+    sessionFile: createTestSessionTranscriptLocator(params.sessionKey),
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     config: params.config ?? makeConfig(),
@@ -593,9 +619,9 @@ async function runTurnWithCooldownSeed(params: {
     mockSingleSuccessfulAttempt();
 
     await runEmbeddedPiAgentInline({
-      sessionId: "session:test",
+      sessionId: TEST_SESSION_ID,
       sessionKey: params.sessionKey,
-      sessionFile: path.join(workspaceDir, "session.jsonl"),
+      sessionFile: createTestSessionTranscriptLocator(),
       workspaceDir,
       agentDir,
       config: makeConfig(),
@@ -658,9 +684,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         );
 
       await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:copilot-auth-error",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeCopilotConfig(),
@@ -743,9 +769,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         );
 
       await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:copilot-auth-repeat",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeCopilotConfig(),
@@ -791,9 +817,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       );
 
       const runPromise = runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:copilot-shutdown",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeCopilotConfig(),
@@ -996,9 +1022,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       );
 
       const result = await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:compaction-timeout",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeConfig(),
@@ -1035,9 +1061,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       );
 
       const result = await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:compaction-wait-abort",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeConfig(),
@@ -1064,9 +1090,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       await expect(
         runEmbeddedPiAgentInline({
-          sessionId: "session:test",
+          sessionId: TEST_SESSION_ID,
           sessionKey: "agent:test:user",
-          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          sessionFile: createTestSessionTranscriptLocator(),
           workspaceDir,
           agentDir,
           config: makeConfig(),
@@ -1114,9 +1140,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       mockSingleSuccessfulAttempt();
 
       await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:user-order-excluded",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeConfig(),
@@ -1143,9 +1169,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       mockSingleSuccessfulAttempt();
 
       await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:user-auth-alias",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeConfig(),
@@ -1182,9 +1208,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       );
 
       await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:mismatch",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeConfig(),
@@ -1224,9 +1250,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       await expect(
         runEmbeddedPiAgentInline({
-          sessionId: "session:test",
+          sessionId: TEST_SESSION_ID,
           sessionKey: "agent:test:cooldown-failover",
-          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          sessionFile: createTestSessionTranscriptLocator(),
           workspaceDir,
           agentDir,
           config: makeConfig({ fallbacks: ["openai/mock-2"] }),
@@ -1268,9 +1294,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       );
 
       const result = await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:cooldown-probe",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeConfig({ fallbacks: ["openai/mock-2"] }),
@@ -1316,9 +1342,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       );
 
       const result = await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:overloaded-cooldown-probe",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeConfig({ fallbacks: ["openai/mock-2"] }),
@@ -1364,9 +1390,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       );
 
       const result = await runEmbeddedPiAgentInline({
-        sessionId: "session:test",
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:test:billing-cooldown-probe-no-fallbacks",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator(),
         workspaceDir,
         agentDir,
         config: makeConfig(),
@@ -1395,9 +1421,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       await expect(
         runEmbeddedPiAgentInline({
-          sessionId: "session:test",
+          sessionId: TEST_SESSION_ID,
           sessionKey: "agent:support:cooldown-failover",
-          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          sessionFile: createTestSessionTranscriptLocator(),
           workspaceDir,
           agentDir,
           config: makeAgentOverrideOnlyFallbackConfig("support"),
@@ -1440,9 +1466,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       await expect(
         runEmbeddedPiAgentInline({
-          sessionId: "session:test",
+          sessionId: TEST_SESSION_ID,
           sessionKey: "agent:test:disabled-failover",
-          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          sessionFile: createTestSessionTranscriptLocator(),
           workspaceDir,
           agentDir,
           config: makeConfig({ fallbacks: ["openai/mock-2"] }),
@@ -1475,9 +1501,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
         await expect(
           runEmbeddedPiAgentInline({
-            sessionId: "session:test",
+            sessionId: TEST_SESSION_ID,
             sessionKey: "agent:test:auth-unavailable",
-            sessionFile: path.join(workspaceDir, "session.jsonl"),
+            sessionFile: createTestSessionTranscriptLocator(),
             workspaceDir,
             agentDir,
             config: makeConfig({ fallbacks: ["openai/mock-2"], apiKey: "" }),
@@ -1513,9 +1539,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       let thrown: unknown;
       try {
         await runEmbeddedPiAgentInline({
-          sessionId: "session:test",
+          sessionId: TEST_SESSION_ID,
           sessionKey: "agent:test:billing-failover-active-model",
-          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          sessionFile: createTestSessionTranscriptLocator(),
           workspaceDir,
           agentDir,
           config: makeConfig({ fallbacks: ["openai/mock-2"] }),
