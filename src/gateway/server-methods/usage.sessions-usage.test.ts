@@ -241,25 +241,33 @@ describe("sessions.usage", () => {
             },
           },
         });
-        vi.mocked(loadSessionCostSummary).mockImplementation(async ({ sessionId }) => ({
-          input: sessionId === "old" ? 10 : 20,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: sessionId === "old" ? 10 : 20,
-          totalCost: sessionId === "old" ? 0.01 : 0.02,
-          inputCost: sessionId === "old" ? 0.01 : 0.02,
-          outputCost: 0,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
-          missingCostEntries: 0,
-          messageCounts: {
-            total: 1,
-            user: 1,
-            assistant: 0,
-            toolCalls: 0,
-            toolResults: 0,
-            errors: 0,
+        vi.mocked(loadSessionCostSummaryFromCache).mockImplementation(async ({ sessionId }) => ({
+          summary: {
+            input: sessionId === "old" ? 10 : 20,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: sessionId === "old" ? 10 : 20,
+            totalCost: sessionId === "old" ? 0.01 : 0.02,
+            inputCost: sessionId === "old" ? 0.01 : 0.02,
+            outputCost: 0,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            missingCostEntries: 0,
+            messageCounts: {
+              total: 1,
+              user: 1,
+              assistant: 0,
+              toolCalls: 0,
+              toolResults: 0,
+              errors: 0,
+            },
+          },
+          cacheStatus: {
+            status: "fresh",
+            cachedFiles: 1,
+            pendingFiles: 0,
+            staleFiles: 0,
           },
         }));
 
