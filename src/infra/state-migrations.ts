@@ -24,7 +24,6 @@ import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
-  normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import {

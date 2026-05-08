@@ -162,7 +162,7 @@ export type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
 export type ToolDefinition<
   TParams extends TSchema = TSchema,
   TDetails = unknown,
-  TState = unknown,
+  _TState = unknown,
 > = {
   name: string;
   label: string;
