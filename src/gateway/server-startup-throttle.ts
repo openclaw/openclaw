@@ -3,11 +3,13 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 const STARTUP_THROTTLE_FILENAME = "gateway-startup-throttle.json";
-const RAPID_WINDOW_MS = 60_000;
+// 30-minute window covers OOM-kill cycles where the gateway runs for several minutes before dying.
+const RAPID_WINDOW_MS = 30 * 60_000;
 const RAPID_THRESHOLD = 3;
-const STABLE_CLEAR_MS = 2 * 60_000;
+// 10 minutes of clean post-sidecar uptime before declaring the start stable.
+const STABLE_CLEAR_MS = 10 * 60_000;
 const BACKOFF_BASE_MS = 5_000;
-const BACKOFF_MAX_MS = 60_000;
+const BACKOFF_MAX_MS = 120_000;
 
 type ThrottleRecord = { startedAt: number; rapidCount: number };
 
@@ -56,7 +58,7 @@ export async function applyStartupRestartThrottle(params: {
     const excess = rapidCount - RAPID_THRESHOLD;
     const backoffMs = Math.min(BACKOFF_BASE_MS * 2 ** (excess - 1), BACKOFF_MAX_MS);
     params.log.warn(
-      `gateway: rapid restart detected (${rapidCount} starts within ${RAPID_WINDOW_MS / 1000}s); ` +
+      `gateway: rapid restart detected (${rapidCount} starts within ${RAPID_WINDOW_MS / 60_000}min); ` +
         `backing off ${backoffMs}ms before loading sidecars`,
     );
     await sleep(backoffMs);
