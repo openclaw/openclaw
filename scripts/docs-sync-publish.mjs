@@ -339,6 +339,25 @@ function prefixLocalePage(entry, localeDir) {
   return clone;
 }
 
+function prefixLocaleNavGroup(group, localeDir) {
+  const clone = { ...group };
+  if (Array.isArray(clone.pages)) {
+    clone.pages = clone.pages.map((entry) => prefixLocalePage(entry, localeDir));
+  }
+  return clone;
+}
+
+function prefixLocaleNavTab(tab, localeDir) {
+  const clone = { ...tab };
+  if (Array.isArray(clone.pages)) {
+    clone.pages = clone.pages.map((entry) => prefixLocalePage(entry, localeDir));
+  }
+  if (Array.isArray(clone.groups)) {
+    clone.groups = clone.groups.map((group) => prefixLocaleNavGroup(group, localeDir));
+  }
+  return clone;
+}
+
 function cloneEnglishLanguageNav(englishNav, locale) {
   if (!englishNav) {
     throw new Error("docs/docs.json is missing navigation.languages.en");
@@ -349,20 +368,7 @@ function cloneEnglishLanguageNav(englishNav, locale) {
     tabs: Array.isArray(englishNav.tabs)
       ? englishNav.tabs
           .filter((tab) => tab?.tab !== "ClawHub")
-          .map((tab) => ({
-            ...tab,
-            pages: Array.isArray(tab.pages)
-              ? tab.pages.map((entry) => prefixLocalePage(entry, locale.dir))
-              : tab.pages,
-            groups: Array.isArray(tab.groups)
-              ? tab.groups.map((group) => ({
-                  ...group,
-                  pages: Array.isArray(group.pages)
-                    ? group.pages.map((entry) => prefixLocalePage(entry, locale.dir))
-                    : group.pages,
-                }))
-              : tab.groups,
-          }))
+          .map((tab) => prefixLocaleNavTab(tab, locale.dir))
       : englishNav.tabs,
   };
 }
