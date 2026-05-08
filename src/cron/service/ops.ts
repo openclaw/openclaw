@@ -32,7 +32,7 @@ import type {
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceState, CronStatusSummary } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
   applyJobResult,
@@ -214,7 +214,7 @@ export function stop(state: CronServiceState) {
   stopTimer(state);
 }
 
-export async function status(state: CronServiceState) {
+export async function status(state: CronServiceState): Promise<CronStatusSummary> {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     return {
@@ -222,6 +222,10 @@ export async function status(state: CronServiceState) {
       storePath: state.deps.storePath,
       jobs: state.store?.jobs.length ?? 0,
       nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
+      // Mirror the runtime resolution in src/cron/schedule.ts:resolveCronTimezone
+      // so the Control UI can plot tz-less cron markers in the same zone the
+      // scheduler actually evaluates them in.
+      gatewayTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
   });
 }
