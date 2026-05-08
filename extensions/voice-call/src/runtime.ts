@@ -10,6 +10,10 @@ import {
   type RealtimeVoiceAgentConsultTranscriptEntry,
   type ResolvedRealtimeVoiceProvider,
 } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  spawnEmailDeliveryAgent,
+  flushPendingBackgroundDeliveries,
+} from "./background-email-delivery.js";
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
@@ -24,7 +28,6 @@ import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
-import { spawnEmailDeliveryAgent, flushPendingBackgroundDeliveries } from "./background-email-delivery.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
@@ -421,6 +424,7 @@ export async function createVoiceCallRuntime(params: {
                   question: parsedArgs.question,
                   consultResult: result.text,
                   backgroundEmailPrompt: effectiveConfig.realtime.backgroundEmailPrompt,
+                  recipientEmail: effectiveConfig.realtime.recipientEmail,
                 });
               })
               .catch((err: unknown) => {
@@ -442,9 +446,7 @@ export async function createVoiceCallRuntime(params: {
             );
             const consultPromise = consultRealtimeVoiceAgent(consultParams);
             const result = await Promise.race([
-              consultPromise.then(
-                (r: { text: string }) => ({ kind: "result" as const, value: r }),
-              ),
+              consultPromise.then((r: { text: string }) => ({ kind: "result" as const, value: r })),
               new Promise<{ kind: "timeout" }>((resolve) =>
                 setTimeout(() => resolve({ kind: "timeout" }), bgTimeout),
               ),
@@ -470,6 +472,7 @@ export async function createVoiceCallRuntime(params: {
                   question: parsedArgs.question,
                   consultResult: r.text,
                   backgroundEmailPrompt: effectiveConfig.realtime.backgroundEmailPrompt,
+                  recipientEmail: effectiveConfig.realtime.recipientEmail,
                 });
               })
               .catch((err: unknown) => {
