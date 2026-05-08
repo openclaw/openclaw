@@ -1054,43 +1054,54 @@ describe("session cost usage", () => {
       "utf-8",
     );
 
-    await withStateDir(root, async () => {
-      await refreshCostUsageCache();
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(
-        lockPath,
-        `${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`,
-        "utf-8",
-      );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await withStateDir(root, async () => {
+        await refreshCostUsageCache();
+        const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+        const lockPath = `${cachePath}.lock`;
+        await fs.writeFile(
+          lockPath,
+          `${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`,
+          "utf-8",
+        );
 
-      try {
-        const cold = await loadSessionCostSummaryFromCache({
-          sessionId: "sess-cache-lock-busy",
-          sessionFile,
-        });
-        expect(cold.summary).toBeNull();
+        try {
+          const cold = await loadSessionCostSummaryFromCache({
+            sessionId: "sess-cache-lock-busy",
+            sessionFile,
+          });
+          expect(cold.summary).toBeNull();
 
-        await new Promise((resolve) => setTimeout(resolve, 75));
-        const stillMissing = await loadSessionCostSummaryFromCache({
-          sessionId: "sess-cache-lock-busy",
-          sessionFile,
-          requestRefresh: false,
-        });
-        expect(stillMissing.summary).toBeNull();
-      } finally {
-        await fs.rm(lockPath, { force: true });
-      }
+          await vi.advanceTimersByTimeAsync(75);
+          const stillMissing = await loadSessionCostSummaryFromCache({
+            sessionId: "sess-cache-lock-busy",
+            sessionFile,
+            requestRefresh: false,
+          });
+          expect(stillMissing.summary).toBeNull();
+        } finally {
+          await fs.rm(lockPath, { force: true });
+        }
 
-      await waitFor(async () => {
-        const warm = await loadSessionCostSummaryFromCache({
-          sessionId: "sess-cache-lock-busy",
-          sessionFile,
-          requestRefresh: false,
-        });
-        return warm.summary?.totalTokens === 10;
+        await vi.waitFor(
+          async () => {
+            const warm = await loadSessionCostSummaryFromCache({
+              sessionId: "sess-cache-lock-busy",
+              sessionFile,
+              requestRefresh: false,
+            });
+            expect(warm.summary?.totalTokens).toBe(10);
+          },
+          {
+            interval: 1,
+            timeout: 200,
+          },
+        );
       });
-    });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("summarizes a single session file", async () => {
