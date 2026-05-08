@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- CLI/watchdog: increase resume and fresh watchdog timeout defaults (min 3→5 min, max 10→30 min, resume max 3→30 min) to reduce premature timeouts on slower or heavily-loaded agents. (#41022)
+
 ### Breaking
 
 ### Fixes
