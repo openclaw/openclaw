@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { computeEntryId } from "./dedupe.js";
 import type { LogMemoryStore } from "./store.js";
 import type { EmbedFn, LogMemoryEntry } from "./types.js";
@@ -11,7 +9,7 @@ const TEACH_PHRASES = [
   "你需要記住",
   "你需要記得",
   "記住:",
-  "記住：",
+  "記住:",
   "記住",
   "下次遇到",
   "這代表",
@@ -52,9 +50,14 @@ export interface KnowledgeCaptureRecord {
   knowledgeFilePath: string;
 }
 
+// Captures engineer-supplied knowledge straight into the semantic layer
+// (KNOWLEDGE.md). Decay starts high so the entry survives several dream
+// cycles. Embedding is not stored — query() recomputes when needed.
 export class KnowledgeCapture {
   constructor(
     private readonly opts: {
+      // workspaceDir is accepted for parity with the previous API; the actual
+      // file path comes from the store so callers don't need to know layout.
       workspaceDir: string;
       store: LogMemoryStore;
       embed: EmbedFn;
@@ -66,9 +69,6 @@ export class KnowledgeCapture {
     return this.opts.now?.() ?? new Date();
   }
 
-  // Returns the new entry only if a teaching moment was detected. Stores
-  // semantic-layer knowledge with a high decay score so it survives several
-  // dream cycles without being pruned.
   async maybeCapture(input: {
     message: string;
     tags?: string[];
@@ -87,17 +87,11 @@ export class KnowledgeCapture {
   }): Promise<KnowledgeCaptureRecord> {
     const now = this.now();
     const tags = ["source:engineer_teach", ...(input.tags ?? [])];
-    const id = computeEntryId({
-      timestamp: now,
-      service: "engineer",
-      message: input.message,
-    });
-    const [embedding] = await this.opts.embed([input.message]);
+    const id = computeEntryId({ timestamp: now, service: "engineer", message: input.message });
     const entry: LogMemoryEntry = {
       id,
       timestamp: now,
       layer: "semantic",
-      embedding,
       payload: {
         type: "engineer_knowledge",
         content: input.message,
@@ -106,32 +100,10 @@ export class KnowledgeCapture {
         decayScore: 0.95,
         accessCount: 0,
         lastAccessedAt: now,
+        title: input.title,
       },
     };
-    this.opts.store.upsert(entry);
-    const knowledgeFilePath = await this.appendToKnowledgeMarkdown({
-      now,
-      message: input.message,
-      tags: entry.payload.tags,
-      title: input.title,
-    });
-    return { entry, knowledgeFilePath };
-  }
-
-  private async appendToKnowledgeMarkdown(input: {
-    now: Date;
-    message: string;
-    tags: string[];
-    title?: string;
-  }): Promise<string> {
-    const filePath = path.join(this.opts.workspaceDir, "KNOWLEDGE.md");
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    const date = input.now.toISOString().slice(0, 10);
-    const heading = input.title ? `## [${date}] ${input.title}` : `## [${date}]`;
-    const body = input.message.trim();
-    const tagsLine = `Tags: ${input.tags.join(", ")}`;
-    const block = `\n${heading}\n\n${body}\n\n${tagsLine}\n`;
-    await fs.appendFile(filePath, block, "utf8");
-    return filePath;
+    await this.opts.store.appendSemantic(entry);
+    return { entry, knowledgeFilePath: this.opts.store.semanticPath() };
   }
 }

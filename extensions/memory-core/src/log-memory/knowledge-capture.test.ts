@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { detectTeachingMoment, KnowledgeCapture } from "./knowledge-capture.js";
 import { LogMemoryStore } from "./store.js";
@@ -28,7 +27,7 @@ describe("detectTeachingMoment", () => {
   );
 });
 
-describe("KnowledgeCapture", () => {
+describe("KnowledgeCapture (file-backed)", () => {
   const embed = makeFakeEmbedder(8);
   let workspace: ReturnType<typeof makeTempWorkspace>;
   let store: LogMemoryStore;
@@ -39,11 +38,10 @@ describe("KnowledgeCapture", () => {
   });
 
   afterEach(() => {
-    store.close();
     workspace.cleanup();
   });
 
-  it("stores semantic entry and appends KNOWLEDGE.md", async () => {
+  it("appends a semantic block to KNOWLEDGE.md and reports the path", async () => {
     const capture = new KnowledgeCapture({
       workspaceDir: workspace.dir,
       store,
@@ -56,19 +54,21 @@ describe("KnowledgeCapture", () => {
       title: "Probe stuck",
     });
     expect(result).not.toBeNull();
-    expect(result?.entry.layer).toBe("semantic");
-    expect(result?.entry.payload.type).toBe("engineer_knowledge");
-    expect(result?.entry.payload.decayScore).toBe(0.95);
-    const md = await fs.readFile(path.join(workspace.dir, "KNOWLEDGE.md"), "utf8");
-    expect(md).toContain("[2026-05-07] Probe stuck");
+    expect(result!.knowledgeFilePath).toBe(store.semanticPath());
+    expect(result!.entry.layer).toBe("semantic");
+    expect(result!.entry.payload.type).toBe("engineer_knowledge");
+    expect(result!.entry.payload.decayScore).toBe(0.95);
+    const md = await fs.readFile(store.semanticPath(), "utf8");
+    expect(md).toContain("## [2026-05-07T12:00:00.000Z] Probe stuck");
     expect(md).toContain("TEACH: probe stuck means jig contamination");
-    expect(md).toContain("service:diagfw");
+    expect(md).toContain("Source: engineer_teach");
+    expect(md).toContain("source:engineer_teach");
   });
 
   it("returns null on non-teaching messages", async () => {
     const capture = new KnowledgeCapture({ workspaceDir: workspace.dir, store, embed });
     const result = await capture.maybeCapture({ message: "ordinary chat" });
     expect(result).toBeNull();
-    expect(store.countByLayer("semantic")).toBe(0);
+    expect(await store.countByLayer("semantic")).toBe(0);
   });
 });

@@ -11,6 +11,9 @@ export interface Cluster {
 // Greedy single-pass clustering: each entry attaches to the nearest existing
 // centroid above the threshold, otherwise seeds a new cluster. Centroids are
 // re-averaged on every join so the cluster drifts toward its members.
+//
+// Entries must already carry an `embedding`. Callers (the dream cycle) embed
+// candidates before clustering so this module stays IO-free.
 export function greedyClusterByCosine(
   entries: LogMemoryEntry[],
   opts?: { threshold?: number; minClusterSize?: number },

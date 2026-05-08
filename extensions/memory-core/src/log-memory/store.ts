@@ -1,424 +1,339 @@
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import { bm25RankToScore, buildFtsQuery } from "../memory/hybrid.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "../memory/manager-db.js";
 import { computeCurrentDecay } from "./decay.js";
-import type { DreamRecord, LogMemoryEntry, LogMemoryLayer, LogMemoryPayload } from "./types.js";
+import { parseBlocks, serializeEpisodicBlock, serializeSemanticBlock } from "./md-format.js";
+import type { LogMemoryEntry, LogMemoryLayer } from "./types.js";
 
-// Stored in a sibling SQLite database under the agent workspace. Keeping it
-// off the main memory db avoids schema/dirty-flag interference with the
-// existing MemoryIndexManager and keeps dream-cycle bulk deletes contained.
-const DEFAULT_DB_FILENAME = "log-memory.db";
+// Layout under <workspaceDir>:
+//   log-memory/
+//     2026-05-07.md     <- episodic (one file per UTC day)
+//     2026-05-08.md
+//     KNOWLEDGE.md      <- semantic (single file)
+//
+// All writes are append-only except for `recordAccess` and `removeEpisodic`,
+// which rewrite a daily file in place. No SQLite, no migrations.
 
-const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS log_memory_entries (
-  id TEXT PRIMARY KEY,
-  timestamp_ms INTEGER NOT NULL,
-  layer TEXT NOT NULL CHECK(layer IN ('episodic','semantic','procedural')),
-  payload_type TEXT NOT NULL,
-  content TEXT NOT NULL,
-  tags TEXT NOT NULL,
-  source TEXT NOT NULL,
-  decay_score REAL NOT NULL,
-  access_count INTEGER NOT NULL DEFAULT 0,
-  last_accessed_ms INTEGER NOT NULL,
-  embedding BLOB
-);
-CREATE INDEX IF NOT EXISTS idx_log_memory_layer_decay
-  ON log_memory_entries(layer, decay_score);
-CREATE INDEX IF NOT EXISTS idx_log_memory_layer_ts
-  ON log_memory_entries(layer, timestamp_ms);
+const EPISODIC_DIR = "log-memory";
+const SEMANTIC_FILENAME = "KNOWLEDGE.md";
+const DAY_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 
-CREATE VIRTUAL TABLE IF NOT EXISTS log_memory_fts USING fts5(
-  content,
-  tags,
-  content='log_memory_entries',
-  content_rowid='rowid',
-  tokenize='unicode61'
-);
+export type AppendInput = LogMemoryEntry;
+// Back-compat alias for callers that imported the old SQLite-era name.
+export type UpsertInput = AppendInput;
 
-CREATE TRIGGER IF NOT EXISTS log_memory_ai
-  AFTER INSERT ON log_memory_entries BEGIN
-  INSERT INTO log_memory_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
-END;
-CREATE TRIGGER IF NOT EXISTS log_memory_ad
-  AFTER DELETE ON log_memory_entries BEGIN
-  INSERT INTO log_memory_fts(log_memory_fts, rowid, content, tags)
-    VALUES('delete', old.rowid, old.content, old.tags);
-END;
-CREATE TRIGGER IF NOT EXISTS log_memory_au
-  AFTER UPDATE ON log_memory_entries BEGIN
-  INSERT INTO log_memory_fts(log_memory_fts, rowid, content, tags)
-    VALUES('delete', old.rowid, old.content, old.tags);
-  INSERT INTO log_memory_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
-END;
-
-CREATE TABLE IF NOT EXISTS dream_records (
-  dream_id TEXT PRIMARY KEY,
-  triggered_at_ms INTEGER NOT NULL,
-  trigger TEXT NOT NULL,
-  episodic_consumed INTEGER NOT NULL,
-  semantic_produced INTEGER NOT NULL,
-  duration_ms INTEGER NOT NULL
-);
-`;
-
-type Row = {
-  id: string;
-  timestamp_ms: number;
-  layer: LogMemoryLayer;
-  payload_type: LogMemoryPayload["type"];
-  content: string;
-  tags: string;
-  source: LogMemoryPayload["source"];
-  decay_score: number;
-  access_count: number;
-  last_accessed_ms: number;
-  embedding: Uint8Array | null;
-};
-
-export type LogMemoryHybridResult = {
+export interface LogMemoryHybridResult {
   entry: LogMemoryEntry;
   score: number;
   vectorScore: number;
   bm25Score: number;
-};
-
-export interface UpsertInput {
-  id: string;
-  timestamp: Date;
-  layer: LogMemoryLayer;
-  embedding?: Float32Array;
-  payload: LogMemoryPayload;
 }
 
 export class LogMemoryStore {
-  private readonly db: DatabaseSync;
-  private closed = false;
+  private readonly rootDir: string;
 
-  static resolveDbPath(workspaceDir: string): string {
-    return path.join(workspaceDir, ".openclaw", DEFAULT_DB_FILENAME);
+  static resolveRootDir(workspaceDir: string): string {
+    return path.join(workspaceDir, EPISODIC_DIR);
   }
 
-  constructor(opts: { workspaceDir: string; dbPath?: string }) {
-    const dbPath = opts.dbPath ?? LogMemoryStore.resolveDbPath(opts.workspaceDir);
-    this.db = openMemoryDatabaseAtPath(dbPath, false);
-    this.db.exec(SCHEMA_SQL);
+  constructor(opts: { workspaceDir: string }) {
+    this.rootDir = LogMemoryStore.resolveRootDir(opts.workspaceDir);
+    fsSync.mkdirSync(this.rootDir, { recursive: true });
   }
 
-  close(): void {
-    if (this.closed) {
-      return;
+  // No-op kept so callers from the SQLite era can `store.close()` without a
+  // crash. The file-based store has no resources to release.
+  close(): void {}
+
+  episodicPathFor(date: Date): string {
+    return path.join(this.rootDir, `${formatDayKey(date)}.md`);
+  }
+
+  semanticPath(): string {
+    return path.join(this.rootDir, SEMANTIC_FILENAME);
+  }
+
+  async has(id: string, opts?: { daysBack?: number }): Promise<boolean> {
+    const entries = await this.loadEpisodic({ daysBack: opts?.daysBack ?? 30 });
+    return entries.some((entry) => entry.id === id);
+  }
+
+  async appendEpisodic(entry: LogMemoryEntry): Promise<void> {
+    const filePath = this.episodicPathFor(entry.timestamp);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const block = serializeEpisodicBlock(entry);
+    await fs.appendFile(filePath, ensureLeadingBlankLine(filePath, block), "utf8");
+  }
+
+  async appendSemantic(entry: LogMemoryEntry): Promise<void> {
+    const filePath = this.semanticPath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const block = serializeSemanticBlock(entry);
+    await fs.appendFile(filePath, ensureLeadingBlankLine(filePath, block), "utf8");
+  }
+
+  // Default loads skip entries that have been consolidated by a dream cycle —
+  // mirrors the `!includePromoted && entry.promotedAt` filter in
+  // short-term-promotion.ts. Pass { includeConsolidated: true } to see them.
+  async loadEpisodic(opts?: {
+    daysBack?: number;
+    includeConsolidated?: boolean;
+  }): Promise<LogMemoryEntry[]> {
+    const daysBack = opts?.daysBack;
+    const includeConsolidated = opts?.includeConsolidated ?? false;
+    const files = await this.listEpisodicFiles();
+    let selected = files;
+    if (typeof daysBack === "number") {
+      const allowed = recentDayKeys(daysBack + 1);
+      selected = files.filter((file) => allowed.has(file.key));
     }
-    this.closed = true;
-    closeMemoryDatabase(this.db);
-  }
-
-  has(id: string): boolean {
-    const row = this.db
-      .prepare(`SELECT 1 AS found FROM log_memory_entries WHERE id = ?`)
-      .get(id) as { found?: number } | undefined;
-    return row?.found === 1;
-  }
-
-  upsert(entry: UpsertInput): void {
-    const stmt = this.db.prepare(
-      `INSERT INTO log_memory_entries(
-         id, timestamp_ms, layer, payload_type, content, tags, source,
-         decay_score, access_count, last_accessed_ms, embedding
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-       ON CONFLICT(id) DO UPDATE SET
-         timestamp_ms = excluded.timestamp_ms,
-         layer = excluded.layer,
-         payload_type = excluded.payload_type,
-         content = excluded.content,
-         tags = excluded.tags,
-         source = excluded.source,
-         decay_score = excluded.decay_score,
-         access_count = excluded.access_count,
-         last_accessed_ms = excluded.last_accessed_ms,
-         embedding = excluded.embedding`,
-    );
-    stmt.run(
-      entry.id,
-      entry.timestamp.getTime(),
-      entry.layer,
-      entry.payload.type,
-      entry.payload.content,
-      JSON.stringify(entry.payload.tags),
-      entry.payload.source,
-      entry.payload.decayScore,
-      entry.payload.accessCount,
-      entry.payload.lastAccessedAt.getTime(),
-      entry.embedding ? embeddingToBuffer(entry.embedding) : null,
-    );
-  }
-
-  delete(ids: string[]): number {
-    if (ids.length === 0) {
-      return 0;
+    const out: LogMemoryEntry[] = [];
+    for (const file of selected) {
+      const text = await safeReadFile(file.path);
+      if (text === null) {
+        continue;
+      }
+      const entries = parseBlocks(text, { layer: "episodic" });
+      for (const entry of entries) {
+        if (!includeConsolidated && entry.payload.consolidatedAt) {
+          continue;
+        }
+        out.push(entry);
+      }
     }
-    let deleted = 0;
-    const stmt = this.db.prepare(`DELETE FROM log_memory_entries WHERE id = ?`);
-    for (const id of ids) {
-      const result = stmt.run(id);
-      deleted += Number(result.changes ?? 0);
+    out.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    return out;
+  }
+
+  async loadSemantic(): Promise<LogMemoryEntry[]> {
+    const text = await safeReadFile(this.semanticPath());
+    if (text === null) {
+      return [];
     }
-    return deleted;
+    return parseBlocks(text, { layer: "semantic" });
   }
 
-  countByLayer(layer: LogMemoryLayer): number {
-    const row = this.db
-      .prepare(`SELECT COUNT(*) AS c FROM log_memory_entries WHERE layer = ?`)
-      .get(layer) as { c: number };
-    return row.c;
+  async loadAll(opts?: {
+    daysBack?: number;
+    includeConsolidated?: boolean;
+  }): Promise<LogMemoryEntry[]> {
+    const [episodic, semantic] = await Promise.all([this.loadEpisodic(opts), this.loadSemantic()]);
+    return [...episodic, ...semantic];
   }
 
-  listByLayer(layer: LogMemoryLayer, limit = 1000): LogMemoryEntry[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM log_memory_entries WHERE layer = ? ORDER BY timestamp_ms DESC LIMIT ?`,
-      )
-      .all(layer, limit) as Row[];
-    return rows.map(rowToEntry);
+  async countByLayer(
+    layer: LogMemoryLayer,
+    opts?: { includeConsolidated?: boolean },
+  ): Promise<number> {
+    if (layer === "semantic") {
+      const entries = await this.loadSemantic();
+      return entries.length;
+    }
+    if (layer === "episodic") {
+      const entries = await this.loadEpisodic({
+        includeConsolidated: opts?.includeConsolidated,
+      });
+      return entries.length;
+    }
+    return 0;
   }
 
-  // Returns episodic candidates whose dynamic decay (recomputed from age,
-  // access count, and importance) is below the threshold.
-  selectDreamCandidates(opts: { threshold: number; limit: number; now: Date }): LogMemoryEntry[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM log_memory_entries
-         WHERE layer = 'episodic'
-         ORDER BY decay_score ASC, timestamp_ms ASC
-         LIMIT ?`,
-      )
-      .all(Math.max(opts.limit * 2, opts.limit)) as Row[];
-    const entries = rows.map(rowToEntry);
+  async selectDreamCandidates(opts: {
+    threshold: number;
+    limit: number;
+    now: Date;
+  }): Promise<LogMemoryEntry[]> {
+    // Already-consolidated entries are not eligible candidates.
+    const entries = await this.loadEpisodic({ includeConsolidated: false });
     return entries
       .filter((entry) => computeCurrentDecay(entry, opts.now) < opts.threshold)
       .slice(0, opts.limit);
   }
 
-  recordAccess(id: string, now: Date): void {
-    this.db
-      .prepare(
-        `UPDATE log_memory_entries
-           SET access_count = access_count + 1, last_accessed_ms = ?
-           WHERE id = ?`,
-      )
-      .run(now.getTime(), id);
-  }
-
-  insertDreamRecord(record: DreamRecord): void {
-    this.db
-      .prepare(
-        `INSERT INTO dream_records(
-           dream_id, triggered_at_ms, trigger, episodic_consumed,
-           semantic_produced, duration_ms
-         ) VALUES (?,?,?,?,?,?)`,
-      )
-      .run(
-        record.dreamId,
-        record.triggeredAt.getTime(),
-        record.trigger,
-        record.episodicConsumed,
-        record.semanticProduced,
-        record.durationMs,
-      );
-  }
-
-  listDreamRecords(limit = 50): DreamRecord[] {
-    const rows = this.db
-      .prepare(
-        `SELECT dream_id, triggered_at_ms, trigger, episodic_consumed,
-                semantic_produced, duration_ms
-         FROM dream_records ORDER BY triggered_at_ms DESC LIMIT ?`,
-      )
-      .all(limit) as Array<{
-      dream_id: string;
-      triggered_at_ms: number;
-      trigger: DreamRecord["trigger"];
-      episodic_consumed: number;
-      semantic_produced: number;
-      duration_ms: number;
-    }>;
-    return rows.map((r) => ({
-      dreamId: r.dream_id,
-      triggeredAt: new Date(r.triggered_at_ms),
-      trigger: r.trigger,
-      episodicConsumed: r.episodic_consumed,
-      semanticProduced: r.semantic_produced,
-      durationMs: r.duration_ms,
-    }));
-  }
-
-  // Hybrid retrieval: cosine over embeddings + BM25 over FTS5, merged via
-  // 0.6 * vector + 0.4 * bm25, top-K. Either side may be empty.
-  async hybridSearch(opts: {
-    queryText: string;
-    queryEmbedding?: Float32Array;
-    layer?: LogMemoryLayer;
-    tags?: string[];
-    limit?: number;
-  }): Promise<LogMemoryHybridResult[]> {
-    const limit = Math.max(1, opts.limit ?? 10);
-    const candidates = limit * 5;
-
-    const bm25Hits = this.searchBm25({
-      queryText: opts.queryText,
-      layer: opts.layer,
-      tags: opts.tags,
-      limit: candidates,
-    });
-
-    const vectorHits = opts.queryEmbedding
-      ? this.searchVector({
-          queryEmbedding: opts.queryEmbedding,
-          layer: opts.layer,
-          tags: opts.tags,
-          limit: candidates,
-        })
-      : [];
-
-    const merged = new Map<string, { entry: LogMemoryEntry; vector: number; bm25: number }>();
-    for (const hit of bm25Hits) {
-      merged.set(hit.entry.id, { entry: hit.entry, vector: 0, bm25: hit.score });
+  // Non-destructive forgetting: stamp the consolidatedAt timestamp on each
+  // matched entry and rewrite the daily file in place. Default reads will
+  // hide the entry afterwards but the raw block stays on disk for audit /
+  // replay (mirrors the promotedAt pattern in short-term-promotion.ts).
+  async markConsolidated(ids: Iterable<string>, consolidatedAt: Date): Promise<number> {
+    const idSet = new Set(ids);
+    if (idSet.size === 0) {
+      return 0;
     }
-    for (const hit of vectorHits) {
-      const existing = merged.get(hit.entry.id);
-      if (existing) {
-        existing.vector = hit.score;
-      } else {
-        merged.set(hit.entry.id, { entry: hit.entry, vector: hit.score, bm25: 0 });
+    const files = await this.listEpisodicFiles();
+    let marked = 0;
+    for (const file of files) {
+      const text = await safeReadFile(file.path);
+      if (text === null) {
+        continue;
       }
+      const entries = parseBlocks(text, { layer: "episodic" });
+      let mutated = false;
+      for (const entry of entries) {
+        if (!idSet.has(entry.id) || entry.payload.consolidatedAt) {
+          continue;
+        }
+        entry.payload.consolidatedAt = consolidatedAt;
+        marked++;
+        mutated = true;
+      }
+      if (!mutated) {
+        continue;
+      }
+      const rewritten = entries.map((entry) => serializeEpisodicBlock(entry)).join("\n");
+      await atomicWriteFile(file.path, rewritten);
     }
+    return marked;
+  }
 
-    const results: LogMemoryHybridResult[] = [];
-    for (const value of merged.values()) {
-      const score = 0.6 * value.vector + 0.4 * value.bm25;
-      results.push({
-        entry: value.entry,
-        score,
-        vectorScore: value.vector,
-        bm25Score: value.bm25,
+  // Explicit cleanup escape hatch — parallel to `removeGroundedShortTermCandidates`
+  // in short-term-promotion.ts. The dream cycle never calls this. Hosts can
+  // invoke it from a separate retention job (e.g. drop entries older than 90d).
+  async removeEpisodic(ids: Iterable<string>): Promise<number> {
+    const idSet = new Set(ids);
+    if (idSet.size === 0) {
+      return 0;
+    }
+    const files = await this.listEpisodicFiles();
+    let removed = 0;
+    for (const file of files) {
+      const text = await safeReadFile(file.path);
+      if (text === null) {
+        continue;
+      }
+      const entries = parseBlocks(text, { layer: "episodic" });
+      const kept = entries.filter((entry) => {
+        if (idSet.has(entry.id)) {
+          removed++;
+          return false;
+        }
+        return true;
       });
-    }
-    results.sort((a, b) => b.score - a.score);
-    return results.slice(0, limit);
-  }
-
-  private searchBm25(opts: {
-    queryText: string;
-    layer?: LogMemoryLayer;
-    tags?: string[];
-    limit: number;
-  }): Array<{ entry: LogMemoryEntry; score: number }> {
-    const ftsQuery = buildFtsQuery(opts.queryText);
-    if (!ftsQuery) {
-      return [];
-    }
-    const rows = this.db
-      .prepare(
-        `SELECT e.*, bm25(log_memory_fts) AS rank
-         FROM log_memory_fts
-         JOIN log_memory_entries e ON e.rowid = log_memory_fts.rowid
-         WHERE log_memory_fts MATCH ?
-         ORDER BY rank
-         LIMIT ?`,
-      )
-      .all(ftsQuery, opts.limit) as Array<Row & { rank: number }>;
-    return rows
-      .map((row) => ({ entry: rowToEntry(row), score: bm25RankToScore(row.rank) }))
-      .filter((item) => matchesFilters(item.entry, opts));
-  }
-
-  private searchVector(opts: {
-    queryEmbedding: Float32Array;
-    layer?: LogMemoryLayer;
-    tags?: string[];
-    limit: number;
-  }): Array<{ entry: LogMemoryEntry; score: number }> {
-    const rows = this.db
-      .prepare(`SELECT * FROM log_memory_entries WHERE embedding IS NOT NULL`)
-      .all() as Row[];
-    const queryNorm = vectorNorm(opts.queryEmbedding);
-    if (queryNorm === 0) {
-      return [];
-    }
-    const scored: Array<{ entry: LogMemoryEntry; score: number }> = [];
-    for (const row of rows) {
-      const entry = rowToEntry(row);
-      if (!entry.embedding || !matchesFilters(entry, opts)) {
+      if (kept.length === entries.length) {
         continue;
       }
-      const sim = cosineSimilarity(opts.queryEmbedding, entry.embedding, queryNorm);
-      if (sim <= 0) {
+      if (kept.length === 0) {
+        await fs.rm(file.path, { force: true });
         continue;
       }
-      scored.push({ entry, score: sim });
+      const rewritten = kept.map((entry) => serializeEpisodicBlock(entry)).join("\n");
+      await atomicWriteFile(file.path, rewritten);
     }
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, opts.limit);
+    return removed;
   }
-}
 
-function matchesFilters(
-  entry: LogMemoryEntry,
-  opts: { layer?: LogMemoryLayer; tags?: string[] },
-): boolean {
-  if (opts.layer && entry.layer !== opts.layer) {
+  async recordAccess(id: string, now: Date): Promise<boolean> {
+    const files = await this.listEpisodicFiles();
+    for (const file of files) {
+      const text = await safeReadFile(file.path);
+      if (text === null) {
+        continue;
+      }
+      const entries = parseBlocks(text, { layer: "episodic" });
+      let mutated = false;
+      for (const entry of entries) {
+        if (entry.id !== id) {
+          continue;
+        }
+        entry.payload.accessCount += 1;
+        entry.payload.lastAccessedAt = now;
+        mutated = true;
+      }
+      if (!mutated) {
+        continue;
+      }
+      const rewritten = entries.map((entry) => serializeEpisodicBlock(entry)).join("\n");
+      await atomicWriteFile(file.path, rewritten);
+      return true;
+    }
     return false;
   }
-  if (opts.tags && opts.tags.length > 0) {
-    const tagSet = new Set(entry.payload.tags);
-    if (!opts.tags.every((tag) => tagSet.has(tag))) {
-      return false;
+
+  async listEpisodicFiles(): Promise<Array<{ path: string; key: string }>> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.rootDir);
+    } catch {
+      return [];
     }
+    const out: Array<{ path: string; key: string }> = [];
+    for (const name of entries) {
+      const m = DAY_FILE_RE.exec(name);
+      if (!m) {
+        continue;
+      }
+      out.push({ path: path.join(this.rootDir, name), key: m[1] });
+    }
+    out.sort((a, b) => a.key.localeCompare(b.key));
+    return out;
   }
-  return true;
 }
 
-export function rowToEntry(row: Row): LogMemoryEntry {
-  return {
-    id: row.id,
-    timestamp: new Date(row.timestamp_ms),
-    layer: row.layer,
-    embedding: row.embedding ? bufferToEmbedding(row.embedding) : undefined,
-    payload: {
-      type: row.payload_type,
-      content: row.content,
-      tags: parseTags(row.tags),
-      source: row.source,
-      decayScore: row.decay_score,
-      accessCount: row.access_count,
-      lastAccessedAt: new Date(row.last_accessed_ms),
-    },
-  };
+function formatDayKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
-function parseTags(raw: string): string[] {
+function recentDayKeys(count: number, now: Date = new Date()): Set<string> {
+  const out = new Set<string>();
+  const base = new Date(now);
+  base.setUTCHours(0, 0, 0, 0);
+  for (let i = 0; i < count; i++) {
+    const day = new Date(base);
+    day.setUTCDate(day.getUTCDate() - i);
+    out.add(formatDayKey(day));
+  }
+  return out;
+}
+
+async function safeReadFile(filePath: string): Promise<string | null> {
   try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+    return await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+
+function ensureLeadingBlankLine(filePath: string, block: string): string {
+  // If the file already exists and doesn't end with a blank line, prepend one
+  // so the next block's heading isn't fused onto the previous block's last
+  // line. Append-mode writes happen frequently enough that we check fs sync.
+  if (!fsSync.existsSync(filePath)) {
+    return block;
+  }
+  try {
+    const stat = fsSync.statSync(filePath);
+    if (stat.size === 0) {
+      return block;
+    }
+    // Cheap tail check: read the last 2 bytes.
+    const fd = fsSync.openSync(filePath, "r");
+    const buf = Buffer.alloc(2);
+    const start = Math.max(0, stat.size - 2);
+    fsSync.readSync(fd, buf, 0, 2, start);
+    fsSync.closeSync(fd);
+    const tail = buf.toString("utf8");
+    if (tail.endsWith("\n\n") || tail === "\n\n") {
+      return block;
+    }
+    if (tail.endsWith("\n")) {
+      return `\n${block}`;
+    }
+    return `\n\n${block}`;
   } catch {
-    return [];
+    return block;
   }
 }
 
-export function embeddingToBuffer(vec: Float32Array): Buffer {
-  return Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+  const dir = path.dirname(filePath);
+  const tmp = path.join(dir, `.${path.basename(filePath)}.tmp-${process.pid}-${Date.now()}`);
+  await fs.writeFile(tmp, content, "utf8");
+  await fs.rename(tmp, filePath);
 }
 
-export function bufferToEmbedding(buf: Uint8Array): Float32Array {
-  // Copy so the underlying SQLite buffer is not retained.
-  const view = new Float32Array(buf.byteLength / 4);
-  const src = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  for (let i = 0; i < view.length; i++) {
-    view[i] = src.getFloat32(i * 4, true);
-  }
-  return view;
-}
+// ---------- vector helpers (kept on the module so other code can reuse) ----------
 
 export function vectorNorm(vec: Float32Array): number {
   let sum = 0;

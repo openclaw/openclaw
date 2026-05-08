@@ -15,14 +15,14 @@ export { computeCurrentDecay, computeInitialDecay } from "./decay.js";
 export { computeEntryId } from "./dedupe.js";
 export { parseLogLine, type ParsedLogLine } from "./parse.js";
 export { approxTokenCount, slidingWindowChunks } from "./chunk.js";
+export { parseBlocks, serializeEpisodicBlock, serializeSemanticBlock } from "./md-format.js";
 export {
-  bufferToEmbedding,
   cosineSimilarity,
-  embeddingToBuffer,
   LogMemoryStore,
+  vectorNorm,
+  type AppendInput,
   type LogMemoryHybridResult,
   type UpsertInput,
-  vectorNorm,
 } from "./store.js";
 export { greedyClusterByCosine, type Cluster } from "./cluster.js";
 export {
@@ -31,6 +31,7 @@ export {
   type DreamTrigger,
   type IngestMeta,
   type IngestResult,
+  type QueryOptions,
 } from "./ingestor.js";
 export {
   detectTeachingMoment,

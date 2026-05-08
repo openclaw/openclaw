@@ -32,7 +32,7 @@ export class DreamScheduler {
       return null;
     }
     const minCount = this.deps.minEpisodicCount ?? DEFAULT_MIN_EPISODIC;
-    const count = this.deps.store.countByLayer("episodic");
+    const count = await this.deps.store.countByLayer("episodic");
     if (!opts?.force && count <= minCount) {
       this.deps.logger?.info?.(
         `${DEFAULT_LOG_PREFIX} skipped: episodic count ${count} ≤ ${minCount}`,

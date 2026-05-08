@@ -2,7 +2,12 @@ import { slidingWindowChunks } from "./chunk.js";
 import { computeInitialDecay } from "./decay.js";
 import { computeEntryId } from "./dedupe.js";
 import { parseLogLine } from "./parse.js";
-import type { LogMemoryHybridResult, LogMemoryStore } from "./store.js";
+import {
+  cosineSimilarity,
+  vectorNorm,
+  type LogMemoryHybridResult,
+  type LogMemoryStore,
+} from "./store.js";
 import type { EmbedFn, LogMemoryEntry, LogMemoryLayer } from "./types.js";
 
 // Threshold (in episodic-entry count) above which an ingest fires the dream
@@ -22,6 +27,14 @@ export interface IngestResult {
 }
 
 export type DreamTrigger = (reason: "threshold") => void;
+
+export interface QueryOptions {
+  layer?: LogMemoryLayer;
+  tags?: string[];
+  limit?: number;
+  // How many days of episodic history to load. Defaults to 1 (today + yesterday).
+  episodicDaysBack?: number;
+}
 
 export class LogIngestor {
   constructor(
@@ -53,6 +66,10 @@ export class LogIngestor {
     let skipped = 0;
     const decayScore = computeInitialDecay(parsed.level);
 
+    // Pre-load today's known IDs so we can dedupe without re-reading the file
+    // for each chunk.
+    const recentIds = await this.loadRecentEpisodicIds();
+
     const chunkPayloads: Array<{ id: string; content: string }> = [];
     for (let index = 0; index < chunks.length; index++) {
       const content = chunks[index];
@@ -61,10 +78,11 @@ export class LogIngestor {
         service: parsed.service ?? meta.service,
         message: chunks.length === 1 ? content : `${index}::${content}`,
       });
-      if (this.opts.store.has(id)) {
+      if (recentIds.has(id)) {
         skipped++;
         continue;
       }
+      recentIds.add(id);
       chunkPayloads.push({ id, content });
     }
 
@@ -72,21 +90,12 @@ export class LogIngestor {
       return { inserted, skipped, triggeredDream: false };
     }
 
-    const embeddings = await this.opts.embed(chunkPayloads.map((c) => c.content));
-    if (embeddings.length !== chunkPayloads.length) {
-      throw new Error(
-        `embed callback returned ${embeddings.length} vectors for ${chunkPayloads.length} chunks`,
-      );
-    }
-
     const now = this.now();
-    for (let i = 0; i < chunkPayloads.length; i++) {
-      const { id, content } = chunkPayloads[i];
+    for (const { id, content } of chunkPayloads) {
       const entry: LogMemoryEntry = {
         id,
         timestamp: parsed.timestamp,
         layer: "episodic",
-        embedding: embeddings[i],
         payload: {
           type: "raw_log",
           content,
@@ -97,46 +106,83 @@ export class LogIngestor {
           lastAccessedAt: now,
         },
       };
-      this.opts.store.upsert(entry);
+      await this.opts.store.appendEpisodic(entry);
       inserted.push(entry);
     }
 
-    const triggeredDream = this.maybeTriggerDream();
+    const triggeredDream = await this.maybeTriggerDream();
     return { inserted, skipped, triggeredDream };
   }
 
-  async query(
-    question: string,
-    opts?: { layer?: LogMemoryLayer; tags?: string[]; limit?: number },
-  ): Promise<LogMemoryHybridResult[]> {
-    const [embedding] = await this.opts.embed([question]);
-    const results = await this.opts.store.hybridSearch({
-      queryText: question,
-      queryEmbedding: embedding,
-      layer: opts?.layer,
-      tags: opts?.tags,
-      limit: opts?.limit ?? 10,
-    });
-    const now = this.now();
-    for (const result of results) {
-      this.opts.store.recordAccess(result.entry.id, now);
+  // Hybrid search: load today + yesterday episodic + KNOWLEDGE.md, embed
+  // query, score each entry as 0.6 * cosine + 0.4 * keyword-match, return top.
+  async query(question: string, opts?: QueryOptions): Promise<LogMemoryHybridResult[]> {
+    const limit = Math.max(1, opts?.limit ?? 10);
+    const daysBack = opts?.episodicDaysBack ?? 1;
+    const all = await this.loadCandidatesForQuery(daysBack);
+    const filtered = applyFilters(all, { layer: opts?.layer, tags: opts?.tags });
+    if (filtered.length === 0) {
+      return [];
     }
-    return results;
+    const queryTokens = tokenizeForKeyword(question);
+    const [queryEmbedding, ...entryEmbeddings] = await this.opts.embed([
+      question,
+      ...filtered.map((entry) => entry.payload.content),
+    ]);
+    const queryNorm = vectorNorm(queryEmbedding);
+
+    const scored: LogMemoryHybridResult[] = filtered.map((entry, index) => {
+      const embedding = entryEmbeddings[index];
+      const cosine =
+        embedding && queryNorm > 0 ? cosineSimilarity(queryEmbedding, embedding, queryNorm) : 0;
+      const vectorScore = Math.max(0, cosine);
+      const bm25Score = keywordMatchScore(queryTokens, entry);
+      return {
+        entry: { ...entry, embedding },
+        score: 0.6 * vectorScore + 0.4 * bm25Score,
+        vectorScore,
+        bm25Score,
+      };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.slice(0, limit);
+
+    const now = this.now();
+    for (const result of top) {
+      if (result.entry.layer === "episodic") {
+        await this.opts.store.recordAccess(result.entry.id, now);
+      }
+    }
+    return top;
   }
 
-  private maybeTriggerDream(): boolean {
+  private async maybeTriggerDream(): Promise<boolean> {
     const trigger = this.opts.onThresholdTrigger;
     if (!trigger) {
       return false;
     }
     const threshold = this.opts.dreamThreshold ?? DEFAULT_DREAM_THRESHOLD;
-    const count = this.opts.store.countByLayer("episodic");
+    const count = await this.opts.store.countByLayer("episodic");
     if (count <= threshold) {
       return false;
     }
     // Non-blocking by contract: callers schedule the cycle without awaiting.
     trigger("threshold");
     return true;
+  }
+
+  private async loadRecentEpisodicIds(): Promise<Set<string>> {
+    const entries = await this.opts.store.loadEpisodic({ daysBack: 1 });
+    return new Set(entries.map((entry) => entry.id));
+  }
+
+  private async loadCandidatesForQuery(daysBack: number): Promise<LogMemoryEntry[]> {
+    const [episodic, semantic] = await Promise.all([
+      this.opts.store.loadEpisodic({ daysBack }),
+      this.opts.store.loadSemantic(),
+    ]);
+    return [...episodic, ...semantic];
   }
 }
 
@@ -150,4 +196,43 @@ function buildLogTags(input: {
     tags.push(`service:${input.service}`);
   }
   return tags;
+}
+
+function applyFilters(
+  entries: LogMemoryEntry[],
+  filters: { layer?: LogMemoryLayer; tags?: string[] },
+): LogMemoryEntry[] {
+  return entries.filter((entry) => {
+    if (filters.layer && entry.layer !== filters.layer) {
+      return false;
+    }
+    if (filters.tags && filters.tags.length > 0) {
+      const tagSet = new Set(entry.payload.tags);
+      if (!filters.tags.every((tag) => tagSet.has(tag))) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function tokenizeForKeyword(text: string): string[] {
+  const matches = text.toLowerCase().match(/[\p{L}\p{N}_:.-]+/gu);
+  return matches ? matches.filter((tok) => tok.length > 0) : [];
+}
+
+function keywordMatchScore(queryTokens: string[], entry: LogMemoryEntry): number {
+  if (queryTokens.length === 0) {
+    return 0;
+  }
+  const haystack = new Set(
+    tokenizeForKeyword(`${entry.payload.content} ${entry.payload.tags.join(" ")}`),
+  );
+  let hits = 0;
+  for (const token of queryTokens) {
+    if (haystack.has(token)) {
+      hits++;
+    }
+  }
+  return hits / queryTokens.length;
 }

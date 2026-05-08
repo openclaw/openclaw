@@ -11,6 +11,6 @@ export function computeEntryId(params: {
   const ts = params.timestamp.toISOString();
   const svc = params.service ?? "";
   const hash = createHash("sha256");
-  hash.update(`${ts}${svc}${params.message}`);
+  hash.update(`${ts}${svc}${params.message}`);
   return hash.digest("hex");
 }

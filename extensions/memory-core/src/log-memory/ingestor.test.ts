@@ -1,9 +1,10 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LogIngestor } from "./ingestor.js";
 import { LogMemoryStore } from "./store.js";
 import { makeFakeEmbedder, makeTempWorkspace } from "./test-helpers.js";
 
-describe("LogIngestor", () => {
+describe("LogIngestor (file-backed)", () => {
   const embed = makeFakeEmbedder(8);
   let workspace: ReturnType<typeof makeTempWorkspace>;
   let store: LogMemoryStore;
@@ -14,11 +15,10 @@ describe("LogIngestor", () => {
   });
 
   afterEach(() => {
-    store.close();
     workspace.cleanup();
   });
 
-  it("parses, embeds, and stores a single log line", async () => {
+  it("parses, tags, and appends to the day-keyed file", async () => {
     const ingestor = new LogIngestor({ store, embed });
     const result = await ingestor.ingest("2026-05-07T12:00:00Z ERROR diagfw probe disconnected", {
       service: "diagfw",
@@ -28,10 +28,11 @@ describe("LogIngestor", () => {
     expect(result.inserted[0].payload.tags).toEqual(
       expect.arrayContaining(["level:ERROR", "host:dut-01", "service:diagfw"]),
     );
-    expect(store.countByLayer("episodic")).toBe(1);
+    const text = await fs.readFile(store.episodicPathFor(new Date("2026-05-07T12:00:00Z")), "utf8");
+    expect(text).toContain("probe disconnected");
   });
 
-  it("dedupes identical logs", async () => {
+  it("dedupes identical logs across calls", async () => {
     const ingestor = new LogIngestor({ store, embed });
     const line = "2026-05-07T12:00:00Z ERROR diagfw probe disconnected";
     const meta = { service: "diagfw", host: "dut-01" };
@@ -39,7 +40,7 @@ describe("LogIngestor", () => {
     const second = await ingestor.ingest(line, meta);
     expect(second.inserted).toHaveLength(0);
     expect(second.skipped).toBeGreaterThan(0);
-    expect(store.countByLayer("episodic")).toBe(1);
+    expect(await store.countByLayer("episodic")).toBe(1);
   });
 
   it("chunks long messages with overlap", async () => {
@@ -49,25 +50,14 @@ describe("LogIngestor", () => {
     expect(result.inserted.length).toBeGreaterThan(1);
   });
 
-  it("fires threshold trigger and returns triggeredDream=true", async () => {
+  it("fires the threshold trigger and reports it", async () => {
     const trigger = vi.fn();
     // Pre-populate to push count past the configured threshold.
     for (let i = 0; i < 5; i++) {
-      const [vec] = await embed([`pre-${i}`]);
-      store.upsert({
-        id: `pre-${i}`,
-        timestamp: new Date(Date.now() - i * 1000),
-        layer: "episodic",
-        embedding: vec,
-        payload: {
-          type: "raw_log",
-          content: `pre-${i}`,
-          tags: [],
-          source: "log_ingest",
-          decayScore: 1,
-          accessCount: 0,
-          lastAccessedAt: new Date(),
-        },
+      const ingestor = new LogIngestor({ store, embed });
+      await ingestor.ingest(`2026-05-07T12:00:0${i}Z INFO diagfw warmup ${i}`, {
+        service: "diagfw",
+        host: "dut-01",
       });
     }
     const ingestor = new LogIngestor({
@@ -84,17 +74,27 @@ describe("LogIngestor", () => {
     expect(trigger).toHaveBeenCalledWith("threshold");
   });
 
-  it("query records access counts on retrieved entries", async () => {
+  it("hybrid query returns scored results and bumps accessCount", async () => {
     const ingestor = new LogIngestor({ store, embed });
-    await ingestor.ingest("2026-05-07T12:00:00Z ERROR diagfw broken sensor", {
+    await ingestor.ingest("2026-05-07T12:00:00Z ERROR diagfw broken sensor on dut-01", {
       service: "diagfw",
       host: "dut-01",
     });
-    const before = store.listByLayer("episodic")[0];
-    expect(before.payload.accessCount).toBe(0);
+    await ingestor.ingest("2026-05-07T12:01:00Z INFO diagfw routine heartbeat ok", {
+      service: "diagfw",
+      host: "dut-01",
+    });
+
     const results = await ingestor.query("broken sensor");
     expect(results.length).toBeGreaterThan(0);
-    const after = store.listByLayer("episodic")[0];
-    expect(after.payload.accessCount).toBe(1);
+    expect(results[0].entry.payload.content).toContain("broken sensor");
+    expect(results[0].score).toBeCloseTo(
+      0.6 * results[0].vectorScore + 0.4 * results[0].bm25Score,
+      6,
+    );
+
+    const after = await store.loadEpisodic();
+    const matched = after.find((entry) => entry.payload.content.includes("broken sensor"));
+    expect(matched?.payload.accessCount).toBe(1);
   });
 });

@@ -2,10 +2,29 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DreamScheduler } from "./scheduler.js";
 import { LogMemoryStore } from "./store.js";
 import { makeFakeEmbedder, makeStaticConsolidator, makeTempWorkspace } from "./test-helpers.js";
+import type { LogMemoryEntry } from "./types.js";
 
-const STALE_TS = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+const STALE_TS_BASE = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
 
-describe("DreamScheduler", () => {
+function staleEntry(idx: number, content: string): LogMemoryEntry {
+  const ts = new Date(STALE_TS_BASE.getTime() + idx);
+  return {
+    id: `pre-${idx}`,
+    timestamp: ts,
+    layer: "episodic",
+    payload: {
+      type: "raw_log",
+      content,
+      tags: [],
+      source: "log_ingest",
+      decayScore: 0.05,
+      accessCount: 0,
+      lastAccessedAt: ts,
+    },
+  };
+}
+
+describe("DreamScheduler (file-backed)", () => {
   const embed = makeFakeEmbedder(8);
   let workspace: ReturnType<typeof makeTempWorkspace>;
   let store: LogMemoryStore;
@@ -16,7 +35,6 @@ describe("DreamScheduler", () => {
   });
 
   afterEach(() => {
-    store.close();
     workspace.cleanup();
   });
 
@@ -32,29 +50,12 @@ describe("DreamScheduler", () => {
       }),
       minEpisodicCount: 50,
     });
-    const result = await scheduler.tick();
-    expect(result).toBeNull();
+    expect(await scheduler.tick()).toBeNull();
   });
 
-  it("tick runs cycle when above threshold", async () => {
-    const messages = Array.from({ length: 16 }, (_, i) => `probe stuck on diagfw ${i}`);
-    const vectors = await embed(messages);
-    for (let i = 0; i < messages.length; i++) {
-      store.upsert({
-        id: `e-${i}`,
-        timestamp: STALE_TS,
-        layer: "episodic",
-        embedding: vectors[i],
-        payload: {
-          type: "raw_log",
-          content: messages[i],
-          tags: [],
-          source: "log_ingest",
-          decayScore: 0.05,
-          accessCount: 0,
-          lastAccessedAt: STALE_TS,
-        },
-      });
+  it("tick runs the dream cycle when above the threshold", async () => {
+    for (let i = 0; i < 16; i++) {
+      await store.appendEpisodic(staleEntry(i, `probe stuck on diagfw ${i}`));
     }
     const scheduler = new DreamScheduler({
       store,
