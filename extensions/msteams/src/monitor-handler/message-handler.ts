@@ -204,7 +204,22 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       maxInlineBytes: mediaMaxBytes,
       maxInlineTotalBytes: mediaMaxBytes,
     });
-    const rawBody = text || attachmentPlaceholder;
+    // Forward messageBack card action payloads instead of dropping empty text.
+    let rawBody = text || attachmentPlaceholder;
+    if (!rawBody && activity.value != null) {
+      try {
+        const serialized =
+          typeof activity.value === "string" ? activity.value : JSON.stringify(activity.value);
+        if (serialized) {
+          rawBody = `[CARD_ACTION] ${serialized}`;
+          log.info("messageBack card action detected; forwarding value payload", {
+            valueType: typeof activity.value,
+          });
+        }
+      } catch {
+        log.warn?.("failed to serialize messageBack value payload");
+      }
+    }
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;
     let quoteSenderName: string | undefined;
