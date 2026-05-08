@@ -279,6 +279,60 @@ function ensureCredentialsDir(root: string) {
 }
 
 describe("doctor legacy state migrations", () => {
+  it("migrates legacy config audit JSONL into SQLite plugin state", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const auditDir = path.join(root, "logs");
+    fs.mkdirSync(auditDir, { recursive: true });
+    const sourcePath = path.join(auditDir, "config-audit.jsonl");
+    fs.writeFileSync(
+      sourcePath,
+      `${JSON.stringify({
+        ts: "2026-05-01T12:00:00.000Z",
+        source: "config-io",
+        event: "config.write",
+        result: "rename",
+        configPath: "/tmp/openclaw.json",
+        nextHash: "next-hash",
+      })}\n`,
+      "utf-8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(detected.channelPlans.plans.some((plan) => plan.label === "Config audit log")).toBe(
+      true,
+    );
+
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 123,
+    });
+    const auditStore = createCorePluginStateKeyedStore<Record<string, unknown>>({
+      ownerId: "core:config",
+      namespace: "audit",
+      maxEntries: 50_000,
+    });
+
+    expect(result.changes.join("\n")).toContain(
+      "Imported 1 config audit record(s) into SQLite plugin state",
+    );
+    await expect(auditStore.entries()).resolves.toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({
+          event: "config.write",
+          result: "rename",
+          configPath: "/tmp/openclaw.json",
+          nextHash: "next-hash",
+        }),
+      }),
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
   it("migrates legacy file-transfer audit JSONL into SQLite plugin state", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {};

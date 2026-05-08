@@ -412,6 +412,12 @@ export function createCorePluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
+export function createCorePluginStateSyncKeyedStore<T>(
+  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+): PluginStateSyncKeyedStore<T> {
+  return createSyncKeyedStoreForPluginId<T>(options.ownerId, options);
+}
+
 export function resetPluginStateStoreForTests(): void {
   closePluginStateSqliteStore();
   closeOpenClawStateDatabaseForTest();

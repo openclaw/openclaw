@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { resolveStateDir } from "./paths.js";
 
 const CONFIG_AUDIT_ARGV_CAP = 8;
@@ -132,6 +134,10 @@ export function snapshotConfigAuditProcessInfo(): ConfigAuditProcessInfo {
 }
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
+export const CONFIG_AUDIT_OWNER_ID = "core:config";
+export const CONFIG_AUDIT_NAMESPACE = "audit";
+export const CONFIG_AUDIT_MAX_ENTRIES = 50_000;
+export const CONFIG_AUDIT_STORE_LABEL = "SQLite core:config/audit state";
 
 export type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed" | "rejected";
 
@@ -264,23 +270,6 @@ type ConfigWriteAuditRecordBase = Omit<
 > & {
   nextHash: string;
   nextBytes: number;
-};
-
-type ConfigAuditFs = {
-  promises: {
-    mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
-    appendFile(
-      path: string,
-      data: string,
-      options?: { encoding?: BufferEncoding; mode?: number },
-    ): Promise<unknown>;
-  };
-  mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): unknown;
-  appendFileSync(
-    path: string,
-    data: string,
-    options?: { encoding?: BufferEncoding; mode?: number },
-  ): unknown;
 };
 
 function normalizeAuditLabel(value: string | undefined): string | null {
@@ -417,7 +406,7 @@ export function finalizeConfigWriteAuditRecord(params: {
 }
 
 type ConfigAuditAppendContext = {
-  fs: ConfigAuditFs;
+  fs: unknown;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
 };
@@ -438,15 +427,38 @@ function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): Config
   return record as ConfigAuditRecord;
 }
 
+function resolveConfigAuditStoreEnv(params: {
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+}): NodeJS.ProcessEnv {
+  return {
+    ...params.env,
+    OPENCLAW_STATE_DIR: resolveStateDir(params.env, params.homedir),
+  };
+}
+
+function openConfigAuditStore(env: NodeJS.ProcessEnv) {
+  return createCorePluginStateSyncKeyedStore<ConfigAuditRecord>({
+    ownerId: CONFIG_AUDIT_OWNER_ID,
+    namespace: CONFIG_AUDIT_NAMESPACE,
+    maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+    env,
+  });
+}
+
+function configAuditEntryKey(record: ConfigAuditRecord): string {
+  return `${record.ts}:${record.event}:${randomUUID()}`;
+}
+
+function toStoredConfigAuditRecord(record: ConfigAuditRecord): ConfigAuditRecord {
+  return JSON.parse(JSON.stringify(record)) as ConfigAuditRecord;
+}
+
 export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): Promise<void> {
   try {
-    const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
-    const record = resolveConfigAuditAppendRecord(params);
-    await params.fs.promises.mkdir(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    await params.fs.promises.appendFile(auditPath, `${JSON.stringify(record)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
+    const record = toStoredConfigAuditRecord(resolveConfigAuditAppendRecord(params));
+    const env = resolveConfigAuditStoreEnv(params);
+    openConfigAuditStore(env).register(configAuditEntryKey(record), record);
   } catch {
     // best-effort
   }
@@ -454,14 +466,20 @@ export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): 
 
 export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): void {
   try {
-    const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
-    const record = resolveConfigAuditAppendRecord(params);
-    params.fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    params.fs.appendFileSync(auditPath, `${JSON.stringify(record)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
+    const record = toStoredConfigAuditRecord(resolveConfigAuditAppendRecord(params));
+    const env = resolveConfigAuditStoreEnv(params);
+    openConfigAuditStore(env).register(configAuditEntryKey(record), record);
   } catch {
     // best-effort
   }
+}
+
+export function listConfigAuditRecordsForTests(params: {
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+}): ConfigAuditRecord[] {
+  const env = resolveConfigAuditStoreEnv(params);
+  return openConfigAuditStore(env)
+    .entries()
+    .map((entry) => entry.value);
 }

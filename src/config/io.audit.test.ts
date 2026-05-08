@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
+  listConfigAuditRecordsForTests,
   redactConfigAuditArgv,
   resolveConfigAuditLogPath,
 } from "./io.audit.js";
@@ -54,12 +56,10 @@ function createRenameAuditRecord(home: string) {
 }
 
 function readAuditLog(home: string): unknown[] {
-  const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-  return fs
-    .readFileSync(auditPath, "utf-8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  return listConfigAuditRecordsForTests({
+    env: {} as NodeJS.ProcessEnv,
+    homedir: () => home,
+  });
 }
 
 describe("config io audit helpers", () => {
@@ -73,7 +73,11 @@ describe("config io audit helpers", () => {
     await suiteRootTracker.cleanup();
   });
 
-  it('ignores literal "undefined" home env values when choosing the audit log path', async () => {
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
+  it('ignores literal "undefined" home env values when choosing the legacy audit log path', async () => {
     const home = await suiteRootTracker.make("home");
     const auditPath = resolveConfigAuditLogPath(
       {
@@ -176,7 +180,7 @@ describe("config io audit helpers", () => {
     expect(record.errorMessage).toBe("disk full");
   });
 
-  it("appends JSONL audit entries to the resolved audit path", async () => {
+  it("stores audit entries in SQLite plugin state", async () => {
     const home = await suiteRootTracker.make("append");
     const record = createRenameAuditRecord(home);
 
