@@ -24,7 +24,7 @@ import {
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousTranscriptPath, getRecentTranscriptContent } from "./transcript.js";
+import { getRecentTranscriptContent } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -171,33 +171,13 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       unknown
     >;
     const currentSessionId = sessionEntry.sessionId as string;
-    let currentTranscriptPath = (sessionEntry.sessionFile as string) || undefined;
-
-    if (!currentTranscriptPath) {
-      const sessionsDirs = new Set<string>();
-      sessionsDirs.add(path.join(workspaceDir, "sessions"));
-
-      for (const sessionsDir of sessionsDirs) {
-        const recoveredTranscriptPath = await findPreviousTranscriptPath({
-          sessionsDir,
-          sessionId: currentSessionId,
-        });
-        if (!recoveredTranscriptPath) {
-          continue;
-        }
-        currentTranscriptPath = recoveredTranscriptPath;
-        log.debug("Found previous transcript path", { path: currentTranscriptPath });
-        break;
-      }
-    }
+    const currentTranscriptPath = (sessionEntry.sessionFile as string) || undefined;
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
       transcriptPath: currentTranscriptPath,
       hasCfg: Boolean(cfg),
     });
-
-    const transcriptPath = currentTranscriptPath || undefined;
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -209,8 +189,15 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (transcriptPath) {
-      sessionContent = await getRecentTranscriptContent(transcriptPath, messageCount);
+    if (currentSessionId || currentTranscriptPath) {
+      sessionContent = await getRecentTranscriptContent(
+        {
+          agentId,
+          sessionId: currentSessionId,
+          transcriptPath: currentTranscriptPath,
+        },
+        messageCount,
+      );
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,

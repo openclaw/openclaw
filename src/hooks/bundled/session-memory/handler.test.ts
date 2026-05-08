@@ -8,7 +8,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousTranscriptPath, getRecentTranscriptContent } from "./transcript.js";
+import { getRecentTranscriptContent } from "./transcript.js";
 
 // Avoid calling the embedded Pi agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -143,10 +143,8 @@ async function runNewWithPreviousSession(params: {
   action?: "new" | "reset";
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
-  const sessionsDir = path.join(tempDir, "sessions");
-  await fs.mkdir(sessionsDir, { recursive: true });
 
-  const sessionFile = path.join(sessionsDir, "test-session.jsonl");
+  const sessionFile = path.join(tempDir, "transcript-fixtures", "test-session.jsonl");
   seedSessionTranscript({
     sessionId: "test-123",
     sessionFile,
@@ -173,37 +171,36 @@ async function runNewWithPreviousSession(params: {
 
 async function createSessionMemoryWorkspace(params?: {
   activeSession?: { name: string; content: string };
-}): Promise<{ tempDir: string; sessionsDir: string; activeSessionFile?: string }> {
+}): Promise<{ tempDir: string; transcriptDir: string; activeSessionFile?: string }> {
   const tempDir = await createCaseWorkspace("workspace");
-  const sessionsDir = path.join(tempDir, "sessions");
-  await fs.mkdir(sessionsDir, { recursive: true });
+  const transcriptDir = path.join(tempDir, "transcript-fixtures");
 
   if (!params?.activeSession) {
-    return { tempDir, sessionsDir };
+    return { tempDir, transcriptDir };
   }
 
-  const activeSessionFile = path.join(sessionsDir, params.activeSession.name);
+  const activeSessionFile = path.join(transcriptDir, params.activeSession.name);
   seedSessionTranscript({
     sessionId: path.basename(params.activeSession.name, ".jsonl"),
     sessionFile: activeSessionFile,
     content: params.activeSession.content,
   });
-  return { tempDir, sessionsDir, activeSessionFile };
+  return { tempDir, transcriptDir, activeSessionFile };
 }
 
 async function writeSessionTranscript(params: {
   sessionId?: string;
   name: string;
   content: string;
-}): Promise<{ tempDir: string; sessionsDir: string; sessionFile: string }> {
-  const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
-  const sessionFile = path.join(sessionsDir, params.name);
+}): Promise<{ tempDir: string; transcriptDir: string; sessionFile: string }> {
+  const { tempDir, transcriptDir } = await createSessionMemoryWorkspace();
+  const sessionFile = path.join(transcriptDir, params.name);
   seedSessionTranscript({
     sessionId: params.sessionId ?? path.basename(params.name, ".jsonl"),
     sessionFile,
     content: params.content,
   });
-  return { tempDir, sessionsDir, sessionFile };
+  return { tempDir, transcriptDir, sessionFile };
 }
 
 async function readSessionTranscript(params: {
@@ -274,7 +271,7 @@ describe("session-memory hook", () => {
   });
 
   it("creates memory file with session content on /new command", async () => {
-    // Create a mock session file with user/assistant messages
+    // Create mock transcript rows with user/assistant messages.
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Hello there" },
       { role: "assistant", content: "Hi! How can I help?" },
@@ -358,10 +355,8 @@ describe("session-memory hook", () => {
 
   it("does not block reset command handling on opt-in model slug generation", async () => {
     const tempDir = await createCaseWorkspace("workspace");
-    const sessionsDir = path.join(tempDir, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
 
-    const sessionFile = path.join(sessionsDir, "test-session.jsonl");
+    const sessionFile = path.join(tempDir, "transcript-fixtures", "test-session.jsonl");
     seedSessionTranscript({
       sessionId: "test-123",
       sessionFile,
@@ -493,10 +488,8 @@ describe("session-memory hook", () => {
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");
-    const naviSessionsDir = path.join(naviWorkspace, "sessions");
-    await fs.mkdir(naviSessionsDir, { recursive: true });
 
-    const sessionFile = path.join(naviSessionsDir, "navi-session.jsonl");
+    const sessionFile = path.join(naviWorkspace, "transcript-fixtures", "navi-session.jsonl");
     seedSessionTranscript({
       sessionId: "navi-session",
       sessionFile,
@@ -632,30 +625,24 @@ describe("session-memory hook", () => {
   });
 
   it("recovers canonical transcript when previousSessionEntry.sessionFile is missing", async () => {
-    const { sessionsDir } = await createSessionMemoryWorkspace();
+    const { tempDir } = await createSessionMemoryWorkspace();
 
     const sessionId = "missing-session-file";
     seedSessionTranscript({
       sessionId,
-      sessionFile: path.join(sessionsDir, `${sessionId}.jsonl`),
+      sessionFile: path.join(tempDir, "transcript-fixtures", `${sessionId}.jsonl`),
       content: createMockSessionContent([
         { role: "user", content: "Recovered with missing sessionFile pointer" },
         { role: "assistant", content: "Recovered by sessionId fallback" },
       ]),
     });
 
-    const previousTranscriptPath = await findPreviousTranscriptPath({
-      sessionsDir,
-      sessionId,
-    });
-    expect(previousTranscriptPath).toBe(path.join(sessionsDir, `${sessionId}.jsonl`));
-
-    const memoryContent = await getRecentTranscriptContent(previousTranscriptPath!);
+    const memoryContent = await getRecentTranscriptContent({ agentId: "main", sessionId });
     expect(memoryContent).toContain("user: Recovered with missing sessionFile pointer");
     expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
   });
 
-  it("handles empty session files gracefully", async () => {
+  it("handles empty transcripts gracefully", async () => {
     // Should not throw
     const { files } = await runNewWithPreviousSession({ sessionContent: "" });
     expect(files.length).toBe(1);
@@ -664,10 +651,12 @@ describe("session-memory hook", () => {
   it("uses agent-specific workspace when workspaceDir is provided for non-default agent (gateway path regression)", async () => {
     const defaultWorkspace = await createCaseWorkspace("workspace-default");
     const customAgentWorkspace = await createCaseWorkspace("workspace-custom-agent");
-    const sessionsDir = path.join(customAgentWorkspace, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
 
-    const sessionFile = path.join(sessionsDir, "custom-agent-session.jsonl");
+    const sessionFile = path.join(
+      customAgentWorkspace,
+      "transcript-fixtures",
+      "custom-agent-session.jsonl",
+    );
     seedSessionTranscript({
       sessionId: "custom-agent-session",
       sessionFile,
@@ -705,7 +694,7 @@ describe("session-memory hook", () => {
     await expectPathMissing(path.join(defaultWorkspace, "memory"));
   });
 
-  it("handles session files with fewer messages than requested", async () => {
+  it("handles transcripts with fewer messages than requested", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Only message 1" },
       { role: "assistant", content: "Only message 2" },
