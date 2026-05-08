@@ -16,6 +16,14 @@ import {
 
 const PROVIDER_ID = "memory-wiki-source-sync";
 
+function resolveLegacyVaultStatePath(vaultRoot: string): string {
+  return path.join(vaultRoot, ".openclaw-wiki", "state.json");
+}
+
+function resolveLegacyVaultLocksDir(vaultRoot: string): string {
+  return path.join(vaultRoot, ".openclaw-wiki", "locks");
+}
+
 async function legacySourceExists(vaultRoot: string): Promise<boolean> {
   const sourcePath = resolveMemoryWikiLegacySourceSyncStatePath(vaultRoot);
   return await fs
@@ -29,6 +37,45 @@ async function legacyLogExists(vaultRoot: string): Promise<boolean> {
     .stat(resolveMemoryWikiLegacyLogPath(vaultRoot))
     .then((stat) => stat.isFile())
     .catch(() => false);
+}
+
+async function legacyVaultMetadataExists(vaultRoot: string): Promise<boolean> {
+  const [hasStateFile, hasLocksDir] = await Promise.all([
+    fs
+      .stat(resolveLegacyVaultStatePath(vaultRoot))
+      .then((stat) => stat.isFile())
+      .catch(() => false),
+    fs
+      .stat(resolveLegacyVaultLocksDir(vaultRoot))
+      .then((stat) => stat.isDirectory())
+      .catch(() => false),
+  ]);
+  return hasStateFile || hasLocksDir;
+}
+
+async function removeLegacyVaultMetadata(vaultRoot: string): Promise<{
+  removedStateFile: boolean;
+  removedLocksDir: boolean;
+}> {
+  const statePath = resolveLegacyVaultStatePath(vaultRoot);
+  const locksDir = resolveLegacyVaultLocksDir(vaultRoot);
+  const [hadStateFile, hadLocksDir] = await Promise.all([
+    fs
+      .stat(statePath)
+      .then((stat) => stat.isFile())
+      .catch(() => false),
+    fs
+      .stat(locksDir)
+      .then((stat) => stat.isDirectory())
+      .catch(() => false),
+  ]);
+  if (hadStateFile) {
+    await fs.rm(statePath, { force: true });
+  }
+  if (hadLocksDir) {
+    await fs.rm(locksDir, { recursive: true, force: true });
+  }
+  return { removedStateFile: hadStateFile, removedLocksDir: hadLocksDir };
 }
 
 function resolveLegacyImportRunsDir(vaultRoot: string): string {
@@ -88,8 +135,21 @@ export function createMemoryWikiSourceSyncMigrationProvider(
     const hasSourceSync = await legacySourceExists(config.vault.path);
     const hasLegacyLog = await legacyLogExists(config.vault.path);
     const hasLegacyDigests = await legacyMemoryWikiDigestFilesExist(config.vault.path);
+    const hasLegacyVaultMetadata = await legacyVaultMetadataExists(config.vault.path);
     const importRunFiles = await listLegacyImportRunJsonFiles(config.vault.path);
     const items = [
+      ...(hasLegacyVaultMetadata
+        ? [
+            createMigrationItem({
+              id: "memory-wiki-vault-metadata-json",
+              kind: "state",
+              action: "archive",
+              source: path.join(config.vault.path, ".openclaw-wiki"),
+              target: "none; Memory Wiki vault metadata is derived from config and SQLite state",
+              message: "Remove retired Memory Wiki vault state.json and locks directory.",
+            }),
+          ]
+        : []),
       ...(hasSourceSync
         ? [
             createMigrationItem({
@@ -157,6 +217,7 @@ export function createMemoryWikiSourceSyncMigrationProvider(
       const found =
         (await legacySourceExists(config.vault.path)) ||
         (await legacyLogExists(config.vault.path)) ||
+        (await legacyVaultMetadataExists(config.vault.path)) ||
         (await legacyMemoryWikiDigestFilesExist(config.vault.path)) ||
         (await listLegacyImportRunJsonFiles(config.vault.path)).length > 0;
       return {
@@ -180,7 +241,14 @@ export function createMemoryWikiSourceSyncMigrationProvider(
           continue;
         }
         try {
-          if (item.id === "memory-wiki-source-sync-json") {
+          if (item.id === "memory-wiki-vault-metadata-json") {
+            const result = await removeLegacyVaultMetadata(config.vault.path);
+            items[itemIndex] = {
+              ...item,
+              status: "migrated",
+              details: result,
+            };
+          } else if (item.id === "memory-wiki-source-sync-json") {
             const result = await importMemoryWikiLegacySourceSyncState({
               vaultRoot: config.vault.path,
             });
