@@ -1088,21 +1088,21 @@ describe("statusCommand", () => {
       "Troubleshooting:",
       "Next steps:",
     ]) {
-      expect(logs.some((line) => line.includes(token))).toBe(true);
+      expect(logs).toEqual(expect.arrayContaining([expect.stringContaining(token)]));
     }
-    expect(
-      logs.some((line) => line.includes("legacy-plugin still uses legacy before_agent_start")),
-    ).toBe(true);
-    expect(
-      logs.some(
-        (line) =>
-          line.includes("openclaw status --all") ||
-          line.includes("openclaw --profile isolated status --all"),
-      ),
-    ).toBe(true);
-    expect(logs.some((line) => line.includes("Cache"))).toBe(true);
-    expect(logs.some((line) => line.includes("40% hit"))).toBe(true);
-    expect(logs.some((line) => line.includes("read 2.0k"))).toBe(true);
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("legacy-plugin still uses legacy before_agent_start"),
+      ]),
+    );
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/openclaw (?:--profile isolated )?status --all/),
+      ]),
+    );
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Cache")]));
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("40% hit")]));
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("read 2.0k")]));
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {
@@ -1157,8 +1157,8 @@ describe("statusCommand", () => {
       },
     });
     const logs = await runStatusAndGetLogs();
-    expect(logs.some((line) => line.includes("100% cached"))).toBe(true);
-    expect(logs.some((line) => line.includes("120% cached"))).toBe(false);
+    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("100% cached")]));
+    expect(logs).not.toEqual(expect.arrayContaining([expect.stringContaining("120% cached")]));
 
     mocks.loadSessionStore.mockReturnValue({
       "+1000": {
@@ -1170,8 +1170,10 @@ describe("statusCommand", () => {
       },
     });
     const promptSideLogs = await runStatusAndGetLogs();
-    expect(promptSideLogs.some((line) => line.includes("67% cached"))).toBe(true);
-    expect(promptSideLogs.some((line) => line.includes("40% cached"))).toBe(false);
+    expect(promptSideLogs).toEqual(expect.arrayContaining([expect.stringContaining("67% cached")]));
+    expect(promptSideLogs).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("40% cached")]),
+    );
   });
 
   it("shows node-only gateway info when no local gateway service is installed", async () => {
@@ -1216,7 +1218,7 @@ describe("statusCommand", () => {
         presence: [],
       });
       const logs = await runStatusAndGetLogs();
-      expect(logs.some((l: string) => l.includes("auth token"))).toBe(true);
+      expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("auth token")]));
     });
   });
 
