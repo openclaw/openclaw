@@ -484,7 +484,10 @@ By default, OpenClaw starts local Codex harness sessions in YOLO mode:
 `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
 `sandbox: "danger-full-access"`. This is the trusted local operator posture used
 for autonomous heartbeats: Codex can use shell and network tools without
-stopping on native approval prompts that nobody is around to answer.
+stopping on native approval prompts that nobody is around to answer. On local
+stdio Codex app-server installs where `/etc/codex/requirements.toml` disallows
+`danger-full-access`, OpenClaw treats the implicit default as guardian instead
+so it does not send a sandbox override that Codex app-server will reject.
 
 To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
 "guardian"`:
@@ -646,9 +649,9 @@ Supported `appServer` fields:
 | `clearEnv`                    | `[]`                                     | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. `CODEX_HOME` and `HOME` are reserved for OpenClaw's per-agent Codex isolation on local launches. |
 | `requestTimeoutMs`            | `60000`                                  | Timeout for app-server control-plane calls.                                                                                                                                                                                          |
 | `turnCompletionIdleTimeoutMs` | `60000`                                  | Quiet window after a turn-scoped Codex app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                  |
-| `mode`                        | `"yolo"`                                 | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                      |
-| `approvalPolicy`              | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.                                                                                                                                                                       |
-| `sandbox`                     | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                                                                                                                                                                               |
+| `mode`                        | `"yolo"` unless local Codex requirements disallow full access | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access` make the implicit default guardian.                                                                                          |
+| `approvalPolicy`              | `"never"` or guardian-derived `"on-request"` | Native Codex approval policy sent to thread start/resume/turn.                                                                                                                                                                       |
+| `sandbox`                     | `"danger-full-access"` or guardian-derived `"workspace-write"` | Native Codex sandbox mode sent to thread start/resume.                                                                                                                                                                               |
 | `approvalsReviewer`           | `"user"`                                 | Use `"auto_review"` to let Codex review native approval prompts. `guardian_subagent` remains a legacy alias.                                                                                                                         |
 | `serviceTier`                 | unset                                    | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                      |
 

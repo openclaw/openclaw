@@ -1,8 +1,10 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { z } from "openclaw/plugin-sdk/zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET = randomBytes(32);
+const CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
@@ -305,6 +307,9 @@ export function resolveCodexAppServerRuntimeOptions(
   params: {
     pluginConfig?: unknown;
     env?: NodeJS.ProcessEnv;
+    requirementsToml?: string | null;
+    requirementsPath?: string;
+    readRequirementsFile?: (path: string) => string | undefined;
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
@@ -323,10 +328,16 @@ export function resolveCodexAppServerRuntimeOptions(
   const clearEnv = normalizeStringList(config.clearEnv);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
+  const explicitPolicyMode =
+    resolvePolicyMode(config.mode) ?? resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
   const policyMode =
-    resolvePolicyMode(config.mode) ??
-    resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
-    "yolo";
+    explicitPolicyMode ??
+    resolveDefaultCodexAppServerPolicyMode({
+      transport,
+      requirementsToml: params.requirementsToml,
+      requirementsPath: params.requirementsPath,
+      readRequirementsFile: params.readRequirementsFile,
+    });
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
@@ -500,6 +511,83 @@ function resolveTransport(value: unknown): CodexAppServerTransportMode {
 
 function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {
   return value === "guardian" || value === "yolo" ? value : undefined;
+}
+
+function resolveDefaultCodexAppServerPolicyMode(params: {
+  transport: CodexAppServerTransportMode;
+  requirementsToml?: string | null;
+  requirementsPath?: string;
+  readRequirementsFile?: (path: string) => string | undefined;
+}): CodexAppServerPolicyMode {
+  if (params.transport !== "stdio") {
+    return "yolo";
+  }
+  return codexRequirementsAllowDangerFullAccess(params) ? "yolo" : "guardian";
+}
+
+function codexRequirementsAllowDangerFullAccess(params: {
+  requirementsToml?: string | null;
+  requirementsPath?: string;
+  readRequirementsFile?: (path: string) => string | undefined;
+}): boolean {
+  const content = readCodexRequirementsToml(params);
+  if (content === undefined) {
+    return true;
+  }
+  const allowedSandboxModes = parseAllowedSandboxModesFromCodexRequirements(content);
+  return allowedSandboxModes === undefined || allowedSandboxModes.has("danger-full-access");
+}
+
+function readCodexRequirementsToml(params: {
+  requirementsToml?: string | null;
+  requirementsPath?: string;
+  readRequirementsFile?: (path: string) => string | undefined;
+}): string | undefined {
+  if (params.requirementsToml !== undefined) {
+    return params.requirementsToml ?? undefined;
+  }
+  const path = readNonEmptyString(params.requirementsPath) ?? CODEX_REQUIREMENTS_PATH;
+  try {
+    if (params.readRequirementsFile) {
+      return params.readRequirementsFile(path);
+    }
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function parseAllowedSandboxModesFromCodexRequirements(
+  content: string,
+): Set<CodexAppServerSandboxMode> | undefined {
+  const match = content.match(/(?:^|\n)\s*allowed_sandbox_modes\s*=\s*\[([\s\S]*?)\]/);
+  if (!match) {
+    return undefined;
+  }
+  const rawArrayBody = match[1] ?? "";
+  const stringMatches = [...rawArrayBody.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'/g)];
+  if (stringMatches.length === 0 && rawArrayBody.replace(/#[^\n]*/g, "").trim().length > 0) {
+    return undefined;
+  }
+  return new Set(
+    stringMatches
+      .map((entry) => normalizeRequirementsSandboxMode(entry[1] ?? entry[2] ?? ""))
+      .filter((entry): entry is CodexAppServerSandboxMode => entry !== undefined),
+  );
+}
+
+function normalizeRequirementsSandboxMode(value: string): CodexAppServerSandboxMode | undefined {
+  const compact = value.replace(/[\s_-]/g, "").toLowerCase();
+  if (compact === "readonly") {
+    return "read-only";
+  }
+  if (compact === "workspacewrite") {
+    return "workspace-write";
+  }
+  if (compact === "dangerfullaccess") {
+    return "danger-full-access";
+  }
+  return undefined;
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
