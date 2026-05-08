@@ -202,8 +202,11 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
         route: {
           accountId: "default",
           agentId: "lobster",
+          channel: "imessage",
           sessionKey: "k",
           mainSessionKey: "mk",
+          lastRoutePolicy: "main",
+          matchedBy: "default",
         },
         bodyText: "hi",
         createdAt: undefined,
