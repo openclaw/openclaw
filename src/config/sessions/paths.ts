@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveStateDir } from "../paths.js";
@@ -282,39 +282,4 @@ export function resolveSessionFilePath(
     }
   }
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
-}
-
-export function resolveLegacySessionStorePath(
-  store?: string,
-  opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
-) {
-  const agentId = normalizeAgentId(opts?.agentId ?? DEFAULT_AGENT_ID);
-  const env = opts?.env ?? process.env;
-  const homedir = () => resolveRequiredHomeDir(env, os.homedir);
-  if (!store) {
-    return path.join(resolveAgentSessionsDir(agentId, env, homedir), "sessions.json");
-  }
-  if (store.includes("{agentId}")) {
-    const expanded = store.replaceAll("{agentId}", agentId);
-    if (expanded.startsWith("~")) {
-      return path.resolve(
-        expandHomePrefix(expanded, {
-          home: resolveRequiredHomeDir(env, homedir),
-          env,
-          homedir,
-        }),
-      );
-    }
-    return path.resolve(expanded);
-  }
-  if (store.startsWith("~")) {
-    return path.resolve(
-      expandHomePrefix(store, {
-        home: resolveRequiredHomeDir(env, homedir),
-        env,
-        homedir,
-      }),
-    );
-  }
-  return path.resolve(store);
 }
