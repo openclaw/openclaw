@@ -902,6 +902,37 @@ export async function resolveApiKeyForProvider(params: {
       provider,
       preferredProfile,
     });
+  // A per-entry apiKey can be a profile ID reference (e.g. "openrouter:key-b")
+  // rather than a literal bearer token. If the raw value matches an existing
+  // profile in the store, resolve the actual credential through that profile.
+  const perEntryRawKey = getCustomProviderApiKey(cfg, provider);
+  if (
+    perEntryRawKey &&
+    !isNonSecretApiKeyMarker(perEntryRawKey) &&
+    store.profiles[perEntryRawKey]
+  ) {
+    try {
+      const resolved = await resolveApiKeyForProfile({
+        cfg,
+        store,
+        profileId: perEntryRawKey,
+        agentDir: params.agentDir,
+      });
+      if (resolved) {
+        const mode = store.profiles[perEntryRawKey]?.type;
+        return {
+          apiKey: resolved.apiKey,
+          profileId: perEntryRawKey,
+          source: `profile:${perEntryRawKey}`,
+          mode: mode ? profileTypeToAuthMode(mode) : "api-key",
+        };
+      }
+    } catch (err) {
+      log.debug?.(
+        `per-entry apiKey profile "${perEntryRawKey}" failed for "${provider}": ${String(err)}`,
+      );
+    }
+  }
   const order = resolveAuthProfileOrder({
     cfg,
     store,
