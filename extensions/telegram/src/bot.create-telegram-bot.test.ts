@@ -47,6 +47,7 @@ const {
   getTelegramSequentialKey,
   setTelegramBotRuntimeForTest,
 } = await import("./bot-core.js");
+const { clearAccountThrottlersForTest } = await import("./account-throttler.js");
 const { resetTelegramForumFlagCacheForTest } = await import("./bot/helpers.js");
 let createTelegramBot: (
   opts: TelegramBotOptions,
@@ -173,6 +174,8 @@ describe("createTelegramBot", () => {
   });
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
+    clearAccountThrottlersForTest();
+    throttlerSpy.mockReset();
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
@@ -189,6 +192,15 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(throttlerSpy).toHaveBeenCalledTimes(1);
     expect(useSpy).toHaveBeenCalledWith("throttler");
+  });
+
+  it("reuses the grammY throttler for the same token", () => {
+    createTelegramBot({ token: "tok" });
+    createTelegramBot({ token: "tok" });
+    createTelegramBot({ token: "other" });
+
+    expect(throttlerSpy).toHaveBeenCalledTimes(2);
+    expect(useSpy).toHaveBeenCalledTimes(3);
   });
 
   it("logs middleware errors through grammY catch without rethrowing", () => {
