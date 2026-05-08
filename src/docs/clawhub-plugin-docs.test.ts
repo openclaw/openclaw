@@ -42,8 +42,7 @@ describe("ClawHub plugin docs", () => {
 
     expect(validateExternalCodePluginPackageJson(packageJson).issues).toEqual([]);
     expect(typeof pluginManifest.id).toBe("string");
-    expect(typeof pluginManifest.configSchema).toBe("object");
-    expect(pluginManifest.configSchema).not.toBeNull();
+    expect(pluginManifest.configSchema).toEqual(expect.any(Object));
     expect(Array.isArray(pluginManifest.configSchema)).toBe(false);
   });
 
