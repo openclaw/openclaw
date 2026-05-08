@@ -117,7 +117,7 @@ function createReplyConfig(streamMode?: "block"): OpenClawConfig {
         ...(streamMode ? { streaming: { mode: streamMode } } : {}),
       },
     },
-    session: { store: "/tmp/sessions.json" },
+    session: {},
   } as OpenClawConfig);
 }
 
@@ -200,7 +200,7 @@ describe("block streaming", () => {
       resetTriggered: false,
       systemSent: false,
       abortedLastRun: false,
-      storePath: "/tmp/sessions.json",
+      storePath: "/tmp/openclaw-agent.sqlite",
       sessionScope: "per-sender",
       groupResolution: undefined,
       isGroup: false,
