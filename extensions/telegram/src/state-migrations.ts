@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  importTelegramMessageCacheEntries,
+  resolveTelegramMessageCachePath,
+} from "./message-cache.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { cacheSticker, type CachedSticker } from "./sticker-cache-store.js";
 import { type TelegramThreadBindingRecord } from "./thread-bindings.js";
@@ -183,6 +187,27 @@ function sentMessagePlans(
   );
 }
 
+function messageCachePlans(
+  stateDir: string,
+): Array<Extract<ChannelLegacyStateMigrationPlan, { kind: "custom" }>> {
+  return fs.globSync(path.join(stateDir, "**/*.telegram-messages.json")).map((sourcePath) =>
+    customPlan({
+      label: "Telegram message cache",
+      sourcePath,
+      apply: () => {
+        const parsed = readJson(sourcePath);
+        const legacyStorePath = sourcePath.replace(/\.telegram-messages\.json$/u, "");
+        const imported = importTelegramMessageCacheEntries(
+          resolveTelegramMessageCachePath(legacyStorePath),
+          parsed,
+        );
+        removeFile(sourcePath);
+        return { changes: [`Imported ${imported} Telegram message cache`], warnings: [] };
+      },
+    }),
+  );
+}
+
 function topicNamePlans(
   stateDir: string,
 ): Array<Extract<ChannelLegacyStateMigrationPlan, { kind: "custom" }>> {
@@ -221,6 +246,7 @@ export function detectTelegramLegacyStateMigrations(
     ...stickerCachePlan(params.stateDir),
     ...threadBindingPlans(params.stateDir),
     ...sentMessagePlans(params.stateDir),
+    ...messageCachePlans(params.stateDir),
     ...topicNamePlans(params.stateDir),
   ];
 }
