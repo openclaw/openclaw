@@ -55,7 +55,9 @@ describe("wave-23 pitfalls — encoding", () => {
   it("P-003 allows whitespace inside predicate values (content)", () => {
     // Spaces inside a predicate value are legitimate — they're filtering
     // against actual content.
-    expect(() => parseOcPath("oc://X/[name=hello world]")).not.toThrow();
+    const path = parseOcPath("oc://X/[name=hello world]");
+    expect(path.file).toBe("X");
+    expect(path.section).toBe("[name=hello world]");
   });
 
   it("P-004 / P-011 rejects control characters and null bytes", () => {
@@ -396,7 +398,7 @@ describe("wave-23 pitfalls — performance & limits", () => {
 
   it("P-032 path at the cap parses cleanly", () => {
     const justUnder = "oc://X/" + "a".repeat(MAX_PATH_LENGTH - "oc://X/".length);
-    expect(() => parseOcPath(justUnder)).not.toThrow();
+    expect(parseOcPath(justUnder).section).toBe("a".repeat(MAX_PATH_LENGTH - "oc://X/".length));
   });
 
   it("P-032 formatOcPath enforces the same cap on output", () => {
@@ -477,7 +479,9 @@ describe("wave-23 pitfalls — reserved characters", () => {
     // the first `?` as the query split.
     expect(parseOcPath("oc://X/foo?session=s").section).toBe("foo");
     // Empty key after `?` (no `=`): query parser silently ignores.
-    expect(() => parseOcPath("oc://X/foo?")).not.toThrow();
+    const path = parseOcPath("oc://X/foo?");
+    expect(path.section).toBe("foo");
+    expect(path.session).toBeUndefined();
   });
 
   it("P-040 negative-index magnitude is bounded", () => {
