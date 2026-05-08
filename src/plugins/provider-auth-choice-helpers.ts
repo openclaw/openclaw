@@ -136,6 +136,15 @@ export function applyDefaultModel(
       : existingModel && typeof existingModel === "object"
         ? (existingModel as { primary?: string }).primary
         : undefined;
+  const normalizedExistingPrimary = existingPrimary
+    ? normalizeAgentModelRefForConfig(existingPrimary)
+    : undefined;
+  const existingFallbacks =
+    existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
+      ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>
+          normalizeAgentModelRefForConfig(fallback),
+        )
+      : undefined;
   return {
     ...cfg,
     agents: {
@@ -144,12 +153,10 @@ export function applyDefaultModel(
         ...cfg.agents?.defaults,
         models,
         model: {
-          ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
-            ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
-            : undefined),
+          ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
           primary:
             opts?.preserveExistingPrimary === true
-              ? (existingPrimary ?? normalizedModel)
+              ? (normalizedExistingPrimary ?? normalizedModel)
               : normalizedModel,
         },
       },

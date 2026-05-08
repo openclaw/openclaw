@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
+import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 type ModelTarget = {
@@ -40,7 +41,9 @@ function parseModelTarget(raw: string): ModelTarget | null {
     };
   }
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const modelId = normalizeLowercaseStringOrEmpty(trimmed.slice(slash + 1));
+  const modelId = normalizeLowercaseStringOrEmpty(
+    normalizeStaticProviderModelId(provider, trimmed.slice(slash + 1)),
+  );
   if (!provider || !modelId) {
     return null;
   }
