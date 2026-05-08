@@ -188,6 +188,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/media: require authenticated owner or admin context for managed outgoing image bytes instead of trusting requester-session headers.
 - Doctor/gateway: avoid duplicate Node runtime warnings when the daemon install plan already selected a supported Node runtime.
 - Gateway/nodes: ignore malformed non-string capability entries from live nodes instead of throwing while listing the node catalog.
+- Gateway/pairing: preserve deliberately narrowed role-token scopes when approving device scope upgrades instead of regranting the whole approved baseline.
 - Gateway/watch: leave `OPENCLAW_TRACE_SYNC_IO` disabled by default in `pnpm gateway:watch:raw` so watch mode avoids noisy Node sync-I/O stack traces unless explicitly requested.
 - Codex app-server: close stdio stdin before force-killing the managed app-server, matching Codex single-client shutdown behavior and avoiding unsettled CLI exits after successful runs.
 - CLI/Codex: dispose registered agent harnesses during short-lived CLI shutdown so successful Codex-backed `agent --local` runs do not leave app-server child processes alive.

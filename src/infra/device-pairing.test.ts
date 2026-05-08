@@ -333,6 +333,66 @@ describe("device pairing tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  test("preserves existing operator token scopes when approving a scope upgrade", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+
+    const upgrade = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.write"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        upgrade.request.requestId,
+        { callerScopes: ["operator.read", "operator.write"] },
+        baseDir,
+      ),
+    ).resolves.toMatchObject({ status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.approvedScopes).toEqual(["operator.read", "operator.write"]);
+    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read", "operator.write"]);
+  });
+
+  test("does not widen a down-scoped operator token when approving a scope upgrade", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read", "operator.write"]);
+    await overwritePairedOperatorTokenScopes(baseDir, ["operator.read"]);
+
+    const upgrade = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.talk.secrets"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        upgrade.request.requestId,
+        { callerScopes: ["operator.read", "operator.talk.secrets", "operator.write"] },
+        baseDir,
+      ),
+    ).resolves.toMatchObject({ status: "approved" });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.approvedScopes).toEqual([
+      "operator.read",
+      "operator.write",
+      "operator.talk.secrets",
+    ]);
+    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read", "operator.talk.secrets"]);
+    expect(paired?.tokens?.operator?.scopes).not.toContain("operator.write");
+  });
+
   test("preserves requested non-operator scopes on newly minted role tokens", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(
