@@ -104,7 +104,7 @@ async function promptCodexMigrationSkillSelection(
   const selection = resolveInteractiveMigrationSkillSelection(skillItems, selected ?? []);
   if (selection.action === "skip") {
     runtime.log("Codex skill migration skipped for now.");
-    return null;
+    return applyMigrationSelectedSkillItemIds(plan, new Set());
   }
   const selectedPlan = applyMigrationSelectedSkillItemIds(plan, selection.selectedItemIds);
   runtime.log(

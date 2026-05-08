@@ -5,7 +5,9 @@ import {
   applyMigrationSelectedPluginItemIds,
   applyMigrationSelectedSkillItemIds,
   applyMigrationSkillSelection,
+  formatMigrationPluginSelectionHint,
   getDefaultMigrationPluginSelectionValues,
+  getSelectableMigrationPluginItems,
   getDefaultMigrationSkillSelectionValues,
   MIGRATION_SKILL_SELECTION_SKIP,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
@@ -43,12 +45,14 @@ function pluginItem(params: {
   id: string;
   name: string;
   status?: MigrationItem["status"];
+  reason?: string;
 }): MigrationItem {
   return {
     id: params.id,
     kind: "plugin",
     action: "install",
     status: params.status ?? "planned",
+    reason: params.reason,
     source: `openai-curated/${params.name}`,
     target: `plugins.entries.codex.config.codexPlugins.plugins.${params.name}`,
     details: {
@@ -468,9 +472,34 @@ describe("applyMigrationPluginSelection", () => {
     expect(
       getDefaultMigrationPluginSelectionValues([
         pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
-        pluginItem({ id: "plugin:gmail", name: "gmail", status: "skipped" }),
+        pluginItem({
+          id: "plugin:gmail",
+          name: "gmail",
+          status: "conflict",
+          reason: "plugin exists",
+        }),
       ]),
     ).toEqual(["plugin:google-calendar"]);
+  });
+
+  it("includes conflicting plugins in the selector with a conflict hint", () => {
+    const items = [
+      pluginItem({ id: "plugin:google-calendar", name: "google-calendar" }),
+      pluginItem({
+        id: "plugin:gmail",
+        name: "gmail",
+        status: "conflict",
+        reason: "plugin exists",
+      }),
+    ];
+
+    expect(getSelectableMigrationPluginItems(plan(items)).map((item) => item.id)).toEqual([
+      "plugin:google-calendar",
+      "plugin:gmail",
+    ]);
+    expect(formatMigrationPluginSelectionHint(items[1]!)).toBe(
+      "openai-curated; conflict: plugin exists",
+    );
   });
 
   it("resolves interactive plugin special options with toggle-off precedence", () => {

@@ -216,8 +216,16 @@ export function getSelectableMigrationSkillItems(plan: MigrationPlan): Migration
 }
 
 export function getSelectableMigrationPluginItems(plan: MigrationPlan): MigrationItem[] {
+  // Only source-installed curated Codex plugins become selectable install items.
+  // Cached/manual-review plugin bundles are emitted as manual items, the aggregate
+  // Codex plugin config write is a config item, and already skipped/applied/error
+  // items are no longer user-actionable in the selector. Conflicts stay selectable
+  // so the user can explicitly choose or deselect them before apply.
   return plan.items.filter(
-    (item) => item.kind === "plugin" && item.action === "install" && item.status === "planned",
+    (item) =>
+      item.kind === "plugin" &&
+      item.action === "install" &&
+      (item.status === "planned" || item.status === "conflict"),
   );
 }
 
@@ -266,6 +274,9 @@ export function formatMigrationPluginSelectionHint(item: MigrationItem): string 
     readMigrationPluginMarketplaceName(item),
     configKey && configKey !== pluginName ? `config: ${configKey}` : undefined,
   ];
+  if (item.status === "conflict") {
+    parts.push(item.reason ? `conflict: ${item.reason}` : "conflict");
+  }
   return (
     parts
       .filter((value): value is string => typeof value === "string" && value.length > 0)

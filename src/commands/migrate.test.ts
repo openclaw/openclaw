@@ -428,6 +428,141 @@ describe("migrateApplyCommand", () => {
     ).toEqual(["gmail"]);
   });
 
+  it("keeps all default plugin selections when interactive skills are toggled off", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const skillPlan = codexSkillPlan();
+    const pluginPlan = codexPluginPlan();
+    const planned = codexSkillPlan({
+      summary: {
+        total: skillPlan.items.length + pluginPlan.items.length,
+        planned: skillPlan.items.length + pluginPlan.items.length,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [...skillPlan.items, ...pluginPlan.items],
+    });
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect
+      .mockResolvedValueOnce([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF])
+      .mockResolvedValueOnce(["plugin:google-calendar", "plugin:gmail"]);
+    mocks.promptYesNo.mockResolvedValue(true);
+    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+      ...selectedPlan,
+      summary: { ...selectedPlan.summary, planned: 0, migrated: selectedPlan.summary.planned },
+      items: selectedPlan.items.map((item) =>
+        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+      ),
+    }));
+
+    await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    expect(mocks.multiselect).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        message: expect.stringContaining("Select native Codex plugins"),
+        initialValues: ["plugin:google-calendar", "plugin:gmail"],
+      }),
+    );
+    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    expect(appliedPlan.summary).toMatchObject({ planned: 4, skipped: 2, conflicts: 0 });
+    expect(appliedPlan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "skill:alpha",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+        expect.objectContaining({
+          id: "skill:beta",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+        expect.objectContaining({ id: "plugin:google-calendar", status: "planned" }),
+        expect.objectContaining({ id: "plugin:gmail", status: "planned" }),
+        expect.objectContaining({ id: "config:codex-plugins", status: "planned" }),
+      ]),
+    );
+  });
+
+  it("leaves target-existing Codex plugins unchecked with a conflict hint", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const planned = codexPluginPlan({
+      summary: {
+        total: 3,
+        planned: 2,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 1,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [
+        {
+          id: "plugin:google-calendar",
+          kind: "plugin",
+          action: "install",
+          status: "conflict",
+          reason: "plugin exists",
+          details: {
+            configKey: "google-calendar",
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+        },
+        codexPluginPlan().items[1]!,
+        codexPluginPlan().items[2]!,
+      ],
+    });
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValue(["plugin:gmail"]);
+    mocks.promptYesNo.mockResolvedValue(true);
+    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+      ...selectedPlan,
+      summary: { ...selectedPlan.summary, planned: 0, migrated: selectedPlan.summary.planned },
+      items: selectedPlan.items.map((item) =>
+        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+      ),
+    }));
+
+    await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    expect(mocks.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Select native Codex plugins"),
+        initialValues: ["plugin:gmail"],
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            value: "plugin:google-calendar",
+            label: "google-calendar",
+            hint: expect.stringContaining("conflict: plugin exists"),
+          }),
+          expect.objectContaining({ value: "plugin:gmail", label: "gmail" }),
+        ]),
+      }),
+    );
+    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    expect(appliedPlan.summary).toMatchObject({ planned: 2, skipped: 1, conflicts: 0 });
+    expect(appliedPlan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+        expect.objectContaining({ id: "plugin:gmail", status: "planned" }),
+      ]),
+    );
+  });
+
   it("skips interactive Codex plugin migration before confirmation when Skip for now is selected", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,
@@ -585,22 +720,65 @@ describe("migrateApplyCommand", () => {
     expect(mocks.provider.apply).not.toHaveBeenCalled();
   });
 
-  it("skips interactive Codex skill migration when Skip for now is selected", async () => {
+  it("continues to interactive Codex plugins when skill migration is skipped", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,
       value: true,
     });
-    const planned = codexSkillPlan();
+    const skillPlan = codexSkillPlan();
+    const pluginPlan = codexPluginPlan();
+    const planned = codexSkillPlan({
+      summary: {
+        total: skillPlan.items.length + pluginPlan.items.length,
+        planned: skillPlan.items.length + pluginPlan.items.length,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [...skillPlan.items, ...pluginPlan.items],
+    });
     mocks.provider.plan.mockResolvedValue(planned);
-    mocks.multiselect.mockResolvedValue([MIGRATION_SKILL_SELECTION_SKIP]);
+    mocks.multiselect
+      .mockResolvedValueOnce([MIGRATION_SKILL_SELECTION_SKIP])
+      .mockResolvedValueOnce(["plugin:gmail"]);
+    mocks.promptYesNo.mockResolvedValue(true);
+    mocks.provider.apply.mockImplementation(async (_ctx, selectedPlan: MigrationPlan) => ({
+      ...selectedPlan,
+      summary: { ...selectedPlan.summary, planned: 0, migrated: selectedPlan.summary.planned },
+      items: selectedPlan.items.map((item) =>
+        item.status === "planned" ? { ...item, status: "migrated" as const } : item,
+      ),
+    }));
 
-    const result = await migrateDefaultCommand(runtime, { provider: "codex" });
+    await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    expect(result).toBe(planned);
-    expect(mocks.promptYesNo).not.toHaveBeenCalled();
-    expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
-    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(mocks.multiselect).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenCalledWith("Codex skill migration skipped for now.");
+    expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
+    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    expect(appliedPlan.summary).toMatchObject({ planned: 3, skipped: 3, conflicts: 0 });
+    expect(appliedPlan.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "skill:alpha",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+        expect.objectContaining({
+          id: "skill:beta",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+        expect.objectContaining({ id: "plugin:gmail", status: "planned" }),
+        expect.objectContaining({
+          id: "plugin:google-calendar",
+          status: "skipped",
+          reason: "not selected for migration",
+        }),
+      ]),
+    );
   });
 
   it("applies Toggle all off before interactive Codex migration apply", async () => {
