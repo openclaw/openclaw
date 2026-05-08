@@ -66,6 +66,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
+  requestUpdate?: () => void;
   refreshSessionsAfterChat: Set<string>;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
@@ -745,8 +746,18 @@ function injectCommandResult(host: ChatHost, content: string) {
   ];
 }
 
-export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
-  void Promise.allSettled([
+export async function refreshChat(
+  host: ChatHost,
+  opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
+) {
+  const requestUpdate = () => host.requestUpdate?.();
+  const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
+    if (opts?.scheduleScroll !== false) {
+      scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    }
+    requestUpdate();
+  });
+  const secondaryRefresh = Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
       activeMinutes: 0,
       limit: 0,
@@ -756,11 +767,14 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     refreshChatAvatar(host),
     refreshChatModels(host),
     refreshChatCommands(host),
-  ]);
-  await loadChatHistory(host as unknown as ChatState);
-  if (opts?.scheduleScroll !== false) {
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  ]).finally(requestUpdate);
+  void historyRefresh;
+  void secondaryRefresh;
+  if (opts?.awaitHistory === true) {
+    await historyRefresh;
+    return;
   }
+  await Promise.resolve();
 }
 
 async function refreshChatModels(host: ChatHost) {

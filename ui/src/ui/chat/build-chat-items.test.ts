@@ -151,6 +151,39 @@ describe("buildChatItems", () => {
     expect(items).toEqual([]);
   });
 
+  it("renders only the last 100 history messages and shows a hidden-count notice", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: Array.from({ length: 105 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message ${index}`,
+          timestamp: index,
+        })),
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+
+    expect(items[0]).toMatchObject({
+      kind: "group",
+      messages: [
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "system",
+            content: "Showing last 100 messages (5 hidden).",
+          }),
+        }),
+      ],
+    });
+    expect(groups).toHaveLength(101);
+    expect(groups[1].messages[0].message).toMatchObject({
+      content: "message 5",
+    });
+    expect(groups.at(-1)?.messages[0].message).toMatchObject({
+      content: "message 104",
+    });
+  });
+
   it("does not collapse duplicate text messages separated by another message", () => {
     const groups = messageGroups({
       messages: [

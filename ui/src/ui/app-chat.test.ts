@@ -142,6 +142,77 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+describe("refreshChat", () => {
+  beforeAll(async () => {
+    await loadChatHelpers();
+  });
+
+  it("dispatches chat refresh work without waiting for slow history or secondary RPCs", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const requestUpdate = vi.fn();
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      requestUpdate,
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await Promise.race([
+      refresh.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(outcome).toBe("resolved");
+    expect(host.chatLoading).toBe(true);
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "main",
+      limit: 100,
+      maxChars: 4000,
+    });
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(request).toHaveBeenCalledWith("commands.list", {
+      agentId: "main",
+      includeArgs: true,
+      scope: "text",
+    });
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("can wait for history without waiting for secondary metadata refreshes", async () => {
+    const history = createDeferred<unknown>();
+    const requestUpdate = vi.fn();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return history.promise;
+      }
+      return new Promise<unknown>(() => undefined);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      requestUpdate,
+    });
+
+    const refresh = refreshChat(host, { awaitHistory: true, scheduleScroll: false });
+    const pendingOutcome = await Promise.race([
+      refresh.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(pendingOutcome).toBe("pending");
+    history.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
+    });
+
+    await expect(refresh).resolves.toBeUndefined();
+    expect(host.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "ready" }] },
+    ]);
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+});
+
 describe("refreshChatAvatar", () => {
   beforeAll(async () => {
     await loadChatHelpers();
