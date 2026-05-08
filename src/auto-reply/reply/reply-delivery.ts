@@ -33,6 +33,7 @@ export function normalizeReplyPayloadDirectives(params: {
     ? parseReplyDirectives(sourceText, {
         currentMessageId: params.currentMessageId,
         silentToken,
+        mediaDirectives: "extract",
       })
     : undefined;
 

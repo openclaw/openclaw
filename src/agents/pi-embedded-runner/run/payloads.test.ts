@@ -214,6 +214,42 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads[0]?.text).toBeUndefined();
   });
 
+  it("does not activate raw MEDIA in inline tool aggregates when final reply has no media", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done"],
+      inlineToolResultsAllowed: true,
+      verboseLevel: "on",
+      toolMetas: [{ toolName: "exec", meta: "MEDIA:/tmp/secret.png" }],
+    });
+
+    expect(payloads).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining("Exec"),
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      }),
+      expect.objectContaining({
+        text: "Done",
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      }),
+    ]);
+    expect(payloads.flatMap((payload) => payload.mediaUrls ?? [])).toEqual([]);
+    expect(payloads.map((payload) => payload.mediaUrl).filter(Boolean)).toEqual([]);
+  });
+
+  it("leaves mid-line diagnostic MEDIA text inert without creating media", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "write", error: "MEDIA:/tmp/secret.png" },
+      verboseLevel: "on",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("MEDIA:/tmp/secret.png");
+    expect(payloads[0]?.mediaUrl).toBeUndefined();
+    expect(payloads[0]?.mediaUrls).toBeUndefined();
+  });
+
   it("preserves media directives when stored assistant text was reduced to visible text only", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Attached image"],

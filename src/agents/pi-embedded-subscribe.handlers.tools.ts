@@ -32,7 +32,9 @@ import {
   extractToolErrorMessage,
   extractToolResultText,
   filterToolResultMediaUrls,
+  isLocalToolResultMediaUrl,
   isToolResultError,
+  isToolResultLocalMediaTrusted,
   isToolResultTimedOut,
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
@@ -42,12 +44,10 @@ import { normalizeToolName } from "./tool-policy.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
-type MediaParseModule = typeof import("../media/parse.js");
 type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
 
 let execApprovalReplyModulePromise: Promise<ExecApprovalReplyModule> | undefined;
 let hookRunnerGlobalModulePromise: Promise<HookRunnerGlobalModule> | undefined;
-let mediaParseModulePromise: Promise<MediaParseModule> | undefined;
 let beforeToolCallModulePromise: Promise<BeforeToolCallModule> | undefined;
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
@@ -58,11 +58,6 @@ function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
 function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   hookRunnerGlobalModulePromise ??= import("../plugins/hook-runner-global.js");
   return hookRunnerGlobalModulePromise;
-}
-
-function loadMediaParse(): Promise<MediaParseModule> {
-  mediaParseModulePromise ??= import("../media/parse.js");
-  return mediaParseModulePromise;
 }
 
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
@@ -328,16 +323,15 @@ function queuePendingToolMedia(
 }
 
 async function collectEmittedToolOutputMediaUrls(
-  toolName: string,
-  outputText: string,
-  result: unknown,
+  _toolName: string,
+  _outputText: string,
+  _result: unknown,
 ): Promise<string[]> {
-  const { splitMediaFromOutput } = await loadMediaParse();
-  const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
-  if (mediaUrls.length === 0) {
-    return [];
-  }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result);
+  // Raw tool-output text is rendered with MEDIA: directives stripped, not
+  // activated. Structured/trusted tool media is queued through
+  // extractToolResultMediaArtifact() below, so no emitted text media should be
+  // treated as already delivered here.
+  return [];
 }
 
 const COMPACT_PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
@@ -571,9 +565,15 @@ async function emitToolResultOutput(params: {
   if (pendingMediaUrls.length === 0) {
     return;
   }
+  const shouldTrustPendingLocalMedia = Boolean(
+    mediaReply.trustedLocalMedia &&
+    pendingMediaUrls.some(isLocalToolResultMediaUrl) &&
+    isToolResultLocalMediaTrusted(rawToolName, result, ctx.builtinToolNames),
+  );
   queuePendingToolMedia(ctx, {
     mediaUrls: pendingMediaUrls,
     ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
+    ...(shouldTrustPendingLocalMedia ? { trustedLocalMedia: true } : {}),
   });
 }
 

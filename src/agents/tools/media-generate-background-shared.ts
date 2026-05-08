@@ -214,7 +214,7 @@ async function maybeDeliverMediaGenerationResultDirectly(params: {
   if (!channel || !to) {
     return false;
   }
-  const parsed = parseReplyDirectives(params.result);
+  const parsed = parseReplyDirectives(params.result, { mediaDirectives: "extract" });
   const content = parsed.text.trim();
   const mediaUrls = parsed.mediaUrls?.filter((entry) => entry.trim().length > 0);
   const requesterAgentId = parseAgentSessionKey(params.handle.requesterSessionKey)?.agentId;

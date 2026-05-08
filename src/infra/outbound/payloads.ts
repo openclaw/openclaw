@@ -135,7 +135,7 @@ function createOutboundPayloadPlanEntry(
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(payload.text ?? "");
+  const parsed = parseReplyDirectives(payload.text ?? "", { mediaDirectives: "strip" });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
   const mergedMedia = mergeMediaUrls(

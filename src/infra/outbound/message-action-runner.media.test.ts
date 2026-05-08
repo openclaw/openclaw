@@ -748,11 +748,6 @@ describe("runMessageAction media behavior", () => {
           message: "",
           expectedRelativePath: path.join("data", "file.txt"),
         },
-        {
-          name: "MEDIA directive",
-          message: "Hello\nMEDIA: ./data/note.ogg",
-          expectedRelativePath: path.join("data", "note.ogg"),
-        },
       ] as const) {
         await withSandbox(async (sandboxDir) => {
           await expectSandboxMediaRewrite({
@@ -764,6 +759,28 @@ describe("runMessageAction media behavior", () => {
           });
         });
       }
+    });
+
+    it("strips raw MEDIA directives from message text without activating media", async () => {
+      await withSandbox(async (sandboxDir) => {
+        const result = await runDrySend({
+          cfg: workspaceConfig,
+          actionParams: {
+            channel: "workspace",
+            target: "12345678",
+            message: "Hello\nMEDIA: ./data/note.ogg",
+          },
+          sandboxRoot: sandboxDir,
+        });
+
+        expect(result.kind).toBe("send");
+        if (result.kind !== "send") {
+          throw new Error("expected send result");
+        }
+        expect(result.sendResult?.mediaUrl).toBeUndefined();
+        expect(result.sendResult?.mediaUrls).toBeUndefined();
+        expect(result.payload).toMatchObject({ message: "Hello" });
+      });
     });
 
     it("prefers media over mediaUrl when both aliases are present", async () => {

@@ -13,11 +13,23 @@ export type ReplyDirectiveParseResult = {
   isSilent: boolean;
 };
 
+export type MediaDirectiveParseMode = "extract" | "strip" | "ignore";
+
 export function parseReplyDirectives(
   raw: string,
-  options: { currentMessageId?: string; silentToken?: string } = {},
+  options: {
+    currentMessageId?: string;
+    silentToken?: string;
+    /**
+     * Raw textual MEDIA: lines are authority-bearing only at final-reply boundaries.
+     * Use "strip" for tool/log/diagnostic text that should be rendered without
+     * activating media, and "ignore" when MEDIA-looking text should remain visible.
+     */
+    mediaDirectives?: MediaDirectiveParseMode;
+  } = {},
 ): ReplyDirectiveParseResult {
-  const split = splitMediaFromOutput(raw);
+  const mediaDirectiveMode = options.mediaDirectives ?? "extract";
+  const split = mediaDirectiveMode === "ignore" ? { text: raw } : splitMediaFromOutput(raw);
   let text = split.text ?? "";
 
   const replyParsed = parseInlineDirectives(text, {
@@ -36,14 +48,15 @@ export function parseReplyDirectives(
     text = "";
   }
 
+  const exposeMediaDirectives = mediaDirectiveMode === "extract";
   return {
     text,
-    mediaUrls: split.mediaUrls,
-    mediaUrl: split.mediaUrl,
+    mediaUrls: exposeMediaDirectives ? split.mediaUrls : undefined,
+    mediaUrl: exposeMediaDirectives ? split.mediaUrl : undefined,
     replyToId: replyParsed.replyToId,
     replyToCurrent: replyParsed.replyToCurrent || undefined,
     replyToTag: replyParsed.hasReplyTag,
-    audioAsVoice: split.audioAsVoice,
+    audioAsVoice: exposeMediaDirectives ? split.audioAsVoice : undefined,
     isSilent,
   };
 }

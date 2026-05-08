@@ -67,7 +67,7 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
-  it("extracts MEDIA: path from text content block", () => {
+  it("ignores raw MEDIA text and falls back to image details.path", () => {
     const result = {
       content: [
         { type: "text", text: "MEDIA:/tmp/screenshot.png" },
@@ -78,21 +78,21 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
   });
 
-  it("extracts MEDIA: path with extra text in the block", () => {
+  it("ignores raw MEDIA: path with extra text in the block", () => {
     const result = {
       content: [{ type: "text", text: "Here is the image\nMEDIA:/tmp/output.jpg\nDone" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/output.jpg"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
-  it("extracts multiple MEDIA: paths from different text blocks", () => {
+  it("ignores multiple raw MEDIA: paths from different text blocks", () => {
     const result = {
       content: [
         { type: "text", text: "MEDIA:/tmp/page1.png" },
         { type: "text", text: "MEDIA:/tmp/page2.png" },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
   it("falls back to details.path when image content exists but no MEDIA: text", () => {
@@ -119,7 +119,7 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
-  it("does not fall back to details.path when MEDIA: paths are found", () => {
+  it("falls back to image details.path even when raw MEDIA text is present", () => {
     const result = {
       content: [
         { type: "text", text: "MEDIA:/tmp/from-text.png" },
@@ -127,22 +127,22 @@ describe("extractToolResultMediaPaths", () => {
       ],
       details: { path: "/tmp/from-details.png" },
     };
-    // MEDIA: text takes priority; details.path is NOT also included.
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/from-text.png"]);
+    // Raw MEDIA: text is inert; image details.path remains the structured fallback.
+    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/from-details.png"]);
   });
 
-  it("handles backtick-wrapped MEDIA: paths", () => {
+  it("ignores backtick-wrapped raw MEDIA: paths", () => {
     const result = {
       content: [{ type: "text", text: "MEDIA: `/tmp/screenshot.png`" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
-  it("ignores null/undefined items in content array", () => {
+  it("ignores raw MEDIA text while tolerating null/undefined items in content array", () => {
     const result = {
       content: [null, undefined, { type: "text", text: "MEDIA:/tmp/ok.png" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/ok.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
   it("returns empty array for text-only results without MEDIA:", () => {
@@ -234,7 +234,7 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
-  it("still extracts MEDIA: at line start after other text lines", () => {
+  it("ignores raw MEDIA: at line start after other text lines", () => {
     const result = {
       content: [
         {
@@ -243,17 +243,17 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
-  it("extracts indented MEDIA: line", () => {
+  it("ignores indented raw MEDIA: line", () => {
     const result = {
       content: [{ type: "text", text: "  MEDIA:/tmp/indented.png" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/indented.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
-  it("extracts valid MEDIA: line while ignoring <media:audio> on another line", () => {
+  it("ignores valid-looking raw MEDIA: line alongside <media:audio> text", () => {
     const result = {
       content: [
         {
@@ -262,10 +262,10 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/tts-output.opus"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
-  it("extracts multiple MEDIA: lines from a single text block", () => {
+  it("ignores multiple raw MEDIA: lines from a single text block", () => {
     const result = {
       content: [
         {
@@ -274,7 +274,7 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
   it("trusts image_generate local MEDIA paths", () => {
