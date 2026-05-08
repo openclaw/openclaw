@@ -282,7 +282,7 @@ describe("createBotFrameworkJwtValidator", () => {
     await expect(validator.validate("Bearer botfw-token")).resolves.toBe(true);
 
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
-    expect((opts.audience as string[]).includes("https://api.botframework.com")).toBe(true);
+    expect(opts.audience).toContain("https://api.botframework.com");
   });
 
   it("accepts global audience tokens when azp matches the configured app id", async () => {
