@@ -17,6 +17,7 @@ import {
   createGoogleMusicGenerationProviderMetadata,
   createGoogleVideoGenerationProviderMetadata,
 } from "./generation-provider-metadata.js";
+import { registerGmailGatewayMethods } from "./gmail-gateway.js";
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { registerGoogleProvider } from "./provider-registration.js";
 import { buildGoogleSpeechProvider } from "./speech-provider.js";
@@ -342,6 +343,7 @@ export default definePluginEntry({
     api.registerCliBackend(buildGoogleGeminiCliBackend());
     registerGoogleGeminiCliProvider(api);
     registerGoogleProvider(api);
+    registerGmailGatewayMethods(api);
     api.registerMemoryEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
