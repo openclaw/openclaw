@@ -42,6 +42,8 @@ import {
   type DreamingState,
 } from "./controllers/dreaming.ts";
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
+import { loadGmailAuthStatus, type GmailAuthState } from "./controllers/gmail-auth.ts";
+import { loadGmailInbox, type GmailInboxState } from "./controllers/gmail-inbox.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
 import {
   loadModelAuthStatusState,
@@ -131,6 +133,8 @@ type SettingsAppHost = SettingsHost &
   CronState &
   DebugState &
   DevicesState &
+  GmailAuthState &
+  GmailInboxState &
   DreamingState &
   ExecApprovalsState &
   LogsState &
@@ -655,6 +659,10 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
     // user-initiated refresh surfaces post-re-auth state immediately.
     loadModelAuthStatusState(app, { refresh: opts?.refresh }),
+    (async () => {
+      await loadGmailAuthStatus(app);
+      await loadGmailInbox(app);
+    })(),
   ]).then((results) => {
     if (!isCurrentOverviewRefresh()) {
       return;

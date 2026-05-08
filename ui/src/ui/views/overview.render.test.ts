@@ -37,6 +37,31 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     cronNext: null,
     lastChannelsRefresh: null,
     modelAuthStatus: null,
+    gmailAuthStatus: null,
+    gmailAuthLoading: false,
+    gmailAuthConnectPending: false,
+    gmailAuthError: null,
+    gmailInboxLoading: false,
+    gmailInboxError: null,
+    gmailInboxItems: [],
+    gmailInboxQuery: "",
+    gmailInboxUnreadOnly: false,
+    gmailSelectedThreadId: null,
+    gmailThreadLoading: false,
+    gmailThreadError: null,
+    gmailSelectedThread: null,
+    gmailDraftForm: {
+      to: "",
+      subject: "",
+      textBody: "",
+    },
+    gmailDraftSaving: false,
+    gmailDraftError: null,
+    gmailDraftSuccess: null,
+    gmailSendConfirmOpen: false,
+    gmailSendPending: false,
+    gmailSendError: null,
+    gmailSendSuccess: null,
     usageResult: null,
     sessionsResult: null,
     skillsReport: null,
@@ -56,6 +81,18 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     onRefresh: () => undefined,
     onNavigate: () => undefined,
     onRefreshLogs: () => undefined,
+    onGmailConnect: () => undefined,
+    onGmailRefresh: () => undefined,
+    onGmailInboxFiltersChange: () => undefined,
+    onGmailInboxSearch: () => undefined,
+    onGmailSelectThread: () => undefined,
+    onGmailDraftFieldChange: () => undefined,
+    onGmailDraftReply: () => undefined,
+    onGmailDraftReset: () => undefined,
+    onGmailDraftSave: () => undefined,
+    onGmailSendOpenConfirm: () => undefined,
+    onGmailSendCloseConfirm: () => undefined,
+    onGmailSendConfirm: () => undefined,
     ...overrides,
   };
 }
@@ -90,6 +127,72 @@ describe("overview view rendering", () => {
     expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文 (简体中文)");
 
     await i18n.setLocale("en");
+  });
+
+  it("renders the gmail connect controls in the overview access card", async () => {
+    const container = document.createElement("div");
+
+    render(renderOverview(createOverviewProps()), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Connect Gmail");
+    expect(container.textContent).toContain("Refresh Gmail");
+  });
+
+  it("renders the gmail inbox and selected thread when connected", async () => {
+    const container = document.createElement("div");
+
+    render(
+      renderOverview(
+        createOverviewProps({
+          gmailAuthStatus: {
+            providerId: "google-gmail",
+            connected: true,
+            profiles: [{ profileId: "google-gmail:david@example.com", email: "david@example.com" }],
+          },
+          gmailInboxItems: [
+            {
+              id: "msg-1",
+              threadId: "thread-1",
+              subject: "Hello David",
+              from: "Taylor <taylor@example.com>",
+              snippet: "Just checking in about the project",
+              internalDate: Date.now(),
+              unread: true,
+            },
+          ],
+          gmailSelectedThreadId: "thread-1",
+          gmailSelectedThread: {
+            id: "thread-1",
+            messages: [
+              {
+                id: "msg-1",
+                subject: "Hello David",
+                from: "Taylor <taylor@example.com>",
+                to: "David <david@example.com>",
+                date: "Wed, 7 May 2026 10:00:00 -0500",
+                snippet: "Just checking in about the project",
+                bodyText: "Full body preview",
+                unread: true,
+                messageId: "<msg-1@example.com>",
+                references: ["<root@example.com>"],
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Gmail inbox");
+    expect(container.textContent).toContain("Search inbox");
+    expect(container.textContent).toContain("Unread only");
+    expect(container.textContent).toContain("Hello David");
+    expect(container.textContent).toContain("Full body preview");
+    expect(container.textContent).toContain("Draft reply");
+    expect(container.textContent).toContain("Send…");
+    expect(container.textContent).toContain("Save draft");
   });
 
   it("renders a dedicated scope-upgrade approval hint with the exact approve command", async () => {

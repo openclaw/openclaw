@@ -1,6 +1,9 @@
 import { html, nothing } from "lit";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
+import type { GmailAuthStatusResult } from "../controllers/gmail-auth.ts";
+import type { GmailDraftForm } from "../controllers/gmail-draft.ts";
+import type { GmailInboxItem, GmailThreadView } from "../controllers/gmail-inbox.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
@@ -43,6 +46,27 @@ export type OverviewProps = {
   warnQueryToken: boolean;
   // New dashboard data
   modelAuthStatus: ModelAuthStatusResult | null;
+  gmailAuthStatus: GmailAuthStatusResult | null;
+  gmailAuthLoading: boolean;
+  gmailAuthConnectPending: boolean;
+  gmailAuthError: string | null;
+  gmailInboxLoading: boolean;
+  gmailInboxError: string | null;
+  gmailInboxItems: GmailInboxItem[];
+  gmailInboxQuery: string;
+  gmailInboxUnreadOnly: boolean;
+  gmailSelectedThreadId: string | null;
+  gmailThreadLoading: boolean;
+  gmailThreadError: string | null;
+  gmailSelectedThread: GmailThreadView | null;
+  gmailDraftForm: GmailDraftForm;
+  gmailDraftSaving: boolean;
+  gmailDraftError: string | null;
+  gmailDraftSuccess: string | null;
+  gmailSendConfirmOpen: boolean;
+  gmailSendPending: boolean;
+  gmailSendError: string | null;
+  gmailSendSuccess: string | null;
   usageResult: SessionsUsageResult | null;
   sessionsResult: SessionsListResult | null;
   skillsReport: SkillStatusReport | null;
@@ -62,6 +86,18 @@ export type OverviewProps = {
   onRefresh: () => void;
   onNavigate: (tab: string) => void;
   onRefreshLogs: () => void;
+  onGmailConnect: () => void;
+  onGmailRefresh: () => void;
+  onGmailInboxFiltersChange: (patch: { query?: string; unreadOnly?: boolean }) => void;
+  onGmailInboxSearch: () => void;
+  onGmailSelectThread: (threadId: string) => void;
+  onGmailDraftFieldChange: (patch: Partial<GmailDraftForm>) => void;
+  onGmailDraftReply: () => void;
+  onGmailDraftReset: () => void;
+  onGmailDraftSave: () => void;
+  onGmailSendOpenConfirm: () => void;
+  onGmailSendCloseConfirm: () => void;
+  onGmailSendConfirm: () => void;
 };
 
 const PAIRING_HINT_COPY: Record<
@@ -374,6 +410,47 @@ export function renderOverview(props: OverviewProps) {
               : t("overview.access.connectHint")}</span
           >
         </div>
+        <div
+          style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border, rgba(255,255,255,0.08));"
+        >
+          <div
+            style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;"
+          >
+            <div>
+              <div class="card-title" style="font-size: 15px; margin: 0;">Gmail</div>
+              <div class="muted" style="margin-top: 4px;">
+                ${props.gmailAuthStatus?.connected
+                  ? (props.gmailAuthStatus.profiles[0]?.email ?? "Connected")
+                  : props.gmailAuthLoading
+                    ? "Checking Gmail connection…"
+                    : "Connect Gmail for inbox, search, threads, and drafts."}
+              </div>
+            </div>
+            <div class="row" style="gap: 8px;">
+              <button
+                class="btn"
+                ?disabled=${props.gmailAuthLoading}
+                @click=${() => props.onGmailRefresh()}
+              >
+                Refresh Gmail
+              </button>
+              <button
+                class="btn btn--primary"
+                ?disabled=${!props.connected || props.gmailAuthConnectPending}
+                @click=${() => props.onGmailConnect()}
+              >
+                ${props.gmailAuthConnectPending
+                  ? "Connecting Gmail…"
+                  : props.gmailAuthStatus?.connected
+                    ? "Reconnect Gmail"
+                    : "Connect Gmail"}
+              </button>
+            </div>
+          </div>
+          ${props.gmailAuthError
+            ? html`<div class="pill danger" style="margin-top: 10px;">${props.gmailAuthError}</div>`
+            : nothing}
+        </div>
         ${!props.connected
           ? html`
               <div class="login-gate__help" style="margin-top: 16px;">
@@ -451,6 +528,268 @@ export function renderOverview(props: OverviewProps) {
 
     <div class="ov-section-divider"></div>
 
+    ${props.gmailAuthStatus?.connected
+      ? html`
+          <div class="card">
+            <div
+              style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;"
+            >
+              <div>
+                <div class="card-title">Gmail inbox</div>
+                <div class="card-sub">Recent inbox threads from the connected Gmail account.</div>
+              </div>
+              <button
+                class="btn"
+                ?disabled=${props.gmailInboxLoading}
+                @click=${() => props.onGmailRefresh()}
+              >
+                ${props.gmailInboxLoading ? "Refreshing…" : "Refresh inbox"}
+              </button>
+            </div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; align-items:end;">
+              <label class="field" style="flex:1 1 260px;">
+                <span>Search inbox</span>
+                <input
+                  .value=${props.gmailInboxQuery}
+                  @input=${(e: Event) =>
+                    props.onGmailInboxFiltersChange({
+                      query: (e.target as HTMLInputElement).value,
+                    })}
+                  @keydown=${(e: KeyboardEvent) => {
+                    if (e.key === "Enter") {
+                      props.onGmailInboxSearch();
+                    }
+                  }}
+                  placeholder="from:, subject:, keywords…"
+                />
+              </label>
+              <label
+                class="field"
+                style="display:flex; align-items:center; gap:8px; min-height:36px;"
+              >
+                <input
+                  type="checkbox"
+                  .checked=${props.gmailInboxUnreadOnly}
+                  @change=${(e: Event) =>
+                    props.onGmailInboxFiltersChange({
+                      unreadOnly: (e.target as HTMLInputElement).checked,
+                    })}
+                />
+                <span>Unread only</span>
+              </label>
+              <button
+                class="btn"
+                ?disabled=${props.gmailInboxLoading}
+                @click=${() => props.onGmailInboxSearch()}
+              >
+                Search
+              </button>
+            </div>
+            ${props.gmailInboxError
+              ? html`<div class="pill danger" style="margin-top: 12px;">
+                  ${props.gmailInboxError}
+                </div>`
+              : nothing}
+            <div
+              style="display:grid; grid-template-columns:minmax(280px, 360px) minmax(0, 1fr); gap:16px; margin-top:16px; align-items:start;"
+            >
+              <div style="display:flex; flex-direction:column; gap:8px;">
+                ${props.gmailInboxItems.length === 0
+                  ? html`<div class="muted">
+                      ${props.gmailInboxLoading
+                        ? "Loading inbox…"
+                        : "No inbox messages loaded yet."}
+                    </div>`
+                  : props.gmailInboxItems.map(
+                      (item) => html`
+                        <button
+                          class="btn"
+                          style="text-align:left; display:block; padding:12px; border:${props.gmailSelectedThreadId ===
+                          item.threadId
+                            ? "1px solid var(--accent, #6ea8fe)"
+                            : "1px solid var(--border, rgba(255,255,255,0.08))"}; background:${props.gmailSelectedThreadId ===
+                          item.threadId
+                            ? "rgba(110,168,254,0.08)"
+                            : "transparent"};"
+                          @click=${() => props.onGmailSelectThread(item.threadId)}
+                        >
+                          <div
+                            style="display:flex; align-items:center; justify-content:space-between; gap:8px;"
+                          >
+                            <strong style="font-size:13px;">${item.subject}</strong>
+                            ${item.unread ? html`<span class="pill">Unread</span>` : nothing}
+                          </div>
+                          <div class="muted" style="margin-top:4px; font-size:12px;">
+                            ${item.from}
+                          </div>
+                          <div style="margin-top:6px; font-size:13px;">
+                            ${item.snippet || "No preview available."}
+                          </div>
+                        </button>
+                      `,
+                    )}
+              </div>
+              <div>
+                ${props.gmailThreadError
+                  ? html`<div class="pill danger">${props.gmailThreadError}</div>`
+                  : props.gmailThreadLoading
+                    ? html`<div class="muted">Loading thread…</div>`
+                    : !props.gmailSelectedThread || props.gmailSelectedThread.messages.length === 0
+                      ? html`<div class="muted">Select a thread to read it here.</div>`
+                      : html`
+                          <div style="display:flex; flex-direction:column; gap:16px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+                              <div>
+                                <div class="card-title" style="font-size: 15px; margin: 0;">Thread</div>
+                                <div class="muted" style="margin-top: 4px;">Read the thread, then save a reply draft below.</div>
+                              </div>
+                              <button class="btn" @click=${() => props.onGmailDraftReply()}>Reply as draft</button>
+                            </div>
+                            ${props.gmailSelectedThread.messages.map(
+                              (message) => html`
+                                <article
+                                  style="padding:14px; border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:12px;"
+                                >
+                                  <div
+                                    style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;"
+                                  >
+                                    <strong>${message.subject}</strong>
+                                    ${message.unread
+                                      ? html`<span class="pill">Unread</span>`
+                                      : nothing}
+                                  </div>
+                                  <div class="muted" style="margin-top:6px; font-size:12px;">
+                                    From:
+                                    ${message.from}${message.to
+                                      ? html`<span> · To: ${message.to}</span>`
+                                      : nothing}${message.date
+                                      ? html`<span> · ${message.date}</span>`
+                                      : nothing}
+                                  </div>
+                                  <div
+                                    style="margin-top:10px; white-space:pre-wrap; line-height:1.45; font-size:13px;"
+                                  >
+                                    ${message.bodyText ||
+                                    message.snippet ||
+                                    "No body preview available."}
+                                  </div>
+                                </article>
+                              `,
+                            )}
+                            <div style="padding:14px; border:1px solid var(--border, rgba(255,255,255,0.08)); border-radius:12px;">
+                              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+                                <div>
+                                  <div class="card-title" style="font-size: 15px; margin: 0;">Draft reply</div>
+                                  <div class="muted" style="margin-top: 4px;">Create a Gmail draft from this thread.</div>
+                                </div>
+                                <div class="row" style="gap:8px;">
+                                  <button class="btn" @click=${() => props.onGmailDraftReset()}>Clear</button>
+                                  <button class="btn" ?disabled=${props.gmailSendPending} @click=${() => props.onGmailSendOpenConfirm()}>
+                                    Send…
+                                  </button>
+                                  <button class="btn btn--primary" ?disabled=${props.gmailDraftSaving} @click=${() => props.onGmailDraftSave()}>
+                                    ${props.gmailDraftSaving ? "Saving draft…" : "Save draft"}
+                                  </button>
+                                </div>
+                              </div>
+                              ${
+                                props.gmailSendConfirmOpen
+                                  ? html`<div class="callout warn" style="margin-top:10px;">
+                                      <div><strong>Send this email now?</strong></div>
+                                      <div class="muted" style="margin-top:6px;">
+                                        This will send the message immediately from your Gmail
+                                        account.
+                                      </div>
+                                      <div class="row" style="gap:8px; margin-top:10px;">
+                                        <button
+                                          class="btn"
+                                          @click=${() => props.onGmailSendCloseConfirm()}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          class="btn btn--primary"
+                                          ?disabled=${props.gmailSendPending}
+                                          @click=${() => props.onGmailSendConfirm()}
+                                        >
+                                          ${props.gmailSendPending ? "Sending…" : "Confirm send"}
+                                        </button>
+                                      </div>
+                                    </div>`
+                                  : nothing
+                              }
+                              </div>
+                              <div style="display:grid; gap:10px; margin-top:14px;">
+                                <label class="field">
+                                  <span>To</span>
+                                  <input
+                                    .value=${props.gmailDraftForm.to}
+                                    @input=${(e: Event) =>
+                                      props.onGmailDraftFieldChange({
+                                        to: (e.target as HTMLInputElement).value,
+                                      })}
+                                  />
+                                </label>
+                                <label class="field">
+                                  <span>Subject</span>
+                                  <input
+                                    .value=${props.gmailDraftForm.subject}
+                                    @input=${(e: Event) =>
+                                      props.onGmailDraftFieldChange({
+                                        subject: (e.target as HTMLInputElement).value,
+                                      })}
+                                  />
+                                </label>
+                                <label class="field">
+                                  <span>Body</span>
+                                  <textarea
+                                    rows="10"
+                                    .value=${props.gmailDraftForm.textBody}
+                                    @input=${(e: Event) =>
+                                      props.onGmailDraftFieldChange({
+                                        textBody: (e.target as HTMLTextAreaElement).value,
+                                      })}
+                                    style="width:100%; box-sizing:border-box; resize:vertical;"
+                                  ></textarea>
+                                </label>
+                              </div>
+                              ${
+                                props.gmailDraftError
+                                  ? html`<div class="pill danger" style="margin-top:10px;">
+                                      ${props.gmailDraftError}
+                                    </div>`
+                                  : nothing
+                              }
+                              ${
+                                props.gmailDraftSuccess
+                                  ? html`<div class="pill ok" style="margin-top:10px;">
+                                      ${props.gmailDraftSuccess}
+                                    </div>`
+                                  : nothing
+                              }
+                              ${
+                                props.gmailSendError
+                                  ? html`<div class="pill danger" style="margin-top:10px;">
+                                      ${props.gmailSendError}
+                                    </div>`
+                                  : nothing
+                              }
+                              ${
+                                props.gmailSendSuccess
+                                  ? html`<div class="pill ok" style="margin-top:10px;">
+                                      ${props.gmailSendSuccess}
+                                    </div>`
+                                  : nothing
+                              }
+                            </div>
+                          </div>
+                        `}
+              </div>
+            </div>
+          </div>
+          <div class="ov-section-divider"></div>
+        `
+      : nothing}
     ${renderOverviewCards({
       usageResult: props.usageResult,
       sessionsResult: props.sessionsResult,

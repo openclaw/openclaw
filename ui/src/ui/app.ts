@@ -81,6 +81,28 @@ import type {
 } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import {
+  loadGmailAuthStatus as loadGmailAuthStatusInternal,
+  startGmailOAuthConnect as startGmailOAuthConnectInternal,
+  type GmailAuthStatusResult,
+} from "./controllers/gmail-auth.ts";
+import {
+  closeGmailSendConfirm as closeGmailSendConfirmInternal,
+  createGmailDraft as createGmailDraftInternal,
+  openGmailSendConfirm as openGmailSendConfirmInternal,
+  populateReplyDraftFromThread as populateReplyDraftFromThreadInternal,
+  resetGmailDraftForm as resetGmailDraftFormInternal,
+  sendGmailMessage as sendGmailMessageInternal,
+  updateGmailDraftForm as updateGmailDraftFormInternal,
+  type GmailDraftForm,
+} from "./controllers/gmail-draft.ts";
+import {
+  loadGmailInbox as loadGmailInboxInternal,
+  selectGmailThread as selectGmailThreadInternal,
+  updateGmailInboxFilters as updateGmailInboxFiltersInternal,
+  type GmailInboxItem,
+  type GmailThreadView,
+} from "./controllers/gmail-inbox.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
@@ -254,6 +276,31 @@ export class OpenClawApp extends LitElement {
   @state() devicesLoading = false;
   @state() devicesError: string | null = null;
   @state() devicesList: DevicePairingList | null = null;
+  @state() gmailAuthLoading = false;
+  @state() gmailAuthConnectPending = false;
+  @state() gmailAuthStatus: GmailAuthStatusResult | null = null;
+  @state() gmailAuthError: string | null = null;
+  @state() gmailInboxLoading = false;
+  @state() gmailInboxError: string | null = null;
+  @state() gmailInboxItems: GmailInboxItem[] = [];
+  @state() gmailInboxQuery = "";
+  @state() gmailInboxUnreadOnly = false;
+  @state() gmailSelectedThreadId: string | null = null;
+  @state() gmailThreadLoading = false;
+  @state() gmailThreadError: string | null = null;
+  @state() gmailSelectedThread: GmailThreadView | null = null;
+  @state() gmailDraftForm: GmailDraftForm = {
+    to: "",
+    subject: "",
+    textBody: "",
+  };
+  @state() gmailDraftSaving = false;
+  @state() gmailDraftError: string | null = null;
+  @state() gmailDraftSuccess: string | null = null;
+  @state() gmailSendConfirmOpen = false;
+  @state() gmailSendPending = false;
+  @state() gmailSendError: string | null = null;
+  @state() gmailSendSuccess: string | null = null;
   @state() execApprovalsLoading = false;
   @state() execApprovalsSaving = false;
   @state() execApprovalsDirty = false;
@@ -904,6 +951,79 @@ export class OpenClawApp extends LitElement {
 
   async loadCron() {
     await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
+  }
+
+  async loadGmailAuthStatus() {
+    await loadGmailAuthStatusInternal(
+      this as unknown as Parameters<typeof loadGmailAuthStatusInternal>[0],
+    );
+  }
+
+  async startGmailOAuthConnect() {
+    await startGmailOAuthConnectInternal(
+      this as unknown as Parameters<typeof startGmailOAuthConnectInternal>[0],
+    );
+  }
+
+  async loadGmailInbox() {
+    await loadGmailInboxInternal(this as unknown as Parameters<typeof loadGmailInboxInternal>[0]);
+  }
+
+  updateGmailInboxFilters(patch: { query?: string; unreadOnly?: boolean }) {
+    updateGmailInboxFiltersInternal(
+      this as unknown as Parameters<typeof updateGmailInboxFiltersInternal>[0],
+      patch,
+    );
+  }
+
+  async selectGmailThread(threadId: string) {
+    await selectGmailThreadInternal(
+      this as unknown as Parameters<typeof selectGmailThreadInternal>[0],
+      threadId,
+    );
+  }
+
+  updateGmailDraftForm(patch: Partial<GmailDraftForm>) {
+    updateGmailDraftFormInternal(
+      this as unknown as Parameters<typeof updateGmailDraftFormInternal>[0],
+      patch,
+    );
+  }
+
+  populateReplyDraftFromThread() {
+    populateReplyDraftFromThreadInternal(
+      this as unknown as Parameters<typeof populateReplyDraftFromThreadInternal>[0],
+    );
+  }
+
+  resetGmailDraftForm() {
+    resetGmailDraftFormInternal(
+      this as unknown as Parameters<typeof resetGmailDraftFormInternal>[0],
+    );
+  }
+
+  openGmailSendConfirm() {
+    openGmailSendConfirmInternal(
+      this as unknown as Parameters<typeof openGmailSendConfirmInternal>[0],
+    );
+  }
+
+  closeGmailSendConfirm() {
+    closeGmailSendConfirmInternal(
+      this as unknown as Parameters<typeof closeGmailSendConfirmInternal>[0],
+    );
+  }
+
+  async createGmailDraft() {
+    await createGmailDraftInternal(
+      this as unknown as Parameters<typeof createGmailDraftInternal>[0],
+    );
+  }
+
+  async sendGmailMessage() {
+    await sendGmailMessageInternal(
+      this as unknown as Parameters<typeof sendGmailMessageInternal>[0],
+    );
   }
 
   async handleAbortChat() {

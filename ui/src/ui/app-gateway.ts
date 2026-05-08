@@ -44,6 +44,11 @@ import {
   pruneExecApprovalQueue,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
+import {
+  loadGmailAuthStatus,
+  maybeCompleteGmailOAuthRedirect,
+  type GmailAuthState,
+} from "./controllers/gmail-auth.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import {
@@ -545,6 +550,11 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       void loadHealthState(host as unknown as HealthState);
       void loadNodes(host as unknown as NodesState, { quiet: true });
       void loadDevices(host as unknown as DevicesState, { quiet: true });
+      void maybeCompleteGmailOAuthRedirect(host as unknown as GmailAuthState).then((completed) => {
+        if (!completed) {
+          void loadGmailAuthStatus(host as unknown as GmailAuthState);
+        }
+      });
       void loadAgentsThenRefreshActiveTab(host);
       // Re-run push reconciliation now that the gateway client is available.
       void host.reconcileWebPushState?.();

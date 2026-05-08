@@ -1642,6 +1642,27 @@ export function renderApp(state: AppViewState) {
               lastChannelsRefresh: state.channelsLastSuccess,
               warnQueryToken,
               modelAuthStatus: state.modelAuthStatusResult,
+              gmailAuthStatus: state.gmailAuthStatus,
+              gmailAuthLoading: state.gmailAuthLoading,
+              gmailAuthConnectPending: state.gmailAuthConnectPending,
+              gmailAuthError: state.gmailAuthError,
+              gmailInboxLoading: state.gmailInboxLoading,
+              gmailInboxError: state.gmailInboxError,
+              gmailInboxItems: state.gmailInboxItems,
+              gmailInboxQuery: state.gmailInboxQuery,
+              gmailInboxUnreadOnly: state.gmailInboxUnreadOnly,
+              gmailSelectedThreadId: state.gmailSelectedThreadId,
+              gmailThreadLoading: state.gmailThreadLoading,
+              gmailThreadError: state.gmailThreadError,
+              gmailSelectedThread: state.gmailSelectedThread,
+              gmailDraftForm: state.gmailDraftForm,
+              gmailDraftSaving: state.gmailDraftSaving,
+              gmailDraftError: state.gmailDraftError,
+              gmailDraftSuccess: state.gmailDraftSuccess,
+              gmailSendConfirmOpen: state.gmailSendConfirmOpen,
+              gmailSendPending: state.gmailSendPending,
+              gmailSendError: state.gmailSendError,
+              gmailSendSuccess: state.gmailSendSuccess,
               usageResult: state.usageResult,
               sessionsResult: state.sessionsResult,
               skillsReport: state.skillsReport,
@@ -1667,6 +1688,48 @@ export function renderApp(state: AppViewState) {
               onRefresh: () => state.loadOverview({ refresh: true }),
               onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
               onRefreshLogs: () => state.loadOverview({ refresh: true }),
+              onGmailConnect: () => {
+                void state.startGmailOAuthConnect();
+              },
+              onGmailRefresh: () => {
+                void (async () => {
+                  await state.loadGmailAuthStatus();
+                  await state.loadGmailInbox();
+                })();
+              },
+              onGmailInboxFiltersChange: (patch) => {
+                state.updateGmailInboxFilters(patch);
+              },
+              onGmailInboxSearch: () => {
+                void state.loadGmailInbox();
+              },
+              onGmailSelectThread: (threadId) => {
+                void (async () => {
+                  await state.selectGmailThread(threadId);
+                  state.populateReplyDraftFromThread();
+                })();
+              },
+              onGmailDraftFieldChange: (patch) => {
+                state.updateGmailDraftForm(patch);
+              },
+              onGmailDraftReply: () => {
+                state.populateReplyDraftFromThread();
+              },
+              onGmailDraftReset: () => {
+                state.resetGmailDraftForm();
+              },
+              onGmailDraftSave: () => {
+                void state.createGmailDraft();
+              },
+              onGmailSendOpenConfirm: () => {
+                state.openGmailSendConfirm();
+              },
+              onGmailSendCloseConfirm: () => {
+                state.closeGmailSendConfirm();
+              },
+              onGmailSendConfirm: () => {
+                void state.sendGmailMessage();
+              },
             })
           : nothing}
         ${state.tab === "channels"

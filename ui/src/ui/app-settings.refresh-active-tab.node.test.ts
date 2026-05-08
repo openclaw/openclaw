@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   loadDebugMock: vi.fn(async () => {}),
   loadDevicesMock: vi.fn(async () => {}),
   loadExecApprovalsMock: vi.fn(async () => {}),
+  loadGmailAuthStatusMock: vi.fn(async () => {}),
+  loadGmailInboxMock: vi.fn(async () => {}),
   loadLogsMock: vi.fn(async () => {}),
   loadModelAuthStatusStateMock: vi.fn(async () => {}),
   loadNodesMock: vi.fn(async () => {}),
@@ -70,6 +72,12 @@ vi.mock("./controllers/devices.ts", () => ({
 }));
 vi.mock("./controllers/exec-approvals.ts", () => ({
   loadExecApprovals: mocks.loadExecApprovalsMock,
+}));
+vi.mock("./controllers/gmail-auth.ts", () => ({
+  loadGmailAuthStatus: mocks.loadGmailAuthStatusMock,
+}));
+vi.mock("./controllers/gmail-inbox.ts", () => ({
+  loadGmailInbox: mocks.loadGmailInboxMock,
 }));
 vi.mock("./controllers/logs.ts", () => ({
   loadLogs: mocks.loadLogsMock,

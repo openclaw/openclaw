@@ -8,6 +8,9 @@ import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { GmailAuthStatusResult } from "./controllers/gmail-auth.ts";
+import type { GmailDraftForm } from "./controllers/gmail-draft.ts";
+import type { GmailInboxItem, GmailThreadView } from "./controllers/gmail-inbox.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
@@ -137,6 +140,27 @@ export type AppViewState = {
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
+  gmailAuthLoading: boolean;
+  gmailAuthConnectPending: boolean;
+  gmailAuthStatus: GmailAuthStatusResult | null;
+  gmailAuthError: string | null;
+  gmailInboxLoading: boolean;
+  gmailInboxError: string | null;
+  gmailInboxItems: GmailInboxItem[];
+  gmailInboxQuery: string;
+  gmailInboxUnreadOnly: boolean;
+  gmailSelectedThreadId: string | null;
+  gmailThreadLoading: boolean;
+  gmailThreadError: string | null;
+  gmailSelectedThread: GmailThreadView | null;
+  gmailDraftForm: GmailDraftForm;
+  gmailDraftSaving: boolean;
+  gmailDraftError: string | null;
+  gmailDraftSuccess: string | null;
+  gmailSendConfirmOpen: boolean;
+  gmailSendPending: boolean;
+  gmailSendError: string | null;
+  gmailSendSuccess: string | null;
   execApprovalsLoading: boolean;
   execApprovalsSaving: boolean;
   execApprovalsDirty: boolean;
@@ -430,6 +454,18 @@ export type AppViewState = {
     loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
     loadCron: () => Promise<void>;
+    loadGmailAuthStatus: () => Promise<void>;
+    startGmailOAuthConnect: () => Promise<void>;
+    loadGmailInbox: () => Promise<void>;
+    updateGmailInboxFilters: (patch: { query?: string; unreadOnly?: boolean }) => void;
+    selectGmailThread: (threadId: string) => Promise<void>;
+    updateGmailDraftForm: (patch: Partial<GmailDraftForm>) => void;
+    populateReplyDraftFromThread: () => void;
+    resetGmailDraftForm: () => void;
+    openGmailSendConfirm: () => void;
+    closeGmailSendConfirm: () => void;
+    createGmailDraft: () => Promise<void>;
+    sendGmailMessage: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;
     handleWhatsAppWait: () => Promise<void>;
     handleWhatsAppLogout: () => Promise<void>;
