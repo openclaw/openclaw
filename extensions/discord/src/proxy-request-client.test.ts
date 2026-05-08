@@ -51,7 +51,10 @@ describe("createDiscordRequestClient", () => {
     client.abortAllRequests();
 
     await expect(request).rejects.toThrow();
-    expect(abortable.receivedSignal?.aborted).toBe(true);
+    if (!abortable.receivedSignal) {
+      throw new Error("Expected proxied fetch abort signal");
+    }
+    expect(abortable.receivedSignal.aborted).toBe(true);
   });
 
   it("provides the REST client's timeout signal even without a caller signal", async () => {
