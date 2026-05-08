@@ -5602,10 +5602,18 @@ module.exports = {
 } };`,
     });
 
+    const warnMessages: string[] = [];
     const registry = loadRegistryFromSinglePlugin({
       plugin,
       pluginConfig: {
         allow: ["conversation-hooks"],
+      },
+      options: {
+        logger: {
+          warn: (msg: string) => {
+            warnMessages.push(msg);
+          },
+        },
       },
     });
 
@@ -5616,6 +5624,14 @@ module.exports = {
       ),
     );
     expect(blockedDiagnostics).toHaveLength(7);
+    const blockedWarnLogs = warnMessages.filter(
+      (msg) =>
+        msg.includes("conversation-hooks") &&
+        msg.includes(
+          "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
+        ),
+    );
+    expect(blockedWarnLogs).toHaveLength(7);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {

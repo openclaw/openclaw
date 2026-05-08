@@ -2164,23 +2164,27 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     if (isConversationHookName(hookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;
       if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+        const blockMsg =
+          `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
+          `plugins.entries.${record.id}.hooks.allowConversationAccess=true`;
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
           source: record.source,
-          message:
-            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
-            `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
+          message: blockMsg,
         });
+        registryParams.logger.warn(`[plugins] ${record.id}: ${blockMsg}`);
         return;
       }
       if (record.origin === "bundled" && explicitConversationAccess === false) {
+        const blockMsg = `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`;
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
           source: record.source,
-          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+          message: blockMsg,
         });
+        registryParams.logger.warn(`[plugins] ${record.id}: ${blockMsg}`);
         return;
       }
     }
