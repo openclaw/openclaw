@@ -218,7 +218,10 @@ describe("realtime voice agent talkback queue", () => {
     queue.close();
     await vi.runAllTimersAsync();
 
-    expect(signal?.aborted).toBe(true);
+    if (!signal) {
+      throw new Error("Expected talkback consult abort signal");
+    }
+    expect(signal.aborted).toBe(true);
     expect(deliver).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();
     vi.useRealTimers();
