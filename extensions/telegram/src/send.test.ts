@@ -18,6 +18,7 @@ installTelegramSendTestHooks();
 
 const {
   botApi,
+  botConfigUseSpy,
   botCtorSpy,
   imageMetadata,
   loadConfig,
@@ -523,6 +524,14 @@ describe("sendMessageTelegram", () => {
         client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
       }),
     );
+  });
+
+  it("installs the shared grammY throttler on send clients", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok" });
+
+    expect(botConfigUseSpy).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {

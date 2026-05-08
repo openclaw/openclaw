@@ -8,6 +8,7 @@ import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString, redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
@@ -447,7 +448,14 @@ function resolveTelegramApiContext(opts: {
   });
   const token = resolveToken(opts.token, account);
   const client = resolveTelegramClientOptions(account);
-  const api = (opts.api ?? new Bot(token, client ? { client } : undefined).api) as TelegramApi;
+  let api: TelegramApi;
+  if (opts.api) {
+    api = opts.api as TelegramApi;
+  } else {
+    const bot = new Bot(token, client ? { client } : undefined);
+    bot.api.config.use(getOrCreateAccountThrottler(token));
+    api = bot.api;
+  }
   return { cfg, account, api };
 }
 
