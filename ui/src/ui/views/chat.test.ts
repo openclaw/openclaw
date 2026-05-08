@@ -518,14 +518,14 @@ describe("chat voice controls", () => {
 describe("chat slash menu accessibility", () => {
   function inputDraft(container: HTMLElement, value: string) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).not.toBeNull();
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
     textarea!.value = value;
     textarea!.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
   function keydownComposer(container: HTMLElement, key: string) {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).not.toBeNull();
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
     textarea!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   }
 
@@ -656,12 +656,12 @@ describe("chat attachment picker", () => {
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
 
-    expect(input).not.toBeNull();
+    expect(input).toBeInstanceOf(HTMLInputElement);
     Object.defineProperty(input!, "files", {
       configurable: true,
       value: [file],
     });
-    input?.dispatchEvent(new Event("change", { bubbles: true }));
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
 
     await vi.waitFor(() => {
       expect(onAttachmentsChange).toHaveBeenCalledWith([
@@ -686,12 +686,12 @@ describe("chat attachment picker", () => {
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
 
-    expect(input).not.toBeNull();
+    expect(input).toBeInstanceOf(HTMLInputElement);
     Object.defineProperty(input!, "files", {
       configurable: true,
       value: [file],
     });
-    input?.dispatchEvent(new Event("change", { bubbles: true }));
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
@@ -868,7 +868,7 @@ describe("chat session controls", () => {
     const agentSelect = container.querySelector<HTMLSelectElement>(
       'select[data-chat-agent-filter="true"]',
     );
-    expect(agentSelect).not.toBeNull();
+    expect(agentSelect).toBeInstanceOf(HTMLSelectElement);
 
     agentSelect!.value = "beta";
     agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -888,7 +888,7 @@ describe("chat session controls", () => {
     expect(notice?.getAttribute("role")).toBe("status");
     expect(notice?.getAttribute("aria-live")).toBe("polite");
     expect(notice?.textContent?.trim()).toBe("Switched to Coding");
-    expect(container.querySelector(".chat-controls__session-row--flash")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-controls__session-row--flash")).toHaveLength(1);
   });
 
   it("shows the active agent main session instead of a blank select when no row exists yet", () => {
