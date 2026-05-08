@@ -159,6 +159,10 @@ The remaining cleanup is mostly consolidation and deletion:
   transcript files. Gateway chat/media/history paths read transcript rows from
   SQLite; JSONL is now a legacy doctor/migrate input or in-memory export
   encoding, not a runtime state file.
+- Runtime session path resolution now canonicalizes active sessions to
+  `sqlite-transcript://<agent>/<session>.jsonl` locators. Legacy absolute
+  JSONL paths are normalized during normal row updates instead of being kept as
+  active runtime identity.
 - Automatic compaction transcript rotation writes successor transcript rows
   directly through the SQLite transcript store. The retained `.jsonl` path is
   metadata for legacy/export callers, not a durable file write.
@@ -170,6 +174,9 @@ The remaining cleanup is mostly consolidation and deletion:
   file-lock helper; its durable state paths are SQLite-backed.
 - Session age/count pruning and explicit session cleanup have been removed.
   Doctor owns legacy import; stale sessions are reset or deleted explicitly.
+- Doctor no longer treats `agents/<agent>/sessions/` as required runtime
+  state. It only scans that directory when it already exists, as legacy import
+  or orphan-cleanup input.
 - Gateway `sessions.resolve`, session patch/reset/compact paths, subagent
   spawning, fast abort, ACP metadata, heartbeat-isolated sessions, and TUI
   patching no longer migrate or prune legacy session keys as a side effect of
