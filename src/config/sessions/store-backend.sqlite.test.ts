@@ -6,11 +6,7 @@ import { writeTextAtomic } from "../../infra/json-files.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveSessionTranscriptsDirForAgent } from "./paths.js";
-import {
-  importJsonSessionStoreToSqlite,
-  loadSqliteSessionEntries,
-  replaceSqliteSessionEntries,
-} from "./store-backend.sqlite.js";
+import { loadSqliteSessionEntries } from "./store-backend.sqlite.js";
 import {
   deleteSessionEntry,
   getSessionEntry,
@@ -61,62 +57,14 @@ describe("SQLite session store backend", () => {
       updatedAt: 456,
     };
 
-    replaceSqliteSessionEntries(
-      { agentId: "main", env, now: () => 1000 },
-      { "discord:u1": mainEntry },
-    );
-    replaceSqliteSessionEntries(
-      { agentId: "ops", env, now: () => 1000 },
-      { "discord:u1": opsEntry },
-    );
+    upsertSessionEntry({ agentId: "main", env, sessionKey: "discord:u1", entry: mainEntry });
+    upsertSessionEntry({ agentId: "ops", env, sessionKey: "discord:u1", entry: opsEntry });
 
     expect(loadSqliteSessionEntries({ agentId: "main", env })).toEqual({
       "discord:u1": mainEntry,
     });
     expect(loadSqliteSessionEntries({ agentId: "ops", env })).toEqual({
       "discord:u1": opsEntry,
-    });
-  });
-
-  it("imports legacy sessions.json into SQLite and removes the JSON source", async () => {
-    const stateDir = createTempDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const legacyStorePath = path.join(stateDir, "sessions.json");
-    const entry: SessionEntry = {
-      sessionId: "legacy-session",
-      sessionFile: "/tmp/legacy.jsonl",
-      updatedAt: 999,
-      lastChannel: "discord",
-      lastTo: "user-1",
-    };
-    await writeTextAtomic(
-      legacyStorePath,
-      JSON.stringify(
-        {
-          "discord:user-1": entry,
-        },
-        null,
-        2,
-      ),
-    );
-
-    expect(
-      importJsonSessionStoreToSqlite({
-        agentId: "main",
-        sourcePath: legacyStorePath,
-        env,
-      }),
-    ).toEqual({ imported: 1, sourcePath: legacyStorePath, removedSource: true });
-
-    expect(fs.existsSync(legacyStorePath)).toBe(false);
-    expect(loadSqliteSessionEntries({ agentId: "main", env })).toEqual({
-      "discord:user-1": {
-        ...entry,
-        deliveryContext: {
-          channel: "discord",
-          to: "user-1",
-        },
-      },
     });
   });
 
@@ -158,21 +106,26 @@ describe("SQLite session store backend", () => {
   it("updates one session entry without replacing the whole SQLite store", async () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
-    replaceSqliteSessionEntries(
-      { agentId: "ops", env },
-      {
-        "discord:ops": {
-          sessionId: "ops-session",
-          sessionFile: "ops.jsonl",
-          updatedAt: 100,
-        },
-        "discord:other": {
-          sessionId: "other-session",
-          sessionFile: "other.jsonl",
-          updatedAt: 50,
-        },
+    upsertSessionEntry({
+      agentId: "ops",
+      env,
+      sessionKey: "discord:ops",
+      entry: {
+        sessionId: "ops-session",
+        sessionFile: "ops.jsonl",
+        updatedAt: 100,
       },
-    );
+    });
+    upsertSessionEntry({
+      agentId: "ops",
+      env,
+      sessionKey: "discord:other",
+      entry: {
+        sessionId: "other-session",
+        sessionFile: "other.jsonl",
+        updatedAt: 50,
+      },
+    });
 
     const updated = await patchSessionEntry({
       agentId: "ops",
