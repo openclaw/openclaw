@@ -16,6 +16,7 @@ import {
   shouldPrepareUpdatedInstallRestart,
   resolveUpdatedGatewayRestartPort,
   shouldUseLegacyProcessRestartAfterUpdate,
+  updatePluginsAfterCoreUpdate,
 } from "./update-command.js";
 
 describe("resolveGatewayInstallEntrypointCandidates", () => {
@@ -557,6 +558,38 @@ describe("resolvePostCoreUpdateChildStdio", () => {
   it('returns "inherit" on non-Windows platforms', () => {
     expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
     expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
+  });
+});
+
+describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
+  it("returns status:error (not skipped) when configSnapshot is invalid, so the pre-restart gate fires", async () => {
+    // The pre-restart gate in `updateCommand` is literally
+    //   if (postCorePluginUpdate?.status === "error") { exit(1) }
+    // so asserting that this function returns status:"error" on invalid
+    // config is sufficient to prove the gate fires end-to-end. We pass
+    // `json: true` to suppress logging side-effects without mocking.
+    const result = await updatePluginsAfterCoreUpdate({
+      root: "/tmp/openclaw-test",
+      channel: "stable",
+      configSnapshot: {
+        valid: false,
+        issues: [],
+        legacyIssues: [],
+      } as unknown as Awaited<
+        ReturnType<typeof import("../../config/io.js").readConfigFileSnapshot>
+      >,
+      opts: { json: true } as never,
+      timeoutMs: 1000,
+    });
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("invalid-config");
+    expect(result.changed).toBe(false);
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        reason: "invalid-config",
+        guidance: expect.arrayContaining([expect.stringContaining("openclaw doctor")]),
+      }),
+    ]);
   });
 });
 

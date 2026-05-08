@@ -101,6 +101,7 @@ describe("runPostCorePluginConvergence", () => {
       warnings: [
         'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
       ],
+      records: {},
     });
     const result = await runPostCorePluginConvergence({
       cfg: {

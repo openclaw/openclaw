@@ -1152,7 +1152,7 @@ async function runGitUpdate(params: {
   };
 }
 
-async function updatePluginsAfterCoreUpdate(params: {
+export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
