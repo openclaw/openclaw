@@ -1621,7 +1621,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Shelling\n🛠️ run tests, `pnpm test -- --watch=false`\n• done",
+      "Shelling\n🛠️ Exec: run tests, `pnpm test -- --watch=false`\n• done",
     );
   });
 
