@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "./diagnostic-events.js";
 import {
   DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
   configureSqliteWalMaintenance,
@@ -14,6 +15,7 @@ function createMockDb(): DatabaseSync {
 describe("sqlite WAL maintenance", () => {
   afterEach(() => {
     vi.useRealTimers();
+    resetDiagnosticEventsForTest();
   });
 
   it("enables WAL mode and explicit autocheckpointing", () => {
@@ -50,6 +52,8 @@ describe("sqlite WAL maintenance", () => {
     const db = createMockDb();
     const error = new Error("busy");
     const onCheckpointError = vi.fn();
+    const diagnostics: unknown[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => diagnostics.push(event));
     vi.mocked(db.exec).mockImplementation((sql) => {
       if (sql.includes("wal_checkpoint")) {
         throw error;
@@ -57,11 +61,21 @@ describe("sqlite WAL maintenance", () => {
     });
 
     const maintenance = configureSqliteWalMaintenance(db, {
+      databaseLabel: "state-test",
       checkpointIntervalMs: 0,
       onCheckpointError,
     });
 
     expect(maintenance.checkpoint()).toBe(false);
     expect(onCheckpointError).toHaveBeenCalledWith(error);
+    unsubscribe();
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        type: "sqlite.wal.checkpoint.error",
+        databaseLabel: "state-test",
+        checkpointMode: "TRUNCATE",
+        error: "busy",
+      }),
+    ]);
   });
 });
