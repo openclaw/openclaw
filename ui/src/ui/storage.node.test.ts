@@ -571,7 +571,8 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
 
-    expect(persisted.sessionsByGateway).toEqual(expect.any(Object));
+    expect(persisted.sessionsByGateway).toBeTypeOf("object");
+    expect(persisted.sessionsByGateway).not.toBeNull();
     const scopes = Object.keys(persisted.sessionsByGateway);
     expect(scopes).toHaveLength(10);
     // oldest stale entries should be evicted
