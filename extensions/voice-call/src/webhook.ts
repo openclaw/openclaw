@@ -854,7 +854,54 @@ export class VoiceCallWebhookServer {
   private processParsedEvents(events: NormalizedEvent[]): void {
     for (const event of events) {
       try {
+        // Providers whose final user transcripts arrive through the generic
+        // webhook event path (today: Telnyx and Plivo — neither has OpenClaw
+        // streaming integration yet) need the same auto-response handoff
+        // that Twilio Media Streams already gets in the `onTranscript`
+        // callback. Without it, the manager records the transcript and
+        // transitions to "listening" but the bot never replies. Peek at
+        // waiter state *before* `manager.processEvent` because that call
+        // clears the waiter, then gate firing on transcript-length growth
+        // so replays and turn-token mismatches stay idempotent.
+        // See https://github.com/openclaw/openclaw/issues/79118.
+        let pendingAutoResponse: { call: CallRecord; transcript: string } | null = null;
+        let transcriptLengthBeforeProcess = 0;
+        if (event.type === "call.speech" && event.isFinal) {
+          // event.callId is the manager UUID for outbound calls (carried via
+          // client_state) but falls back to providerCallId for inbound calls
+          // where the provider doesn't echo client_state (Telnyx case).
+          const call =
+            this.manager.getCall(event.callId) ??
+            this.manager.getCallByProviderCallId(event.callId);
+          if (call) {
+            const hadWaiter = this.manager.hasTranscriptWaiter(call.callId);
+            const callMode = call.metadata?.mode as string | undefined;
+            const shouldRespond = call.direction === "inbound" || callMode === "conversation";
+            if (!hadWaiter && shouldRespond) {
+              pendingAutoResponse = { call, transcript: event.transcript };
+              transcriptLengthBeforeProcess = call.transcript.length;
+            }
+          }
+        }
         this.manager.processEvent(event);
+        if (pendingAutoResponse) {
+          // Only auto-respond if `processEvent` actually appended a user
+          // transcript entry. This preserves the manager's dedupe + replay
+          // protection: a redelivered webhook for an already-processed event
+          // (or a turn-token mismatch path that breaks before
+          // addTranscriptEntry) leaves transcript.length unchanged, so we
+          // skip the side effect.
+          const userSpoke =
+            pendingAutoResponse.call.transcript.length > transcriptLengthBeforeProcess;
+          if (userSpoke) {
+            this.handleInboundResponse(
+              pendingAutoResponse.call.callId,
+              pendingAutoResponse.transcript,
+            ).catch((err) => {
+              console.warn(`[voice-call] Failed to auto-respond:`, err);
+            });
+          }
+        }
       } catch (err) {
         console.error(`[voice-call] Error processing event ${event.type}:`, err);
       }

@@ -115,10 +115,17 @@ const createCall = (startedAt: number): CallRecord => ({
 const createManager = (calls: CallRecord[]) => {
   const endCall = vi.fn(async () => ({ success: true }));
   const processEvent = vi.fn();
+  const callsByCallId = new Map(calls.map((c) => [c.callId, c]));
+  const callsByProviderCallId = new Map(
+    calls.filter((c) => c.providerCallId).map((c) => [c.providerCallId as string, c]),
+  );
   const manager = {
     getActiveCalls: () => calls,
     endCall,
     processEvent,
+    getCall: (callId: string) => callsByCallId.get(callId),
+    getCallByProviderCallId: (providerCallId: string) => callsByProviderCallId.get(providerCallId),
+    hasTranscriptWaiter: () => false,
   } as unknown as CallManager;
 
   return { manager, endCall, processEvent };
@@ -1542,6 +1549,201 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       expect(event.transcript).toBe("hello");
       expect(event.isFinal).toBe(true);
       expect(handleInboundResponse).toHaveBeenCalledWith("call-inbound", "hello");
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+// Regression coverage for https://github.com/openclaw/openclaw/issues/79118.
+// Providers whose final user transcripts arrive through the generic webhook
+// event path (today: Telnyx and Plivo) deliver them via webhook events
+// rather than a media-stream `onTranscript` callback, so the auto-response
+// handoff has to be triggered from `processParsedEvents` too.
+describe("VoiceCallWebhookServer webhook event path auto-response (#79118)", () => {
+  const createInboundCall = (): CallRecord => ({
+    callId: "call-inbound-79118",
+    providerCallId: "v3:provider-79118",
+    provider: "telnyx",
+    direction: "inbound",
+    state: "listening",
+    // Reserved US 555 test numbers — matching the createCall helper above.
+    from: "+15550009999",
+    to: "+15550000111",
+    startedAt: Date.now(),
+    transcript: [],
+    processedEventIds: [],
+  });
+
+  const buildSpeechEvent = (
+    call: CallRecord,
+  ): Extract<NormalizedEvent, { type: "call.speech" }> => ({
+    id: "evt-79118",
+    type: "call.speech",
+    // Telnyx inbound events fall back to providerCallId because the provider
+    // doesn't echo client_state on calls it originated; verify the lookup
+    // path tolerates that.
+    callId: call.providerCallId as string,
+    providerCallId: call.providerCallId,
+    timestamp: Date.now(),
+    transcript: "hallo wie geht es dir",
+    isFinal: true,
+  });
+
+  const buildTelnyxLikeProvider = (event: NormalizedEvent): VoiceCallProvider => ({
+    ...provider,
+    name: "telnyx",
+    verifyWebhook: () => ({ ok: true, verifiedRequestKey: "telnyx:req:79118" }),
+    parseWebhookEvent: () => ({ events: [event], statusCode: 200 }),
+  });
+
+  type ManagerOverrides = {
+    hasTranscriptWaiter?: () => boolean;
+    /**
+     * Controls whether the stub processEvent appends a user transcript entry
+     * to the call (mimicking the real manager path-2 behavior). Default
+     * appends; set to false to simulate dedupe / replay (manager skips
+     * the event because dedupeKey was already in processedEventIds).
+     */
+    appendTranscriptOnProcess?: boolean;
+  };
+
+  const buildManagerWith = (call: CallRecord, overrides: ManagerOverrides = {}) => {
+    const appendOnProcess = overrides.appendTranscriptOnProcess ?? true;
+    const processEvent = vi.fn((event: NormalizedEvent) => {
+      if (appendOnProcess && event.type === "call.speech" && event.isFinal) {
+        call.transcript.push({
+          timestamp: Date.now(),
+          speaker: "user",
+          text: event.transcript,
+          isFinal: true,
+        });
+      }
+    });
+    const manager = {
+      getActiveCalls: () => [call],
+      getCall: (id: string) => (id === call.callId ? call : undefined),
+      getCallByProviderCallId: (pid: string) => (pid === call.providerCallId ? call : undefined),
+      hasTranscriptWaiter: overrides.hasTranscriptWaiter ?? (() => false),
+      endCall: vi.fn(async () => ({ success: true })),
+      processEvent,
+    } as unknown as CallManager;
+    return { manager, processEvent };
+  };
+
+  const installHandleInboundResponseSpy = (server: VoiceCallWebhookServer) => {
+    const spy = vi.fn(async () => {});
+    (
+      server as unknown as {
+        handleInboundResponse: (callId: string, transcript: string) => Promise<void>;
+      }
+    ).handleInboundResponse = spy;
+    return spy;
+  };
+
+  it("fires handleInboundResponse once for a final inbound transcript when no waiter is pending", async () => {
+    const inboundCall = createInboundCall();
+    const event = buildSpeechEvent(inboundCall);
+    const { manager, processEvent } = buildManagerWith(inboundCall);
+    const config = createConfig({
+      skipSignatureVerification: true,
+      serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, buildTelnyxLikeProvider(event));
+    const handleInboundResponse = installHandleInboundResponseSpy(server);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookForm(server, baseUrl, "stub=1");
+      expect(response.status).toBe(200);
+      expect(processEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "call.speech",
+          transcript: "hallo wie geht es dir",
+          isFinal: true,
+        }),
+      );
+      expect(handleInboundResponse).toHaveBeenCalledTimes(1);
+      expect(handleInboundResponse).toHaveBeenCalledWith(
+        inboundCall.callId,
+        "hallo wie geht es dir",
+      );
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("does not fire handleInboundResponse when a transcript waiter is pending", async () => {
+    const inboundCall = createInboundCall();
+    const event = buildSpeechEvent(inboundCall);
+    const { manager } = buildManagerWith(inboundCall, { hasTranscriptWaiter: () => true });
+    const config = createConfig({
+      skipSignatureVerification: true,
+      serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, buildTelnyxLikeProvider(event));
+    const handleInboundResponse = installHandleInboundResponseSpy(server);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookForm(server, baseUrl, "stub=1");
+      expect(response.status).toBe(200);
+      expect(handleInboundResponse).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("does not fire handleInboundResponse for partial (non-final) transcripts", async () => {
+    const inboundCall = createInboundCall();
+    const event = { ...buildSpeechEvent(inboundCall), isFinal: false };
+    const { manager } = buildManagerWith(inboundCall);
+    const config = createConfig({
+      skipSignatureVerification: true,
+      serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, buildTelnyxLikeProvider(event));
+    const handleInboundResponse = installHandleInboundResponseSpy(server);
+
+    try {
+      const baseUrl = await server.start();
+      await postWebhookForm(server, baseUrl, "stub=1");
+      expect(handleInboundResponse).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  // Regression for the dedupe-bypass scenario raised in PR #79336 review:
+  // a redelivered webhook for an event already in `call.processedEventIds`
+  // makes `manager.processEvent` skip `addTranscriptEntry`, but a naive
+  // pre-computed pendingAutoResponse would still fire and produce a
+  // duplicate bot reply. Gating on `call.transcript.length` growth closes
+  // that window — this test is the regression.
+  it("does not fire handleInboundResponse when manager dedupes the event (replay)", async () => {
+    const inboundCall = createInboundCall();
+    const event = buildSpeechEvent(inboundCall);
+    // appendTranscriptOnProcess: false simulates the manager taking the
+    // dedupe early-return path (event was already in processedEventIds, so
+    // no transcript entry is appended even though processEvent was called).
+    const { manager, processEvent } = buildManagerWith(inboundCall, {
+      appendTranscriptOnProcess: false,
+    });
+    const config = createConfig({
+      skipSignatureVerification: true,
+      serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, buildTelnyxLikeProvider(event));
+    const handleInboundResponse = installHandleInboundResponseSpy(server);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookForm(server, baseUrl, "stub=1");
+      expect(response.status).toBe(200);
+      expect(processEvent).toHaveBeenCalledTimes(1);
+      // No transcript entry was appended → side effect must not fire.
+      expect(inboundCall.transcript).toHaveLength(0);
+      expect(handleInboundResponse).not.toHaveBeenCalled();
     } finally {
       await server.stop();
     }
