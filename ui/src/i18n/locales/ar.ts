@@ -704,11 +704,11 @@ export const ar: TranslationMap = {
       all: "الكل",
     },
     scope: {
-      instance: "Current instance",
-      instanceHint: "Show only the active session id for each logical session.",
-      family: "Historical lineage",
-      familyHint: "Roll up known rotated transcript-backed session ids.",
-      familyIncluded: "Historical lineage includes {count} session instances.",
+      instance: "المثيل الحالي",
+      instanceHint: "اعرض فقط معرّف الجلسة النشطة لكل جلسة منطقية.",
+      family: "السلالة التاريخية",
+      familyHint: "اجمع معرّفات الجلسات المعروفة والمدعومة بالنصوص المنسوخة التي تم تدويرها.",
+      familyIncluded: "تتضمن السلالة التاريخية {count} من مثيلات الجلسات.",
     },
     filters: {
       title: "عوامل التصفية",
