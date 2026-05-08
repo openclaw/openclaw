@@ -354,9 +354,8 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
     const label = params.entry?.streaming?.progress?.label;
     const maxLines = params.entry?.streaming?.progress?.maxLines ?? 8;
     const formatLine = params.formatLine ?? ((line: string) => line);
-    const lines = [
-      label === false ? undefined : (label ?? "Thinking"),
-      ...params.lines.map((line) => {
+    const progressLines = params.lines
+      .map((line) => {
         const text =
           typeof line === "string"
             ? line
@@ -367,10 +366,12 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
                 : line.text;
         const formatted = formatLine(text);
         return /^\p{Extended_Pictographic}/u.test(text) ? formatted : `• ${formatted}`;
-      }),
-    ]
+      })
       .filter((line): line is string => Boolean(line))
       .slice(-maxLines);
+    const lines = [label === false ? undefined : (label ?? "Thinking"), ...progressLines].filter(
+      (line): line is string => Boolean(line),
+    );
     return lines.join("\n");
   },
   formatChannelProgressDraftLine: (params: {
@@ -827,6 +828,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
       [
+        "Shelling",
         "• step 1",
         "• step 2",
         "• step 3",

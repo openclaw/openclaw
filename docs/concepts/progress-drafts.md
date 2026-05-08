@@ -57,9 +57,10 @@ A progress draft has two parts:
 | Progress lines | Compact run updates using the same tool icons and detail formatter as verbose output. |
 
 The label appears after the agent starts meaningful work and either remains busy
-for five seconds or emits a second work event. It is part of the rolling progress
-line list, so the starter status scrolls away once enough concrete work appears.
-Plain text-only replies do not show a progress draft. Progress lines are added
+for five seconds or emits a second work event. It stays visible while the agent
+is still working; `streaming.progress.maxLines` limits only the rolling progress
+lines below the label. In other words, progress drafts render as `label + last N
+progress lines`. Plain text-only replies do not show a progress draft. Progress lines are added
 only when the agent emits useful work updates, for example `🛠️ Bash: run tests`,
 `🔎 Web Search: for "discord edit message"`, or `✍️ Write: to /tmp/file`.
 By default they use the same compact explain mode as `/verbose`; set
