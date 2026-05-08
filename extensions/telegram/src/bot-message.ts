@@ -23,21 +23,16 @@ import type { TelegramReplyChainEntry } from "./message-cache.js";
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
 export function formatTelegramInboundLogLine(params: {
-  from?: string;
-  to?: string;
-  chatType?: string;
-  body?: string;
+  from: string;
+  to: string;
+  chatType: string;
+  body: string;
   mediaType?: string;
 }): string {
-  const from = params.from || "unknown";
-  const to = params.to || "telegram";
-  const chatType = params.chatType || "direct";
   const kindLabel = params.mediaType ? `, ${params.mediaType}` : "";
-  const length = (params.body ?? "").length;
-  return `Inbound message ${from} -> ${to} (${chatType}${kindLabel}, ${length} chars)`;
+  return `Inbound message ${params.from} -> ${params.to} (${params.chatType}${kindLabel}, ${params.body.length} chars)`;
 }
 
-/** Dependencies injected once when creating the message processor. */
 type TelegramMessageProcessorDeps = Omit<
   BuildTelegramMessageContextParams,
   "primaryCtx" | "allMedia" | "storeAllowFrom" | "options"
@@ -142,11 +137,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           ? `@${context.primaryCtx.me.username}`
           : context.ctxPayload.To,
         chatType: context.ctxPayload.ChatType,
-        body:
-          context.ctxPayload.RawBody ??
-          context.ctxPayload.BodyForCommands ??
-          context.ctxPayload.BodyForAgent ??
-          context.ctxPayload.Body,
+        body: context.ctxPayload.RawBody,
         mediaType: allMedia[0]?.contentType,
       }),
     );
@@ -177,9 +168,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           "Something went wrong while processing your request. Please try again.",
           buildTelegramThreadParams(context.threadSpec),
         );
-      } catch {
-        // Best-effort fallback; delivery may fail if the bot was blocked or the chat is invalid.
-      }
+      } catch {}
     }
   };
 };
