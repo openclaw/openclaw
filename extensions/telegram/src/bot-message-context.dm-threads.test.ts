@@ -81,7 +81,6 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
       from: { id: 42, first_name: "Alice" },
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
   });
@@ -104,7 +103,6 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
       },
     );
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
   });
@@ -136,7 +134,6 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
       },
     );
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
   });
@@ -173,7 +170,6 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
       }),
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
   });
@@ -187,7 +183,6 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
       from: { id: 42, first_name: "Alice" },
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBeUndefined();
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
   });
