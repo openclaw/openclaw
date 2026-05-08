@@ -113,18 +113,14 @@ describe("SQLite session store backend", () => {
       updatedAt: 100,
     };
 
-    await saveSessionStore(storePath, { "discord:ops": entry }, { skipMaintenance: true });
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        store["discord:ops"] = {
-          ...store["discord:ops"],
-          updatedAt: 200,
-          modelOverride: "gpt-5.5",
-        };
-      },
-      { skipMaintenance: true },
-    );
+    await saveSessionStore(storePath, { "discord:ops": entry });
+    await updateSessionStore(storePath, (store) => {
+      store["discord:ops"] = {
+        ...store["discord:ops"],
+        updatedAt: 200,
+        modelOverride: "gpt-5.5",
+      };
+    });
 
     expect(fs.existsSync(storePath)).toBe(false);
     expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
@@ -146,7 +142,7 @@ describe("SQLite session store backend", () => {
       updatedAt: 100,
     };
 
-    await saveSessionStore(storePath, { "discord:ops": entry }, { skipMaintenance: true });
+    await saveSessionStore(storePath, { "discord:ops": entry });
 
     expect(fs.existsSync(storePath)).toBe(false);
     expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
@@ -176,17 +172,13 @@ describe("SQLite session store backend", () => {
 
     expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
 
-    await saveSessionStore(
-      storePath,
-      {
-        "discord:ops": {
-          ...legacyEntry,
-          sessionId: "sqlite-session",
-          updatedAt: 200,
-        },
+    await saveSessionStore(storePath, {
+      "discord:ops": {
+        ...legacyEntry,
+        sessionId: "sqlite-session",
+        updatedAt: 200,
       },
-      { skipMaintenance: true },
-    );
+    });
     expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
       "discord:ops": {
         ...legacyEntry,

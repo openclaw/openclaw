@@ -2,11 +2,13 @@ import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import {
+  capEntryCount,
+  getActiveSessionMaintenanceWarning,
   isProtectedSessionMaintenanceEntry,
+  pruneStaleEntries,
   resolveMaintenanceConfigFromInput,
   resolveSessionEntryMaintenanceHighWater,
 } from "./store-maintenance.js";
-import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;

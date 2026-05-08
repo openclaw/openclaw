@@ -11,7 +11,6 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
-import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   saveSqliteSessionStore,
@@ -26,16 +25,9 @@ import {
   writeSessionStoreCache,
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
-import { loadSessionStore } from "./store-load.js";
-import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
-  capEntryCount,
-  getActiveSessionMaintenanceWarning,
   pruneQuotaSuspensions,
-  pruneStaleEntries,
   type QuotaSuspensionMaintenanceResult,
-  type ResolvedSessionMaintenanceConfig,
-  type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
 import { normalizeSessionStore } from "./store-normalize.js";
 import { runExclusiveSessionStoreWrite } from "./store-writer.js";
@@ -86,19 +78,7 @@ export function readSessionUpdatedAt(params: {
   }
 }
 
-export {
-  capEntryCount,
-  getActiveSessionMaintenanceWarning,
-  pruneStaleEntries,
-  resolveMaintenanceConfig,
-};
-export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
-
 type SaveSessionStoreOptions = {
-  /** Deprecated no-op retained for callers that still pass migration-era options. */
-  skipMaintenance?: boolean;
-  /** Deprecated no-op retained for callers that still pass migration-era options. */
-  activeSessionKey?: string;
   /**
    * Session keys that are allowed to drop persisted ACP metadata during this update.
    * All other updates preserve existing `entry.acp` blocks when callers replace the
@@ -306,16 +286,13 @@ export async function runQuotaSuspensionMaintenance(params: {
   if (!fs.existsSync(params.storePath)) {
     return { resumed: [], cleared: 0 };
   }
-  return await updateSessionStore(
-    params.storePath,
-    (store) =>
-      pruneQuotaSuspensions({
-        store,
-        now: params.now ?? Date.now(),
-        ttlMs: params.ttlMs,
-        log: params.log,
-      }),
-    { skipMaintenance: true },
+  return await updateSessionStore(params.storePath, (store) =>
+    pruneQuotaSuspensions({
+      store,
+      now: params.now ?? Date.now(),
+      ttlMs: params.ttlMs,
+      log: params.log,
+    }),
   );
 }
 
@@ -376,9 +353,7 @@ async function persistResolvedSessionEntry(params: {
   for (const legacyKey of params.resolved.legacyKeys) {
     delete params.store[legacyKey];
   }
-  await saveSessionStoreUnlocked(params.storePath, params.store, {
-    activeSessionKey: params.resolved.normalizedKey,
-  });
+  await saveSessionStoreUnlocked(params.storePath, params.store);
   return params.next;
 }
 
@@ -418,42 +393,38 @@ export async function recordSessionMetaFromInbound(params: {
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, ctx } = params;
   const createIfMissing = params.createIfMissing ?? true;
-  return await updateSessionStore(
-    storePath,
-    (store) => {
-      const resolved = resolveSessionStoreEntry({ store, sessionKey });
-      const existing = resolved.existing;
-      const patch = deriveSessionMetaPatch({
-        ctx,
-        sessionKey: resolved.normalizedKey,
-        existing,
-        groupResolution: params.groupResolution,
-      });
-      if (!patch) {
-        if (existing && resolved.legacyKeys.length > 0) {
-          store[resolved.normalizedKey] = existing;
-          for (const legacyKey of resolved.legacyKeys) {
-            delete store[legacyKey];
-          }
+  return await updateSessionStore(storePath, (store) => {
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
+    const existing = resolved.existing;
+    const patch = deriveSessionMetaPatch({
+      ctx,
+      sessionKey: resolved.normalizedKey,
+      existing,
+      groupResolution: params.groupResolution,
+    });
+    if (!patch) {
+      if (existing && resolved.legacyKeys.length > 0) {
+        store[resolved.normalizedKey] = existing;
+        for (const legacyKey of resolved.legacyKeys) {
+          delete store[legacyKey];
         }
-        return existing ?? null;
       }
-      if (!existing && !createIfMissing) {
-        return null;
-      }
-      const next = existing
-        ? // Inbound metadata updates must not refresh activity timestamps;
-          // idle reset evaluation relies on updatedAt from actual session turns.
-          mergeSessionEntryPreserveActivity(existing, patch)
-        : mergeSessionEntry(existing, patch);
-      store[resolved.normalizedKey] = next;
-      for (const legacyKey of resolved.legacyKeys) {
-        delete store[legacyKey];
-      }
-      return next;
-    },
-    { activeSessionKey: normalizeStoreSessionKey(sessionKey) },
-  );
+      return existing ?? null;
+    }
+    if (!existing && !createIfMissing) {
+      return null;
+    }
+    const next = existing
+      ? // Inbound metadata updates must not refresh activity timestamps;
+        // idle reset evaluation relies on updatedAt from actual session turns.
+        mergeSessionEntryPreserveActivity(existing, patch)
+      : mergeSessionEntry(existing, patch);
+    store[resolved.normalizedKey] = next;
+    for (const legacyKey of resolved.legacyKeys) {
+      delete store[legacyKey];
+    }
+    return next;
+  });
 }
 
 export async function updateLastRoute(params: {

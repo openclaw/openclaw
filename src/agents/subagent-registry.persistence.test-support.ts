@@ -27,20 +27,16 @@ export async function writeSubagentSessionEntry(params: {
   defaultSessionId: string;
 }): Promise<string> {
   const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
-  await updateSessionStore(
-    storePath,
-    (store) => {
-      store[params.sessionKey] = {
-        ...store[params.sessionKey],
-        sessionId: params.sessionId ?? params.defaultSessionId,
-        updatedAt: params.updatedAt ?? Date.now(),
-        ...(typeof params.abortedLastRun === "boolean"
-          ? { abortedLastRun: params.abortedLastRun }
-          : {}),
-      };
-    },
-    { skipMaintenance: true },
-  );
+  await updateSessionStore(storePath, (store) => {
+    store[params.sessionKey] = {
+      ...store[params.sessionKey],
+      sessionId: params.sessionId ?? params.defaultSessionId,
+      updatedAt: params.updatedAt ?? Date.now(),
+      ...(typeof params.abortedLastRun === "boolean"
+        ? { abortedLastRun: params.abortedLastRun }
+        : {}),
+    };
+  });
   return storePath;
 }
 
@@ -50,13 +46,9 @@ export async function removeSubagentSessionEntry(params: {
   agentId: string;
 }): Promise<string> {
   const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
-  await updateSessionStore(
-    storePath,
-    (store) => {
-      delete store[params.sessionKey];
-    },
-    { skipMaintenance: true },
-  );
+  await updateSessionStore(storePath, (store) => {
+    delete store[params.sessionKey];
+  });
   return storePath;
 }
 

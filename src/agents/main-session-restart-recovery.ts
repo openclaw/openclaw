@@ -133,28 +133,24 @@ async function markSessionFailed(params: {
   sessionKey: string;
   reason: string;
 }): Promise<void> {
-  await updateSessionStore(
-    params.storePath,
-    (store) => {
-      const entry = store[params.sessionKey];
-      if (!entry || entry.status !== "running") {
-        return;
-      }
-      entry.status = "failed";
-      entry.abortedLastRun = true;
-      entry.endedAt = Date.now();
-      entry.updatedAt = entry.endedAt;
-      entry.pendingFinalDelivery = undefined;
-      entry.pendingFinalDeliveryText = undefined;
-      entry.pendingFinalDeliveryCreatedAt = undefined;
-      entry.pendingFinalDeliveryLastAttemptAt = undefined;
-      entry.pendingFinalDeliveryAttemptCount = undefined;
-      entry.pendingFinalDeliveryLastError = undefined;
-      entry.pendingFinalDeliveryContext = undefined;
-      store[params.sessionKey] = entry;
-    },
-    { skipMaintenance: true },
-  );
+  await updateSessionStore(params.storePath, (store) => {
+    const entry = store[params.sessionKey];
+    if (!entry || entry.status !== "running") {
+      return;
+    }
+    entry.status = "failed";
+    entry.abortedLastRun = true;
+    entry.endedAt = Date.now();
+    entry.updatedAt = entry.endedAt;
+    entry.pendingFinalDelivery = undefined;
+    entry.pendingFinalDeliveryText = undefined;
+    entry.pendingFinalDeliveryCreatedAt = undefined;
+    entry.pendingFinalDeliveryLastAttemptAt = undefined;
+    entry.pendingFinalDeliveryAttemptCount = undefined;
+    entry.pendingFinalDeliveryLastError = undefined;
+    entry.pendingFinalDeliveryContext = undefined;
+    store[params.sessionKey] = entry;
+  });
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
 }
 
@@ -175,26 +171,21 @@ async function resumeMainSession(params: {
       },
       timeoutMs: 10_000,
     });
-    await updateSessionStore(
-      params.storePath,
-      (store) => {
-        const entry = store[params.sessionKey];
-        if (!entry) {
-          return;
-        }
-        const now = Date.now();
-        entry.abortedLastRun = false;
-        entry.updatedAt = now;
-        if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
-          entry.pendingFinalDeliveryLastAttemptAt = now;
-          entry.pendingFinalDeliveryAttemptCount =
-            (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-          entry.pendingFinalDeliveryLastError = null;
-        }
-        store[params.sessionKey] = entry;
-      },
-      { skipMaintenance: true },
-    );
+    await updateSessionStore(params.storePath, (store) => {
+      const entry = store[params.sessionKey];
+      if (!entry) {
+        return;
+      }
+      const now = Date.now();
+      entry.abortedLastRun = false;
+      entry.updatedAt = now;
+      if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
+        entry.pendingFinalDeliveryLastAttemptAt = now;
+        entry.pendingFinalDeliveryAttemptCount = (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+        entry.pendingFinalDeliveryLastError = null;
+      }
+      store[params.sessionKey] = entry;
+    });
     log.info(
       `resumed interrupted main session: ${params.sessionKey}${
         params.pendingFinalDeliveryText ? " (with pending payload)" : ""
@@ -223,28 +214,24 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   }
 
   const storePath = path.join(sessionsDir, "sessions.json");
-  await updateSessionStore(
-    storePath,
-    (store) => {
-      for (const [sessionKey, entry] of Object.entries(store)) {
-        if (!entry || entry.status !== "running") {
-          continue;
-        }
-        if (shouldSkipMainRecovery(entry, sessionKey)) {
-          result.skipped++;
-          continue;
-        }
-        const entryLockPaths = resolveEntryTranscriptLockPaths({ entry, sessionsDir });
-        if (!entryLockPaths.some((lockPath) => interruptedLockPaths.has(lockPath))) {
-          continue;
-        }
-        entry.abortedLastRun = true;
-        store[sessionKey] = entry;
-        result.marked++;
+  await updateSessionStore(storePath, (store) => {
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      if (!entry || entry.status !== "running") {
+        continue;
       }
-    },
-    { skipMaintenance: true },
-  );
+      if (shouldSkipMainRecovery(entry, sessionKey)) {
+        result.skipped++;
+        continue;
+      }
+      const entryLockPaths = resolveEntryTranscriptLockPaths({ entry, sessionsDir });
+      if (!entryLockPaths.some((lockPath) => interruptedLockPaths.has(lockPath))) {
+        continue;
+      }
+      entry.abortedLastRun = true;
+      store[sessionKey] = entry;
+      result.marked++;
+    }
+  });
 
   if (result.marked > 0) {
     log.warn(`marked ${result.marked} interrupted main session(s) from stale transcript locks`);

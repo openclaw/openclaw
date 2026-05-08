@@ -171,9 +171,6 @@ export async function upsertAcpSessionMeta(params: {
       store[storeSessionKey] = nextEntry;
       return nextEntry;
     },
-    {
-      activeSessionKey: normalizeLowercaseStringOrEmpty(sessionKey),
-      allowDropAcpMetaSessionKeys: [sessionKey],
-    },
+    { allowDropAcpMetaSessionKeys: [sessionKey] },
   );
 }
