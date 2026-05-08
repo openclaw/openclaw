@@ -20,6 +20,15 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function requireDiscordConfig(snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>) {
+  const config = snapshot.config.channels?.discord;
+  expect(config).toBeDefined();
+  if (!config) {
+    throw new Error("expected Discord runtime config");
+  }
+  return config;
+}
+
 describe("secrets runtime external channel origin discovery", () => {
   it("discovers loadable plugins for channel SecretRefs when plugins.entries is absent", async () => {
     loadPluginMetadataSnapshotMock.mockReturnValue({
@@ -68,7 +77,7 @@ describe("secrets runtime external channel origin discovery", () => {
       includeAuthStoreRefs: false,
     });
 
-    expect(snapshot.config.channels?.discord?.token).toBe("resolved-discord-token");
+    expect(requireDiscordConfig(snapshot).token).toBe("resolved-discord-token");
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
     expect(loadChannelSecretContractApiMock).toHaveBeenCalledWith(
       expect.objectContaining({
