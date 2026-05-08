@@ -402,7 +402,8 @@ describe("agentCliCommand", () => {
       );
       expect(loggingState.forceConsoleToStderr).toBe(true);
       expect(jsonRuntime.log).toHaveBeenCalledTimes(1);
-      const payload = JSON.parse(String(jsonRuntime.log.mock.calls[0]?.[0]));
+      const jsonPayload = requireFirstCallArg(jsonRuntime.log, "json runtime log");
+      const payload = JSON.parse(String(jsonPayload));
       expect(payload).toMatchObject({
         payloads: [{ text: "local" }],
         meta: {
