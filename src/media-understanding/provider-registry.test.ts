@@ -107,22 +107,64 @@ describe("media-understanding provider registry", () => {
     });
   });
 
-  it("does not auto-register providers with audio or video only inputs", () => {
+  it("auto-registers providers with audio-capable models", () => {
     const cfg = {
       models: {
         providers: {
-          avOnly: {
-            models: [
-              { id: "audio-model", input: ["text", "audio"] },
-              { id: "video-model", input: ["text", "video"] },
-            ],
+          audioProvider: {
+            models: [{ id: "audio-model", input: ["text", "audio"] }],
           },
         },
       },
     } as never;
 
     const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const provider = getMediaUnderstandingProvider("audioProvider", registry);
 
-    expect(getMediaUnderstandingProvider("avOnly", registry)).toBeUndefined();
+    expect(provider?.id).toBe("audioprovider");
+    expect(provider?.capabilities).toContain("audio");
+    expect(provider?.understandAudio).toBeDefined();
+  });
+
+  it("auto-registers providers with video-capable models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          videoProvider: {
+            models: [{ id: "video-model", input: ["text", "video"] }],
+          },
+        },
+      },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const provider = getMediaUnderstandingProvider("videoProvider", registry);
+
+    expect(provider?.id).toBe("videoprovider");
+    expect(provider?.capabilities).toContain("video");
+    expect(provider?.understandVideo).toBeDefined();
+  });
+
+  it("auto-registers providers with multi-modal capabilities", () => {
+    const cfg = {
+      models: {
+        providers: {
+          multiModal: {
+            models: [{ id: "multi-model", input: ["text", "image", "audio", "video"] }],
+          },
+        },
+      },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const provider = getMediaUnderstandingProvider("multiModal", registry);
+
+    expect(provider?.id).toBe("multimodal");
+    expect(provider?.capabilities).toContain("image");
+    expect(provider?.capabilities).toContain("audio");
+    expect(provider?.capabilities).toContain("video");
+    expect(provider?.describeImage).toBeDefined();
+    expect(provider?.understandAudio).toBeDefined();
+    expect(provider?.understandVideo).toBeDefined();
   });
 });

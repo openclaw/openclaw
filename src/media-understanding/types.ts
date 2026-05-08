@@ -1,7 +1,12 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
+type MediaUnderstandingKind =
+  | "audio.transcription"
+  | "audio.understanding"
+  | "video.description"
+  | "video.understanding"
+  | "image.description";
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
@@ -104,6 +109,32 @@ export type AudioTranscriptionResult = {
   model?: string;
 };
 
+export type AudioUnderstandingRequest = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
+  model?: string;
+  prompt?: string;
+  maxTokens?: number;
+  timeoutMs: number;
+  fetchFn?: typeof fetch;
+  profile?: string;
+  preferredProfile?: string;
+  authStore?: AuthProfileStore;
+  agentDir: string;
+  cfg: OpenClawConfig;
+  provider: string;
+};
+
+export type AudioUnderstandingResult = {
+  text: string;
+  model?: string;
+};
+
 export type VideoDescriptionRequest = {
   buffer: Buffer;
   fileName: string;
@@ -119,6 +150,32 @@ export type VideoDescriptionRequest = {
 };
 
 export type VideoDescriptionResult = {
+  text: string;
+  model?: string;
+};
+
+export type VideoUnderstandingRequest = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
+  model?: string;
+  prompt?: string;
+  maxTokens?: number;
+  timeoutMs: number;
+  fetchFn?: typeof fetch;
+  profile?: string;
+  preferredProfile?: string;
+  authStore?: AuthProfileStore;
+  agentDir: string;
+  cfg: OpenClawConfig;
+  provider: string;
+};
+
+export type VideoUnderstandingResult = {
   text: string;
   model?: string;
 };
@@ -176,7 +233,9 @@ export type MediaUnderstandingProvider = {
   autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
+  understandAudio?: (req: AudioUnderstandingRequest) => Promise<AudioUnderstandingResult>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
+  understandVideo?: (req: VideoUnderstandingRequest) => Promise<VideoUnderstandingResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
   describeImages?: (req: ImagesDescriptionRequest) => Promise<ImagesDescriptionResult>;
 };

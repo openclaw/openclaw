@@ -614,6 +614,63 @@ export async function runProviderEntry(params: {
   const fetchFn = resolveProxyFetchFromEnv();
 
   if (capability === "audio") {
+    // Check for native audio understanding first, then fall back to transcription
+    if (provider.understandAudio) {
+      const understandAudio = provider.understandAudio;
+      const requestOverrides = resolveMediaRequestOverrides(params.config);
+      const media = await params.cache.getBuffer({
+        attachmentIndex: params.attachmentIndex,
+        maxBytes,
+        timeoutMs,
+      });
+      assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
+      const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
+        providerId,
+        cfg,
+        entry,
+        config: params.config,
+        agentDir: params.agentDir,
+      });
+      const model =
+        entry.model?.trim() ||
+        (await import("./defaults.js")).resolveDefaultMediaModel({
+          cfg,
+          providerId,
+          capability: "audio",
+        }) ||
+        entry.model;
+      const result = await executeWithApiKeyRotation({
+        provider: providerId,
+        apiKeys,
+        execute: async (apiKey) =>
+          understandAudio({
+            buffer: media.buffer,
+            fileName: media.fileName,
+            mime: media.mime,
+            apiKey,
+            baseUrl,
+            headers,
+            request,
+            model,
+            prompt: requestOverrides.prompt ?? prompt,
+            timeoutMs,
+            fetchFn,
+            profile: entry.profile,
+            preferredProfile: entry.preferredProfile,
+            agentDir: params.agentDir ?? "",
+            cfg: params.cfg,
+            provider: providerId,
+          }),
+      });
+      return {
+        kind: "audio.understanding",
+        attachmentIndex: params.attachmentIndex,
+        text: trimOutput(result.text, maxChars),
+        provider: providerId,
+        model: result.model ?? model,
+      };
+    }
+    // Fall back to traditional transcription
     if (!provider.transcribeAudio) {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
@@ -678,6 +735,70 @@ export async function runProviderEntry(params: {
     };
   }
 
+  // Check for native video understanding first, then fall back to traditional description
+  if (provider.understandVideo) {
+    const understandVideo = provider.understandVideo;
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
+    const media = await params.cache.getBuffer({
+      attachmentIndex: params.attachmentIndex,
+      maxBytes,
+      timeoutMs,
+    });
+    const estimatedBase64Bytes = estimateBase64Size(media.size);
+    const maxBase64Bytes = resolveVideoMaxBase64Bytes(maxBytes);
+    if (estimatedBase64Bytes > maxBase64Bytes) {
+      throw new MediaUnderstandingSkipError(
+        "maxBytes",
+        `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
+      );
+    }
+    const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
+      providerId,
+      cfg,
+      entry,
+      config: params.config,
+      agentDir: params.agentDir,
+    });
+    const model =
+      entry.model?.trim() ||
+      (await import("./defaults.js")).resolveDefaultMediaModel({
+        cfg,
+        providerId,
+        capability: "video",
+      }) ||
+      entry.model;
+    const result = await executeWithApiKeyRotation({
+      provider: providerId,
+      apiKeys,
+      execute: (apiKey) =>
+        understandVideo({
+          buffer: media.buffer,
+          fileName: media.fileName,
+          mime: media.mime,
+          apiKey,
+          baseUrl,
+          headers,
+          request,
+          model,
+          prompt: requestOverrides.prompt ?? prompt,
+          timeoutMs,
+          fetchFn,
+          profile: entry.profile,
+          preferredProfile: entry.preferredProfile,
+          agentDir: params.agentDir ?? "",
+          cfg: params.cfg,
+          provider: providerId,
+        }),
+    });
+    return {
+      kind: "video.understanding",
+      attachmentIndex: params.attachmentIndex,
+      text: trimOutput(result.text, maxChars),
+      provider: providerId,
+      model: result.model ?? model,
+    };
+  }
+  // Fall back to traditional video description
   if (!provider.describeVideo) {
     throw new Error(`Video understanding provider "${providerId}" not available.`);
   }

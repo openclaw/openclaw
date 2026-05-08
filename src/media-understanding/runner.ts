@@ -259,6 +259,178 @@ async function resolveAutoImageModelId(params: {
   });
 }
 
+async function resolveAutoAudioModelId(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  providerRegistry: ProviderRegistry;
+  explicitModel?: string;
+}): Promise<string | undefined> {
+  // First check if provider has a default audio model configured
+  const defaultModel = resolveDefaultMediaModelFromRegistry({
+    providerId: params.providerId,
+    capability: "audio",
+    providerRegistry: params.providerRegistry,
+  });
+  if (defaultModel) {
+    return defaultModel;
+  }
+  const explicit = normalizeOptionalString(params.explicitModel);
+  if (explicit) {
+    return explicit;
+  }
+  const configuredModel = resolveConfiguredAudioModelId(params);
+  if (configuredModel) {
+    return configuredModel;
+  }
+  const { resolveDefaultMediaModel } = await import("./defaults.js");
+  const bundledDefaultModel = resolveDefaultMediaModel({
+    cfg: params.cfg,
+    providerId: params.providerId,
+    capability: "audio",
+  });
+  if (bundledDefaultModel) {
+    return bundledDefaultModel;
+  }
+  // For native audio understanding, try to find a model with audio input capability
+  const { loadModelCatalog } = await loadModelCatalogApi();
+  const catalog = await loadModelCatalog({ config: params.cfg });
+  return resolveCatalogAudioModelId({
+    providerId: params.providerId,
+    catalog,
+  });
+}
+
+async function resolveAutoVideoModelId(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  providerRegistry: ProviderRegistry;
+  explicitModel?: string;
+}): Promise<string | undefined> {
+  // First check if provider has a default video model configured
+  const defaultModel = resolveDefaultMediaModelFromRegistry({
+    providerId: params.providerId,
+    capability: "video",
+    providerRegistry: params.providerRegistry,
+  });
+  if (defaultModel) {
+    return defaultModel;
+  }
+  const explicit = normalizeOptionalString(params.explicitModel);
+  if (explicit) {
+    return explicit;
+  }
+  const configuredModel = resolveConfiguredVideoModelId(params);
+  if (configuredModel) {
+    return configuredModel;
+  }
+  const { resolveDefaultMediaModel } = await import("./defaults.js");
+  const bundledDefaultModel = resolveDefaultMediaModel({
+    cfg: params.cfg,
+    providerId: params.providerId,
+    capability: "video",
+  });
+  if (bundledDefaultModel) {
+    return bundledDefaultModel;
+  }
+  // For native video understanding, try to find a model with video input capability
+  const { loadModelCatalog } = await loadModelCatalogApi();
+  const catalog = await loadModelCatalog({ config: params.cfg });
+  return resolveCatalogVideoModelId({
+    providerId: params.providerId,
+    catalog,
+  });
+}
+
+function resolveConfiguredAudioModelId(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): string | undefined {
+  const configured = resolveConfiguredAudioModel(params);
+  const id = configured?.id?.trim();
+  return id || undefined;
+}
+
+function resolveConfiguredAudioModel(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): { id?: string; input?: string[] } | undefined {
+  const providerCfg = findNormalizedProviderValue(
+    params.cfg.models?.providers,
+    params.providerId,
+  ) as
+    | {
+        models?: Array<{
+          id?: string;
+          input?: string[];
+        }>;
+      }
+    | undefined;
+  return providerCfg?.models?.find((entry) => {
+    const id = entry?.id?.trim();
+    return Boolean(id) && entry?.input?.includes("audio");
+  });
+}
+
+function resolveConfiguredVideoModelId(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): string | undefined {
+  const configured = resolveConfiguredVideoModel(params);
+  const id = configured?.id?.trim();
+  return id || undefined;
+}
+
+function resolveConfiguredVideoModel(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): { id?: string; input?: string[] } | undefined {
+  const providerCfg = findNormalizedProviderValue(
+    params.cfg.models?.providers,
+    params.providerId,
+  ) as
+    | {
+        models?: Array<{
+          id?: string;
+          input?: string[];
+        }>;
+      }
+    | undefined;
+  return providerCfg?.models?.find((entry) => {
+    const id = entry?.id?.trim();
+    return Boolean(id) && entry?.input?.includes("video");
+  });
+}
+
+function resolveCatalogAudioModelId(params: {
+  providerId: string;
+  catalog: ModelCatalog;
+}): string | undefined {
+  const matches = params.catalog.filter(
+    (entry) =>
+      normalizeMediaProviderId(entry.provider) === params.providerId &&
+      entry.input?.includes("audio"),
+  );
+  if (matches.length === 0) {
+    return undefined;
+  }
+  return matches[0].id;
+}
+
+function resolveCatalogVideoModelId(params: {
+  providerId: string;
+  catalog: ModelCatalog;
+}): string | undefined {
+  const matches = params.catalog.filter(
+    (entry) =>
+      normalizeMediaProviderId(entry.provider) === params.providerId &&
+      entry.input?.includes("video"),
+  );
+  if (matches.length === 0) {
+    return undefined;
+  }
+  return matches[0].id;
+}
+
 export function buildProviderRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
   cfg?: OpenClawConfig,
@@ -535,13 +707,15 @@ async function resolveKeyEntry(params: {
     if (!provider) {
       return null;
     }
-    if (capability === "audio" && !provider.transcribeAudio) {
+    // Check for native understanding capabilities (understandAudio/understandVideo)
+    // or traditional capabilities (transcribeAudio/describeVideo)
+    if (capability === "audio" && !provider.transcribeAudio && !provider.understandAudio) {
       return null;
     }
     if (capability === "image" && !provider.describeImage) {
       return null;
     }
-    if (capability === "video" && !provider.describeVideo) {
+    if (capability === "video" && !provider.describeVideo && !provider.understandVideo) {
       return null;
     }
     if (
@@ -561,8 +735,25 @@ async function resolveKeyEntry(params: {
             providerRegistry,
             explicitModel: model,
           })
-        : model;
-    if (capability === "image" && !resolvedModel) {
+        : capability === "audio"
+          ? await resolveAutoAudioModelId({
+              cfg,
+              providerId,
+              providerRegistry,
+              explicitModel: model,
+            })
+          : capability === "video"
+            ? await resolveAutoVideoModelId({
+                cfg,
+                providerId,
+                providerRegistry,
+                explicitModel: model,
+              })
+            : model;
+    if (
+      (capability === "image" || capability === "audio" || capability === "video") &&
+      !resolvedModel
+    ) {
       return null;
     }
     return { type: "provider" as const, provider: providerId, model: resolvedModel };
@@ -732,13 +923,15 @@ async function resolveActiveModelEntry(params: {
   if (!provider) {
     return null;
   }
-  if (params.capability === "audio" && !provider.transcribeAudio) {
+  // Check for native understanding capabilities (understandAudio/understandVideo)
+  // or traditional capabilities (transcribeAudio/describeVideo)
+  if (params.capability === "audio" && !provider.transcribeAudio && !provider.understandAudio) {
     return null;
   }
   if (params.capability === "image" && !provider.describeImage) {
     return null;
   }
-  if (params.capability === "video" && !provider.describeVideo) {
+  if (params.capability === "video" && !provider.describeVideo && !provider.understandVideo) {
     return null;
   }
   const hasAuth = await hasProviderAuthAvailable({
@@ -758,15 +951,26 @@ async function resolveActiveModelEntry(params: {
       explicitModel: params.activeModel?.model,
     });
   } else if (params.capability === "audio") {
-    model = resolveDefaultMediaModelFromRegistry({
+    model = await resolveAutoAudioModelId({
+      cfg: params.cfg,
       providerId,
-      capability: "audio",
       providerRegistry: params.providerRegistry,
+      explicitModel: params.activeModel?.model,
     });
-  } else {
-    model = params.activeModel?.model;
+  } else if (params.capability === "video") {
+    model = await resolveAutoVideoModelId({
+      cfg: params.cfg,
+      providerId,
+      providerRegistry: params.providerRegistry,
+      explicitModel: params.activeModel?.model,
+    });
   }
-  if ((params.capability === "image" || params.capability === "audio") && !model) {
+  if (
+    (params.capability === "image" ||
+      params.capability === "audio" ||
+      params.capability === "video") &&
+    !model
+  ) {
     return null;
   }
   return {

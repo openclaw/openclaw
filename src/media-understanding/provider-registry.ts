@@ -1,9 +1,15 @@
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
+import { understandAudioWithModel } from "./audio-understanding-runtime.js";
+import {
+  resolveAudioCapableConfigProviderIds,
+  resolveImageCapableConfigProviderIds,
+  resolveVideoCapableConfigProviderIds,
+} from "./config-provider-models.js";
 import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
+import { understandVideoWithModel } from "./video-understanding-runtime.js";
 
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
@@ -38,7 +44,8 @@ export function buildMediaUnderstandingRegistry(
   })) {
     mergeProviderIntoRegistry(registry, provider);
   }
-  // Auto-register media-understanding for config providers with image-capable models (#51392)
+  // Auto-register media-understanding for config providers with capable models (#51392)
+  // Image-capable providers
   for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
     if (!registry.has(normalizedKey)) {
       mergeProviderIntoRegistry(registry, {
@@ -47,6 +54,40 @@ export function buildMediaUnderstandingRegistry(
         describeImage: describeImageWithModel,
         describeImages: describeImagesWithModel,
       });
+    }
+  }
+  // Audio-capable providers (native audio understanding via model input)
+  for (const normalizedKey of resolveAudioCapableConfigProviderIds(cfg)) {
+    const existing = registry.get(normalizedKey);
+    if (!existing) {
+      mergeProviderIntoRegistry(registry, {
+        id: normalizedKey,
+        capabilities: ["audio"],
+        understandAudio: understandAudioWithModel,
+      });
+    } else if (!existing.capabilities?.includes("audio")) {
+      // Extend existing provider with audio capability
+      existing.capabilities = [...(existing.capabilities ?? []), "audio"];
+      if (!existing.understandAudio) {
+        existing.understandAudio = understandAudioWithModel;
+      }
+    }
+  }
+  // Video-capable providers (native video understanding via model input)
+  for (const normalizedKey of resolveVideoCapableConfigProviderIds(cfg)) {
+    const existing = registry.get(normalizedKey);
+    if (!existing) {
+      mergeProviderIntoRegistry(registry, {
+        id: normalizedKey,
+        capabilities: ["video"],
+        understandVideo: understandVideoWithModel,
+      });
+    } else if (!existing.capabilities?.includes("video")) {
+      // Extend existing provider with video capability
+      existing.capabilities = [...(existing.capabilities ?? []), "video"];
+      if (!existing.understandVideo) {
+        existing.understandVideo = understandVideoWithModel;
+      }
     }
   }
   if (overrides) {
