@@ -169,32 +169,46 @@ type AgentCommandCall = Record<string, unknown>;
 type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
 
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+let dateOnlyFakeClockActive = false;
+
+function waitForRealTimer(ms: number) {
+  return new Promise<void>((resolve) => realSetTimeout(resolve, ms));
+}
+
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
-  vi.useFakeTimers();
-  try {
-    let lastError: unknown;
-    for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
-      try {
-        assertion();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(stepMs);
+  let lastError: unknown;
+  for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
     }
-    throw lastError ?? new Error("assertion did not pass in time");
-  } finally {
-    vi.useRealTimers();
+
+    await Promise.resolve();
+    if (vi.isFakeTimers() && !dateOnlyFakeClockActive) {
+      await vi.advanceTimersByTimeAsync(stepMs);
+    } else {
+      await waitForRealTimer(stepMs);
+    }
   }
+  throw lastError ?? new Error("assertion did not pass in time");
+}
+
+function requireValue<T>(value: T | null | undefined, message: string): T {
+  if (value == null) {
+    throw new Error(message);
+  }
+  return value;
 }
 
 async function flushScheduledDispatchStep() {
   await Promise.resolve();
-  if (vi.isFakeTimers()) {
+  if (vi.isFakeTimers() && !dateOnlyFakeClockActive) {
     await vi.runOnlyPendingTimersAsync();
   } else {
-    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+    await waitForRealTimer(15);
   }
   await Promise.resolve();
 }
@@ -242,7 +256,8 @@ function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
 }
 
 function setupNewYorkTimeConfig(isoDate: string) {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  dateOnlyFakeClockActive = true;
   vi.setSystemTime(new Date(isoDate)); // Wed Jan 28, 8:30 PM EST
   mocks.agentCommand.mockClear();
   mocks.loadConfigReturn = {
@@ -256,6 +271,7 @@ function setupNewYorkTimeConfig(isoDate: string) {
 
 function resetTimeConfig() {
   mocks.loadConfigReturn = {};
+  dateOnlyFakeClockActive = false;
   vi.useRealTimers();
 }
 
@@ -310,7 +326,7 @@ async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
     meta: { durationMs: 100 },
   });
   await runMainAgent("hi", idempotencyKey);
-  return capturedEntry;
+  return requireValue(capturedEntry, "updated session entry missing");
 }
 
 function readLastAgentCommandCall(): AgentCommandCall | undefined {
@@ -413,6 +429,8 @@ describe("gateway agent handler", () => {
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
+    dateOnlyFakeClockActive = false;
+    vi.useRealTimers();
   });
 
   it("preserves ACP metadata from the current stored session entry", async () => {
@@ -447,8 +465,9 @@ describe("gateway agent handler", () => {
     await runMainAgent("test", "test-idem-acp-meta");
 
     expect(mocks.updateSessionStore).toHaveBeenCalled();
-    expect(capturedEntry).toBeDefined();
-    expect(capturedEntry?.acp).toEqual(existingAcpMeta);
+    expect(requireValue(capturedEntry, "updated session entry missing").acp).toEqual(
+      existingAcpMeta,
+    );
   });
 
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
@@ -781,9 +800,8 @@ describe("gateway agent handler", () => {
     });
 
     const capturedEntry = await runMainAgentAndCaptureEntry("test-idem");
-    expect(capturedEntry).toBeDefined();
-    expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
-    expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
+    expect(capturedEntry.cliSessionIds).toEqual(existingCliSessionIds);
+    expect(capturedEntry.claudeCliSessionId).toBe(existingClaudeCliSessionId);
   });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
@@ -1256,7 +1274,9 @@ describe("gateway agent handler", () => {
       (call: unknown[]) =>
         call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
     );
-    expect(accepted).toBeDefined();
+    expect(requireValue(accepted, "accepted response missing")[1]).toEqual(
+      expect.objectContaining({ status: "accepted" }),
+    );
     const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejected).toBeUndefined();
     expect(logInfo).toHaveBeenCalledTimes(1);
@@ -2292,10 +2312,9 @@ describe("gateway agent handler", () => {
     mockMainSessionEntry({});
 
     const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-2");
-    expect(capturedEntry).toBeDefined();
     // Should be undefined, not cause an error
-    expect(capturedEntry?.cliSessionIds).toBeUndefined();
-    expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
+    expect(capturedEntry.cliSessionIds).toBeUndefined();
+    expect(capturedEntry.claudeCliSessionId).toBeUndefined();
   });
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {
     mocks.loadSessionEntry.mockReturnValue({
@@ -2337,9 +2356,9 @@ describe("gateway agent handler", () => {
     );
 
     expect(mocks.updateSessionStore).toHaveBeenCalled();
-    expect(capturedStore).toBeDefined();
-    expect(capturedStore?.["agent:main:work"]).toBeDefined();
-    expect(capturedStore?.["agent:main:MAIN"]).toBeUndefined();
+    const sessionStore = requireValue(capturedStore, "updated session store missing");
+    expect(sessionStore).toHaveProperty("agent:main:work");
+    expect(sessionStore["agent:main:MAIN"]).toBeUndefined();
   });
 
   it("handles bare /new by resetting the same session and sending reset greeting prompt", async () => {
@@ -2942,12 +2961,12 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     const entry = context.chatAbortControllers.get(runId);
-    expect(entry).toBeDefined();
-    expect(entry?.sessionKey).toBe("agent:main:main");
-    expect(entry?.sessionId).toBe("existing-session-id");
-    expect(entry?.ownerConnId).toBe("conn-1");
-    expect(entry?.controller.signal.aborted).toBe(false);
-    expect((entry?.expiresAtMs ?? 0) - (entry?.startedAtMs ?? 0)).toBeGreaterThan(24 * 60 * 60_000);
+    const abortEntry = requireValue(entry, "chat abort entry missing");
+    expect(abortEntry.sessionKey).toBe("agent:main:main");
+    expect(abortEntry.sessionId).toBe("existing-session-id");
+    expect(abortEntry.ownerConnId).toBe("conn-1");
+    expect(abortEntry.controller.signal.aborted).toBe(false);
+    expect(abortEntry.expiresAtMs - abortEntry.startedAtMs).toBeGreaterThan(24 * 60 * 60_000);
   });
 
   it("yields after the accepted ack before dispatching heavy agent work", async () => {
@@ -3006,8 +3025,8 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     const entry = context.chatAbortControllers.get(runId);
-    expect(entry).toBeDefined();
-    expect((entry?.expiresAtMs ?? 0) - (entry?.startedAtMs ?? 0)).toBeGreaterThan(24 * 60 * 60_000);
+    const abortEntry = requireValue(entry, "chat abort entry missing");
+    expect(abortEntry.expiresAtMs - abortEntry.startedAtMs).toBeGreaterThan(24 * 60 * 60_000);
   });
 
   it("sets the maintenance expiry to the configured agent timeout, not the 24h chat default", async () => {
@@ -3033,13 +3052,13 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.loadConfigReturn = {};
 
     const entry = context.chatAbortControllers.get(runId);
-    expect(entry).toBeDefined();
+    const abortEntry = requireValue(entry, "chat abort entry missing");
     // 48h configured timeout must not be silently truncated to the 24h
     // chat.send default cap baked into resolveChatRunExpiresAtMs. Assert
     // at least 25h to leave headroom above the 24h cap; the expected
     // value is ~48h.
     const TWENTY_FIVE_HOURS_MS = 25 * 60 * 60 * 1_000;
-    expect((entry?.expiresAtMs ?? 0) - before).toBeGreaterThan(TWENTY_FIVE_HOURS_MS);
+    expect(abortEntry.expiresAtMs - before).toBeGreaterThan(TWENTY_FIVE_HOURS_MS);
   });
 
   it("chat.abort by runId aborts the agent run's signal and removes the entry", async () => {

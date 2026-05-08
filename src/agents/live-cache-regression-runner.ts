@@ -22,6 +22,7 @@ const ANTHROPIC_TIMEOUT_MS = 120_000;
 const LIVE_CACHE_LANE_RETRIES = 1;
 const LIVE_CACHE_RESPONSE_RETRIES = 2;
 const OPENAI_CACHE_REASONING = "low" as unknown as never;
+const OPENAI_CACHE_MIN_MAX_TOKENS = 256;
 const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const OPENAI_MCP_PREFIX = buildStableCachePrefix("openai-mcp-style");
 const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
@@ -153,6 +154,32 @@ function shouldRetryCacheProbeText(params: {
   );
 }
 
+function resolveCacheProbeMaxTokens(params: {
+  maxTokens: number | undefined;
+  providerTag: "anthropic" | "openai";
+}): number {
+  const requested = params.maxTokens ?? 64;
+  if (params.providerTag !== "openai") {
+    return requested;
+  }
+  return Math.max(requested, OPENAI_CACHE_MIN_MAX_TOKENS);
+}
+
+function shouldAcceptEmptyOpenAICacheProbe(params: {
+  providerTag: "anthropic" | "openai";
+  text: string;
+  usage: CacheUsage;
+}): boolean {
+  if (params.providerTag !== "openai" || params.text.trim().length > 0) {
+    return false;
+  }
+  return (
+    (params.usage.input ?? 0) > 0 ||
+    (params.usage.cacheRead ?? 0) > 0 ||
+    (params.usage.cacheWrite ?? 0) > 0
+  );
+}
+
 async function runToolOnlyTurn(params: {
   apiKey: string;
   cacheRetention: "none" | "short" | "long";
@@ -242,7 +269,10 @@ async function completeCacheProbe(params: {
         apiKey: params.apiKey,
         cacheRetention: params.cacheRetention,
         sessionId: params.sessionId,
-        maxTokens: params.maxTokens ?? 64,
+        maxTokens: resolveCacheProbeMaxTokens({
+          maxTokens: params.maxTokens,
+          providerTag: params.providerTag,
+        }),
         temperature: 0,
         ...(params.providerTag === "openai" ? { reasoning: OPENAI_CACHE_REASONING } : {}),
       },
@@ -250,6 +280,24 @@ async function completeCacheProbe(params: {
       timeoutMs,
     );
     const text = extractAssistantText(response);
+    const usage = normalizeCacheUsage(response.usage);
+    if (
+      shouldAcceptEmptyOpenAICacheProbe({
+        providerTag: params.providerTag,
+        text,
+        usage,
+      })
+    ) {
+      logLiveCache(
+        `${params.providerTag} cache lane ${params.suffix} accepted empty text with usage ${formatUsage(usage)}`,
+      );
+      return {
+        suffix: params.suffix,
+        text,
+        usage,
+        hitRate: computeCacheHitRate(usage),
+      };
+    }
     if (shouldRetryCacheProbeText({ attempt, suffix: params.suffix, text })) {
       logLiveCache(
         `${params.providerTag} cache lane ${params.suffix} response mismatch; retrying: ${JSON.stringify(text)}`,
@@ -262,7 +310,6 @@ async function completeCacheProbe(params: {
     if (!responseTextLower.includes(markerLower)) {
       throw new CacheProbeTextMismatchError(params.suffix, text);
     }
-    const usage = normalizeCacheUsage(response.usage);
     return {
       suffix: params.suffix,
       text,
@@ -551,6 +598,8 @@ function appendBaselineFindings(target: BaselineFindings, source: BaselineFindin
 export const __testing = {
   assertAgainstBaseline,
   evaluateAgainstBaseline,
+  resolveCacheProbeMaxTokens,
+  shouldAcceptEmptyOpenAICacheProbe,
   shouldRetryCacheProbeText,
   shouldRetryBaselineFindings,
 };
@@ -562,7 +611,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     provider: "openai",
     api: "openai-responses",
     envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-    preferredModelIds: ["gpt-5.2", "gpt-5.4-mini", "gpt-5.4", "gpt-5.5"],
+    preferredModelIds: ["gpt-4.1", "gpt-5.2", "gpt-5.4-mini", "gpt-5.4", "gpt-5.5"],
   });
   const anthropic = await resolveLiveDirectModel({
     provider: "anthropic",

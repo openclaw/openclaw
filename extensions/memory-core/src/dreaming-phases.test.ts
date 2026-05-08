@@ -54,6 +54,26 @@ const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   },
 };
 
+function requireCandidateByKey<T extends { key: string }>(candidates: T[], key: string): T {
+  const candidate = candidates.find((entry) => entry.key === key);
+  if (!candidate) {
+    throw new Error(`expected promotion candidate ${key}`);
+  }
+  return candidate;
+}
+
+function requireCandidateKeyByPath(
+  candidates: Array<{ key: string; path: string }>,
+  predicate: (path: string) => boolean,
+  label: string,
+): string {
+  const key = candidates.find((candidate) => predicate(candidate.path))?.key;
+  if (!key) {
+    throw new Error(`expected promotion candidate key for ${label}`);
+  }
+  return key;
+}
+
 function createHarness(
   config: OpenClawConfig,
   workspaceDir?: string,
@@ -2314,9 +2334,8 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs,
     });
-    const reinforcedCandidate = reinforced.find((candidate) => candidate.key === baseline[0].key);
-    expect(reinforcedCandidate).toBeDefined();
-    expect(reinforcedCandidate!.score).toBeGreaterThan(baselineScore);
+    const reinforcedCandidate = requireCandidateByKey(reinforced, baseline[0].key);
+    expect(reinforcedCandidate.score).toBeGreaterThan(baselineScore);
 
     const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
     const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
@@ -2373,12 +2392,16 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs,
     });
-    const liveKey = baseline.find((candidate) => candidate.path === "memory/2026-04-03.md")?.key;
-    const staleKey = baseline.find((candidate) =>
-      candidate.path.includes("session-corpus/2026-04-16.txt"),
-    )?.key;
-    expect(liveKey).toBeDefined();
-    expect(staleKey).toBeDefined();
+    const liveKey = requireCandidateKeyByPath(
+      baseline,
+      (candidatePath) => candidatePath === "memory/2026-04-03.md",
+      "live memory note",
+    );
+    const staleKey = requireCandidateKeyByPath(
+      baseline,
+      (candidatePath) => candidatePath.includes("session-corpus/2026-04-16.txt"),
+      "stale session corpus",
+    );
 
     await withDreamingTestClock(async () => {
       setDreamingTestTime();
@@ -2404,8 +2427,8 @@ describe("memory-core dreaming phases", () => {
     const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
       entries: Record<string, { remHits: number }>;
     };
-    expect(phaseSignalStore.entries[liveKey!]).toMatchObject({ remHits: 1 });
-    expect(phaseSignalStore.entries[staleKey!]).toBeUndefined();
+    expect(phaseSignalStore.entries[liveKey]).toMatchObject({ remHits: 1 });
+    expect(phaseSignalStore.entries[staleKey]).toBeUndefined();
 
     const remOutput = await fs.readFile(
       path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
@@ -2586,17 +2609,6 @@ describe("memory-core dreaming phases", () => {
     expect(after1).toHaveLength(1);
     expect(after1[0]?.dailyCount).toBe(1);
 
-    // Clear the daily ingestion checkpoint so the file is re-read on the second
-    // sweep (simulating a new day where the same lookback window still covers
-    // this file).
-    const dailyStatePath = path.join(workspaceDir, "memory", ".dreams", "daily-ingestion.json");
-    try {
-      await fs.unlink(dailyStatePath);
-    } catch {
-      // ignore if not created
-    }
-
-    // Second ingestion on 2026-04-06 (next day).
     const day2Ms = Date.parse("2026-04-06T10:00:00.000Z");
     const { beforeAgentReply: reply2 } = createHarness(configForTest, workspaceDir);
     await withDreamingTestClock(async () => {
@@ -2615,8 +2627,6 @@ describe("memory-core dreaming phases", () => {
       nowMs: day2Ms,
     });
     expect(after2).toHaveLength(1);
-    // With the fix, dailyCount should be 2 because the ingestion date changed.
-    // Before the fix, it stayed at 1 because dayBucket was the file date.
     expect(after2[0]?.dailyCount).toBe(2);
   });
 });

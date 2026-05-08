@@ -12,13 +12,12 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import {
-  isCliRuntimeAlias,
-  resolveCliRuntimeExecutionProvider,
-} from "../../agents/model-runtime-aliases.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
+import { resolveOpenAIRuntimeProviderForPi } from "../../agents/openai-codex-routing.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatRateLimitOrOverloadedErrorCopy,
@@ -340,10 +339,13 @@ function extractCodexUsageLimitMessage(text: string): string | undefined {
     "You've reached your Codex subscription usage limit.",
     "Codex usage limit reached.",
   ];
-  const markerIndex = markers
-    .map((marker) => text.indexOf(marker))
-    .filter((index) => index >= 0)
-    .toSorted((left, right) => left - right)[0];
+  let markerIndex: number | undefined;
+  for (const marker of markers) {
+    const index = text.indexOf(marker);
+    if (index >= 0 && (markerIndex === undefined || index < markerIndex)) {
+      markerIndex = index;
+    }
+  }
   if (markerIndex === undefined) {
     return undefined;
   }
@@ -433,6 +435,30 @@ function resolveExternalRunFailureTextForConversation(params: {
   return SILENT_REPLY_TOKEN;
 }
 
+const CLI_BACKEND_NO_OUTPUT_STALL_RE =
+  /\bCLI produced no output for\s+(\d+)\s*s\s+and was terminated\b/iu;
+const CLI_BACKEND_OVERALL_TIMEOUT_RE =
+  /\bCLI exceeded timeout\s*\(\s*(\d+)\s*s\s*\)\s+and was terminated\b/iu;
+const CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE = /\b([\w.-]+\/[A-Za-z][\w.-]*)\s*:\s*CLI\b/iu;
+
+function buildCliBackendTimeoutFailureText(message: string): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const stall = normalizedMessage.match(CLI_BACKEND_NO_OUTPUT_STALL_RE);
+  const overall = normalizedMessage.match(CLI_BACKEND_OVERALL_TIMEOUT_RE);
+  const timeout = stall ?? overall;
+  const seconds = timeout?.[1];
+  if (!seconds) {
+    return null;
+  }
+  const routedModelRef = normalizedMessage.match(CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE)?.[1];
+  const routingSuffix = routedModelRef ? ` (routing ${routedModelRef})` : "";
+  const modeLabel = stall ? "no-output stall" : "overall CLI turn budget";
+  return (
+    `⚠️ CLI subprocess${routingSuffix}: timed out after ${seconds}s (${modeLabel}). The gateway may still be healthy. Try \`/new\`, a lighter model, or raise ` +
+    "`agents.defaults.timeoutSeconds` and the watchdog `noOutputTimeoutMs` entries under `cliBackends.<your-runtime>`."
+  );
+}
+
 function buildMissingApiKeyFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   const providerMatch = normalizedMessage.match(/No API key found for provider "([^"]+)"/u);
@@ -493,6 +519,10 @@ function buildExternalRunFailureReply(
       text: `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`,
       isGenericRunnerFailure: false,
     };
+  }
+  const cliBackendTimeoutFailure = buildCliBackendTimeoutFailureText(normalizedMessage);
+  if (cliBackendTimeoutFailure) {
+    return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
   }
   return {
     text: options?.includeDetails
@@ -881,8 +911,9 @@ function resolveRestartLifecycleError(
   const pending = [err];
   const seen = new Set<unknown>();
 
-  while (pending.length > 0) {
-    const candidate = pending.shift();
+  let pendingIndex = 0;
+  while (pendingIndex < pending.length) {
+    const candidate = pending[pendingIndex++];
     if (!candidate || seen.has(candidate)) {
       continue;
     }
@@ -1373,15 +1404,12 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
-          const agentRuntimeOverride = normalizeOptionalString(
-            params.getActiveSessionEntry()?.agentRuntimeOverride,
-          );
           const cliExecutionProvider =
             resolveCliRuntimeExecutionProvider({
               provider,
               cfg: runtimeConfig,
               agentId: params.followupRun.run.agentId,
-              runtimeOverride: agentRuntimeOverride,
+              modelId: model,
             }) ?? provider;
 
           if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
@@ -1534,6 +1562,21 @@ export async function runAgentTurnWithFallback(params: {
               model,
             },
           );
+          const agentHarnessPolicy = resolveAgentHarnessPolicy({
+            provider,
+            modelId: model,
+            config: runtimeConfig,
+            agentId: params.followupRun.run.agentId,
+            sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+          });
+          const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
+            provider,
+            harnessRuntime: agentHarnessPolicy.runtime,
+            authProfileProvider: runBaseParams.authProfileId?.split(":", 1)[0],
+            authProfileId: runBaseParams.authProfileId,
+            config: runtimeConfig,
+            workspaceDir: params.followupRun.run.workspaceDir,
+          });
           return (async () => {
             let attemptCompactionCount = 0;
             const lifecycleBackstop = createEmbeddedLifecycleTerminalBackstop({
@@ -1552,12 +1595,7 @@ export async function runAgentTurnWithFallback(params: {
                 groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                 ...senderContext,
                 ...runBaseParams,
-                ...(agentRuntimeOverride &&
-                agentRuntimeOverride !== "auto" &&
-                agentRuntimeOverride !== "default" &&
-                !isCliRuntimeAlias(agentRuntimeOverride)
-                  ? { agentHarnessId: agentRuntimeOverride }
-                  : {}),
+                provider: embeddedRunProvider,
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
@@ -1632,8 +1670,7 @@ export async function runAgentTurnWithFallback(params: {
                     const phase = readStringValue(evt.data.phase) ?? "";
                     const name = readStringValue(evt.data.name);
                     if (phase === "start" || phase === "update") {
-                      await params.typingSignals.signalToolStart();
-                      await params.opts?.onToolStart?.({
+                      const toolStartProgressPromise = params.opts?.onToolStart?.({
                         name,
                         phase,
                         args:
@@ -1642,9 +1679,17 @@ export async function runAgentTurnWithFallback(params: {
                             : undefined,
                         detailMode: params.toolProgressDetail,
                       });
+                      await Promise.all([
+                        params.typingSignals.signalToolStart(),
+                        toolStartProgressPromise,
+                      ]);
                     }
                   }
-                  if (evt.stream === "item") {
+                  const suppressItemChannelProgress =
+                    evt.stream === "item" &&
+                    evt.data.suppressChannelProgress === true &&
+                    Boolean(params.opts?.onToolStart);
+                  if (evt.stream === "item" && !suppressItemChannelProgress) {
                     await params.opts?.onItemEvent?.({
                       itemId: readStringValue(evt.data.itemId),
                       kind: readStringValue(evt.data.kind),

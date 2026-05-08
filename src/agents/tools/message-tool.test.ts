@@ -103,6 +103,19 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+const openClawToolsFactoryMocks = vi.hoisted(() => {
+  const tool = (name: string) => ({
+    name,
+    displaySummary: `${name} test stub`,
+    description: `${name} test stub`,
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(async () => ({ type: "json", data: { ok: true } })),
+  });
+  return {
+    tool,
+  };
+});
+
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
   const actual = await vi.importActual<
     typeof import("../../infra/outbound/message-action-runner.js")
@@ -128,6 +141,79 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
 
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
+}));
+
+vi.mock("../../channels/plugins/message-tool-api.js", () => ({
+  resolveBundledChannelMessageToolDiscoveryAdapter: () => ({
+    describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+  }),
+}));
+
+vi.mock("./agents-list-tool.js", () => ({
+  createAgentsListTool: () => openClawToolsFactoryMocks.tool("agents"),
+}));
+vi.mock("./cron-tool.js", () => ({
+  createCronTool: () => openClawToolsFactoryMocks.tool("cron"),
+}));
+vi.mock("./gateway-tool.js", () => ({
+  createGatewayTool: () => openClawToolsFactoryMocks.tool("gateway"),
+}));
+vi.mock("./heartbeat-response-tool.js", () => ({
+  createHeartbeatResponseTool: () => openClawToolsFactoryMocks.tool("heartbeat_response"),
+}));
+vi.mock("./image-generate-tool.js", () => ({
+  createImageGenerateTool: () => null,
+}));
+vi.mock("./image-tool.js", () => ({
+  createImageTool: () => null,
+}));
+vi.mock("./manifest-capability-availability.js", () => ({
+  hasSnapshotCapabilityAvailability: () => false,
+  hasSnapshotProviderEnvAvailability: () => false,
+  loadCapabilityMetadataSnapshot: () => ({ index: {}, plugins: [] }),
+}));
+vi.mock("./music-generate-tool.js", () => ({
+  createMusicGenerateTool: () => null,
+}));
+vi.mock("./nodes-tool.js", () => ({
+  createNodesTool: () => openClawToolsFactoryMocks.tool("nodes"),
+}));
+vi.mock("./pdf-tool.js", () => ({
+  createPdfTool: () => null,
+}));
+vi.mock("./session-status-tool.js", () => ({
+  createSessionStatusTool: () => openClawToolsFactoryMocks.tool("session_status"),
+}));
+vi.mock("./sessions-history-tool.js", () => ({
+  createSessionsHistoryTool: () => openClawToolsFactoryMocks.tool("sessions_history"),
+}));
+vi.mock("./sessions-list-tool.js", () => ({
+  createSessionsListTool: () => openClawToolsFactoryMocks.tool("sessions_list"),
+}));
+vi.mock("./sessions-send-tool.js", () => ({
+  createSessionsSendTool: () => openClawToolsFactoryMocks.tool("sessions_send"),
+}));
+vi.mock("./sessions-spawn-tool.js", () => ({
+  createSessionsSpawnTool: () => openClawToolsFactoryMocks.tool("sessions_spawn"),
+}));
+vi.mock("./sessions-yield-tool.js", () => ({
+  createSessionsYieldTool: () => openClawToolsFactoryMocks.tool("sessions_yield"),
+}));
+vi.mock("./subagents-tool.js", () => ({
+  createSubagentsTool: () => openClawToolsFactoryMocks.tool("subagents"),
+}));
+vi.mock("./tts-tool.js", () => ({
+  createTtsTool: () => openClawToolsFactoryMocks.tool("tts"),
+}));
+vi.mock("./update-plan-tool.js", () => ({
+  createUpdatePlanTool: () => openClawToolsFactoryMocks.tool("update_plan"),
+}));
+vi.mock("./video-generate-tool.js", () => ({
+  createVideoGenerateTool: () => null,
+}));
+vi.mock("./web-tools.js", () => ({
+  createWebFetchTool: () => openClawToolsFactoryMocks.tool("web_fetch"),
+  createWebSearchTool: () => openClawToolsFactoryMocks.tool("web_search"),
 }));
 
 function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
@@ -603,7 +689,7 @@ describe("message tool schema scoping", () => {
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
 
-      expect(properties.presentation).toBeDefined();
+      expect(properties).toHaveProperty("presentation");
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -611,17 +697,17 @@ describe("message tool schema scoping", () => {
         expect(actionEnum).toContain(action);
       }
       if (expectTelegramPollExtras) {
-        expect(properties.pollDurationSeconds).toBeDefined();
-        expect(properties.pollAnonymous).toBeDefined();
-        expect(properties.pollPublic).toBeDefined();
+        expect(properties).toHaveProperty("pollDurationSeconds");
+        expect(properties).toHaveProperty("pollAnonymous");
+        expect(properties).toHaveProperty("pollPublic");
       } else {
         expect(properties.pollDurationSeconds).toBeUndefined();
         expect(properties.pollAnonymous).toBeUndefined();
         expect(properties.pollPublic).toBeUndefined();
       }
-      expect(properties.pollId).toBeDefined();
-      expect(properties.pollOptionIndex).toBeDefined();
-      expect(properties.pollOptionId).toBeDefined();
+      expect(properties).toHaveProperty("pollId");
+      expect(properties).toHaveProperty("pollOptionIndex");
+      expect(properties).toHaveProperty("pollOptionId");
     },
   );
 
@@ -720,7 +806,7 @@ describe("message tool schema scoping", () => {
       currentChannelProvider: "telegram",
     });
 
-    expect(getToolProperties(scopedTool).presentation).toBeDefined();
+    expect(getToolProperties(scopedTool)).toHaveProperty("presentation");
     expect(getToolProperties(unscopedTool).presentation).toBeUndefined();
   });
 
@@ -915,11 +1001,11 @@ describe("message tool description", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
-  const bluebubblesPlugin = createChannelPlugin({
-    id: "bluebubbles",
-    label: "BlueBubbles",
-    docsPath: "/channels/bluebubbles",
-    blurb: "BlueBubbles test plugin.",
+  const imessagePlugin = createChannelPlugin({
+    id: "imessage",
+    label: "iMessage",
+    docsPath: "/channels/imessage",
+    blurb: "iMessage test plugin.",
     describeMessageTool: ({ currentChannelId }) => {
       const all: ChannelMessageActionName[] = [
         "react",
@@ -945,7 +1031,7 @@ describe("message tool description", () => {
     },
     messaging: {
       normalizeTarget: (raw) => {
-        const trimmed = raw.trim().replace(/^bluebubbles:/i, "");
+        const trimmed = raw.trim().replace(/^imessage:/i, "");
         const lower = trimmed.toLowerCase();
         if (lower.startsWith("chat_guid:")) {
           const guid = trimmed.slice("chat_guid:".length);
@@ -973,15 +1059,15 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
-  it("hides BlueBubbles group actions for DM targets", () => {
+  it("hides iMessage group actions for DM targets", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
     );
 
     const tool = createMessageTool({
       config: {} as never,
-      currentChannelProvider: "bluebubbles",
-      currentChannelId: "bluebubbles:chat_guid:iMessage;-;+15551234567",
+      currentChannelProvider: "imessage",
+      currentChannelId: "imessage:chat_guid:iMessage;-;+15551234567",
     });
 
     expect(tool.description).not.toContain("renameGroup");
@@ -1074,8 +1160,8 @@ describe("message tool description", () => {
     const currentChannelProperties = getToolProperties(currentChannelTool);
 
     expect(getActionEnum(currentChannelProperties)).toContain("set-profile");
-    expect(currentChannelProperties.displayName).toBeDefined();
-    expect(currentChannelProperties.avatarUrl).toBeDefined();
+    expect(currentChannelProperties).toHaveProperty("displayName");
+    expect(currentChannelProperties).toHaveProperty("avatarUrl");
   });
 
   it("normalizes channel aliases before building the current channel description", () => {
@@ -1103,12 +1189,12 @@ describe("message tool description", () => {
 
   it("keeps the current-channel description stable when only one channel is configured", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
     );
 
     const tool = createMessageTool({
       config: {} as never,
-      currentChannelProvider: "bluebubbles",
+      currentChannelProvider: "imessage",
     });
 
     expect(tool.description).toContain("Supports actions:");

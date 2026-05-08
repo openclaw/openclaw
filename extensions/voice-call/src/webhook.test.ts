@@ -83,6 +83,11 @@ const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => 
         ...overrides.realtime?.fastContext,
         sources: overrides.realtime?.fastContext?.sources ?? base.realtime.fastContext.sources,
       },
+      agentContext: {
+        ...base.realtime.agentContext,
+        ...overrides.realtime?.agentContext,
+        files: overrides.realtime?.agentContext?.files ?? base.realtime.agentContext.files,
+      },
       providers: overrides.realtime?.providers ?? base.realtime.providers,
     },
   };
@@ -214,7 +219,75 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       await server.start();
       expect(mocks.getRealtimeTranscriptionProvider).not.toHaveBeenCalled();
       expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null);
-      expect(server.getMediaStreamHandler()).toBeTruthy();
+      expect(server.getMediaStreamHandler()).toMatchObject({
+        handleUpgrade: expect.any(Function),
+        sendAudio: expect.any(Function),
+        closeAll: expect.any(Function),
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("records media stream Talk events on the active call metadata", async () => {
+    const call = createCall(Date.now());
+    const manager = {
+      getActiveCalls: () => [call],
+      getCallByProviderCallId: (providerCallId: string) =>
+        providerCallId === "provider-call-1" ? call : undefined,
+      endCall: vi.fn(async () => ({ success: true })),
+      processEvent: vi.fn(),
+      speakInitialMessage: vi.fn(async () => {}),
+    } as unknown as CallManager;
+    const config = createConfig({
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "sk-test", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+    try {
+      await server.start();
+      const mediaHandler = server.getMediaStreamHandler() as unknown as {
+        config: {
+          onTalkEvent?: NonNullable<import("./media-stream.js").MediaStreamConfig["onTalkEvent"]>;
+        };
+      };
+      mediaHandler.config.onTalkEvent?.("provider-call-1", "MZ-talk", {
+        id: "voice-call:provider-call-1:MZ-talk:1",
+        type: "transcript.done",
+        sessionId: "voice-call:provider-call-1:MZ-talk",
+        turnId: "MZ-talk:turn:1",
+        seq: 1,
+        timestamp: "2026-05-05T06:00:00.000Z",
+        mode: "stt-tts",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        final: true,
+        payload: { text: "hello", role: "user" },
+      });
+
+      expect(call.metadata).toEqual(
+        expect.objectContaining({
+          lastTalkEventAt: "2026-05-05T06:00:00.000Z",
+          lastTalkEventType: "transcript.done",
+          recentTalkEvents: [
+            {
+              at: "2026-05-05T06:00:00.000Z",
+              type: "transcript.done",
+              sessionId: "voice-call:provider-call-1:MZ-talk",
+              turnId: "MZ-talk:turn:1",
+            },
+          ],
+        }),
+      );
     } finally {
       await server.stop();
     }
@@ -1048,7 +1121,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       unblockReadBodies();
 
       const settled = await Promise.all(inFlightRequests);
-      expect(settled.every((response) => response.status === 200)).toBe(true);
+      expect(settled.map((response) => response.status)).toEqual(Array(8).fill(200));
     } finally {
       unblockReadBodies();
       readBodySpy.mockRestore();
@@ -1123,7 +1196,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       unblockReadBodies();
 
       const settled = await Promise.all(inFlightRequests);
-      expect(settled.every((response) => response.statusCode === 200)).toBe(true);
+      expect(settled.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
     } finally {
       unblockReadBodies();
       readBodySpy.mockRestore();
@@ -1213,8 +1286,7 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     const config = createConfig();
     const server = new VoiceCallWebhookServer(config, manager, provider);
 
-    // Should not throw
-    await server.stop();
+    await expect(server.stop()).resolves.toBeUndefined();
   });
 });
 

@@ -16,6 +16,7 @@ import {
   findBundledPluginSourceMock,
   installHooksFromNpmSpec,
   installHooksFromPath,
+  installPluginFromNpmPackArchive,
   installPluginFromClawHub,
   installPluginFromGitSpec,
   installPluginFromMarketplace,
@@ -38,6 +39,7 @@ import {
 
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
 const ORIGINAL_OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const PROFILE_STATE_ROOT = "/tmp/openclaw-ledger-profile";
 
 const OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY = listOfficialExternalPluginCatalogEntries()
@@ -123,6 +125,28 @@ function createNpmPluginInstallResult(
       packageName: pluginId,
       resolvedVersion: "1.2.3",
       tarballUrl: `https://registry.npmjs.org/${pluginId}/-/${pluginId}-1.2.3.tgz`,
+    },
+  };
+}
+
+function createNpmPackPluginInstallResult(
+  pluginId = "demo",
+): Awaited<ReturnType<typeof installPluginFromNpmPackArchive>> {
+  return {
+    ok: true,
+    pluginId,
+    targetDir: cliInstallPath(pluginId),
+    version: "1.2.3",
+    extensions: ["dist/index.js"],
+    manifestName: `@openclaw/${pluginId}`,
+    npmTarballName: `openclaw-${pluginId}-1.2.3.tgz`,
+    npmResolution: {
+      name: `@openclaw/${pluginId}`,
+      version: "1.2.3",
+      resolvedSpec: `@openclaw/${pluginId}@1.2.3`,
+      integrity: "sha512-pack-demo",
+      shasum: "packdemosha",
+      resolvedAt: "2026-05-06T00:00:00.000Z",
     },
   };
 }
@@ -282,6 +306,11 @@ describe("plugins cli install", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_OPENCLAW_STATE_DIR;
     }
+    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
+      delete process.env.OPENCLAW_NIX_MODE;
+    } else {
+      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
+    }
   });
 
   it("shows the force overwrite option in install help", async () => {
@@ -297,6 +326,19 @@ describe("plugins cli install", () => {
     expect(helpText).toContain("--force");
     expect(helpText).toContain("Overwrite an existing installed plugin or");
     expect(helpText).toContain("hook pack");
+  });
+
+  it("refuses plugin installs in Nix mode before installer side effects", async () => {
+    process.env.OPENCLAW_NIX_MODE = "1";
+
+    await expect(runPluginsCommand(["plugins", "install", "@acme/demo"])).rejects.toThrow(
+      "OPENCLAW_NIX_MODE=1",
+    );
+
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(installPluginFromPath).not.toHaveBeenCalled();
+    expect(installPluginFromMarketplace).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("exits when --marketplace is combined with --link", async () => {
@@ -904,6 +946,47 @@ describe("plugins cli install", () => {
         source: "npm",
         spec: "demo",
         installPath: cliInstallPath("demo"),
+      }),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+  });
+
+  it("installs npm-pack archives through npm install semantics", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("demo");
+    const archivePath = "/tmp/openclaw-demo-1.2.3.tgz";
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmPackArchive.mockResolvedValue(createNpmPackPluginInstallResult("demo"));
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", `npm-pack:${archivePath}`]);
+
+    expect(installPluginFromNpmPackArchive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        archivePath,
+        mode: "install",
+      }),
+    );
+    expect(installPluginFromPath).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      demo: expect.objectContaining({
+        source: "npm",
+        spec: "@openclaw/demo@1.2.3",
+        sourcePath: archivePath,
+        installPath: cliInstallPath("demo"),
+        version: "1.2.3",
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-pack-demo",
+        npmShasum: "packdemosha",
+        npmTarballName: "openclaw-demo-1.2.3.tgz",
       }),
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);

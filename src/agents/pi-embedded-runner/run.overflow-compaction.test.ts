@@ -105,6 +105,7 @@ function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRu
       provider: "anthropic",
       modelId: "test-model",
       resolveSystemPromptContribution: vi.fn(),
+      transformSystemPrompt: vi.fn((context) => context.systemPrompt),
     },
     transcript: {
       policy: transcriptPolicy,
@@ -205,7 +206,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
     expect(mockedEnsureAuthProfileStore).not.toHaveBeenCalled();
     expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
-      "/tmp/agent-dir",
+      expect.stringMatching(/[/\\]\.openclaw[/\\]agents[/\\]main[/\\]agent$/),
       { allowKeychainPrompt: false },
     );
   });

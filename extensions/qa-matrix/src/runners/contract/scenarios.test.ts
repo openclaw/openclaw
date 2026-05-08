@@ -60,6 +60,14 @@ const MATRIX_SUBAGENT_MISSING_HOOK_ERROR =
   "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.";
 const MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS = 300_000;
 
+function requireMatrixQaScenario(id: string): (typeof MATRIX_QA_SCENARIOS)[number] {
+  const scenario = MATRIX_QA_SCENARIOS.find((entry) => entry.id === id);
+  if (!scenario) {
+    throw new Error(`Expected Matrix QA scenario "${id}"`);
+  }
+  return scenario;
+}
+
 function matrixQaScenarioContext(): MatrixQaScenarioContext {
   return {
     baseUrl: "http://127.0.0.1:28008/",
@@ -331,6 +339,131 @@ describe("matrix live qa scenarios", () => {
     }
   });
 
+  it("waits for Matrix SAS device trust after verification completes", async () => {
+    const initiated = {
+      id: "driver-request",
+      transactionId: "tx-sas",
+    };
+    const incoming = {
+      canAccept: true,
+      id: "observer-request",
+      initiatedByMe: false,
+      pending: true,
+      transactionId: "tx-sas",
+    };
+    const ready = {
+      id: "driver-request",
+      phaseName: "ready",
+      transactionId: "tx-sas",
+    };
+    const sas = {
+      emoji: [["🐶", "Dog"]],
+    };
+    const initiatorSas = {
+      hasSas: true,
+      id: "driver-request",
+      sas,
+      transactionId: "tx-sas",
+    };
+    const recipientSas = {
+      hasSas: true,
+      id: "observer-request",
+      sas,
+      transactionId: "tx-sas",
+    };
+    const completedInitiator = {
+      completed: true,
+      id: "driver-request",
+      transactionId: "tx-sas",
+    };
+    const completedRecipient = {
+      completed: true,
+      id: "observer-request",
+      transactionId: "tx-sas",
+    };
+    const driverGetDeviceVerificationStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ verified: false })
+      .mockResolvedValueOnce({ verified: true });
+    const observerGetDeviceVerificationStatus = vi.fn().mockResolvedValue({ verified: true });
+    const driverStop = vi.fn().mockResolvedValue(undefined);
+    const observerStop = vi.fn().mockResolvedValue(undefined);
+
+    createMatrixQaE2eeScenarioClient
+      .mockResolvedValueOnce({
+        bootstrapOwnDeviceVerification: vi.fn().mockResolvedValue({
+          crossSigning: { published: true },
+          success: true,
+          verification: {
+            backupVersion: "1",
+            crossSigningVerified: true,
+            recoveryKeyStored: true,
+            signedByOwner: true,
+            verified: true,
+          },
+        }),
+        confirmVerificationSas: vi.fn().mockResolvedValue(completedInitiator),
+        getDeviceVerificationStatus: driverGetDeviceVerificationStatus,
+        getRecoveryKey: vi.fn().mockResolvedValue({ encodedPrivateKey: "driver-key" }),
+        listVerifications: vi
+          .fn()
+          .mockResolvedValueOnce([ready])
+          .mockResolvedValueOnce([initiatorSas])
+          .mockResolvedValueOnce([completedInitiator]),
+        requestVerification: vi.fn().mockResolvedValue(initiated),
+        resetRoomKeyBackup: vi.fn().mockResolvedValue({ success: true }),
+        startVerification: vi.fn().mockResolvedValue(initiatorSas),
+        stop: driverStop,
+      })
+      .mockResolvedValueOnce({
+        acceptVerification: vi.fn().mockResolvedValue(ready),
+        bootstrapOwnDeviceVerification: vi.fn().mockResolvedValue({
+          crossSigning: { published: true },
+          success: true,
+          verification: {
+            backupVersion: "1",
+            crossSigningVerified: true,
+            recoveryKeyStored: true,
+            signedByOwner: true,
+            verified: true,
+          },
+        }),
+        confirmVerificationSas: vi.fn().mockResolvedValue(completedRecipient),
+        getDeviceVerificationStatus: observerGetDeviceVerificationStatus,
+        getRecoveryKey: vi.fn().mockResolvedValue({ encodedPrivateKey: "observer-key" }),
+        listVerifications: vi
+          .fn()
+          .mockResolvedValueOnce([incoming])
+          .mockResolvedValueOnce([recipientSas])
+          .mockResolvedValueOnce([completedRecipient]),
+        resetRoomKeyBackup: vi.fn().mockResolvedValue({ success: true }),
+        stop: observerStop,
+      });
+
+    const scenario = requireMatrixQaScenario("matrix-e2ee-device-sas-verification");
+
+    await expect(
+      runMatrixQaScenario(scenario, {
+        ...matrixQaScenarioContext(),
+        driverDeviceId: "DRIVERDEVICE",
+        driverPassword: "driver-password",
+        observerDeviceId: "OBSERVERDEVICE",
+        observerPassword: "observer-password",
+        outputDir: "/tmp/matrix-qa",
+        timeoutMs: 80,
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        driverTrustsObserverDevice: true,
+        observerTrustsDriverDevice: true,
+      },
+    });
+
+    expect(driverGetDeviceVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(driverStop).toHaveBeenCalledTimes(1);
+    expect(observerStop).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the Matrix CLI default profile on the full catalog", () => {
     const allIds = scenarioTesting.findMatrixQaScenarios().map((scenario) => scenario.id);
 
@@ -454,12 +587,9 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-approval-thread-target",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-approval-thread-target");
 
-    await expect(runMatrixQaScenario(scenario!, context)).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, context)).resolves.toMatchObject({
       artifacts: {
         reactionEventId: "$driver-approval-reaction",
         reactionTargetEventId: approvalEventId,
@@ -467,6 +597,109 @@ describe("matrix live qa scenarios", () => {
     });
     expect(waitForRoomEvent).toHaveBeenCalledTimes(3);
     expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.waitDecision");
+  });
+
+  it("reuses observed Matrix approval events across channel and DM target=both waits", async () => {
+    const context = matrixQaScenarioContext();
+    context.topology.rooms.push(
+      {
+        key: scenarioTesting.MATRIX_QA_DRIVER_DM_ROOM_KEY,
+        kind: "dm",
+        memberRoles: ["driver", "sut"],
+        memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+        name: "Driver DM",
+        requireMention: false,
+        roomId: "!driver-dm:matrix-qa.test",
+      },
+      {
+        key: scenarioTesting.MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
+        kind: "dm",
+        memberRoles: ["driver", "sut"],
+        memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+        name: "Driver shared DM",
+        requireMention: false,
+        roomId: "!driver-shared-dm:matrix-qa.test",
+      },
+    );
+    let approvalId = "";
+    const gatewayCall = vi.fn().mockImplementation(async (method: string, ...args: unknown[]) => {
+      if (method === "exec.approval.request") {
+        const payload = args.find(
+          (arg): arg is { id?: string } => typeof arg === "object" && arg !== null && "id" in arg,
+        );
+        approvalId = payload?.id ?? "";
+        return { id: approvalId, status: "accepted" };
+      }
+      if (method === "exec.approval.resolve") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected gateway method ${method}`);
+    });
+    context.gatewayCall = gatewayCall;
+
+    const buildApprovalEvent = (eventId: string, roomId: string) =>
+      matrixQaMessageEvent({
+        approval: {
+          allowedDecisions: ["allow-once", "deny"],
+          hasCommandText: true,
+          id: approvalId,
+          kind: "exec",
+          state: "pending",
+          type: "approval.request",
+          version: 1,
+        },
+        body: "approval requested",
+        eventId,
+        kind: "message",
+        roomId,
+      });
+    const waitForRoomEvent = vi.fn().mockImplementation(async () => {
+      const channelApproval = buildApprovalEvent("$approval-both-channel", "!main:matrix-qa.test");
+      const dmApproval = buildApprovalEvent(
+        "$approval-both-dm",
+        "!driver-shared-dm:matrix-qa.test",
+      );
+      context.observedEvents.push(channelApproval, dmApproval, {
+        eventId: "$approval-both-option",
+        kind: "reaction",
+        reaction: {
+          eventId: "$approval-both-channel",
+          key: "✅",
+        },
+        roomId: "!main:matrix-qa.test",
+        sender: "@sut:matrix-qa.test",
+        type: "m.reaction",
+      });
+      return { event: channelApproval, since: "driver-sync-approval" };
+    });
+    const waitForOptionalRoomEvent = vi.fn().mockResolvedValue({
+      matched: false,
+      since: "driver-sync-late-window",
+    });
+    createMatrixQaClient
+      .mockReturnValueOnce({
+        primeRoom: vi.fn().mockResolvedValue("driver-sync-start"),
+        waitForOptionalRoomEvent,
+      })
+      .mockReturnValueOnce({
+        waitForRoomEvent,
+      });
+
+    const scenario = requireMatrixQaScenario("matrix-approval-channel-target-both");
+
+    await expect(runMatrixQaScenario(scenario, context)).resolves.toMatchObject({
+      artifacts: {
+        approvals: [
+          { eventId: "$approval-both-channel", roomId: "!main:matrix-qa.test" },
+          { eventId: "$approval-both-dm", roomId: "!driver-shared-dm:matrix-qa.test" },
+        ],
+      },
+    });
+
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
+    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.resolve");
+    expect(gatewayCall.mock.calls.at(-1)?.[2]).toMatchObject({ expectFinal: false });
+    expect(createMatrixQaClient).toHaveBeenCalledTimes(3);
   });
 
   it("lets explicit Matrix scenario ids override the selected profile", () => {
@@ -804,15 +1037,14 @@ describe("matrix live qa scenarios", () => {
       waitForOptionalRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find((entry) => entry.id === "matrix-allowlist-block");
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-allowlist-block");
 
     const syncState = {
       driver: "driver-sync-next",
     };
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -876,13 +1108,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-observer-allowlist-override",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-observer-allowlist-override");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -947,12 +1176,9 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-allowbots-mentions-mentioned-room",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-allowbots-mentions-mentioned-room");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         actorUserId: "@observer:matrix-qa.test",
         driverEventId: "$observer-bot-trigger",
@@ -987,12 +1213,11 @@ describe("matrix live qa scenarios", () => {
       waitForOptionalRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-allowbots-mentions-unmentioned-open-room-block",
+    const scenario = requireMatrixQaScenario(
+      "matrix-allowbots-mentions-unmentioned-open-room-block",
     );
-    expect(scenario).toBeDefined();
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         actorUserId: "@observer:matrix-qa.test",
         driverEventId: "$observer-bot-unmentioned",
@@ -1024,12 +1249,9 @@ describe("matrix live qa scenarios", () => {
         waitForOptionalRoomEvent: observerWaitForOptionalRoomEvent,
       });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-allowbots-self-sender-ignored",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-allowbots-self-sender-ignored");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         actorUserId: "@sut:matrix-qa.test",
         driverEventId: "$sut-self-trigger",
@@ -1068,12 +1290,9 @@ describe("matrix live qa scenarios", () => {
       waitForOptionalRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-mxid-prefixed-command-block",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-mxid-prefixed-command-block");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         actorUserId: "@observer:matrix-qa.test",
         driverEventId: "$observer-command-trigger",
@@ -1151,12 +1370,9 @@ describe("matrix live qa scenarios", () => {
       waitForOptionalRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-mxid-prefixed-command-block",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-mxid-prefixed-command-block");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$observer-command-trigger",
       },
@@ -1199,13 +1415,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-allowlist-hot-reload",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-allowlist-hot-reload");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         ...matrixQaScenarioContext(),
         patchGatewayConfig,
         topology: {
@@ -1307,13 +1520,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-initial-catchup-then-incremental",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-initial-catchup-then-incremental");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -1417,13 +1627,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-restart-replay-dedupe",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-restart-replay-dedupe");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         ...matrixQaScenarioContext(),
         restartGateway: async () => {
           callOrder.push("restart");
@@ -1549,13 +1756,10 @@ describe("matrix live qa scenarios", () => {
         waitForRoomEvent,
       });
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-stale-sync-replay-dedupe",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-stale-sync-replay-dedupe");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           gatewayStateDir: stateRoot,
           restartGatewayAfterStateMutation: async (mutateState) => {
@@ -1738,13 +1942,10 @@ describe("matrix live qa scenarios", () => {
       }> = [];
       const waitGatewayAccountReady = vi.fn().mockResolvedValue(undefined);
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-sync-state-loss-crypto-intact",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-sync-state-loss-crypto-intact");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVER",
           gatewayRuntimeEnv: {
@@ -1997,13 +2198,10 @@ describe("matrix live qa scenarios", () => {
       });
       const waitGatewayAccountReady = vi.fn().mockResolvedValue(undefined);
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-restart-resume",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-restart-resume");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           gatewayRuntimeEnv: {
             OPENCLAW_CONFIG_PATH: gatewayConfigPath,
@@ -2140,11 +2338,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find((entry) => entry.id === "matrix-dm-reply-shape");
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-dm-reply-shape");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -2234,12 +2431,9 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-thread-reply-override",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-thread-reply-override");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$room-thread-trigger",
         reply: {
@@ -2298,13 +2492,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-subagent-thread-spawn",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-subagent-thread-spawn");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -2405,12 +2596,9 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-subagent-thread-spawn",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-subagent-thread-spawn");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).rejects.toThrow(
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).rejects.toThrow(
       "missing hook error",
     );
 
@@ -2442,12 +2630,9 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-subagent-thread-spawn",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-subagent-thread-spawn");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).rejects.toThrow(
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).rejects.toThrow(
       "sessions_spawn failed",
     );
 
@@ -2494,13 +2679,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-quiet-streaming-preview",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-quiet-streaming-preview");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -2583,12 +2765,9 @@ describe("matrix live qa scenarios", () => {
       ],
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-partial-streaming-preview",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-partial-streaming-preview");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$partial-stream-trigger",
         previewEventId: "$partial-preview",
@@ -2637,12 +2816,9 @@ describe("matrix live qa scenarios", () => {
       ],
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-tool-progress-preview",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-preview");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-trigger",
         previewBodyPreview: "Barnacling...\n`📖 Read: from /tmp/qa/workspace/QA_KICKOFF_TASK.md`",
@@ -2702,12 +2878,9 @@ describe("matrix live qa scenarios", () => {
       ],
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-tool-progress-preview",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-preview");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-generic-trigger",
         previewBodyPreview: "- `tool: exec_command`",
@@ -2753,12 +2926,9 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-tool-progress-preview",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-preview");
 
-    await expect(runMatrixQaScenario(scenario!, context)).rejects.toThrow(
+    await expect(runMatrixQaScenario(scenario, context)).rejects.toThrow(
       /observed preview candidates:[\s\S]*\$tool-progress-timeout-update/,
     );
   });
@@ -2810,12 +2980,9 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-tool-progress-preview",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-preview");
 
-    await expect(runMatrixQaScenario(scenario!, context)).rejects.toThrow(
+    await expect(runMatrixQaScenario(scenario, context)).rejects.toThrow(
       /observed final candidates:[\s\S]*\$tool-progress-final-timeout-candidate/,
     );
   });
@@ -2839,12 +3006,9 @@ describe("matrix live qa scenarios", () => {
       ],
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-tool-progress-preview-opt-out",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-preview-opt-out");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-optout-trigger",
         reply: {
@@ -2893,12 +3057,9 @@ describe("matrix live qa scenarios", () => {
       ],
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-tool-progress-error",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-error");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-error-trigger",
         previewBodyPreview:
@@ -2920,6 +3081,58 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
+  });
+
+  it("accepts shortened Matrix tool progress error preview lines", async () => {
+    const previewEventId = "$tool-progress-error-short-preview";
+    const previewEvent = matrixQaMessageEvent({
+      kind: "notice",
+      eventId: previewEventId,
+      body: "Nautiling...\n`📖 Read: from…ng-matrix-tool-progress-target.txt`",
+    });
+    const { waitForRoomEvent } = mockMatrixQaRoomClient({
+      driverEventId: "$tool-progress-error-short-trigger",
+      events: [
+        {
+          event: previewEvent,
+          since: "driver-sync-preview",
+        },
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "notice",
+              eventId: "$tool-progress-error-short-final",
+              body: readMatrixQaReplyDirective(
+                sendTextMessage.mock.calls[0]?.[0]?.body,
+                "MATRIX_QA_TOOL_PROGRESS_ERROR_SHORT_FIXED",
+              ),
+              relatesTo: {
+                relType: "m.replace",
+                eventId: previewEventId,
+              },
+            }),
+          since: "driver-sync-next",
+        },
+      ],
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-error");
+
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        previewBodyPreview: "Nautiling...\n`📖 Read: from…ng-matrix-tool-progress-target.txt`",
+        previewEventId,
+        reply: {
+          eventId: "$tool-progress-error-short-final",
+          relatesTo: {
+            eventId: previewEventId,
+            relType: "m.replace",
+          },
+        },
+      },
+    });
+
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(2);
   });
 
   it("keeps Matrix-looking tool progress mentions inert in partial previews", async () => {
@@ -2969,12 +3182,9 @@ describe("matrix live qa scenarios", () => {
       ],
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-tool-progress-mention-safety",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-mention-safety");
 
-    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+    await expect(runMatrixQaScenario(scenario, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-mention-trigger",
         previewEventId: "$tool-progress-mention-preview",
@@ -3025,13 +3235,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-block-streaming",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-block-streaming");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -3128,13 +3335,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-image-understanding-attachment",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-image-understanding-attachment");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -3199,36 +3403,40 @@ describe("matrix live qa scenarios", () => {
   it("waits for a real Matrix image attachment after image generation", async () => {
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
     const sendTextMessage = vi.fn().mockResolvedValue("$image-generate-trigger");
-    const waitForRoomEvent = vi.fn().mockResolvedValue({
-      event: {
-        kind: "message",
-        roomId: "!media:matrix-qa.test",
-        eventId: "$sut-image",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        body: "Protocol note: generated the QA lighthouse image successfully.",
-        msgtype: "m.image",
-        attachment: {
-          kind: "image",
-          filename: "qa-lighthouse.png",
+    const waitForOptionalRoomEvent = vi
+      .fn()
+      .mockResolvedValueOnce({
+        matched: false,
+        since: "driver-sync-start",
+      })
+      .mockResolvedValueOnce({
+        event: {
+          kind: "message",
+          roomId: "!media:matrix-qa.test",
+          eventId: "$sut-image",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: "Protocol note: generated the QA lighthouse image successfully.",
+          msgtype: "m.image",
+          attachment: {
+            kind: "image",
+            filename: "qa-lighthouse.png",
+          },
         },
-      },
-      since: "driver-sync-next",
-    });
+        matched: true,
+        since: "driver-sync-next",
+      });
 
     createMatrixQaClient.mockReturnValue({
       primeRoom,
       sendTextMessage,
-      waitForRoomEvent,
+      waitForOptionalRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-generated-image-delivery",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-generated-image-delivery");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -3273,7 +3481,7 @@ describe("matrix live qa scenarios", () => {
     });
 
     expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Image generation check: generate a QA lighthouse image"),
+      body: expect.stringContaining("/tool image_generate action=generate"),
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!media:matrix-qa.test",
     });
@@ -3332,11 +3540,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find((entry) => entry.id === "matrix-media-type-coverage");
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-media-type-coverage");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -3451,13 +3658,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-dm-thread-reply-override",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-dm-thread-reply-override");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -3565,13 +3769,10 @@ describe("matrix live qa scenarios", () => {
         waitForOptionalRoomEvent: waitSecondaryNotice,
       });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-dm-shared-session-notice",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-dm-shared-session-notice");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -3689,13 +3890,10 @@ describe("matrix live qa scenarios", () => {
         waitForOptionalRoomEvent: waitSecondaryNotice,
       });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-dm-per-room-session-override",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-dm-per-room-session-override");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -3783,13 +3981,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-room-autojoin-invite",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-room-autojoin-invite");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -3850,13 +4045,10 @@ describe("matrix live qa scenarios", () => {
       waitForRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-secondary-room-reply",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-secondary-room-reply");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -3980,13 +4172,10 @@ describe("matrix live qa scenarios", () => {
       waitForOptionalRoomEvent,
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-e2ee-verification-notice-no-trigger",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-e2ee-verification-notice-no-trigger");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -4106,13 +4295,10 @@ describe("matrix live qa scenarios", () => {
         verifyWithRecoveryKey,
       });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-e2ee-recovery-key-lifecycle",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-e2ee-recovery-key-lifecycle");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -4239,13 +4425,10 @@ describe("matrix live qa scenarios", () => {
         verifyWithRecoveryKey,
       });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-e2ee-recovery-owner-verification-required",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-e2ee-recovery-owner-verification-required");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -4299,12 +4482,10 @@ describe("matrix live qa scenarios", () => {
     });
 
     const proxyArgs = startMatrixQaFaultProxy.mock.calls[0]?.[0];
-    expect(proxyArgs).toBeDefined();
     if (!proxyArgs) {
       throw new Error("expected Matrix QA fault proxy to start");
     }
     const [faultRule] = proxyArgs.rules;
-    expect(faultRule).toBeDefined();
     if (!faultRule) {
       throw new Error("expected Matrix QA fault proxy rule");
     }
@@ -4549,13 +4730,10 @@ describe("matrix live qa scenarios", () => {
         throw new Error(`unexpected CLI command: ${joined}`);
       });
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-cli-self-verification",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-cli-self-verification");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVERDEVICE",
           driverPassword: "driver-password",
@@ -4737,13 +4915,10 @@ describe("matrix live qa scenarios", () => {
         throw new Error(`unexpected CLI command: ${joined}`);
       });
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-cli-account-add-enable-e2ee",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-cli-account-add-enable-e2ee");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVERDEVICE",
           driverPassword: "driver-password",
@@ -4883,13 +5058,10 @@ describe("matrix live qa scenarios", () => {
         throw new Error(`unexpected CLI command: ${joined}`);
       });
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-cli-encryption-setup",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-cli-encryption-setup");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVERDEVICE",
           driverPassword: "driver-password",
@@ -5006,13 +5178,10 @@ describe("matrix live qa scenarios", () => {
         throw new Error(`unexpected CLI command: ${joined}`);
       });
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-cli-encryption-setup-idempotent",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-cli-encryption-setup-idempotent");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVERDEVICE",
           driverPassword: "driver-password",
@@ -5126,13 +5295,12 @@ describe("matrix live qa scenarios", () => {
         writeStdin: vi.fn(),
       });
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-cli-encryption-setup-bootstrap-failure",
+      const scenario = requireMatrixQaScenario(
+        "matrix-e2ee-cli-encryption-setup-bootstrap-failure",
       );
-      expect(scenario).toBeDefined();
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVERDEVICE",
           driverPassword: "driver-password",
@@ -5155,12 +5323,10 @@ describe("matrix live qa scenarios", () => {
       });
 
       const proxyArgs = startMatrixQaFaultProxy.mock.calls[0]?.[0];
-      expect(proxyArgs).toBeDefined();
       if (!proxyArgs) {
         throw new Error("expected Matrix QA fault proxy to start");
       }
       const [faultRule] = proxyArgs.rules;
-      expect(faultRule).toBeDefined();
       if (!faultRule) {
         throw new Error("expected Matrix QA fault proxy rule");
       }
@@ -5305,13 +5471,10 @@ describe("matrix live qa scenarios", () => {
         throw new Error(`unexpected CLI command: ${joined}`);
       });
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-cli-recovery-key-setup",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-cli-recovery-key-setup");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVERDEVICE",
           driverPassword: "driver-password",
@@ -5449,13 +5612,10 @@ describe("matrix live qa scenarios", () => {
         writeStdin: vi.fn(),
       });
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-cli-recovery-key-invalid",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-cli-recovery-key-invalid");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVERDEVICE",
           driverPassword: "driver-password",
@@ -5575,13 +5735,10 @@ describe("matrix live qa scenarios", () => {
         throw new Error(`unexpected CLI command: ${joined}`);
       });
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-cli-encryption-setup-multi-account",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-cli-encryption-setup-multi-account");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVERDEVICE",
           driverPassword: "driver-password",
@@ -5779,13 +5936,10 @@ describe("matrix live qa scenarios", () => {
       });
       const waitGatewayAccountReady = vi.fn().mockResolvedValue(undefined);
 
-      const scenario = MATRIX_QA_SCENARIOS.find(
-        (entry) => entry.id === "matrix-e2ee-cli-setup-then-gateway-reply",
-      );
-      expect(scenario).toBeDefined();
+      const scenario = requireMatrixQaScenario("matrix-e2ee-cli-setup-then-gateway-reply");
 
       await expect(
-        runMatrixQaScenario(scenario!, {
+        runMatrixQaScenario(scenario, {
           ...matrixQaScenarioContext(),
           driverDeviceId: "DRIVERDEVICE",
           driverPassword: "driver-password",
@@ -5949,13 +6103,10 @@ describe("matrix live qa scenarios", () => {
       },
     });
 
-    const scenario = MATRIX_QA_SCENARIOS.find(
-      (entry) => entry.id === "matrix-e2ee-key-bootstrap-failure",
-    );
-    expect(scenario).toBeDefined();
+    const scenario = requireMatrixQaScenario("matrix-e2ee-key-bootstrap-failure");
 
     await expect(
-      runMatrixQaScenario(scenario!, {
+      runMatrixQaScenario(scenario, {
         baseUrl: "http://127.0.0.1:28008/",
         canary: undefined,
         driverAccessToken: "driver-token",
@@ -6002,12 +6153,10 @@ describe("matrix live qa scenarios", () => {
     });
 
     const proxyArgs = startMatrixQaFaultProxy.mock.calls[0]?.[0];
-    expect(proxyArgs).toBeDefined();
     if (!proxyArgs) {
       throw new Error("expected Matrix QA fault proxy to start");
     }
     const [faultRule] = proxyArgs.rules;
-    expect(faultRule).toBeDefined();
     if (!faultRule) {
       throw new Error("expected Matrix QA fault proxy rule");
     }

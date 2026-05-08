@@ -881,12 +881,6 @@ describe("windowsEscapeArg", () => {
 });
 
 describe("matchAllowlist with argPattern", () => {
-  // argPattern matching is Windows-only; skip this suite on other platforms.
-  if (process.platform !== "win32") {
-    it.skip("argPattern tests are Windows-only", () => {});
-    return;
-  }
-
   const resolution = {
     rawExecutable: "python3",
     resolvedPath: "/usr/bin/python3",
@@ -895,37 +889,79 @@ describe("matchAllowlist with argPattern", () => {
 
   it("matches path-only entry regardless of argv", () => {
     const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
-    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeTruthy();
-    expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toBeTruthy();
-    expect(matchAllowlist(entries, resolution, ["python3"])).toBeTruthy();
+    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toMatchObject({
+      pattern: "/usr/bin/python3",
+    });
+    expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toMatchObject({
+      pattern: "/usr/bin/python3",
+    });
+    expect(matchAllowlist(entries, resolution, ["python3"])).toMatchObject({
+      pattern: "/usr/bin/python3",
+    });
   });
 
   it("matches argPattern with regex", () => {
     const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3", argPattern: "^a\\.py$" }];
-    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeTruthy();
+    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toMatchObject({
+      argPattern: "^a\\.py$",
+    });
     expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toBeNull();
     expect(matchAllowlist(entries, resolution, ["python3", "a.py", "--verbose"])).toBeNull();
   });
 
-  it("prefers argPattern match over path-only match", () => {
+  it.each(["linux", "darwin"])("enforces argPattern on %s", (platform) => {
     const entries: ExecAllowlistEntry[] = [
-      { pattern: "/usr/bin/python3" },
-      { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
+      { pattern: "/usr/bin/python3", argPattern: "^safe\\.py$" },
     ];
-    const match = matchAllowlist(entries, resolution, ["python3", "a.py"]);
-    expect(match).toBeTruthy();
-    expect(match!.argPattern).toBe("^a\\.py$");
+    expect(matchAllowlist(entries, resolution, ["python3", "safe.py"], platform)).toMatchObject({
+      argPattern: "^safe\\.py$",
+    });
+    expect(matchAllowlist(entries, resolution, ["python3", "-c", "print(1)"], platform)).toBeNull();
   });
 
-  it("falls back to path-only match when argPattern doesn't match", () => {
-    const entries: ExecAllowlistEntry[] = [
-      { pattern: "/usr/bin/python3" },
-      { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
-    ];
-    const match = matchAllowlist(entries, resolution, ["python3", "b.py"]);
-    expect(match).toBeTruthy();
-    expect(match!.argPattern).toBeUndefined();
-  });
+  it.each(["linux", "darwin", "win32"])(
+    "prefers argPattern match over path-only match on %s",
+    (platform) => {
+      const entries: ExecAllowlistEntry[] = [
+        { pattern: "/usr/bin/python3" },
+        { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
+      ];
+      const match = matchAllowlist(entries, resolution, ["python3", "a.py"], platform);
+      expect(match).toMatchObject({ pattern: "/usr/bin/python3" });
+      expect(match!.argPattern).toBe("^a\\.py$");
+    },
+  );
+
+  it.each(["linux", "darwin", "win32"])(
+    "falls back to path-only match when argPattern does not match on %s",
+    (platform) => {
+      const entries: ExecAllowlistEntry[] = [
+        { pattern: "/usr/bin/python3" },
+        { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
+      ];
+      const match = matchAllowlist(entries, resolution, ["python3", "b.py"], platform);
+      expect(match).toMatchObject({ pattern: "/usr/bin/python3" });
+      expect(match!.argPattern).toBeUndefined();
+    },
+  );
+
+  it.each(["linux", "darwin", "win32"])(
+    "requires argv before matching argPattern entries on %s",
+    (platform) => {
+      const restrictedEntries: ExecAllowlistEntry[] = [
+        { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
+      ];
+      expect(matchAllowlist(restrictedEntries, resolution, undefined, platform)).toBeNull();
+
+      const mixedEntries: ExecAllowlistEntry[] = [
+        { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" },
+        { pattern: "/usr/bin/python3" },
+      ];
+      const fallback = matchAllowlist(mixedEntries, resolution, undefined, platform);
+      expect(fallback).toMatchObject({ pattern: "/usr/bin/python3" });
+      expect(fallback!.argPattern).toBeUndefined();
+    },
+  );
 
   it("handles invalid regex gracefully", () => {
     const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3", argPattern: "[invalid" }];
@@ -941,7 +977,9 @@ describe("matchAllowlist with argPattern", () => {
       { pattern: "/usr/bin/python3", argPattern: "^hello world\x00$" },
     ];
     // Original approved single-arg must still match (argsString = "hello world\x00").
-    expect(matchAllowlist(entries, resolution, ["python3", "hello world"])).toBeTruthy();
+    expect(matchAllowlist(entries, resolution, ["python3", "hello world"])).toMatchObject({
+      argPattern: "^hello world\x00$",
+    });
     // Split-arg bypass must be rejected (argsString = "hello\x00world\x00").
     expect(matchAllowlist(entries, resolution, ["python3", "hello", "world"])).toBeNull();
   });
@@ -950,8 +988,12 @@ describe("matchAllowlist with argPattern", () => {
     const entries: ExecAllowlistEntry[] = [
       { pattern: "/usr/bin/python3", argPattern: "^(a|b)\\.py$" },
     ];
-    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeTruthy();
-    expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toBeTruthy();
+    expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toMatchObject({
+      argPattern: "^(a|b)\\.py$",
+    });
+    expect(matchAllowlist(entries, resolution, ["python3", "b.py"])).toMatchObject({
+      argPattern: "^(a|b)\\.py$",
+    });
     expect(matchAllowlist(entries, resolution, ["python3", "c.py"])).toBeNull();
   });
 
@@ -965,10 +1007,14 @@ describe("matchAllowlist with argPattern", () => {
       { pattern: "/usr/bin/python3", argPattern: "^\x00$" },
     ];
     // Zero-arg command must match zero-arg pattern but not empty-string-arg pattern.
-    expect(matchAllowlist(zeroArgEntries, resolution, ["python3"])).toBeTruthy();
+    expect(matchAllowlist(zeroArgEntries, resolution, ["python3"])).toMatchObject({
+      argPattern: "^\x00\x00$",
+    });
     expect(matchAllowlist(emptyArgEntries, resolution, ["python3"])).toBeNull();
     // One-empty-string-arg command must match empty-string-arg pattern but not zero-arg pattern.
-    expect(matchAllowlist(emptyArgEntries, resolution, ["python3", ""])).toBeTruthy();
+    expect(matchAllowlist(emptyArgEntries, resolution, ["python3", ""])).toMatchObject({
+      argPattern: "^\x00$",
+    });
     expect(matchAllowlist(zeroArgEntries, resolution, ["python3", ""])).toBeNull();
   });
 });
@@ -986,7 +1032,7 @@ describe("Windows rebuildShellCommandFromSource", () => {
       platform: "win32",
     });
     expect(result.ok).toBe(true);
-    expect(result.command).toBeDefined();
+    expect(result.command).toEqual(expect.stringMatching(/\S/));
   });
 
   it("rejects Windows commands with unsafe tokens", () => {

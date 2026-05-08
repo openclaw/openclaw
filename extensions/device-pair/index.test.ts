@@ -6,7 +6,7 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
 
 const pluginApiMocks = vi.hoisted(() => ({
@@ -63,6 +63,12 @@ import {
   resolveTailnetHostWithRunner,
 } from "./api.js";
 import registerDevicePair from "./index.js";
+
+afterAll(() => {
+  vi.doUnmock("./api.js");
+  vi.doUnmock("./notify.js");
+  vi.resetModules();
+});
 
 type ListedPendingPairingRequest = Awaited<ReturnType<typeof listDevicePairing>>["pending"][number];
 type ApproveDevicePairingResolved = Awaited<ReturnType<typeof approveDevicePairing>>;
@@ -742,7 +748,7 @@ describe("device-pair /pair default setup code", () => {
     expect(text).toContain("Gateway: ws://127.0.0.1:18789");
   });
 
-  it("rejects private LAN cleartext setup urls before issuing setup codes", async () => {
+  it("allows private LAN cleartext setup urls", async () => {
     const command = registerPairCommand({
       pluginConfig: {
         publicUrl: "ws://192.168.1.20:18789",
@@ -757,10 +763,27 @@ describe("device-pair /pair default setup code", () => {
       }),
     );
 
-    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
-    expect(requireText(result)).toContain(
-      "Mobile pairing over non-loopback networks requires a secure gateway URL",
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(requireText(result)).toContain("Gateway: ws://192.168.1.20:18789");
+  });
+
+  it("allows mdns cleartext setup urls", async () => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl: "ws://openclaw.local:18789",
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
     );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(requireText(result)).toContain("Gateway: ws://openclaw.local:18789");
   });
 
   it("rejects public cleartext setup urls before issuing setup codes", async () => {
@@ -780,7 +803,7 @@ describe("device-pair /pair default setup code", () => {
 
     expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(requireText(result)).toContain(
-      "Mobile pairing over non-loopback networks requires a secure gateway URL",
+      "Tailscale and public mobile pairing require a secure gateway URL",
     );
   });
 

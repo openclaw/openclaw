@@ -11,6 +11,7 @@ import {
   isAnthropicBedrockModel,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
@@ -32,6 +33,43 @@ type AmazonBedrockPluginConfig = {
   };
   guardrail?: GuardrailConfig;
 };
+
+const BEDROCK_SERVICE_TIER_VALUES = ["flex", "priority", "default", "reserved"] as const;
+type BedrockServiceTier = (typeof BEDROCK_SERVICE_TIER_VALUES)[number];
+
+function isBedrockServiceTier(value: string): value is BedrockServiceTier {
+  return BEDROCK_SERVICE_TIER_VALUES.some((tier) => tier === value);
+}
+
+function resolveBedrockServiceTier(
+  extraParams: Record<string, unknown> | undefined,
+  warn: (message: string) => void,
+): BedrockServiceTier | undefined {
+  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (isBedrockServiceTier(normalized)) {
+    return normalized;
+  }
+  warn(`ignoring invalid Bedrock service_tier param: ${raw}`);
+  return undefined;
+}
+
+function createBedrockServiceTierWrapper(
+  underlying: StreamFn,
+  serviceTier: BedrockServiceTier,
+): StreamFn {
+  return (model, context, options) => {
+    if (model.api !== "bedrock-converse-stream") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      payloadObj.serviceTier ??= { type: serviceTier };
+    });
+  };
+}
 
 function createGuardrailWrapStreamFn(
   innerWrapStreamFn: (ctx: { modelId: string; streamFn?: StreamFn }) => StreamFn | null | undefined,
@@ -195,6 +233,7 @@ async function createBedrockControlPlane(region: string | undefined): Promise<Be
   if (bedrockControlPlaneOverride) {
     return bedrockControlPlaneOverride(region);
   }
+  await refreshAwsSharedConfigCacheForBedrock();
   const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
   const client = new BedrockClient(region ? { region } : {});
   return {
@@ -387,6 +426,31 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     delete (inferenceConfig as Record<string, unknown>).temperature;
   }
 
+  function withAwsCredentialRefreshOnPayload<TOptions extends object>(
+    options: TOptions,
+  ): TOptions & { onPayload: (payload: unknown, payloadModel: unknown) => Promise<unknown> } {
+    const originalOnPayload = (options as { onPayload?: unknown }).onPayload as
+      | ((payload: unknown, model: unknown) => unknown)
+      | undefined;
+    return {
+      ...options,
+      onPayload: async (payload: unknown, payloadModel: unknown) => {
+        await refreshAwsSharedConfigCacheForBedrock();
+        return originalOnPayload?.(payload, payloadModel);
+      },
+    };
+  }
+
+  function createAwsCredentialRefreshStreamWrapper(
+    streamFn: StreamFn | null | undefined,
+  ): StreamFn | null | undefined {
+    if (!streamFn) {
+      return streamFn;
+    }
+    return (streamModel, context, options) =>
+      streamFn(streamModel, context, withAwsCredentialRefreshOnPayload(Object.assign({}, options)));
+  }
+
   /** Extract the AWS region from a bedrock-runtime baseUrl. */
   function extractRegionFromBaseUrl(baseUrl: string | undefined): string | undefined {
     if (!baseUrl) {
@@ -457,13 +521,20 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     ...anthropicByModelReplayHooks,
-    wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel }) => {
+    wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
       const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;
-      // Apply cache + guardrail wrapping.
-      const wrapped =
-        currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
+      let wrapped =
+        (currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
           ? createGuardrailWrapStreamFn(baseWrapStreamFn, currentGuardrail)({ modelId, streamFn })
-          : baseWrapStreamFn({ modelId, streamFn });
+          : baseWrapStreamFn({ modelId, streamFn })) ?? undefined;
+
+      const serviceTier = resolveBedrockServiceTier(extraParams, (message) =>
+        api.logger.warn(message),
+      );
+      if (serviceTier && wrapped) {
+        wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
+      }
+
       const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !piAiWouldInjectCachePoints(modelId);
@@ -475,7 +546,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const heuristicMatch = needsCachePointInjection(modelId);
 
       if (!region && !mayNeedCacheInjection && !shouldOmitTemperature && !shouldPatchMaxThinking) {
-        return wrapped;
+        return createAwsCredentialRefreshStreamWrapper(wrapped);
       }
 
       const underlying = wrapped ?? streamFn;
@@ -493,19 +564,23 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           | undefined;
 
         if (!mayNeedCacheInjection) {
-          return underlying(streamModel, context, {
-            ...merged,
-            ...(shouldPatchMaxThinking
-              ? {
-                  onPayload: (payload: unknown, payloadModel: unknown) => {
-                    if (payload && typeof payload === "object") {
-                      patchOpus47MaxThinkingEffort(payload as Record<string, unknown>);
-                    }
-                    return originalOnPayload?.(payload, payloadModel);
-                  },
-                }
-              : {}),
-          });
+          return underlying(
+            streamModel,
+            context,
+            withAwsCredentialRefreshOnPayload({
+              ...merged,
+              ...(shouldPatchMaxThinking
+                ? {
+                    onPayload: (payload: unknown, payloadModel: unknown) => {
+                      if (payload && typeof payload === "object") {
+                        patchOpus47MaxThinkingEffort(payload as Record<string, unknown>);
+                      }
+                      return originalOnPayload?.(payload, payloadModel);
+                    },
+                  }
+                : {}),
+            }),
+          );
         }
 
         // Use the cacheRetention from options if explicitly set.
@@ -522,48 +597,56 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           // Fast path: ARN heuristic already identified this as Claude, but the
           // concrete target may still need profile traits for Opus 4.7 payloads.
           const mayNeedTemperatureTrait = "temperature" in merged;
-          return underlying(streamModel, context, {
-            ...merged,
-            onPayload: async (payload: unknown, payloadModel: unknown) => {
-              if (payload && typeof payload === "object") {
-                const payloadRecord = payload as Record<string, unknown>;
-                injectBedrockCachePoints(payloadRecord, cacheRetention);
-                if (shouldPatchMaxThinking) {
-                  patchOpus47MaxThinkingEffort(payloadRecord);
-                }
-                if (mayNeedTemperatureTrait) {
-                  const traits = await resolveAppProfileTraits(modelId, region);
-                  if (traits.omitTemperature) {
-                    omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+          return underlying(
+            streamModel,
+            context,
+            withAwsCredentialRefreshOnPayload({
+              ...merged,
+              onPayload: async (payload: unknown, payloadModel: unknown) => {
+                if (payload && typeof payload === "object") {
+                  const payloadRecord = payload as Record<string, unknown>;
+                  injectBedrockCachePoints(payloadRecord, cacheRetention);
+                  if (shouldPatchMaxThinking) {
+                    patchOpus47MaxThinkingEffort(payloadRecord);
+                  }
+                  if (mayNeedTemperatureTrait) {
+                    const traits = await resolveAppProfileTraits(modelId, region);
+                    if (traits.omitTemperature) {
+                      omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+                    }
                   }
                 }
-              }
-              return originalOnPayload?.(payload, payloadModel);
-            },
-          });
+                return originalOnPayload?.(payload, payloadModel);
+              },
+            }),
+          );
         }
 
         // Slow path: opaque profile ID — resolve underlying model via API (cached).
         // pi-ai's onPayload supports async, so we await the resolution inline.
-        return underlying(streamModel, context, {
-          ...merged,
-          onPayload: async (payload: unknown, payloadModel: unknown) => {
-            const traits = await resolveAppProfileTraits(modelId, region);
-            if (payload && typeof payload === "object") {
-              const payloadRecord = payload as Record<string, unknown>;
-              if (traits.cacheEligible) {
-                injectBedrockCachePoints(payloadRecord, cacheRetention);
+        return underlying(
+          streamModel,
+          context,
+          withAwsCredentialRefreshOnPayload({
+            ...merged,
+            onPayload: async (payload: unknown, payloadModel: unknown) => {
+              const traits = await resolveAppProfileTraits(modelId, region);
+              if (payload && typeof payload === "object") {
+                const payloadRecord = payload as Record<string, unknown>;
+                if (traits.cacheEligible) {
+                  injectBedrockCachePoints(payloadRecord, cacheRetention);
+                }
+                if (shouldPatchMaxThinking) {
+                  patchOpus47MaxThinkingEffort(payloadRecord);
+                }
+                if (traits.omitTemperature) {
+                  omitDeprecatedOpus47PayloadTemperature(payloadRecord);
+                }
               }
-              if (shouldPatchMaxThinking) {
-                patchOpus47MaxThinkingEffort(payloadRecord);
-              }
-              if (traits.omitTemperature) {
-                omitDeprecatedOpus47PayloadTemperature(payloadRecord);
-              }
-            }
-            return originalOnPayload?.(payload, payloadModel);
-          },
-        });
+              return originalOnPayload?.(payload, payloadModel);
+            },
+          }),
+        );
       };
     },
     matchesContextOverflowError: ({ errorMessage }) =>

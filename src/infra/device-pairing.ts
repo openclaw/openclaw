@@ -13,11 +13,11 @@ import {
 import {
   createAsyncLock,
   pruneExpiredPending,
-  readDurableJsonFile,
+  readJsonIfExists,
   reconcilePendingPairingRequests,
   coercePairingStateRecord,
   resolvePairingPaths,
-  writeJsonAtomic,
+  writeJson,
 } from "./pairing-files.js";
 import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
@@ -154,8 +154,8 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
   const [pending, paired] = await Promise.all([
-    readDurableJsonFile<unknown>(pendingPath),
-    readDurableJsonFile<unknown>(pairedPath),
+    readJsonIfExists<unknown>(pendingPath),
+    readJsonIfExists<unknown>(pairedPath),
   ]);
   const state: DevicePairingStateFile = {
     pendingById: coercePairingStateRecord<DevicePairingPendingRequest>(pending),
@@ -174,16 +174,16 @@ async function persistState(
 ) {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
   if (target === "pending") {
-    await writeJsonAtomic(pendingPath, state.pendingById);
+    await writeJson(pendingPath, state.pendingById);
     return;
   }
   if (target === "paired") {
-    await writeJsonAtomic(pairedPath, state.pairedByDeviceId);
+    await writeJson(pairedPath, state.pairedByDeviceId);
     return;
   }
   await Promise.all([
-    writeJsonAtomic(pendingPath, state.pendingById),
-    writeJsonAtomic(pairedPath, state.pairedByDeviceId),
+    writeJson(pendingPath, state.pendingById),
+    writeJson(pairedPath, state.pairedByDeviceId),
   ]);
 }
 
@@ -437,9 +437,23 @@ function resolveApprovedTokenScopes(params: {
   approvedScopes?: string[];
   existing?: PairedDevice;
 }): string[] {
-  const requestedScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
-  if (requestedScopes.length > 0) {
-    return requestedScopes;
+  const pendingScopes = resolveRoleScopedDeviceTokenScopes(params.role, params.pending.scopes);
+  if (pendingScopes.length > 0) {
+    const approvedBaseline = resolveRoleScopedDeviceTokenScopes(
+      params.role,
+      params.existing?.approvedScopes ?? params.existing?.scopes,
+    );
+    const requestedScopeDelta =
+      params.existingToken && approvedBaseline.length > 0
+        ? pendingScopes.filter((scope) => !approvedBaseline.includes(scope))
+        : pendingScopes;
+    if (requestedScopeDelta.length === 0 && params.existingToken) {
+      return resolveRoleScopedDeviceTokenScopes(params.role, params.existingToken.scopes);
+    }
+    return resolveRoleScopedDeviceTokenScopes(
+      params.role,
+      mergeScopes(params.existingToken?.scopes, requestedScopeDelta),
+    );
   }
   return resolveRoleScopedDeviceTokenScopes(
     params.role,
@@ -614,16 +628,21 @@ export async function approveDevicePairing(
       });
       nextTokenScopesByRole.set(roleForToken, nextScopes);
       if (roleForToken === OPERATOR_ROLE && nextScopes.length > 0) {
+        const callerRequiredScopes =
+          mergeScopes(
+            resolveRoleScopedDeviceTokenScopes(roleForToken, pending.scopes),
+            nextScopes,
+          ) ?? nextScopes;
         if (!options?.callerScopes) {
           return {
             status: "forbidden",
             reason: "caller-scopes-required",
-            scope: nextScopes[0],
+            scope: callerRequiredScopes[0],
           };
         }
         const missingScope = resolveMissingRequestedScope({
           role: OPERATOR_ROLE,
-          requestedScopes: nextScopes,
+          requestedScopes: callerRequiredScopes,
           allowedScopes: options.callerScopes,
         });
         if (missingScope) {

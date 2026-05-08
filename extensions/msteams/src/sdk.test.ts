@@ -163,7 +163,6 @@ describe("createMSTeamsApp", () => {
 
     // This would throw "Missing parameter name at index 5: /api*" without the fix
     const app = await createMSTeamsApp(creds, sdk);
-    expect(app).toBeDefined();
     // Verify token methods are available (the reason we use the App class)
     expect(typeof (app as unknown as Record<string, unknown>).getBotToken).toBe("function");
   });
@@ -392,6 +391,31 @@ describe("createBotFrameworkJwtValidator", () => {
     await expect(validator.validate("Bearer no-iss")).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
+
+  it("rethrows JWKS network errors (ECONNREFUSED) instead of silently returning false (#77674)", async () => {
+    // Simulate a firewall blocking egress to login.botframework.com.
+    // The top-level vi.mock("jwks-rsa") sets up a class-level mock, so we spy
+    // on the prototype to override getSigningKey for this test only.
+    const networkErr = Object.assign(new Error("connect ECONNREFUSED 40.126.25.32:443"), {
+      code: "ECONNREFUSED",
+    });
+    const { JwksClient } = await import("jwks-rsa");
+    vi.spyOn(JwksClient.prototype, "getSigningKey").mockRejectedValueOnce(networkErr);
+
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    const validator = await createBotFrameworkJwtValidator(creds);
+    // Network errors must bubble out — callers can then log them at warn/error
+    // level rather than silently returning 401 that looks like a bad credential.
+    await expect(validator.validate("Bearer token-firewall")).rejects.toThrow("ECONNREFUSED");
+  });
+
+  it("returns false (not throws) for non-network JWKS errors like bad signature (#77674)", async () => {
+    // Auth errors (bad signature, expired token) should still return false.
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyBehavior = "throw";
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer token-bad-sig")).resolves.toBe(false);
+  });
 });
 
 function makeFakeSdk() {
@@ -409,7 +433,7 @@ function makeFakeSdk() {
 
 describe("createMSTeamsApp – secret credentials", () => {
   it("passes clientId, clientSecret, tenantId to sdk.App", async () => {
-    const { sdk, appInstances } = makeFakeSdk();
+    const { sdk, appInstances, FakeApp } = makeFakeSdk();
     const creds: MSTeamsSecretCredentials = {
       type: "secret",
       appId: "my-app-id",
@@ -417,7 +441,7 @@ describe("createMSTeamsApp – secret credentials", () => {
       tenantId: "my-tenant",
     };
     const app = await createMSTeamsApp(creds, sdk);
-    expect(app).toBeDefined();
+    expect(app).toBeInstanceOf(FakeApp);
     expect(appInstances[0]).toMatchObject({
       clientId: "my-app-id",
       clientSecret: "my-secret",
@@ -448,10 +472,11 @@ describe("createMSTeamsApp – federated certificate credentials", () => {
       clientId: "fed-app-id",
       tenantId: "fed-tenant",
     });
-    expect(typeof appInstances[0].token).toBe("function");
-    const token = await (appInstances[0].token as (scope: string) => Promise<string>)(
-      "https://api.botframework.com/.default",
-    );
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
+    if (!tokenProvider) {
+      throw new Error("expected federated app to expose token provider");
+    }
+    const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
   });
 
@@ -496,10 +521,11 @@ describe("createMSTeamsApp – federated managed identity", () => {
     };
     await createMSTeamsApp(creds, sdk);
     expect(appInstances[0]).toMatchObject({ clientId: "mi-app-id", tenantId: "mi-tenant" });
-    expect(typeof appInstances[0].token).toBe("function");
-    const token = await (appInstances[0].token as (scope: string) => Promise<string>)(
-      "https://api.botframework.com/.default",
-    );
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
+    if (!tokenProvider) {
+      throw new Error("expected managed-identity app to expose token provider");
+    }
+    const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
   });
 
@@ -512,10 +538,11 @@ describe("createMSTeamsApp – federated managed identity", () => {
       useManagedIdentity: true,
     };
     await createMSTeamsApp(creds, sdk);
-    expect(typeof appInstances[0].token).toBe("function");
-    const token = await (appInstances[0].token as (scope: string) => Promise<string>)(
-      "https://api.botframework.com/.default",
-    );
+    const tokenProvider = appInstances[0].token as ((scope: string) => Promise<string>) | undefined;
+    if (!tokenProvider) {
+      throw new Error("expected managed-identity app to expose token provider");
+    }
+    const token = await tokenProvider("https://api.botframework.com/.default");
     expect(token).toBe("mock-managed-token");
   });
 

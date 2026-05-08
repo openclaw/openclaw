@@ -76,11 +76,53 @@ vi.mock("../utils/with-timeout.js", () => ({
 
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 
+function requireCapturedPrompt<T>(captured: T | undefined): T {
+  if (!captured) {
+    throw new Error("expected captured install prompt");
+  }
+  return captured;
+}
+
 describe("ensureOnboardingPluginInstalled", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
     refreshPluginRegistryAfterConfigMutation.mockResolvedValue(undefined);
+  });
+
+  it("refuses non-skipped installs in Nix mode before package work", async () => {
+    const previous = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      await expect(
+        ensureOnboardingPluginInstalled({
+          cfg: {},
+          entry: {
+            pluginId: "demo-plugin",
+            label: "Demo Provider",
+            install: {
+              npmSpec: "@openclaw/demo-plugin@1.2.3",
+            },
+          },
+          promptInstall: false,
+          prompter: {
+            select: vi.fn(async () => "npm"),
+            progress: vi.fn(),
+          } as never,
+          runtime: {} as never,
+        }),
+      ).rejects.toThrow("OPENCLAW_NIX_MODE=1");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previous;
+      }
+    }
+
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
   });
 
   it("installs and records ClawHub provider plugins with source facts", async () => {
@@ -533,9 +575,9 @@ describe("ensureOnboardingPluginInstalled", () => {
         cwdSpy.mockRestore();
       }
 
-      expect(captured).toBeDefined();
-      expect(captured?.message).toBe("Install Demo Plugin plugin?");
-      expect(captured?.options).toEqual([{ value: "skip", label: "Skip for now" }]);
+      const prompt = requireCapturedPrompt(captured);
+      expect(prompt.message).toBe("Install Demo Plugin plugin?");
+      expect(prompt.options).toEqual([{ value: "skip", label: "Skip for now" }]);
       expect(result).toEqual({
         cfg: {},
         installed: false,
@@ -586,9 +628,9 @@ describe("ensureOnboardingPluginInstalled", () => {
       });
 
       const realPluginDir = await fs.realpath(pluginDir);
-      expect(captured).toBeDefined();
-      expect(captured?.message).toBe("Install Demo Plugin\\n plugin?");
-      expect(captured?.options).toEqual([
+      const prompt = requireCapturedPrompt(captured);
+      expect(prompt.message).toBe("Install Demo Plugin\\n plugin?");
+      expect(prompt.options).toEqual([
         { value: "npm", label: "Download from npm (@demo/plugin@1.2.3)" },
         {
           value: "local",
@@ -597,8 +639,8 @@ describe("ensureOnboardingPluginInstalled", () => {
         },
         { value: "skip", label: "Skip for now" },
       ]);
-      expect(captured?.message).not.toContain("\x1b");
-      expect(captured?.options[0]?.label).not.toContain("\x1b");
+      expect(prompt.message).not.toContain("\x1b");
+      expect(prompt.options[0]?.label).not.toContain("\x1b");
     });
   });
 
@@ -802,11 +844,11 @@ describe("ensureOnboardingPluginInstalled", () => {
         runtime: {} as never,
       });
 
-      expect(captured).toBeDefined();
+      const prompt = requireCapturedPrompt(captured);
       // "Download from npm (@openclaw/tlon)" must NOT appear: the bundled
       // copy is what gets enabled, so the npm hint would only confuse
       // users into thinking the plugin is missing.
-      expect(captured?.options).toEqual([
+      expect(prompt.options).toEqual([
         {
           value: "local",
           label: "Use local plugin path",
@@ -814,7 +856,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         },
         { value: "skip", label: "Skip for now" },
       ]);
-      expect(captured?.initialValue).toBe("local");
+      expect(prompt.initialValue).toBe("local");
       findBundledPluginSourceInMap.mockReset();
       resolveBundledInstallPlanForCatalogEntry.mockReset();
     });

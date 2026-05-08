@@ -253,7 +253,7 @@ describe("validateProviderConfig", () => {
   });
 });
 
-describe("resolveVoiceCallConfig", () => {
+describe("resolveVoiceCallConfig session routing", () => {
   it("enables the pre-answer stale call reaper by default", () => {
     const config = resolveVoiceCallConfig({ enabled: true, provider: "mock" });
 
@@ -388,12 +388,21 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.streaming.providers).toEqual({});
     expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.realtime.toolPolicy).toBe("safe-read-only");
+    expect(normalized.realtime.consultPolicy).toBe("auto");
     expect(normalized.realtime.fastContext).toEqual({
       enabled: false,
       timeoutMs: 800,
       maxResults: 3,
       sources: ["memory", "sessions"],
       fallbackToConsult: false,
+    });
+    expect(normalized.realtime.agentContext).toEqual({
+      enabled: false,
+      maxChars: 6000,
+      includeIdentity: true,
+      includeSystemPrompt: true,
+      includeWorkspaceFiles: true,
+      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     });
     expect(normalized.realtime.instructions).toContain("openclaw_agent_consult");
     expect(normalized.tunnel.provider).toBe("none");
@@ -442,7 +451,7 @@ describe("normalizeVoiceCallConfig", () => {
   });
 });
 
-describe("resolveVoiceCallConfig", () => {
+describe("resolveVoiceCallConfig realtime settings", () => {
   it("preserves configured realtime instructions without env indirection", () => {
     const resolved = resolveVoiceCallConfig({
       enabled: true,
@@ -455,6 +464,7 @@ describe("resolveVoiceCallConfig", () => {
 
     expect(resolved.realtime.instructions).toBe("Stay concise.");
     expect(resolved.realtime.toolPolicy).toBe("safe-read-only");
+    expect(resolved.realtime.consultPolicy).toBe("auto");
     expect(resolved.realtime.provider).toBeUndefined();
   });
 
