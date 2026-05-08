@@ -246,7 +246,10 @@ describe("web auto-reply connection", () => {
       await vi.waitFor(
         () => {
           expect(scripted.getListenerCount()).toBe(1);
-          expect(getActiveWebListener(accountId)).not.toBeNull();
+          const activeListener = getActiveWebListener(accountId);
+          if (!activeListener) {
+            throw new Error("expected active WhatsApp web listener");
+          }
         },
         { timeout: 250, interval: 2 },
       );

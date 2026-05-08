@@ -7,7 +7,6 @@ function requireProbeAuthWarning(findings: ReturnType<typeof collectDeepProbeFin
   const warning = findings.find(
     (finding) => finding.checkId === "gateway.probe_auth_secretref_unavailable",
   );
-  expect(warning).toBeDefined();
   if (!warning) {
     throw new Error("Expected gateway probe auth SecretRef warning");
   }

@@ -37,7 +37,6 @@ function requireReadOnlyResolutionFinding(
   const finding = findings.find(
     (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
   );
-  expect(finding).toBeDefined();
   if (!finding) {
     throw new Error("Expected Zalo read-only resolution warning");
   }
