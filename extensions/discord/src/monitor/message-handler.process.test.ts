@@ -1680,7 +1680,8 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n🧩 First\n🧩 Second\n🧩 Third");
+    expect(draftStream.update).toHaveBeenNthCalledWith(1, "Clawing...\n🧩 First\n🧩 Second");
+    expect(draftStream.update).toHaveBeenNthCalledWith(2, "🧩 First\n🧩 Second\n🧩 Third");
   });
 
   it("skips empty apply_patch starts and renders the patch summary", async () => {

@@ -11,16 +11,6 @@ let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
 let resolveSessionWriteLockAcquireTimeoutMs: typeof import("./session-write-lock.js").resolveSessionWriteLockAcquireTimeoutMs;
 
-vi.mock("../shared/pid-alive.js", async () => {
-  const original =
-    await vi.importActual<typeof import("../shared/pid-alive.js")>("../shared/pid-alive.js");
-  return {
-    ...original,
-    // Keep liveness checks real; only pin process start time for PID recycle coverage.
-    getProcessStartTime: (pid: number) => (pid === process.pid ? FAKE_STARTTIME : null),
-  };
-});
-
 async function expectLockRemovedOnlyAfterFinalRelease(params: {
   lockPath: string;
   firstLock: { release: () => Promise<void> };
@@ -142,6 +132,12 @@ describe("acquireSessionWriteLock", () => {
     resetSessionWriteLockStateForTest();
     vi.clearAllMocks();
   });
+
+  function pinCurrentProcessStartTimeForTest(): void {
+    __testing.setProcessStartTimeResolverForTest((pid) =>
+      pid === process.pid ? FAKE_STARTTIME : null,
+    );
+  }
   it("reuses locks across symlinked session paths", async () => {
     await withSymlinkedSessionPaths(
       async ({ sessionReal, sessionLink, realLockPath, linkLockPath }) => {
@@ -418,6 +414,7 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("cleans untracked current-process .jsonl lock files with matching starttime", async () => {
+    pinCurrentProcessStartTimeForTest();
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const sessionsDir = path.join(root, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -490,6 +487,7 @@ describe("acquireSessionWriteLock", () => {
       return;
     }
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      pinCurrentProcessStartTimeForTest();
       // Write a lock with a live PID (current process) but a wrong starttime,
       // simulating PID recycling: the PID is alive but belongs to a different
       // process than the one that created the lock.
@@ -511,6 +509,7 @@ describe("acquireSessionWriteLock", () => {
 
   it("reclaims untracked current-process lock files with matching starttime", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      pinCurrentProcessStartTimeForTest();
       await writeCurrentProcessLock(lockPath, { starttime: FAKE_STARTTIME });
 
       await expectCurrentPidOwnsLock({ sessionFile, timeoutMs: 500 });
@@ -526,6 +525,7 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("does not reclaim active in-process lock files with matching starttime", async () => {
+    pinCurrentProcessStartTimeForTest();
     await expectActiveInProcessLockIsNotReclaimed({ legacyStarttime: FAKE_STARTTIME });
   });
 
