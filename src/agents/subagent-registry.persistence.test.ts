@@ -3,12 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import {
-  clearSessionStoreCacheForTest,
-  drainSessionStoreWriterQueuesForTest,
-} from "../config/sessions/store.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
@@ -25,7 +22,7 @@ import {
 } from "./subagent-registry.js";
 import {
   createSubagentRegistryTestDeps,
-  readSubagentSessionStore,
+  readSubagentSessionRows,
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
@@ -201,8 +198,7 @@ describe("subagent registry persistence", () => {
     announceSpy.mockClear();
     __testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
-    await drainSessionStoreWriterQueuesForTest();
-    clearSessionStoreCacheForTest();
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
@@ -219,7 +215,7 @@ describe("subagent registry persistence", () => {
     const startedAt = now;
     const endedAt = now + 500;
 
-    const storePath = await writeChildSessionEntry({
+    const agentId = await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:timing",
       sessionId: "sess-timing",
       updatedAt: startedAt - 1,
@@ -239,7 +235,7 @@ describe("subagent registry persistence", () => {
       outcome: { status: "ok" },
     } as never);
 
-    const store = await readSubagentSessionStore(storePath);
+    const store = await readSubagentSessionRows(agentId);
     const persisted = store["agent:main:subagent:timing"];
     expect(persisted?.endedAt).toBe(endedAt);
     expect(persisted?.runtimeMs).toBe(500);
