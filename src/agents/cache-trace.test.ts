@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { listOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
 
@@ -62,6 +67,35 @@ describe("createCacheTrace", () => {
     });
 
     expect(lines.length).toBe(1);
+  });
+
+  it("stores default cache trace events in SQLite state", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cache-trace-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    try {
+      const trace = createCacheTrace({
+        cfg: {
+          diagnostics: {
+            cacheTrace: {
+              enabled: true,
+            },
+          },
+        },
+        env,
+      });
+
+      expect(trace?.filePath).toBe("sqlite://state/diagnostics/cache-trace");
+      trace?.recordStage("session:loaded", { messages: [] });
+
+      const entries = listOpenClawStateKvJson<Record<string, unknown>>("diagnostics.cache_trace", {
+        env,
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.value).toMatchObject({ stage: "session:loaded" });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("records empty prompt/system values when enabled", () => {

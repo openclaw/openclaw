@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { listOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { createAnthropicPayloadLogger } from "./anthropic-payload-log.js";
 
 describe("createAnthropicPayloadLogger", () => {
@@ -63,5 +68,37 @@ describe("createAnthropicPayloadLogger", () => {
     expect(source.bytes).toBe(4);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("QUJDRA==").digest("hex"));
     expect(event.payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("stores default anthropic payload events in SQLite state", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-anthropic-payload-"));
+    const env = {
+      OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    try {
+      const logger = createAnthropicPayloadLogger({ env });
+      expect(logger).not.toBeNull();
+
+      const streamFn: StreamFn = ((model, __, options) => {
+        options?.onPayload?.({ messages: [] }, model);
+        return {} as never;
+      }) as StreamFn;
+      await logger?.wrapStreamFn(streamFn)(
+        { api: "anthropic-messages" } as never,
+        { messages: [] } as never,
+        {},
+      );
+
+      const entries = listOpenClawStateKvJson<Record<string, unknown>>(
+        "diagnostics.anthropic_payload",
+        { env },
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.value).toMatchObject({ stage: "request" });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
