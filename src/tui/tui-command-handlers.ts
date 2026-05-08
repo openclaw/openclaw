@@ -22,6 +22,7 @@ import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
   GatewayStatusSummary,
+  TuiResult,
   TuiOptions,
   TuiStateAccess,
 } from "./tui-types.js";
@@ -50,11 +51,11 @@ type CommandHandlerContext = {
   runAuthFlow?: (params: {
     provider?: string;
   }) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
-  requestExit: () => void;
+  requestExit: (result?: Partial<TuiResult>) => void;
 };
 
 function isBtwCommand(text: string): boolean {
-  return /^\/btw(?::|\s|$)/i.test(text.trim());
+  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -85,6 +86,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
+    chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
   };
 
   const closeOverlayAndRender = () => {
@@ -158,6 +160,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     const selector = createSearchableSelectList(items, 9);
     openSelector(selector, async (value) => {
       await setAgent(value);
+    });
+  };
+
+  const openContextModeSelector = () => {
+    const items = [
+      {
+        value: "list",
+        label: "list",
+        description: "Short context breakdown",
+      },
+      {
+        value: "detail",
+        label: "detail",
+        description: "Per-file, per-tool, per-skill, and system prompt size",
+      },
+      {
+        value: "json",
+        label: "json",
+        description: "Machine-readable context report",
+      },
+    ];
+    const selector = createSearchableSelectList(items, 9);
+    openSelector(selector, async (value) => {
+      await sendMessage(`/context ${value}`);
     });
   };
 
@@ -329,6 +355,22 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "agents":
         await openAgentSelector();
         break;
+      case "context":
+        if (!args) {
+          openContextModeSelector();
+        } else {
+          await sendMessage(raw);
+        }
+        break;
+      case "crestodian":
+        chatLog.addSystem(
+          args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",
+        );
+        requestExit({
+          exitReason: "return-to-crestodian",
+          ...(args ? { crestodianMessage: args } : {}),
+        });
+        break;
       case "session":
         if (!args) {
           await openSessionSelector();
@@ -361,11 +403,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "think":
         if (!args) {
-          const levels = formatThinkingLevels(
-            state.sessionInfo.modelProvider,
-            state.sessionInfo.model,
-            "|",
-          );
+          const levels =
+            state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
+            formatThinkingLevels(state.sessionInfo.modelProvider, state.sessionInfo.model, "|");
           chatLog.addSystem(`usage: /think <${levels}>`);
           break;
         }
@@ -594,6 +634,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
+        sessionId: state.currentSessionId,
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,
@@ -601,6 +642,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
+        state.pendingChatRunId = runId;
         setActivityStatus("waiting");
         tui.requestRender();
       }
@@ -613,6 +655,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       if (!isBtw) {
         state.pendingOptimisticUserMessage = false;
+        state.pendingChatRunId = null;
         state.activeChatRunId = null;
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);

@@ -91,12 +91,12 @@ export type StartSlackStreamParams = {
   userId?: string;
 };
 
-export type AppendSlackStreamParams = {
+type AppendSlackStreamParams = {
   session: SlackStreamSession;
   text: string;
 };
 
-export type StopSlackStreamParams = {
+type StopSlackStreamParams = {
   session: SlackStreamSession;
   /** Optional final markdown text to append before stopping. */
   text?: string;
@@ -155,7 +155,7 @@ type SlackApiClient = WebClient & {
  * Thrown when Slack rejects a stream flush/finalize with a recipient-resolution
  * error (see {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) while text is still
  * only buffered locally by the Slack SDK. Carries the pending text so the
- * caller can deliver it via a normal `chat.postMessage`.
+ * caller can deliver it via the normal Slack reply path.
  */
 export class SlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
@@ -286,7 +286,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
  * If the same benign error fires while text is still only buffered locally
  * (e.g. short replies that never exceeded the SDK's buffer_size), this
  * function throws a {@link SlackStreamNotDeliveredError} carrying that pending
- * text so the caller can deliver it via `chat.postMessage`.
+ * text so the caller can deliver it through the normal Slack reply path.
  *
  * All other errors propagate unchanged.
  */

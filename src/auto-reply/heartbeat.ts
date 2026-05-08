@@ -1,6 +1,6 @@
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { escapeRegExp } from "../utils.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 export type HeartbeatTask = {
@@ -11,8 +11,13 @@ export type HeartbeatTask = {
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
-export const HEARTBEAT_PROMPT =
-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
+const HEARTBEAT_CONTEXT_PROMPT =
+  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats.";
+export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply HEARTBEAT_OK.`;
+export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
+  "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
+export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+export const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
@@ -71,7 +76,25 @@ export function resolveHeartbeatPrompt(raw?: string): string {
   return trimmed || HEARTBEAT_PROMPT;
 }
 
-export type StripHeartbeatMode = "heartbeat" | "message";
+function appendHeartbeatResponseToolInstructions(prompt: string): string {
+  const trimmed = normalizeOptionalString(prompt) ?? "";
+  if (!trimmed) {
+    return HEARTBEAT_RESPONSE_TOOL_PROMPT;
+  }
+  if (trimmed.includes(HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS)) {
+    return trimmed;
+  }
+  return `${trimmed}\n\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+}
+
+export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
+  const trimmed = normalizeOptionalString(raw) ?? "";
+  return trimmed
+    ? appendHeartbeatResponseToolInstructions(trimmed)
+    : HEARTBEAT_RESPONSE_TOOL_PROMPT;
+}
+
+type StripHeartbeatMode = "heartbeat" | "message";
 
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();

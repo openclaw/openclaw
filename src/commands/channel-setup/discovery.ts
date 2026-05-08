@@ -5,9 +5,10 @@ import { isChannelVisibleInSetup } from "../../channels/plugins/exposure.js";
 import { normalizeChannelMeta } from "../../channels/plugins/meta-normalization.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../../channels/plugins/types.public.js";
+import { isStaticallyChannelConfigured } from "../../config/channel-configured-shared.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {
   listSetupDiscoveryChannelPluginCatalogEntries,
@@ -48,11 +49,11 @@ export function listManifestInstalledChannelIds(params: {
   }).config;
   const workspaceDir = resolveWorkspaceDir(resolvedConfig, params.workspaceDir);
   return new Set(
-    loadPluginManifestRegistry({
+    listManifestChannelContributionIds({
       config: resolvedConfig,
       workspaceDir,
       env: params.env ?? process.env,
-    }).plugins.flatMap((plugin) => plugin.channels as ChannelChoice[]),
+    }).map((channelId) => channelId as ChannelChoice),
   );
 }
 
@@ -107,6 +108,7 @@ export function resolveChannelSetupEntries(params: {
       (entry) =>
         !installedPluginIds.has(entry.id) &&
         !manifestInstalledIds.has(entry.id as ChannelChoice) &&
+        !isStaticallyChannelConfigured(params.cfg, entry.id, params.env ?? process.env) &&
         shouldShowChannelInSetup(entry.meta),
     )
     .map((entry) =>

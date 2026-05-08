@@ -1,4 +1,4 @@
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { buildOpenAICodexCliBackend } from "./cli-backend.js";
@@ -41,6 +41,7 @@ export default definePluginEntry({
           mode: resolveOpenAIPromptOverlayMode(pluginConfig),
           modelProviderId: provider.id,
           modelId: ctx.modelId,
+          trigger: ctx.trigger,
         });
       },
     });

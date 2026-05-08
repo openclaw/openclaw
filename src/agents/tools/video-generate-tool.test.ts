@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MAX_VIDEO_BYTES } from "../../media/constants.js";
 import * as mediaStore from "../../media/store.js";
+import * as webMedia from "../../media/web-media.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
-import { createVideoGenerateTool } from "./video-generate-tool.js";
+import {
+  createVideoGenerateTool,
+  resolveVideoGenerationModelConfigForTool,
+} from "./video-generate-tool.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => ({
   listTasksForOwnerKey: vi.fn(),
@@ -16,8 +21,70 @@ const taskExecutorMocks = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),
 }));
 
+const VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS = [
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
+  "GEMINI_API_KEY",
+  "GEMINI_API_KEYS",
+  "GOOGLE_API_KEY",
+  "GOOGLE_API_KEYS",
+  "DEEPINFRA_API_KEY",
+  "MODELSTUDIO_API_KEY",
+  "DASHSCOPE_API_KEY",
+  "QWEN_API_KEY",
+  "BYTEPLUS_API_KEY",
+  "COMFY_API_KEY",
+  "COMFY_CLOUD_API_KEY",
+  "FAL_KEY",
+  "FAL_API_KEY",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+  "OPENROUTER_API_KEY",
+  "RUNWAYML_API_SECRET",
+  "RUNWAY_API_KEY",
+  "TOGETHER_API_KEY",
+  "XAI_API_KEY",
+  "VYDRA_API_KEY",
+] as const;
+
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
+
+const GENERATION_PROVIDER_ENV_VARS = [
+  "BYTEPLUS_API_KEY",
+  "COMFY_API_KEY",
+  "COMFY_CLOUD_API_KEY",
+  "DASHSCOPE_API_KEY",
+  "DEEPINFRA_API_KEY",
+  "FAL_API_KEY",
+  "FAL_KEY",
+  "GCLOUD_PROJECT",
+  "GEMINI_API_KEY",
+  "GEMINI_API_KEYS",
+  "GOOGLE_API_KEY",
+  "GOOGLE_API_KEYS",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_API_KEY",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_CLOUD_PROJECT",
+  "LITELLM_API_KEY",
+  "MINIMAX_API_KEY",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
+  "MODELSTUDIO_API_KEY",
+  "OPENAI_API_KEY",
+  "OPENAI_API_KEYS",
+  "OPENROUTER_API_KEY",
+  "QWEN_API_KEY",
+  "RUNWAY_API_KEY",
+  "RUNWAYML_API_SECRET",
+  "TOGETHER_API_KEY",
+  "VYDRA_API_KEY",
+  "XAI_API_KEY",
+];
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -72,6 +139,9 @@ function mockSavedVideoResult(fileName = "out.mp4") {
 
 function resetVideoGenerateMocks() {
   vi.restoreAllMocks();
+  for (const key of VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS) {
+    vi.stubEnv(key, "");
+  }
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
@@ -82,7 +152,12 @@ function resetVideoGenerateMocks() {
 }
 
 describe("createVideoGenerateTool", () => {
-  beforeEach(resetVideoGenerateMocks);
+  beforeEach(() => {
+    resetVideoGenerateMocks();
+    for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
+      vi.stubEnv(envVar, "");
+    }
+  });
 
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -106,6 +181,87 @@ describe("createVideoGenerateTool", () => {
         }),
       }),
     ).not.toBeNull();
+  });
+
+  it("does not load runtime providers while registering an explicitly configured tool", () => {
+    const listProviders = vi
+      .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders")
+      .mockImplementation(() => {
+        throw new Error("runtime provider list should not run during tool registration");
+      });
+
+    expect(
+      createVideoGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+            },
+          },
+        }),
+      }),
+    ).not.toBeNull();
+    expect(listProviders).not.toHaveBeenCalled();
+  });
+
+  it("does not load runtime providers while resolving an explicitly configured model", () => {
+    const listProviders = vi
+      .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders")
+      .mockImplementation(() => {
+        throw new Error("runtime provider list should not run for explicit video model config");
+      });
+
+    expect(
+      resolveVideoGenerationModelConfigForTool({
+        cfg: asConfig({
+          agents: {
+            defaults: {
+              videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+            },
+          },
+        }),
+      }),
+    ).toEqual({ primary: "qwen/wan2.6-t2v" });
+    expect(listProviders).not.toHaveBeenCalled();
+  });
+
+  it("orders auto-detected provider defaults by canonical aliases", () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "fal",
+        defaultModel: "fal-ai/minimax/video-01-live",
+        models: ["fal-ai/minimax/video-01-live"],
+        capabilities: {},
+        isConfigured: () => true,
+        generateVideo: vi.fn(async () => ({ videos: [] })),
+      },
+      {
+        id: "openai",
+        aliases: ["openai-codex"],
+        defaultModel: "sora-2",
+        models: ["sora-2"],
+        capabilities: {},
+        isConfigured: () => true,
+        generateVideo: vi.fn(async () => ({ videos: [] })),
+      },
+    ]);
+
+    expect(
+      resolveVideoGenerationModelConfigForTool({
+        cfg: asConfig({
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai-codex/gpt-5.5",
+              },
+            },
+          },
+        }),
+      }),
+    ).toEqual({
+      primary: "openai/sora-2",
+      fallbacks: ["fal/fal-ai/minimax/video-01-live"],
+    });
   });
 
   it("generates videos, saves them, and emits MEDIA paths without a session-backed detach", async () => {
@@ -184,6 +340,51 @@ describe("createVideoGenerateTool", () => {
     expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
+  it("uses the video media cap when mediaMaxMb is not configured", async () => {
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "qwen",
+      model: "wan2.6-t2v",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+    });
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/generated-lobster.mp4",
+      id: "generated-lobster.mp4",
+      size: 11,
+      contentType: "video/mp4",
+    });
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await tool.execute("call-default-cap", { prompt: "friendly lobster surfing" });
+
+    expect(saveSpy).toHaveBeenCalledWith(
+      Buffer.from("video-bytes"),
+      "video/mp4",
+      "tool-video-generation",
+      MAX_VIDEO_BYTES,
+      "lobster.mp4",
+    );
+  });
+
   it("surfaces url-only generated videos without saving local files", async () => {
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "vydra",
@@ -229,6 +430,56 @@ describe("createVideoGenerateTool", () => {
       },
       paths: ["https://example.com/generated-lobster.mp4"],
       metadata: { taskId: "task-1" },
+    });
+  });
+
+  it("falls back to the provider URL when generated video persistence exceeds the media cap", async () => {
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "fal",
+      model: "fal-ai/minimax/video-01-live",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        {
+          buffer: Buffer.from("large-video-bytes"),
+          url: "https://fal.run/files/generated-lobster.mp4",
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockRejectedValueOnce(
+      new Error("Media exceeds 16MB limit"),
+    );
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "fal/fal-ai/minimax/video-01-live" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const result = await tool.execute("call-url-fallback", {
+      prompt: "friendly lobster surfing",
+    });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Generated 1 video with fal/fal-ai/minimax/video-01-live.");
+    expect(text).toContain("MEDIA:https://fal.run/files/generated-lobster.mp4");
+    expect(result.details).toMatchObject({
+      provider: "fal",
+      model: "fal-ai/minimax/video-01-live",
+      count: 1,
+      media: {
+        mediaUrls: ["https://fal.run/files/generated-lobster.mp4"],
+      },
+      paths: ["https://fal.run/files/generated-lobster.mp4"],
     });
   });
 
@@ -694,6 +945,7 @@ describe("createVideoGenerateTool", () => {
 
     expect(generateSpy).toHaveBeenCalledWith(
       expect.objectContaining({
+        autoProviderFallback: false,
         providerOptions: { seed: 42, draft: true },
       }),
     );
@@ -753,6 +1005,43 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages).toHaveLength(2);
     expect(call.inputImages?.[0]?.role).toBe("first_frame");
     expect(call.inputImages?.[1]?.role).toBe("last_frame");
+  });
+
+  it("passes web_fetch SSRF policy when loading reference assets", async () => {
+    mockVideoPluginProvider({
+      imageToVideo: { enabled: true, maxInputImages: 1 },
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    mockSavedVideoResult();
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1" },
+          },
+        },
+        tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await tool.execute("call-1", {
+      prompt: "lobster",
+      image: "/tmp/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      "/tmp/reference.png",
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
   });
 
   it("rejects audio data: URLs via the templated rejection branch", async () => {

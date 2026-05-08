@@ -8,9 +8,10 @@ type GatewayRequestContextClient = GatewayClient & {
   usesSharedGatewayAuth?: boolean;
 };
 
-export type GatewayRequestContextParams = {
+type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState">;
+  getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
@@ -51,11 +52,13 @@ export type GatewayRequestContextParams = {
   findRunningWizard: GatewayRequestContext["findRunningWizard"];
   purgeWizardSession: GatewayRequestContext["purgeWizardSession"];
   getRuntimeSnapshot: GatewayRequestContext["getRuntimeSnapshot"];
+  getEventLoopHealth?: GatewayRequestContext["getEventLoopHealth"];
   startChannel: GatewayRequestContext["startChannel"];
   stopChannel: GatewayRequestContext["stopChannel"];
   markChannelLoggedOut: GatewayRequestContext["markChannelLoggedOut"];
   wizardRunner: GatewayRequestContext["wizardRunner"];
   broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
+  broadcastVoiceWakeRoutingChanged: GatewayRequestContext["broadcastVoiceWakeRoutingChanged"];
   unavailableGatewayMethods: ReadonlySet<string>;
 };
 
@@ -72,6 +75,7 @@ export function createGatewayRequestContext(
     get cronStorePath() {
       return params.runtimeState.cronState.storePath;
     },
+    getRuntimeConfig: params.getRuntimeConfig,
     execApprovalManager: params.execApprovalManager,
     pluginApprovalManager: params.pluginApprovalManager,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
@@ -144,11 +148,13 @@ export function createGatewayRequestContext(
     findRunningWizard: params.findRunningWizard,
     purgeWizardSession: params.purgeWizardSession,
     getRuntimeSnapshot: params.getRuntimeSnapshot,
+    getEventLoopHealth: params.getEventLoopHealth,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
     markChannelLoggedOut: params.markChannelLoggedOut,
     wizardRunner: params.wizardRunner,
     broadcastVoiceWakeChanged: params.broadcastVoiceWakeChanged,
+    broadcastVoiceWakeRoutingChanged: params.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: params.unavailableGatewayMethods,
   };
 }

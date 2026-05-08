@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin, {
   applyProposalToWorkspace,
   createProposalFromMessages,
@@ -234,7 +234,7 @@ describe("skill-workshop", () => {
       pluginConfig: { approvalPolicy: "auto" },
       runtime: {
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       on,
@@ -288,7 +288,7 @@ describe("skill-workshop", () => {
           resolveStateDir: () => stateDir,
         },
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(registered) {
@@ -346,7 +346,7 @@ describe("skill-workshop", () => {
           resolveStateDir: () => stateDir,
         },
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(registered) {
@@ -405,7 +405,7 @@ describe("skill-workshop", () => {
           resolveStateDir: () => stateDir,
         },
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       on,
@@ -492,7 +492,7 @@ describe("skill-workshop", () => {
           resolveStateDir: () => stateDir,
         },
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       on,
@@ -682,6 +682,128 @@ describe("skill-workshop", () => {
         toolsAllow: [],
         provider: "openai",
         model: "gpt-5.4",
+      }),
+    );
+  });
+
+  it("uses the configured agent default for reviewer fallback", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = await makeTempDir();
+    const runEmbeddedPiAgent = vi.fn(async () => ({
+      payloads: [{ text: JSON.stringify({ action: "none" }) }],
+      meta: {},
+    }));
+    const api = createTestPluginApi({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.5" },
+          },
+        },
+      },
+      runtime: {
+        agent: {
+          defaults: { provider: "openai", model: "gpt-5.4" },
+          resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          runEmbeddedPiAgent,
+        },
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+      } as never,
+    });
+
+    await reviewTranscriptForProposal({
+      api,
+      config: {
+        enabled: true,
+        autoCapture: true,
+        approvalPolicy: "pending",
+        reviewMode: "llm",
+        reviewInterval: 1,
+        reviewMinToolCalls: 1,
+        reviewTimeoutMs: 5_000,
+        maxPending: 50,
+        maxSkillBytes: 40_000,
+      },
+      ctx: { agentId: "main", workspaceDir },
+      messages: [{ role: "user", content: "Remember this repeatable fix." }],
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      }),
+    );
+  });
+
+  it("infers reviewer fallback provider for a bare configured model", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = await makeTempDir();
+    const runEmbeddedPiAgent = vi.fn(async () => ({
+      payloads: [{ text: JSON.stringify({ action: "none" }) }],
+      meta: {},
+    }));
+    const api = createTestPluginApi({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "gpt-5.5" },
+          },
+        },
+        models: {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      runtime: {
+        agent: {
+          defaults: { provider: "openai", model: "gpt-5.4" },
+          resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          runEmbeddedPiAgent,
+        },
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+      } as never,
+    });
+
+    await reviewTranscriptForProposal({
+      api,
+      config: {
+        enabled: true,
+        autoCapture: true,
+        approvalPolicy: "pending",
+        reviewMode: "llm",
+        reviewInterval: 1,
+        reviewMinToolCalls: 1,
+        reviewTimeoutMs: 5_000,
+        maxPending: 50,
+        maxSkillBytes: 40_000,
+      },
+      ctx: { agentId: "main", workspaceDir },
+      messages: [{ role: "user", content: "Remember this bare-model default." }],
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        model: "gpt-5.5",
       }),
     );
   });

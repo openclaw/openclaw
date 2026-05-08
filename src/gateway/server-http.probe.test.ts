@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AUTH_TOKEN,
   AUTH_NONE,
@@ -261,6 +261,62 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(200);
         expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+      },
+    });
+  });
+
+  it("serves /healthz before loading gateway config", async () => {
+    const getRuntimeConfig = vi.fn(() => {
+      throw new Error("config load blocked");
+    });
+
+    await withGatewayServer({
+      prefix: "probe-healthz-before-config",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getRuntimeConfig },
+      run: async (server) => {
+        const req = createRequest({ path: "/healthz" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+        expect(getRuntimeConfig).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("serves probes before stalled request stages", async () => {
+    const handleHooksRequest = vi.fn((): Promise<boolean> => new Promise(() => {}));
+    const getReadiness = vi.fn(() => ({
+      ready: true,
+      failing: [],
+      uptimeMs: 123,
+    }));
+
+    await withGatewayServer({
+      prefix: "probe-before-stalled-stages",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness, handleHooksRequest },
+      run: async (server) => {
+        const healthReq = createRequest({ path: "/healthz" });
+        const healthResponse = createResponse();
+        await dispatchRequest(server, healthReq, healthResponse.res);
+
+        expect(healthResponse.res.statusCode).toBe(200);
+        expect(healthResponse.getBody()).toBe(JSON.stringify({ ok: true, status: "live" }));
+
+        const readyReq = createRequest({ path: "/readyz" });
+        const readyResponse = createResponse();
+        await dispatchRequest(server, readyReq, readyResponse.res);
+
+        expect(readyResponse.res.statusCode).toBe(200);
+        expect(JSON.parse(readyResponse.getBody())).toEqual({
+          ready: true,
+          failing: [],
+          uptimeMs: 123,
+        });
+        expect(handleHooksRequest).not.toHaveBeenCalled();
       },
     });
   });

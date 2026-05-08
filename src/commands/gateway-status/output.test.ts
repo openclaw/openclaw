@@ -3,10 +3,12 @@ import type { GatewayProbeResult } from "../../gateway/probe.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { GatewayStatusProbedTarget } from "./probe-run.js";
 
-const writeRuntimeJson = vi.fn();
+const mocks = vi.hoisted(() => ({
+  writeRuntimeJson: vi.fn(),
+}));
 
 vi.mock("../../runtime.js", () => ({
-  writeRuntimeJson: (...args: unknown[]) => writeRuntimeJson(...args),
+  writeRuntimeJson: (...args: unknown[]) => mocks.writeRuntimeJson(...args),
 }));
 
 vi.mock("../../terminal/theme.js", async () => {
@@ -18,7 +20,8 @@ vi.mock("../../terminal/theme.js", async () => {
   };
 });
 
-const { writeGatewayStatusJson, writeGatewayStatusText } = await import("./output.js");
+const { buildGatewayStatusWarnings, writeGatewayStatusJson, writeGatewayStatusText } =
+  await import("./output.js");
 
 function createRuntimeCapture(): RuntimeEnv {
   return {
@@ -49,6 +52,10 @@ function createProbe(
       scopes: capability === "admin_capable" ? ["operator.admin"] : ["operator.read"],
       capability,
     },
+    server: {
+      version: "2026.4.24",
+      connId: "conn-test",
+    },
     health: null,
     status: null,
     presence: null,
@@ -73,7 +80,35 @@ function createTarget(id: string, probe: GatewayProbeResult): GatewayStatusProbe
 
 describe("gateway status output", () => {
   beforeEach(() => {
-    writeRuntimeJson.mockReset();
+    mocks.writeRuntimeJson.mockReset();
+  });
+
+  it("warns with diagnostic next steps when no probes or Bonjour discovery find a gateway", () => {
+    const warnings = buildGatewayStatusWarnings({
+      probed: [
+        createTarget(
+          "localLoopback",
+          createProbe("unknown", {
+            ok: false,
+            connectLatencyMs: null,
+            error: "connection refused",
+          }),
+        ),
+      ],
+      sshTarget: null,
+      sshTunnelStarted: false,
+      sshTunnelError: null,
+      discoveryCount: 0,
+    });
+
+    expect(warnings).toContainEqual(
+      expect.objectContaining({
+        code: "no_gateway_reachable",
+        message: expect.stringContaining("openclaw gateway status --deep --require-rpc"),
+        targetIds: ["localLoopback"],
+      }),
+    );
+    expect(warnings.at(0)?.message).toContain("lsof -nP -iTCP:<port>");
   });
 
   it("derives summary capability from reachable probes only in json output", () => {
@@ -91,11 +126,11 @@ describe("gateway status output", () => {
       discovery: [],
       probed: [
         createTarget(
-          "unreachable-admin",
+          "unreachable-before-connect",
           createProbe("admin_capable", {
             ok: false,
-            connectLatencyMs: 40,
-            error: "unknown method: status",
+            connectLatencyMs: null,
+            error: "timeout",
           }),
         ),
         createTarget(
@@ -110,7 +145,7 @@ describe("gateway status output", () => {
       primaryTargetId: "reachable-read",
     });
 
-    expect(writeRuntimeJson).toHaveBeenCalledWith(
+    expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(
       runtime,
       expect.objectContaining({
         ok: true,
@@ -128,11 +163,11 @@ describe("gateway status output", () => {
       discovery: [],
       probed: [
         createTarget(
-          "unreachable-admin",
+          "unreachable-before-connect",
           createProbe("admin_capable", {
             ok: false,
-            connectLatencyMs: 40,
-            error: "unknown method: status",
+            connectLatencyMs: null,
+            error: "timeout",
           }),
         ),
         createTarget(
@@ -148,5 +183,58 @@ describe("gateway status output", () => {
     });
 
     expect(runtime.log).toHaveBeenCalledWith("Capability: read-only");
+  });
+
+  it("reports post-connect detail failures as reachable but degraded in json output", () => {
+    const runtime = createRuntimeCapture();
+    writeGatewayStatusJson({
+      runtime,
+      startedAt: Date.now() - 50,
+      overallTimeoutMs: 5_000,
+      discoveryTimeoutMs: 500,
+      network: {
+        localLoopbackUrl: "ws://127.0.0.1:18789",
+        localTailnetUrl: null,
+        tailnetIPv4: null,
+      },
+      discovery: [],
+      probed: [
+        createTarget(
+          "detail-timeout",
+          createProbe("read_only", {
+            ok: false,
+            connectLatencyMs: 40,
+            error: "timeout",
+          }),
+        ),
+      ],
+      warnings: [
+        {
+          code: "probe_detail_failed",
+          message:
+            "Gateway accepted the WebSocket connection, but follow-up read diagnostics failed: timeout",
+          targetIds: ["detail-timeout"],
+        },
+      ],
+      primaryTargetId: "detail-timeout",
+    });
+
+    expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        ok: true,
+        degraded: true,
+        primaryTargetId: "detail-timeout",
+        targets: [
+          expect.objectContaining({
+            connect: expect.objectContaining({
+              ok: true,
+              rpcOk: false,
+              error: "timeout",
+            }),
+          }),
+        ],
+      }),
+    );
   });
 });

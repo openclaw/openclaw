@@ -1,40 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { isChannelConfigured } from "./channel-configured.js";
 
-vi.mock("../channels/plugins/configured-state.js", () => ({
-  hasBundledChannelConfiguredState: ({
-    channelId,
-    env,
-  }: {
-    channelId: string;
-    env?: NodeJS.ProcessEnv;
-  }) => {
-    if (channelId === "telegram") {
-      return Boolean(env?.TELEGRAM_BOT_TOKEN);
-    }
-    if (channelId === "discord") {
-      return Boolean(env?.DISCORD_BOT_TOKEN);
-    }
-    if (channelId === "slack") {
-      return Boolean(env?.SLACK_BOT_TOKEN);
-    }
-    if (channelId === "irc") {
-      return Boolean(env?.IRC_HOST && env?.IRC_NICK);
-    }
-    return false;
-  },
-}));
-
-vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
-  hasBundledChannelPersistedAuthState: ({
-    channelId,
-    env,
-  }: {
-    channelId: string;
-    env?: NodeJS.ProcessEnv;
-  }) => channelId === "matrix" && env?.OPENCLAW_STATE_DIR === "state-with-matrix-creds",
-}));
-
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: () => undefined,
 }));
@@ -78,9 +44,9 @@ describe("isChannelConfigured", () => {
     ).toBe(true);
   });
 
-  it("detects persisted Matrix credentials through package metadata", () => {
+  it("does not treat persisted Matrix credentials as configured channel state", () => {
     expect(
       isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: "state-with-matrix-creds" }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

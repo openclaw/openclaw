@@ -2,6 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  clearWedgedSubagentRecoveryAbort,
+  formatSubagentRecoveryWedgedReason,
+  isSubagentRecoveryWedgedEntry,
+} from "../agents/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
@@ -16,6 +21,7 @@ import {
   resolveStorePath,
 } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
+import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
@@ -26,9 +32,14 @@ import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
 
 type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  confirmRuntimeRepair: (params: {
+    message: string;
+    initialValue?: boolean;
+    requiresInteractiveConfirmation?: boolean;
+  }) => Promise<boolean>;
   note?: typeof note;
 };
 
@@ -72,6 +83,10 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   } catch {
     return null;
   }
+}
+
+function resolveComparableTranscriptPath(filePath: string): string {
+  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
 function isReachableConfiguredAgentDir(params: {
@@ -552,14 +567,12 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
     }),
   );
   const withoutPersistedAuth = new Set(
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
       includePersistedAuthState: false,
     }),
   );
@@ -857,6 +870,67 @@ export async function noteStateIntegrity(
       );
     }
 
+    const wedgedSubagentSessions = entries.filter(([, entry]) =>
+      isSubagentRecoveryWedgedEntry(entry),
+    );
+    if (wedgedSubagentSessions.length > 0) {
+      const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
+      warnings.push(
+        [
+          `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
+          "  OpenClaw will not auto-resume these child sessions on restart; reconcile their task records instead.",
+          `  Examples: ${wedgedSubagentSessions
+            .slice(0, 3)
+            .map(([key]) => key)
+            .join(", ")}`,
+          `  Fix: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
+        ].join("\n"),
+      );
+      const repairWedged = await prompter.confirmRuntimeRepair({
+        message: `Clear stale aborted recovery flags for ${wedgedCount}?`,
+        initialValue: true,
+      });
+      if (repairWedged) {
+        let repaired = 0;
+        const repairedAt = Date.now();
+        await updateSessionStore(absoluteStorePath, (currentStore) => {
+          for (const [key] of wedgedSubagentSessions) {
+            const current = currentStore[key];
+            if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
+              repaired += 1;
+              currentStore[key] = current;
+            }
+          }
+        });
+        if (repaired > 0) {
+          changes.push(
+            `- Cleared aborted restart-recovery flags for ${countLabel(
+              repaired,
+              "wedged subagent session",
+            )}.`,
+          );
+        }
+      }
+
+      const wedgedReasons = wedgedSubagentSessions
+        .map(([, entry]) => formatSubagentRecoveryWedgedReason(entry))
+        .filter((reason, index, all) => all.indexOf(reason) === index)
+        .slice(0, 2);
+      if (wedgedReasons.length > 0) {
+        warnings.push(wedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
+      }
+    }
+
+    await runPluginSessionStateDoctorRepairs({
+      cfg,
+      store,
+      absoluteStorePath,
+      prompter,
+      env,
+      warnings,
+      changes,
+    });
+
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
@@ -888,7 +962,9 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          resolveComparableTranscriptPath(
+            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+          ),
         );
       } catch {
         // ignore invalid legacy paths
@@ -897,8 +973,10 @@ export async function noteStateIntegrity(
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
-      .filter((filePath) => !referencedTranscriptPaths.has(filePath));
+      .map((entry) => path.join(sessionsDir, entry.name))
+      .filter(
+        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
+      );
     if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
@@ -913,6 +991,7 @@ export async function noteStateIntegrity(
       const archiveOrphans = await prompter.confirmRuntimeRepair({
         message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
         initialValue: false,
+        requiresInteractiveConfirmation: true,
       });
       if (archiveOrphans) {
         let archived = 0;

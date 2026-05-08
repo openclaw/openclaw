@@ -34,7 +34,7 @@ function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefin
       provider: PROVIDER_ID,
       id: entry.id,
       name: entry.name ?? entry.id,
-      compat: { supportsUsageInStreaming: true },
+      compat: { ...entry.compat, supportsUsageInStreaming: true },
       contextWindow: entry.contextWindow,
       contextTokens: entry.contextTokens,
       reasoning: entry.reasoning,
@@ -69,6 +69,7 @@ export default definePluginEntry({
             const providerSetup = await loadProviderSetup();
             return await providerSetup.promptAndConfigureLmstudioInteractive({
               config: ctx.config,
+              agentDir: ctx.agentDir,
               prompter: ctx.prompter,
               secretInputMode: ctx.secretInputMode,
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,

@@ -31,11 +31,11 @@ export const discordChannelConfigUiHints = {
   },
   streaming: {
     label: "Discord Streaming Mode",
-    help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
+    help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are auto-mapped.',
   },
   "streaming.mode": {
     label: "Discord Streaming Mode",
-    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord.',
+    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress".',
   },
   "streaming.chunkMode": {
     label: "Discord Chunk Mode",
@@ -63,7 +63,31 @@ export const discordChannelConfigUiHints = {
   },
   "streaming.preview.toolProgress": {
     label: "Discord Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
+  },
+  "streaming.preview.commandText": {
+    label: "Discord Draft Command Text",
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
+  "streaming.progress.label": {
+    label: "Discord Progress Label",
+    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
+  },
+  "streaming.progress.labels": {
+    label: "Discord Progress Label Pool",
+    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
+  },
+  "streaming.progress.maxLines": {
+    label: "Discord Progress Max Lines",
+    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+  },
+  "streaming.progress.toolProgress": {
+    label: "Discord Progress Tool Lines",
+    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+  },
+  "streaming.progress.commandText": {
+    label: "Discord Progress Command Text",
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
   "retry.attempts": {
     label: "Discord Retry Attempts",
@@ -89,10 +113,6 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Parent Inheritance",
     help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
   },
-  "inboundWorker.runTimeoutMs": {
-    label: "Discord Inbound Worker Timeout (ms)",
-    help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
-  },
   "eventQueue.listenerTimeout": {
     label: "Discord EventQueue Listener Timeout (ms)",
     help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
@@ -117,13 +137,13 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Binding Max Age (hours)",
     help: "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
   },
-  "threadBindings.spawnSubagentSessions": {
-    label: "Discord Thread-Bound Subagent Spawn",
-    help: "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+  "threadBindings.spawnSessions": {
+    label: "Discord Thread-Bound Session Spawn",
+    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-create and bind Discord threads (default: true). Set false to disable for this account/channel.",
   },
-  "threadBindings.spawnAcpSessions": {
-    label: "Discord Thread-Bound ACP Spawn",
-    help: "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+  "threadBindings.defaultSpawnContext": {
+    label: "Discord Thread Spawn Context",
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
   "ui.components.accentColor": {
     label: "Discord Component Accent Color",
@@ -137,9 +157,29 @@ export const discordChannelConfigUiHints = {
     label: "Discord Guild Members Intent",
     help: "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
   },
+  "intents.voiceStates": {
+    label: "Discord Voice States Intent",
+    help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set true only for Discord voice channel conversations.",
+  },
+  gatewayInfoTimeoutMs: {
+    label: "Discord Gateway Metadata Timeout (ms)",
+    help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
+  },
+  gatewayReadyTimeoutMs: {
+    label: "Discord Gateway READY Timeout (ms)",
+    help: "Startup wait for the Discord gateway READY event before restarting the socket. Default is 15000; OPENCLAW_DISCORD_READY_TIMEOUT_MS can override when config is unset.",
+  },
+  gatewayRuntimeReadyTimeoutMs: {
+    label: "Discord Gateway Runtime READY Timeout (ms)",
+    help: "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset.",
+  },
   "voice.enabled": {
     label: "Discord Voice Enabled",
-    help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+    help: "Enable Discord voice channel conversations. Text-only Discord configs leave voice off by default; set true to enable /vc commands and the Guild Voice States intent.",
+  },
+  "voice.model": {
+    label: "Discord Voice Model",
+    help: "Optional LLM model override for Discord voice channel responses (for example openai/gpt-5.4-mini). Leave unset to inherit the routed agent model.",
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
@@ -152,6 +192,14 @@ export const discordChannelConfigUiHints = {
   "voice.decryptionFailureTolerance": {
     label: "Discord Voice Decrypt Failure Tolerance",
     help: "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
+  },
+  "voice.connectTimeoutMs": {
+    label: "Discord Voice Connect Timeout (ms)",
+    help: "Initial @discordjs/voice Ready wait before a join is treated as failed. Default: 30000.",
+  },
+  "voice.reconnectGraceMs": {
+    label: "Discord Voice Reconnect Grace (ms)",
+    help: "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000.",
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",
@@ -209,9 +257,17 @@ export const discordChannelConfigUiHints = {
     label: "Discord Allow Bot Messages",
     help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
   },
+  mentionAliases: {
+    label: "Discord Mention Aliases",
+    help: "Map outbound @handle text to stable Discord user IDs before sending. Set per account via channels.discord.accounts.<id>.mentionAliases.",
+  },
   token: {
     label: "Discord Bot Token",
     help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
     sensitive: true,
+  },
+  applicationId: {
+    label: "Discord Application ID",
+    help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

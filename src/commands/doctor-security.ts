@@ -1,4 +1,4 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
@@ -269,6 +269,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       provider: params.provider,
       accountId: params.accountId,
       allowFrom: params.allowFrom,
+      dmPolicy,
       normalizeEntry: params.normalizeEntry,
     });
     const dmScope = cfg.session?.dmScope ?? "main";
@@ -304,7 +305,10 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   };
 
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
+    includePersistedAuthState: true,
+    includeSetupFallbackPlugins: true,
+  })) {
     if (!plugin.security) {
       continue;
     }

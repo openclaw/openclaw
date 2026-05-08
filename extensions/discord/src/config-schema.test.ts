@@ -76,6 +76,30 @@ describe("discord config schema", () => {
     expect(cfg.historyLimit).toBe(3);
   });
 
+  it("accepts Discord application IDs at top-level and account scope", () => {
+    const cfg = expectValidDiscordConfig({
+      applicationId: "123456789012345678",
+      accounts: {
+        work: {
+          applicationId: 234567890123456,
+        },
+      },
+    });
+
+    expect(cfg.applicationId).toBe("123456789012345678");
+    expect(cfg.accounts?.work?.applicationId).toBe("234567890123456");
+  });
+
+  it("rejects unsafe numeric Discord application IDs", () => {
+    const issues = expectInvalidDiscordConfig({
+      applicationId: 106232522769186816,
+    });
+
+    expect(
+      issues.some((issue) => issue.message.includes("not a valid non-negative safe integer")),
+    ).toBe(true);
+  });
+
   it("loads guild map and dm group settings", () => {
     const cfg = expectValidDiscordConfig({
       enabled: true,
@@ -111,6 +135,39 @@ describe("discord config schema", () => {
     expect(cfg.guilds?.["123"]?.slug).toBe("friends-of-openclaw");
     expect(cfg.guilds?.["123"]?.channels?.general?.enabled).toBe(true);
     expect(cfg.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
+  });
+
+  it("accepts voice model override field", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        model: "openai/gpt-5.4-mini",
+      },
+    });
+
+    expect(cfg.voice?.model).toBe("openai/gpt-5.4-mini");
+  });
+
+  it("accepts Discord voice timing overrides", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        connectTimeoutMs: 45_000,
+        reconnectGraceMs: 20_000,
+      },
+    });
+
+    expect(cfg.voice?.connectTimeoutMs).toBe(45_000);
+    expect(cfg.voice?.reconnectGraceMs).toBe(20_000);
+  });
+
+  it("rejects invalid Discord voice timing overrides", () => {
+    for (const voice of [
+      { connectTimeoutMs: 0 },
+      { connectTimeoutMs: 120_001 },
+      { reconnectGraceMs: -1 },
+      { reconnectGraceMs: 1.5 },
+    ]) {
+      expectInvalidDiscordConfig({ voice });
+    }
   });
 
   it("coerces safe-integer numeric allowlist entries to strings", () => {

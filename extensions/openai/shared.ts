@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   cloneFirstTemplateModel,
@@ -32,7 +32,7 @@ type SyntheticOpenAIModelCatalogEntry = {
   cost?: SyntheticOpenAIModelCatalogCost;
 };
 
-export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
 export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
@@ -48,12 +48,13 @@ function hasSupportedOpenAIResponsesTransport(
   return transport === "auto" || transport === "sse" || transport === "websocket";
 }
 
-export function defaultOpenAIResponsesExtraParams(
+function defaultOpenAIResponsesExtraParams(
   extraParams: Record<string, unknown> | undefined,
-  options?: { openaiWsWarmup?: boolean },
+  options?: { openaiWsWarmup?: boolean; transport?: "auto" | "sse" | "websocket" },
 ): Record<string, unknown> | undefined {
   const hasSupportedTransport = hasSupportedOpenAIResponsesTransport(extraParams?.transport);
   const hasExplicitWarmup = typeof extraParams?.openaiWsWarmup === "boolean";
+  const defaultTransport = options?.transport ?? "auto";
   const shouldDefaultWarmup = options?.openaiWsWarmup === true;
   if (hasSupportedTransport && (!shouldDefaultWarmup || hasExplicitWarmup)) {
     return extraParams;
@@ -61,7 +62,7 @@ export function defaultOpenAIResponsesExtraParams(
 
   return {
     ...extraParams,
-    ...(hasSupportedTransport ? {} : { transport: "auto" }),
+    ...(hasSupportedTransport ? {} : { transport: defaultTransport }),
     ...(shouldDefaultWarmup && !hasExplicitWarmup ? { openaiWsWarmup: true } : {}),
   };
 }
@@ -93,6 +94,7 @@ const wrapOpenAIResponsesProviderStreamFn: NonNullable<
 
 export function buildOpenAIResponsesProviderHooks(options?: {
   openaiWsWarmup?: boolean;
+  transport?: "auto" | "sse" | "websocket";
 }): OpenAIResponsesProviderHooks {
   return {
     buildReplayPolicy: buildOpenAIReplayPolicy,

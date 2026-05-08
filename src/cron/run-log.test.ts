@@ -9,6 +9,7 @@ import {
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
   readCronRunLogEntriesPage,
+  readCronRunLogEntriesSync,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
@@ -93,6 +94,36 @@ describe("cron run log", () => {
       expect(lines.length).toBe(3);
       const last = JSON.parse(lines[2] ?? "{}") as { ts?: number };
       expect(last.ts).toBe(1009);
+    });
+  });
+
+  it("reads run-log entries synchronously for task reconciliation", async () => {
+    await withRunLogDir("openclaw-cron-log-sync-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1000,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        runAtMs: 900,
+        durationMs: 100,
+      });
+      await appendCronRunLog(logPath, {
+        ts: 2000,
+        jobId: "job-2",
+        action: "finished",
+        status: "error",
+      });
+
+      expect(readCronRunLogEntriesSync(logPath, { jobId: "job-1" })).toEqual([
+        expect.objectContaining({
+          jobId: "job-1",
+          status: "ok",
+          runAtMs: 900,
+          durationMs: 100,
+        }),
+      ]);
+      expect(readCronRunLogEntriesSync(path.join(dir, "runs", "missing.jsonl"))).toEqual([]);
     });
   });
 
@@ -277,6 +308,46 @@ describe("cron run log", () => {
           })
         ).entries,
       ).toEqual([]);
+    });
+  });
+
+  it("reads and searches run diagnostics", async () => {
+    await withRunLogDir("openclaw-cron-log-diagnostics-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "error",
+        diagnostics: {
+          summary: "exec stderr tail",
+          entries: [
+            {
+              ts: 1,
+              source: "exec",
+              severity: "error",
+              message: "exec stderr tail",
+              exitCode: 2,
+            },
+          ],
+        },
+      });
+
+      const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
+      expect(entries[0]?.diagnostics).toMatchObject({
+        summary: "exec stderr tail",
+        entries: [{ source: "exec", severity: "error", message: "exec stderr tail", exitCode: 2 }],
+      });
+      expect(
+        (
+          await readCronRunLogEntriesPage(logPath, {
+            limit: 10,
+            jobId: "job-1",
+            query: "stderr tail",
+          })
+        ).entries,
+      ).toHaveLength(1);
     });
   });
 

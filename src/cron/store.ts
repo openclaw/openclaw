@@ -4,6 +4,7 @@ import path from "node:path";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { tryCronScheduleIdentity } from "./schedule-identity.js";
 import type { CronStoreFile } from "./types.js";
 
 type SerializedStoreCacheEntry = {
@@ -40,6 +41,7 @@ function resolveStatePath(storePath: string): string {
 
 type CronStateFileEntry = {
   updatedAtMs?: number;
+  scheduleIdentity?: string;
   state?: Record<string, unknown>;
 };
 
@@ -63,6 +65,7 @@ function extractStateFile(store: CronStoreFile): CronStateFile {
   for (const job of store.jobs) {
     jobs[job.id] = {
       updatedAtMs: job.updatedAtMs,
+      scheduleIdentity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
       state: job.state ?? {},
     };
   }
@@ -114,6 +117,39 @@ async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
   }
 }
 
+function loadStateFileSync(statePath: string): CronStateFile | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(statePath, "utf-8");
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return null;
+    }
+    throw new Error(`Failed to read cron state at ${statePath}: ${String(err)}`, {
+      cause: err,
+    });
+  }
+
+  try {
+    const parsed = parseJsonWithJson5Fallback(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      record.version !== 1 ||
+      typeof record.jobs !== "object" ||
+      record.jobs === null ||
+      Array.isArray(record.jobs)
+    ) {
+      return null;
+    }
+    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
+  } catch {
+    return null;
+  }
+}
+
 function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
   return jobs.some(
     (job) =>
@@ -150,6 +186,18 @@ function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unk
     : Date.now();
 }
 
+function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: CronStateFileEntry): void {
+  job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
+  job.state = (entry.state ?? {}) as never;
+  if (
+    typeof entry.scheduleIdentity === "string" &&
+    entry.scheduleIdentity !== tryCronScheduleIdentity(job as unknown as Record<string, unknown>)
+  ) {
+    ensureJobStateObject(job);
+    job.state.nextRunAtMs = undefined;
+  }
+}
+
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
@@ -182,8 +230,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
       for (const job of store.jobs) {
         const entry = stateFile.jobs[job.id];
         if (entry) {
-          job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
-          job.state = (entry.state ?? {}) as never;
+          mergeStateFileEntry(job, entry);
         } else {
           backfillMissingRuntimeFields(job);
         }
@@ -219,8 +266,62 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   }
 }
 
+export function loadCronStoreSync(storePath: string): CronStoreFile {
+  try {
+    const raw = fs.readFileSync(storePath, "utf-8");
+    let parsed: unknown;
+    try {
+      parsed = parseJsonWithJson5Fallback(raw);
+    } catch (err) {
+      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
+        cause: err,
+      });
+    }
+    const parsedRecord =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
+    const store = {
+      version: 1 as const,
+      jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
+    };
+
+    const stateFile = loadStateFileSync(resolveStatePath(storePath));
+    const hasLegacyInlineState =
+      !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
+
+    if (stateFile) {
+      for (const job of store.jobs) {
+        const entry = stateFile.jobs[job.id];
+        if (entry) {
+          mergeStateFileEntry(job, entry);
+        } else {
+          backfillMissingRuntimeFields(job);
+        }
+      }
+    } else if (!hasLegacyInlineState) {
+      for (const job of store.jobs) {
+        backfillMissingRuntimeFields(job);
+      }
+    }
+
+    for (const job of store.jobs) {
+      ensureJobStateObject(job);
+    }
+
+    return store;
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return { version: 1, jobs: [] };
+    }
+    throw err;
+  }
+}
+
 type SaveCronStoreOptions = {
   skipBackup?: boolean;
+  stateOnly?: boolean;
 };
 
 async function setSecureFileMode(filePath: string): Promise<void> {
@@ -261,6 +362,7 @@ export async function saveCronStore(
   store: CronStoreFile,
   opts?: SaveCronStoreOptions,
 ) {
+  const stateOnly = opts?.stateOnly === true;
   const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
   const stateFile = extractStateFile(store);
   const stateJson = JSON.stringify(stateFile, null, 2);
@@ -268,13 +370,17 @@ export async function saveCronStore(
   const statePath = resolveStatePath(storePath);
   const cache = serializedStoreCache.get(storePath);
 
-  const configChanged = cache?.configJson !== configJson;
+  const configChanged = !stateOnly && cache?.configJson !== configJson;
   const stateChanged = cache?.stateJson !== stateJson;
   const migrating = cache?.needsSplitMigration === true;
-  const configNeedsWrite = await serializedFileNeedsWrite(storePath, configJson, configChanged);
+  const configNeedsWrite = stateOnly
+    ? false
+    : await serializedFileNeedsWrite(storePath, configJson, configChanged);
   const stateNeedsWrite = await serializedFileNeedsWrite(statePath, stateJson, stateChanged);
 
-  if (!configNeedsWrite && !stateNeedsWrite && !migrating) {
+  if (
+    stateOnly ? !stateNeedsWrite && !migrating : !configNeedsWrite && !stateNeedsWrite && !migrating
+  ) {
     return;
   }
 
@@ -286,7 +392,7 @@ export async function saveCronStore(
     updatedCache.stateJson = stateJson;
   }
 
-  if (configNeedsWrite || migrating) {
+  if (!stateOnly && (configNeedsWrite || migrating)) {
     // Determine backup need: only when config actually changed (not migration-only).
     const skipBackup = opts?.skipBackup === true || !configChanged;
     if (!skipBackup) {
@@ -301,7 +407,7 @@ export async function saveCronStore(
     await atomicWrite(storePath, configJson);
     updatedCache.configJson = configJson;
   }
-  updatedCache.needsSplitMigration = false;
+  updatedCache.needsSplitMigration = stateOnly && migrating;
 }
 
 const RENAME_MAX_RETRIES = 3;

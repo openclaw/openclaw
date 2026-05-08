@@ -137,8 +137,8 @@ describe("shell env fallback", () => {
     ).toBe(15000);
   });
 
-  it("skips when already has an expected key", () => {
-    const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "set" };
+  it("skips when already has all expected keys", () => {
+    const env: NodeJS.ProcessEnv = { OPENAI_API_KEY: "set", DISCORD_BOT_TOKEN: "set" };
     const exec = vi.fn(() => Buffer.from(""));
 
     const res = runShellEnvFallback({
@@ -152,6 +152,37 @@ describe("shell env fallback", () => {
     expect(res.applied).toEqual([]);
     expect(res.ok && res.skippedReason).toBe("already-has-keys");
     expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("imports missing expected keys even when another expected key already exists", () => {
+    const env: NodeJS.ProcessEnv = { OPENCLAW_GATEWAY_TOKEN: "set" };
+    const exec = vi.fn(() =>
+      Buffer.from(
+        "OPENCLAW_GATEWAY_TOKEN=from-shell\0TWILIO_ACCOUNT_SID=AC123\0TWILIO_AUTH_TOKEN=secret\0TWILIO_FROM_NUMBER=+15550001234\0",
+      ),
+    );
+
+    const res = runShellEnvFallback({
+      enabled: true,
+      env,
+      expectedKeys: [
+        "OPENCLAW_GATEWAY_TOKEN",
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_FROM_NUMBER",
+      ],
+      exec,
+    });
+
+    expect(res).toEqual({
+      ok: true,
+      applied: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"],
+    });
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("set");
+    expect(env.TWILIO_ACCOUNT_SID).toBe("AC123");
+    expect(env.TWILIO_AUTH_TOKEN).toBe("secret");
+    expect(env.TWILIO_FROM_NUMBER).toBe("+15550001234");
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it("treats explicitly empty env vars as intentional overrides", () => {
@@ -237,6 +268,34 @@ describe("shell env fallback", () => {
     });
 
     expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches login-shell env probe failures for repeated fallback reads", () => {
+    resetShellPathCacheForTests();
+    const env: NodeJS.ProcessEnv = {};
+    const logger = { warn: vi.fn() };
+    const exec = vi.fn(() => {
+      throw new Error("shell unavailable");
+    });
+
+    for (let i = 0; i < 2; i += 1) {
+      expect(
+        loadShellEnvFallback({
+          enabled: true,
+          env,
+          expectedKeys: ["OPENAI_API_KEY"],
+          exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+          logger,
+        }),
+      ).toMatchObject({
+        ok: false,
+        applied: [],
+        error: "shell unavailable",
+      });
+    }
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledTimes(2);
   });
 
   it("tracks last applied keys across success, skip, and failure paths", () => {

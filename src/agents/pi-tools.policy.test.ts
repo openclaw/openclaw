@@ -7,10 +7,13 @@ import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
   resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
   resolveSubagentToolPolicyForSession,
+  resolveTrustedGroupId,
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
+import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
@@ -34,8 +37,139 @@ describe("pi-tools.policy", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
   });
 
-  it("blocks apply_patch when write is denylisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(false);
+  it("keeps apply_patch when write is denylisted", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
+  });
+});
+
+describe("resolveGroupToolPolicy group context validation", () => {
+  const cfg: OpenClawConfig = {
+    channels: {
+      whatsapp: {
+        groups: {
+          "safe-room": {
+            tools: { allow: ["read"] },
+          },
+          "trusted-group": {
+            tools: { allow: ["exec", "read", "write", "edit"] },
+          },
+        },
+      },
+    },
+    tools: { allow: ["read"] },
+  };
+
+  it("rejects forged groupId when the session has no group context", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+        groupChannel: "whatsapp",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses session-derived group policy when caller groupId disagrees", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:safe-room",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+        groupChannel: "whatsapp",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("accepts caller groupId when it matches session-derived group context", () => {
+    expect(
+      resolveTrustedGroupId({
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        groupId: "trusted-group",
+      }),
+    ).toEqual({ groupId: "trusted-group", dropped: false });
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+        groupChannel: "whatsapp",
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
+  });
+
+  it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
+    expect(
+      resolveTrustedGroupId({
+        sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:whatsapp:group:trusted-group",
+        groupId: "trusted-group",
+      }),
+    ).toEqual({ groupId: "trusted-group", dropped: false });
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:whatsapp:group:trusted-group",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
+  });
+
+  it("keeps specific session group policy ahead of trusted parent caller groupId", () => {
+    const scopedCfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          groups: {
+            room: {
+              tools: { allow: ["exec", "read"] },
+            },
+            "room:sender:alice": {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveGroupToolPolicy({
+        config: scopedCfg,
+        sessionKey: "agent:main:whatsapp:group:room:sender:alice",
+        messageProvider: "whatsapp",
+        groupId: "room",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("prefers the session-derived channel over caller-supplied messageProvider", () => {
+    const channelCfg = {
+      channels: {
+        discord: {
+          groups: {
+            C123: { tools: { allow: ["exec"] } },
+          },
+        },
+        slack: {
+          groups: {
+            C123: { tools: { allow: ["read"] } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveGroupToolPolicy({
+      config: channelCfg,
+      sessionKey: "agent:main:slack:group:C123",
+      messageProvider: "discord",
+      groupId: "C123",
+    });
+
+    expect(policy).toEqual({ allow: ["read"] });
   });
 });
 
@@ -240,7 +374,137 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
 });
 
 describe("resolveEffectiveToolPolicy", () => {
-  it("implicitly re-exposes exec and process when tools.exec is configured", () => {
+  it.each(providerAliasCases)(
+    "matches provider alias %s to canonical tools.byProvider key %s",
+    (alias, canonical) => {
+      const cfg = {
+        tools: {
+          byProvider: {
+            [canonical]: { deny: ["exec"] },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveEffectiveToolPolicy({ config: cfg, modelProvider: alias });
+
+      expect(result.globalProviderPolicy).toEqual({ deny: ["exec"] });
+    },
+  );
+
+  it.each(providerAliasCases)(
+    "matches provider alias %s to canonical model-scoped tools.byProvider key %s",
+    (alias, canonical) => {
+      const cfg = {
+        tools: {
+          byProvider: {
+            [`${canonical}/claude-sonnet`]: { deny: ["exec"] },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: alias,
+        modelId: "claude-sonnet",
+      });
+
+      expect(result.globalProviderPolicy).toEqual({ deny: ["exec"] });
+    },
+  );
+
+  it("prefers canonical tools.byProvider policy when alias keys collide after normalization", () => {
+    const aliasFirst = {
+      tools: {
+        byProvider: {
+          bedrock: { deny: ["read"] },
+          "amazon-bedrock": { deny: ["exec"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const canonicalFirst = {
+      tools: {
+        byProvider: {
+          "amazon-bedrock": { deny: ["exec"] },
+          bedrock: { deny: ["read"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveEffectiveToolPolicy({ config: aliasFirst, modelProvider: "bedrock" })
+        .globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveEffectiveToolPolicy({ config: canonicalFirst, modelProvider: "bedrock" })
+        .globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+  });
+
+  it("prefers canonical model-scoped tools.byProvider policy when alias keys collide", () => {
+    const aliasFirst = {
+      tools: {
+        byProvider: {
+          "bedrock/claude-sonnet": { deny: ["read"] },
+          "amazon-bedrock/claude-sonnet": { deny: ["exec"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const canonicalFirst = {
+      tools: {
+        byProvider: {
+          "amazon-bedrock/claude-sonnet": { deny: ["exec"] },
+          "bedrock/claude-sonnet": { deny: ["read"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const params = { modelProvider: "bedrock", modelId: "claude-sonnet" };
+
+    expect(
+      resolveEffectiveToolPolicy({ config: aliasFirst, ...params }).globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveEffectiveToolPolicy({ config: canonicalFirst, ...params }).globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+  });
+
+  it("keeps slash-containing modelId scoped to the selected provider", () => {
+    const cfg = {
+      tools: {
+        byProvider: {
+          "anthropic/claude-sonnet": { deny: ["exec"] },
+          "openrouter/anthropic/claude-sonnet": { deny: ["read"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: "openrouter",
+        modelId: "anthropic/claude-sonnet",
+      }).globalProviderPolicy,
+    ).toEqual({ deny: ["read"] });
+  });
+
+  it("does not let slash-containing modelId select another provider policy", () => {
+    const cfg = {
+      tools: {
+        byProvider: {
+          "anthropic/claude-sonnet": { deny: ["exec"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: "openrouter",
+        modelId: "anthropic/claude-sonnet",
+      }).globalProviderPolicy,
+    ).toBeUndefined();
+  });
+
+  it("does not implicitly re-expose exec when tools.exec is configured (#47487)", () => {
     const cfg = {
       tools: {
         profile: "messaging",
@@ -248,10 +512,10 @@ describe("resolveEffectiveToolPolicy", () => {
       },
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg });
-    expect(result.profileAlsoAllow).toEqual(["exec", "process"]);
+    expect(result.profileAlsoAllow).toBeUndefined();
   });
 
-  it("implicitly re-exposes read, write, and edit when tools.fs is configured", () => {
+  it("does not implicitly re-expose fs tools when tools.fs is configured (#47487)", () => {
     const cfg = {
       tools: {
         profile: "messaging",
@@ -259,10 +523,10 @@ describe("resolveEffectiveToolPolicy", () => {
       },
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg });
-    expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
+    expect(result.profileAlsoAllow).toBeUndefined();
   });
 
-  it("merges explicit alsoAllow with implicit tool-section exposure", () => {
+  it("explicit alsoAllow works without implicit widening (#47487)", () => {
     const cfg = {
       tools: {
         profile: "messaging",
@@ -271,10 +535,10 @@ describe("resolveEffectiveToolPolicy", () => {
       },
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg });
-    expect(result.profileAlsoAllow).toEqual(["web_search", "exec", "process"]);
+    expect(result.profileAlsoAllow).toEqual(["web_search"]);
   });
 
-  it("uses agent tool sections when resolving implicit exposure", () => {
+  it("does not implicitly re-expose fs tools from agent tool sections (#47487)", () => {
     const cfg = {
       tools: {
         profile: "messaging",
@@ -291,6 +555,41 @@ describe("resolveEffectiveToolPolicy", () => {
       },
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
-    expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
+    expect(result.profileAlsoAllow).toBeUndefined();
+  });
+
+  it("global tools.exec does not widen agent messaging profile (#47487)", () => {
+    const cfg = {
+      tools: {
+        exec: { security: "allowlist" },
+      },
+      agents: {
+        list: [
+          {
+            id: "messenger",
+            tools: {
+              profile: "messaging",
+              alsoAllow: ["image"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "messenger" });
+    expect(result.profileAlsoAllow).toEqual(["image"]);
+    expect(result.profileAlsoAllow).not.toContain("exec");
+    expect(result.profileAlsoAllow).not.toContain("process");
+  });
+
+  it("explicit alsoAllow with exec still grants exec under messaging profile", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["exec", "process"],
+        exec: { host: "sandbox" },
+      },
+    } as OpenClawConfig;
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+    expect(result.profileAlsoAllow).toEqual(["exec", "process"]);
   });
 });

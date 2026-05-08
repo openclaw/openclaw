@@ -1,12 +1,23 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportActionName, QaTransportAdapter } from "./qa-transport.js";
 
-export type QaRuntimeGatewayClient = {
+type QaRuntimeGatewayClient = {
   baseUrl: string;
   tempRoot: string;
   workspaceDir: string;
   runtimeEnv: NodeJS.ProcessEnv;
+  getProcessCpuMs?: () => number | null;
+  getProcessRssBytes?: () => number | null;
+  logs?: () => string;
+  restartAfterStateMutation?: (
+    mutateState: (context: {
+      configPath: string;
+      runtimeEnv: NodeJS.ProcessEnv;
+      stateDir: string;
+      tempRoot: string;
+    }) => Promise<void>,
+  ) => Promise<void>;
   call: (
     method: string,
     params?: unknown,
@@ -16,7 +27,7 @@ export type QaRuntimeGatewayClient = {
   ) => Promise<unknown>;
 };
 
-export type QaRuntimeTransport = QaTransportAdapter;
+type QaRuntimeTransport = QaTransportAdapter;
 
 export type QaSuiteRuntimeEnv = {
   gateway: QaRuntimeGatewayClient;

@@ -7,20 +7,24 @@ import {
   isCronSessionKey,
   parseSessionKey,
   renderChatSessionSelect as renderChatSessionSelectBase,
-  renderChatThinkingSelect,
   resolveSessionDisplayName,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { loadSessions } from "./controllers/sessions.ts";
+import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
-import { normalizeOptionalString } from "./string-coerce.ts";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "./session-key.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 
 export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
 
@@ -32,6 +36,7 @@ type SessionDefaultsSnapshot = {
 type SessionSwitchHost = AppViewState & {
   chatStreamStartedAt: number | null;
   chatSideResultTerminalRuns: Set<string>;
+  resetChatInputHistoryNavigation(): void;
   resetToolStream(): void;
   resetChatScroll(): void;
 };
@@ -50,6 +55,20 @@ export function resolveAssistantAttachmentAuthToken(
   return resolveControlUiAuthToken(state);
 }
 
+export function resolveDashboardHeaderContext(
+  state: Pick<AppViewState, "agentsList" | "sessionKey">,
+): { agentLabel: string } {
+  const agentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const agent = state.agentsList?.agents.find(
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === agentId,
+  );
+  const agentLabel =
+    normalizeOptionalString(agent?.identity?.name) ??
+    normalizeOptionalString(agent?.name) ??
+    agentId;
+  return { agentLabel };
+}
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
@@ -65,9 +84,29 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
   return "main";
 }
 
+function saveChatQueueForSession(state: AppViewState, sessionKey: string) {
+  const queueBySession = (state.chatQueueBySession ??= {});
+  if (state.chatQueue.length > 0) {
+    queueBySession[sessionKey] = [...state.chatQueue];
+    state.chatQueueBySession = { ...queueBySession };
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(queueBySession, sessionKey)) {
+    delete queueBySession[sessionKey];
+    state.chatQueueBySession = { ...queueBySession };
+  }
+}
+
+function restoreChatQueueForSession(state: AppViewState, sessionKey: string): ChatQueueItem[] {
+  return [...(state.chatQueueBySession?.[sessionKey] ?? [])];
+}
+
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   const host = state as unknown as SessionSwitchHost;
+  const previousSessionKey = state.sessionKey;
+  saveChatQueueForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
+  (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatMessages = [];
@@ -80,7 +119,11 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.compactionStatus = null;
   state.fallbackStatus = null;
   state.chatAvatarUrl = null;
-  state.chatQueue = [];
+  state.chatAvatarSource = null;
+  state.chatAvatarStatus = null;
+  state.chatAvatarReason = null;
+  state.chatQueue = restoreChatQueueForSession(state, sessionKey);
+  host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
   state.chatRunId = null;
   host.chatSideResultTerminalRuns.clear();
@@ -92,6 +135,23 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
     lastActiveSessionKey: sessionKey,
   });
 }
+
+function canSwitchToNewChatSession(state: AppViewState): boolean {
+  return (
+    !state.chatLoading &&
+    !state.chatSending &&
+    !state.chatRunId &&
+    state.chatStream === null &&
+    state.chatQueue.length === 0
+  );
+}
+
+const NEW_CHAT_ACTIVE_RUN_MESSAGE =
+  "Start a new session after the active run or queued messages finish.";
+const NEW_CHAT_SESSIONS_LOADING_MESSAGE =
+  "Session list is still refreshing. Try New Chat again in a moment.";
+const NEW_CHAT_CREATE_FAILED_MESSAGE =
+  "New Chat could not create a new session. Try again in a moment.";
 
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
@@ -176,14 +236,31 @@ export function renderChatSessionSelect(state: AppViewState) {
 
 export function renderChatControls(state: AppViewState) {
   const hideCron = state.sessionsHideCron ?? true;
-  const hiddenCronCount = hideCron
-    ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
-    : 0;
+  const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const refreshLabel = t("chat.refreshTitle");
+  const thinkingLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.thinkingToggle");
+  const toolCallsLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.toolCallsToggle");
+  const focusLabel = disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle");
+  const cronLabel = hideCron
+    ? hiddenCronCount > 0
+      ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+      : t("chat.showCronSessions")
+    : t("chat.hideCronSessions");
+  const refreshDisabled =
+    !state.connected ||
+    state.chatLoading ||
+    state.chatSending ||
+    Boolean(state.chatRunId) ||
+    state.chatStream !== null;
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -237,7 +314,7 @@ export function renderChatControls(state: AppViewState) {
     <div class="chat-controls">
       <button
         class="btn btn--sm btn--icon"
-        ?disabled=${state.chatLoading || !state.connected}
+        ?disabled=${refreshDisabled}
         @click=${async () => {
           const app = state as unknown as ChatRefreshHost;
           app.chatManualRefreshInFlight = true;
@@ -256,7 +333,9 @@ export function renderChatControls(state: AppViewState) {
             });
           }
         }}
-        title=${t("chat.refreshTitle")}
+        title=${refreshLabel}
+        aria-label=${refreshLabel}
+        data-tooltip=${refreshLabel}
       >
         ${refreshIcon}
       </button>
@@ -274,7 +353,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showThinking}
-        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.thinkingToggle")}
+        title=${thinkingLabel}
+        aria-label=${thinkingLabel}
+        data-tooltip=${thinkingLabel}
       >
         ${icons.brain}
       </button>
@@ -291,7 +372,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${showToolCalls}
-        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.toolCallsToggle")}
+        title=${toolCallsLabel}
+        aria-label=${toolCallsLabel}
+        data-tooltip=${toolCallsLabel}
       >
         ${toolCallsIcon}
       </button>
@@ -308,7 +391,9 @@ export function renderChatControls(state: AppViewState) {
           });
         }}
         aria-pressed=${focusActive}
-        title=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")}
+        title=${focusLabel}
+        aria-label=${focusLabel}
+        data-tooltip=${focusLabel}
       >
         ${focusIcon}
       </button>
@@ -318,11 +403,9 @@ export function renderChatControls(state: AppViewState) {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        title=${hideCron
-          ? hiddenCronCount > 0
-            ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-            : t("chat.showCronSessions")
-          : t("chat.hideCronSessions")}
+        title=${cronLabel}
+        aria-label=${cronLabel}
+        data-tooltip=${cronLabel}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
@@ -336,12 +419,15 @@ export function renderChatControls(state: AppViewState) {
  * Hidden on desktop via CSS.
  */
 export function renderChatMobileToggle(state: AppViewState) {
-  const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const controlsDropdownId = "chat-mobile-controls-dropdown";
+  const mobileControlsOpen = state.chatMobileControlsOpen;
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const hideCron = state.sessionsHideCron ?? true;
+  const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -383,21 +469,14 @@ export function renderChatMobileToggle(state: AppViewState) {
         class="btn btn--sm btn--icon chat-controls-mobile-toggle"
         @click=${(e: Event) => {
           e.stopPropagation();
-          const btn = e.currentTarget as HTMLElement;
-          const dropdown = btn.nextElementSibling as HTMLElement;
-          if (dropdown) {
-            const isOpen = dropdown.classList.toggle("open");
-            if (isOpen) {
-              const close = () => {
-                dropdown.classList.remove("open");
-                document.removeEventListener("click", close);
-              };
-              setTimeout(() => document.addEventListener("click", close, { once: true }), 0);
-            }
-          }
+          state.setChatMobileControlsOpen(!mobileControlsOpen, {
+            trigger: e.currentTarget as HTMLElement,
+          });
         }}
-        title="Chat settings"
-        aria-label="Chat settings"
+        title=${t("chat.settings")}
+        aria-label=${t("chat.settings")}
+        aria-expanded=${mobileControlsOpen}
+        aria-controls=${controlsDropdownId}
       >
         <svg
           width="18"
@@ -416,40 +495,14 @@ export function renderChatMobileToggle(state: AppViewState) {
         </svg>
       </button>
       <div
-        class="chat-controls-dropdown"
+        id=${controlsDropdownId}
+        class="chat-controls-dropdown ${mobileControlsOpen ? "open" : ""}"
         @click=${(e: Event) => {
           e.stopPropagation();
         }}
       >
         <div class="chat-controls">
-          <label class="field chat-controls__session">
-            <select
-              .value=${state.sessionKey}
-              @change=${(e: Event) => {
-                const next = (e.target as HTMLSelectElement).value;
-                switchChatSession(state, next);
-              }}
-            >
-              ${sessionGroups.map(
-                (group) => html`
-                  <optgroup label=${group.label}>
-                    ${group.options.map(
-                      (opt) => html`
-                        <option
-                          value=${opt.key}
-                          title=${opt.title}
-                          ?selected=${opt.key === state.sessionKey}
-                        >
-                          ${opt.label}
-                        </option>
-                      `,
-                    )}
-                  </optgroup>
-                `,
-              )}
-            </select>
-          </label>
-          ${renderChatThinkingSelect(state)}
+          ${renderChatSessionSelectBase(state, switchChatSession)}
           <div class="chat-controls__thinking">
             <button
               class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
@@ -499,6 +552,20 @@ export function renderChatMobileToggle(state: AppViewState) {
             >
               ${focusIcon}
             </button>
+            <button
+              class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
+              @click=${() => {
+                state.sessionsHideCron = !hideCron;
+              }}
+              aria-pressed=${hideCron}
+              title=${hideCron
+                ? hiddenCronCount > 0
+                  ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+                  : t("chat.showCronSessions")
+                : t("chat.hideCronSessions")}
+            >
+              ${renderCronFilterIcon(hiddenCronCount)}
+            </button>
           </div>
         </div>
       </div>
@@ -507,7 +574,13 @@ export function renderChatMobileToggle(state: AppViewState) {
 }
 
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
+  const previousSessionKey = state.sessionKey;
+  const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
+  const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
   resetChatStateForSessionSwitch(state, nextSessionKey);
+  if (previousSessionKey !== nextSessionKey) {
+    state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
+  }
   void state.loadAssistantIdentity();
   void refreshChatAvatar(state);
   void refreshSlashCommands({
@@ -523,29 +596,115 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   void refreshSessionOptions(state);
 }
 
+export function dismissChatError(state: AppViewState) {
+  state.lastError = null;
+  state.lastErrorCode = null;
+  if (state.realtimeTalkStatus === "error") {
+    const talkHost = state as unknown as {
+      realtimeTalkSession?: { stop(): void } | null;
+    };
+    talkHost.realtimeTalkSession?.stop();
+    talkHost.realtimeTalkSession = null;
+    state.realtimeTalkActive = false;
+    state.realtimeTalkStatus = "idle";
+    state.realtimeTalkDetail = null;
+    state.realtimeTalkTranscript = null;
+  }
+}
+
+export async function createChatSession(state: AppViewState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (!canSwitchToNewChatSession(state)) {
+    state.lastError = NEW_CHAT_ACTIVE_RUN_MESSAGE;
+    return;
+  }
+  if (state.sessionsLoading) {
+    state.lastError = NEW_CHAT_SESSIONS_LOADING_MESSAGE;
+    return;
+  }
+
+  state.lastError = null;
+  const previousSessionKey = state.sessionKey;
+  const parentSessionKey = state.sessionsResult?.sessions.some(
+    (row) => row.key === previousSessionKey,
+  )
+    ? previousSessionKey
+    : undefined;
+  const nextSessionKey = await createSessionAndRefresh(
+    state as unknown as Parameters<typeof createSessionAndRefresh>[0],
+    {
+      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
+      parentSessionKey,
+    },
+    {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+      showArchived: state.sessionsShowArchived,
+    },
+  );
+  if (
+    !nextSessionKey ||
+    state.sessionKey !== previousSessionKey ||
+    !canSwitchToNewChatSession(state)
+  ) {
+    if (!nextSessionKey) {
+      state.lastError =
+        state.sessionsError ??
+        (state.sessionsLoading
+          ? NEW_CHAT_SESSIONS_LOADING_MESSAGE
+          : NEW_CHAT_CREATE_FAILED_MESSAGE);
+    }
+    return;
+  }
+
+  const preservedDraft = state.chatMessage;
+  const preservedAttachments = state.chatAttachments;
+  switchChatSession(state, nextSessionKey);
+  state.chatMessage = preservedDraft;
+  state.chatAttachments = preservedAttachments;
+}
+
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     activeMinutes: 0,
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
+    showArchived: state.sessionsShowArchived,
   });
 }
 
-/** Count sessions with a cron: key that would be hidden when hideCron=true. */
-function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResult | null): number {
+/** Count cron sessions hidden by the active agent-scoped chat filter. */
+function countHiddenCronSessions(state: AppViewState, sessions: SessionsListResult | null): number {
   if (!sessions?.sessions) {
     return 0;
   }
-  // Don't count the currently active session even if it's a cron.
-  return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
+  const activeAgentId = normalizeAgentId(
+    parseAgentSessionKey(state.sessionKey)?.agentId ?? state.agentsList?.defaultId ?? "main",
+  );
+  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
+  const isTiedToActiveAgent = (key: string) => {
+    const parsed = parseAgentSessionKey(key);
+    if (parsed) {
+      return normalizeAgentId(parsed.agentId) === activeAgentId;
+    }
+    return activeAgentId === defaultAgentId;
+  };
+
+  return sessions.sessions.filter(
+    (s) => isCronSessionKey(s.key) && s.key !== state.sessionKey && isTiedToActiveAgent(s.key),
+  ).length;
 }
 
-type ThemeModeOption = { id: ThemeMode; label: string; short: string };
+type ThemeModeOption = { id: ThemeMode; labelKey: string; short: string };
 const THEME_MODE_OPTIONS: ThemeModeOption[] = [
-  { id: "system", label: "System", short: "SYS" },
-  { id: "light", label: "Light", short: "LIGHT" },
-  { id: "dark", label: "Dark", short: "DARK" },
+  { id: "system", labelKey: "common.system", short: "SYS" },
+  { id: "light", labelKey: "common.light", short: "LIGHT" },
+  { id: "dark", labelKey: "common.dark", short: "DARK" },
 ];
 
 export function renderTopbarThemeModeToggle(state: AppViewState) {
@@ -567,23 +726,24 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   };
 
   return html`
-    <div class="topbar-theme-mode" role="group" aria-label="Color mode">
-      ${THEME_MODE_OPTIONS.map(
-        (opt) => html`
+    <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
+      ${THEME_MODE_OPTIONS.map((opt) => {
+        const label = t(opt.labelKey);
+        return html`
           <button
             type="button"
             class="topbar-theme-mode__btn ${opt.id === state.themeMode
               ? "topbar-theme-mode__btn--active"
               : ""}"
-            title=${opt.label}
-            aria-label="Color mode: ${opt.label}"
+            title=${label}
+            aria-label=${t("common.colorModeOption", { mode: label })}
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >
             ${modeIcon(opt.id)}
           </button>
-        `,
-      )}
+        `;
+      })}
     </div>
   `;
 }
@@ -599,8 +759,8 @@ export function renderSidebarConnectionStatus(state: AppViewState) {
       class="sidebar-version__status ${toneClass}"
       role="img"
       aria-live="polite"
-      aria-label="Gateway status: ${label}"
-      title="Gateway status: ${label}"
+      aria-label=${t("chat.gatewayStatus", { status: label })}
+      title=${t("chat.gatewayStatus", { status: label })}
     ></span>
   `;
 }

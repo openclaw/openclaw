@@ -67,8 +67,48 @@ describe("media understanding attachments SSRF", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("allows RFC2544 benchmark-range URLs only when media fetch policy opts in", async () => {
+    const url = "http://198.18.0.153/file.jpg";
+    const deniedCache = new MediaAttachmentCache([{ index: 0, url }]);
+    await expect(
+      deniedCache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response("image", {
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
+    const allowedCache = new MediaAttachmentCache([{ index: 0, url }], {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    await expect(
+      allowedCache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
+    ).resolves.toMatchObject({ mime: "image/jpeg" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("reads local attachments inside configured roots", async () => {
     await withLocalAttachmentCache("openclaw-media-cache-allowed-", async ({ cache }) => {
+      const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
+      expect(result.buffer.toString()).toBe("ok");
+    });
+  });
+
+  it("resolves relative attachment paths against the provided workspaceDir", async () => {
+    await withTempDir({ prefix: "openclaw-media-cache-workspace-" }, async (base) => {
+      const workspaceDir = path.join(base, "workspace");
+      const attachmentPath = path.join(workspaceDir, "media", "inbound", "report.pdf");
+      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
+      await fs.writeFile(attachmentPath, "ok");
+
+      const cache = new MediaAttachmentCache([{ index: 0, path: "media/inbound/report.pdf" }], {
+        localPathRoots: [workspaceDir],
+        workspaceDir,
+      });
+
       const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
       expect(result.buffer.toString()).toBe("ok");
     });

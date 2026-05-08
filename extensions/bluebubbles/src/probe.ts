@@ -8,7 +8,7 @@ export type BlueBubblesProbe = BaseProbeResult & {
   status?: number | null;
 };
 
-export type BlueBubblesServerInfo = {
+type BlueBubblesServerInfo = {
   os_version?: string;
   server_version?: string;
   private_api?: boolean;
@@ -80,7 +80,7 @@ export async function fetchBlueBubblesServerInfo(params: {
  * Get cached server info synchronously (for use in describeMessageTool).
  * Returns null if not cached or expired.
  */
-export function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesServerInfo | null {
+function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesServerInfo | null {
   const cacheKey = normalizeOptionalString(accountId) || "default";
   const cached = serverInfoCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
@@ -112,7 +112,7 @@ export function isBlueBubblesPrivateApiEnabled(accountId?: string): boolean {
 /**
  * Parse macOS version string (e.g., "15.0.1" or "26.0") into major version number.
  */
-export function parseMacOSMajorVersion(version?: string | null): number | null {
+function parseMacOSMajorVersion(version?: string | null): number | null {
   if (!version) {
     return null;
   }
@@ -131,11 +131,6 @@ export function isMacOS26OrHigher(accountId?: string): boolean {
   }
   const major = parseMacOSMajorVersion(info.os_version);
   return major !== null && major >= 26;
-}
-
-/** Clear the server info cache (for testing) */
-export function clearServerInfoCache(): void {
-  serverInfoCache.clear();
 }
 
 export async function probeBlueBubbles(params: {

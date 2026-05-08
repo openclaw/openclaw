@@ -1,9 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
+
+vi.mock("../media/channel-inbound-roots.js", () => ({
+  resolveChannelInboundAttachmentRoots: () => undefined,
+}));
+
+vi.mock("../agents/api-key-rotation.js", () => ({
+  collectProviderApiKeysForExecution: ({ primaryApiKey }: { primaryApiKey?: string }) => [
+    primaryApiKey ?? "test-key",
+  ],
+  executeWithApiKeyRotation: async <T>({ execute }: { execute: (apiKey: string) => Promise<T> }) =>
+    execute("test-key"),
+}));
+
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
+  return createEmptyCapabilityProviderMockModule();
+});
 
 describe("runCapability video provider wiring", () => {
   it("merges video baseUrl and headers with entry precedence", async () => {

@@ -1,6 +1,6 @@
-import OpenClawKit
 import Network
 import Observation
+import OpenClawKit
 import os
 import SwiftUI
 import UIKit
@@ -21,6 +21,7 @@ struct SettingsTab: View {
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
+    @AppStorage(TalkSpeechLocale.storageKey) private var talkSpeechLocale: String = TalkSpeechLocale.automaticID
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
@@ -48,6 +49,8 @@ struct SettingsTab: View {
     @State private var defaultShareInstruction: String = ""
     @AppStorage("gateway.setupCode") private var setupCode: String = ""
     @State private var setupStatusText: String?
+    @State private var showQRScanner: Bool = false
+    @State private var scannerError: String?
     @State private var manualGatewayPortText: String = ""
     @State private var gatewayExpanded: Bool = true
     @State private var selectedAgentPickerId: String = ""
@@ -96,6 +99,13 @@ struct SettingsTab: View {
                             TextField("Paste setup code", text: self.$setupCode)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
+
+                            Button {
+                                self.openGatewayQRScanner()
+                            } label: {
+                                Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+                            }
+                            .disabled(self.connectingGatewayID != nil)
 
                             Button {
                                 Task { await self.applySetupCodeAndConnect() }
@@ -246,8 +256,7 @@ struct SettingsTab: View {
                                     .padding(10)
                                     .background(
                                         .thinMaterial,
-                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    )
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
                         }
                     } label: {
@@ -269,15 +278,22 @@ struct SettingsTab: View {
                         self.featureToggle(
                             "Voice Wake",
                             isOn: self.$voiceWakeEnabled,
-                            help: "Enables wake-word activation to start a hands-free session.") { newValue in
-                                self.appModel.setVoiceWakeEnabled(newValue)
-                            }
+                            help: "Enables wake-word activation to start a hands-free session.")
+                        { newValue in
+                            self.appModel.setVoiceWakeEnabled(newValue)
+                        }
                         self.featureToggle(
                             "Talk Mode",
                             isOn: self.$talkEnabled,
-                            help: "Enables voice conversation mode with your connected OpenClaw agent.") { newValue in
-                                self.appModel.setTalkEnabled(newValue)
+                            help: "Enables voice conversation mode with your connected OpenClaw agent.")
+                        { newValue in
+                            self.appModel.setTalkEnabled(newValue)
+                        }
+                        Picker("Speech Language", selection: self.$talkSpeechLocale) {
+                            ForEach(TalkSpeechLocale.supportedOptions()) { option in
+                                Text(option.label).tag(option.id)
                             }
+                        }
                         self.featureToggle(
                             "Background Listening",
                             isOn: self.$talkBackgroundEnabled,
@@ -295,8 +311,7 @@ struct SettingsTab: View {
                             "Allow Camera",
                             isOn: self.$cameraEnabled,
                             help: "Allows the gateway to request photos or short video clips "
-                                + "while OpenClaw is foregrounded."
-                        )
+                                + "while OpenClaw is foregrounded.")
 
                         HStack(spacing: 8) {
                             Text("Location Access")
@@ -307,8 +322,7 @@ struct SettingsTab: View {
                                     message: "Controls location permissions for OpenClaw. "
                                         + "Off disables location tools, While Using enables "
                                         + "foreground location, and Always enables "
-                                        + "background location."
-                                )
+                                        + "background location.")
                             } label: {
                                 Image(systemName: "info.circle")
                                     .foregroundStyle(.secondary)
@@ -341,8 +355,7 @@ struct SettingsTab: View {
                                         ? (
                                             self.appModel.talkMode.gatewayTalkApiKeyConfigured
                                                 ? "Configured"
-                                                : "Not configured"
-                                        )
+                                                : "Not configured")
                                         : "Not loaded")
                                 LabeledContent(
                                     "Default Model",
@@ -359,7 +372,7 @@ struct SettingsTab: View {
                                 isOn: self.$talkButtonEnabled,
                                 help: "Shows the Talk control in the main toolbar.")
                             TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
-                                .lineLimit(2 ... 6)
+                                .lineLimit(2...6)
                                 .textInputAutocapitalization(.sentences)
                             HStack(spacing: 8) {
                                 Text("Default Share Instruction")
@@ -370,8 +383,7 @@ struct SettingsTab: View {
                                     self.activeFeatureHelp = FeatureHelp(
                                         title: "Default Share Instruction",
                                         message: "Appends this instruction when sharing content "
-                                            + "into OpenClaw from iOS."
-                                    )
+                                            + "into OpenClaw from iOS.")
                                 } label: {
                                     Image(systemName: "info.circle")
                                         .foregroundStyle(.secondary)
@@ -427,6 +439,30 @@ struct SettingsTab: View {
                         })
                 }
             }
+            .sheet(isPresented: self.$showQRScanner) {
+                NavigationStack {
+                    QRScannerView(
+                        onGatewayLink: { link in
+                            self.handleScannedGatewayLink(link)
+                        },
+                        onError: { error in
+                            self.showQRScanner = false
+                            self.setupStatusText = "Scanner error: \(error)"
+                            self.scannerError = error
+                        },
+                        onDismiss: {
+                            self.showQRScanner = false
+                        })
+                        .ignoresSafeArea()
+                        .navigationTitle("Scan QR Code")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Cancel") { self.showQRScanner = false }
+                            }
+                        }
+                }
+            }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button("Reset", role: .destructive) {
                     self.resetOnboarding()
@@ -435,14 +471,21 @@ struct SettingsTab: View {
             } message: {
                 Text(
                     "This will disconnect, clear saved gateway connection + credentials, "
-                        + "and reopen the onboarding wizard."
-                )
+                        + "and reopen the onboarding wizard.")
             }
             .alert(item: self.$activeFeatureHelp) { help in
                 Alert(
                     title: Text(help.title),
                     message: Text(help.message),
                     dismissButton: .default(Text("OK")))
+            }
+            .alert("QR Scanner Unavailable", isPresented: Binding(
+                get: { self.scannerError != nil },
+                set: { if !$0 { self.scannerError = nil } }))
+            {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(self.scannerError ?? "")
             }
             .onAppear {
                 self.lastLocationModeRaw = self.locationEnabledModeRaw
@@ -629,8 +672,8 @@ struct SettingsTab: View {
         _ title: String,
         isOn: Binding<Bool>,
         help: String,
-        onChange: ((Bool) -> Void)? = nil
-    ) -> some View {
+        onChange: ((Bool) -> Void)? = nil) -> some View
+    {
         HStack(spacing: 8) {
             Toggle(title, isOn: isOn)
             Button {
@@ -748,8 +791,7 @@ struct SettingsTab: View {
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         GatewayDiagnostics.log(
             "setup code applied host=\(host) port=\(resolvedPort ?? -1) "
-                + "tls=\(self.manualGatewayTLS) token=\(hasToken) password=\(hasPassword)"
-        )
+                + "tls=\(self.manualGatewayTLS) token=\(hasToken) password=\(hasPassword)")
         guard let port = resolvedPort else {
             self.setupStatusText = "Failed: invalid port"
             return
@@ -768,39 +810,28 @@ struct SettingsTab: View {
             return false
         }
 
-        guard let payload = GatewaySetupCode.decode(raw: raw) else {
-            self.setupStatusText = "Setup code not recognized."
+        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
+            self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
             return false
         }
 
-        if let urlString = payload.url, let url = URL(string: urlString) {
-            self.applySetupURL(url)
-        } else if let host = payload.host, !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.manualGatewayHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let port = payload.port {
-                self.manualGatewayPort = port
-                self.manualGatewayPortText = String(port)
-            } else {
-                self.manualGatewayPort = 0
-                self.manualGatewayPortText = ""
-            }
-            if let tls = payload.tls {
-                self.manualGatewayTLS = tls
-            }
-        } else if let url = URL(string: raw), url.scheme != nil {
-            self.applySetupURL(url)
-        } else {
-            self.setupStatusText = "Setup code missing URL or host."
-            return false
-        }
+        self.applyGatewayLink(link)
+        return true
+    }
+
+    private func applyGatewayLink(_ link: GatewayConnectDeepLink) {
+        self.manualGatewayHost = link.host
+        self.manualGatewayPort = link.port
+        self.manualGatewayPortText = String(link.port)
+        self.manualGatewayTLS = link.tls
 
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBootstrapToken =
-            payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedInstanceId.isEmpty {
             GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
         }
-        if let token = payload.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let token = link.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
             self.gatewayToken = trimmedToken
             if !trimmedInstanceId.isEmpty {
@@ -812,7 +843,7 @@ struct SettingsTab: View {
                 GatewaySettingsStore.saveGatewayToken("", instanceId: trimmedInstanceId)
             }
         }
-        if let password = payload.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let password = link.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
             self.gatewayPassword = trimmedPassword
             if !trimmedInstanceId.isEmpty {
@@ -824,26 +855,33 @@ struct SettingsTab: View {
                 GatewaySettingsStore.saveGatewayPassword("", instanceId: trimmedInstanceId)
             }
         }
-
-        return true
     }
 
-    private func applySetupURL(_ url: URL) {
-        guard let host = url.host, !host.isEmpty else { return }
-        self.manualGatewayHost = host
-        if let port = url.port {
-            self.manualGatewayPort = port
-            self.manualGatewayPortText = String(port)
-        } else {
-            self.manualGatewayPort = 0
-            self.manualGatewayPortText = ""
+    private func openGatewayQRScanner() {
+        self.appModel.disconnectGateway()
+        self.connectingGatewayID = nil
+        self.setupStatusText = "Opening QR scanner…"
+        self.showQRScanner = true
+    }
+
+    private func handleScannedGatewayLink(_ link: GatewayConnectDeepLink) {
+        self.showQRScanner = false
+        self.setupCode = ""
+        self.applyGatewayLink(link)
+        self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)…"
+        Task { await self.connectAfterScannedGatewayLink() }
+    }
+
+    private func connectAfterScannedGatewayLink() async {
+        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedPort = self.resolvedManualPort(host: host)
+        guard let port = resolvedPort else {
+            self.setupStatusText = "Failed: invalid port"
+            return
         }
-        let scheme = (url.scheme ?? "").lowercased()
-        if scheme == "wss" || scheme == "https" {
-            self.manualGatewayTLS = true
-        } else if scheme == "ws" || scheme == "http" {
-            self.manualGatewayTLS = false
-        }
+        let ok = await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS)
+        guard ok else { return }
+        await self.connectManual()
     }
 
     private func resolvedManualPort(host: String) -> Int? {
@@ -852,7 +890,7 @@ struct SettingsTab: View {
         }
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        if self.manualGatewayTLS && trimmed.lowercased().hasSuffix(".ts.net") {
+        if self.manualGatewayTLS, trimmed.lowercased().hasSuffix(".ts.net") {
             return 443
         }
         return 18789
@@ -862,7 +900,7 @@ struct SettingsTab: View {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        if Self.isTailnetHostOrIP(trimmed) && !Self.hasTailnetIPv4() {
+        if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
             let msg = "Tailscale is off on this iPhone. Turn it on, then try again."
             self.setupStatusText = msg
             GatewayDiagnostics.log("preflight fail: tailnet missing host=\(trimmed)")
@@ -890,8 +928,6 @@ struct SettingsTab: View {
             timeoutSeconds: timeoutSeconds,
             queueLabel: "gateway.preflight")
     }
-
-    // (GatewaySetupCode) decode raw setup codes.
 
     private func connectManual() async {
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1089,4 +1125,5 @@ struct SettingsTab: View {
         return lines
     }
 }
+
 // swiftlint:enable type_body_length

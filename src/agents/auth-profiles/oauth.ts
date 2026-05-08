@@ -4,7 +4,7 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai/oauth";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -93,9 +93,14 @@ function isProfileConfigCompatible(params: {
   return true;
 }
 
-async function buildOAuthApiKey(provider: string, credentials: OAuthCredential): Promise<string> {
+async function buildOAuthApiKey(
+  provider: string,
+  credentials: OAuthCredential,
+  context: { cfg?: OpenClawConfig },
+): Promise<string> {
   const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
     provider,
+    config: context.cfg,
     context: credentials,
   });
   return typeof formatted === "string" && formatted.length > 0 ? formatted : credentials.access;
@@ -195,6 +200,7 @@ async function tryResolveOAuthProfile(
     profileId,
     credential: cred,
     agentDir: params.agentDir,
+    cfg,
   });
   if (!resolved) {
     return null;
@@ -279,7 +285,7 @@ export async function resolveApiKeyForProfile(
   }
 
   const refResolveCache: SecretRefResolveCache = {};
-  const configForRefResolution = cfg ?? loadConfig();
+  const configForRefResolution = cfg ?? getRuntimeConfig();
   const refDefaults = configForRefResolution.secrets?.defaults;
   assertNoOAuthSecretRefPolicyViolations({
     store,
@@ -333,6 +339,7 @@ export async function resolveApiKeyForProfile(
       agentDir: params.agentDir,
       profileId,
       credential: cred,
+      cfg,
     });
     if (!resolved) {
       return null;

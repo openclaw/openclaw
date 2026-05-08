@@ -7,6 +7,7 @@ import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/regist
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
@@ -35,10 +36,12 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { closeTrackedBrowserTabsForSessions } from "../../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -58,17 +61,17 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { forkSessionFromParent, resolveParentForkMaxTokens } from "./session-fork.js";
+import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
+import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
-let sessionArchiveRuntimePromise: Promise<
-  typeof import("../../gateway/session-archive.runtime.js")
-> | null = null;
+const sessionArchiveRuntimeLoader = createLazyImportLoader(
+  () => import("../../gateway/session-archive.runtime.js"),
+);
 
 function loadSessionArchiveRuntime() {
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
+  return sessionArchiveRuntimeLoader.load();
 }
 
 function stripThreadIdFromDeliveryContext(
@@ -267,7 +270,6 @@ export async function initSessionState(params: {
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
-  const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
@@ -428,12 +430,22 @@ export async function initSessionState(params: {
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
-  // Forcing freshEntry=true prevents accidental data loss on automated system events.
   const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
+  const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
+    entry,
+    agentId,
+    storePath,
+  });
   const entryFreshness = entry
-    ? isSystemEvent || skipImplicitExpiry
+    ? skipImplicitExpiry
       ? ({ fresh: true } satisfies SessionFreshness)
-      : evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
+      : evaluateSessionFreshness({
+          updatedAt: entry.updatedAt,
+          sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
+          lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
+          now,
+          policy: resetPolicy,
+        })
     : undefined;
   const softResetAllowed =
     softReset.matched &&
@@ -451,7 +463,9 @@ export async function initSessionState(params: {
       }) ?? "",
     );
   const freshEntry =
-    (entryFreshness?.fresh ?? false) || (softResetAllowed && canReuseExistingEntry);
+    (isSystemEvent && canReuseExistingEntry) ||
+    (entryFreshness?.fresh ?? false) ||
+    (softResetAllowed && canReuseExistingEntry);
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
@@ -468,6 +482,9 @@ export async function initSessionState(params: {
     sessionKey,
     previousSessionId: previousSessionEntry?.sessionId,
   });
+  if (previousSessionEntry) {
+    clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId]);
+  }
 
   if (!isNewSession && freshEntry && canReuseExistingEntry) {
     sessionId = entry.sessionId;
@@ -596,6 +613,10 @@ export async function initSessionState(params: {
     ...baseEntry,
     sessionId,
     updatedAt: Date.now(),
+    sessionStartedAt: isNewSession
+      ? now
+      : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
+    lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
     systemSent,
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
@@ -678,23 +699,26 @@ export async function initSessionState(params: {
     sessionStore[parentSessionKey] &&
     !alreadyForked
   ) {
-    const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
-    if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
-      // Parent context is too large — forking would create a thread session
-      // that immediately overflows the model's context window. Start fresh
-      // instead and mark as forked to prevent re-attempts. See #26905.
+    const parentEntry = sessionStore[parentSessionKey];
+    const forkDecision = await resolveParentForkDecision({
+      parentEntry,
+      storePath,
+    });
+    if (forkDecision.status === "skip") {
+      // The parent branch is too large to inherit usefully. Start fresh and
+      // mark as handled so the thread does not retry this decision every turn.
       log.warn(
         `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${parentTokens} maxTokens=${parentForkMaxTokens}`,
+          `parentTokens=${forkDecision.parentTokens} maxTokens=${forkDecision.maxTokens}`,
       );
       sessionEntry.forkedFromParent = true;
     } else {
       log.warn(
         `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${parentTokens}`,
+          `parentTokens=${forkDecision.parentTokens ?? "unknown"}`,
       );
       const forked = await forkSessionFromParent({
-        parentEntry: sessionStore[parentSessionKey],
+        parentEntry,
         agentId,
         sessionsDir: path.dirname(storePath),
       });
@@ -805,6 +829,12 @@ export async function initSessionState(params: {
       sessionKey,
       sessionFile: previousSessionEntry.sessionFile,
       reason: previousSessionEndReason ?? "unknown",
+    });
+    void closeTrackedBrowserTabsForSessions({
+      sessionKeys: [previousSessionEntry.sessionId, sessionKey],
+      onWarn: (message) => log.warn(message),
+    }).catch((error) => {
+      log.warn(`browser tab cleanup failed: ${String(error)}`);
     });
   }
 

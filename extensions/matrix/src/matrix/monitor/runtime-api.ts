@@ -5,7 +5,7 @@
 export type { NormalizedLocation } from "openclaw/plugin-sdk/channel-location";
 export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 export type { BlockReplyContext, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export {
   addAllowlistUserEntriesFromConfigEntry,
@@ -22,7 +22,6 @@ export {
 export { formatLocationText, toLocationContext } from "openclaw/plugin-sdk/channel-location";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-payload";
 export { logInboundDrop, logTypingFailure } from "openclaw/plugin-sdk/channel-logging";
-export { resolveAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 export {
   buildChannelKeyCandidates,
   resolveChannelEntryMatch,

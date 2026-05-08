@@ -90,6 +90,7 @@ export type PluginRuntimeChannel = {
     resolveHumanDelayConfig: typeof import("../../agents/identity.js").resolveHumanDelayConfig;
     dispatchReplyFromConfig: import("../../auto-reply/reply/dispatch-from-config.types.js").DispatchReplyFromConfig;
     withReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").withReplyDispatcher;
+    settleReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").settleReplyDispatcher;
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
     /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
@@ -128,8 +129,10 @@ export type PluginRuntimeChannel = {
     resolveInboundMentionDecision: typeof import("../../channels/mention-gating.js").resolveInboundMentionDecision;
   };
   reactions: {
+    createAckReactionHandle: typeof import("../../channels/ack-reactions.js").createAckReactionHandle;
     shouldAckReaction: typeof import("../../channels/ack-reactions.js").shouldAckReaction;
     removeAckReactionAfterReply: typeof import("../../channels/ack-reactions.js").removeAckReactionAfterReply;
+    removeAckReactionHandleAfterReply: typeof import("../../channels/ack-reactions.js").removeAckReactionHandleAfterReply;
   };
   groups: {
     resolveGroupPolicy: typeof import("../../config/group-policy.js").resolveChannelGroupPolicy;
@@ -147,6 +150,15 @@ export type PluginRuntimeChannel = {
   };
   outbound: {
     loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
+  };
+  turn: {
+    run: typeof import("../../channels/turn/kernel.js").runChannelTurn;
+    /** @deprecated Prefer `run(...)`. */
+    runResolved: typeof import("../../channels/turn/kernel.js").runResolvedChannelTurn;
+    buildContext: typeof import("../../channels/turn/kernel.js").buildChannelTurnContext;
+    runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedChannelTurn;
+    /** @deprecated Prefer `run(...)` or `runPrepared(...)`. */
+    dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

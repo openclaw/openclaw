@@ -144,12 +144,17 @@ export function parseSessionsRouteArgs(argv: string[]) {
   if (!active.ok) {
     return null;
   }
+  const limit = parseOptionalFlagValue(argv, "--limit");
+  if (!limit.ok) {
+    return null;
+  }
   return {
     json: hasFlag(argv, "--json"),
     allAgents: hasFlag(argv, "--all-agents"),
     agent: agent.value,
     store: store.value,
     active: active.value,
+    limit: limit.value,
   };
 }
 
@@ -259,5 +264,71 @@ export function parseChannelsStatusRouteArgs(argv: string[]) {
     json: hasFlag(argv, "--json"),
     probe: hasFlag(argv, "--probe"),
     timeout: timeout.value,
+  };
+}
+
+function parseTasksListRouteArgsForCommandPath(argv: string[], commandPath: string[]) {
+  if (!hasFlag(argv, "--json")) {
+    return null;
+  }
+  const positionals = getCommandPositionalsWithRootOptions(argv, {
+    commandPath,
+    booleanFlags: ["--json"],
+    valueFlags: ["--runtime", "--status"],
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  const runtime = parseOptionalFlagValue(argv, "--runtime");
+  if (!runtime.ok) {
+    return null;
+  }
+  const status = parseOptionalFlagValue(argv, "--status");
+  if (!status.ok) {
+    return null;
+  }
+  return {
+    json: true as const,
+    runtime: runtime.value,
+    status: status.value,
+  };
+}
+
+export function parseTasksListRouteArgs(argv: string[]) {
+  return (
+    parseTasksListRouteArgsForCommandPath(argv, ["tasks"]) ??
+    parseTasksListRouteArgsForCommandPath(argv, ["tasks", "list"])
+  );
+}
+
+export function parseTasksAuditRouteArgs(argv: string[]) {
+  if (!hasFlag(argv, "--json")) {
+    return null;
+  }
+  const positionals = getCommandPositionalsWithRootOptions(argv, {
+    commandPath: ["tasks", "audit"],
+    booleanFlags: ["--json"],
+    valueFlags: ["--severity", "--code", "--limit"],
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  const severity = parseOptionalFlagValue(argv, "--severity");
+  if (!severity.ok) {
+    return null;
+  }
+  const code = parseOptionalFlagValue(argv, "--code");
+  if (!code.ok) {
+    return null;
+  }
+  const limit = getPositiveIntFlagValue(argv, "--limit");
+  if (limit === null) {
+    return null;
+  }
+  return {
+    json: true as const,
+    severity: severity.value,
+    code: code.value,
+    limit,
   };
 }

@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.types.js";
 
-type TestProfileConfig = { cdpPort?: number; cdpUrl?: string; color?: string };
+type TestProfileConfig = {
+  cdpPort?: number;
+  cdpUrl?: string;
+  color?: string;
+  headless?: boolean;
+  executablePath?: string;
+  driver?: "openclaw" | "existing-session";
+};
 type TestConfig = {
   browser: {
     enabled: true;
@@ -39,15 +46,9 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    createConfigIO: () => ({
-      loadConfig: () => {
-        // Always return fresh config for createConfigIO to simulate fresh disk read
-        return buildConfig();
-      },
-    }),
     getRuntimeConfigSnapshot: () => null,
-    loadConfig: () => {
-      // simulate stale loadConfig that doesn't see updates unless cache cleared
+    getRuntimeConfig: () => {
+      // simulate stale getRuntimeConfig that doesn't see updates unless cache cleared
       if (!mockState.cachedConfig) {
         mockState.cachedConfig = buildConfig();
       }
@@ -61,7 +62,7 @@ vi.mock("./config-refresh-source.js", () => ({
   loadBrowserConfigForRuntimeRefresh: () => buildConfig(),
 }));
 
-const { loadConfig } = await import("../config/config.js");
+const { getRuntimeConfig } = await import("../config/config.js");
 const { resolveBrowserConfig, resolveProfile } = await import("./config.js");
 const { refreshResolvedBrowserConfigFromDisk, resolveBrowserProfileWithHotReload } =
   await import("./resolved-config-refresh.js");
@@ -77,8 +78,8 @@ describe("server-context hot-reload profiles", () => {
 
   it("forProfile hot-reloads newly added profiles from config", async () => {
     // Start with only openclaw profile
-    // 1. Prime the cache by calling loadConfig() first
-    const cfg = loadConfig();
+    // 1. Prime the cache by calling getRuntimeConfig() first
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
 
     // Verify cache is primed (without desktop)
@@ -102,12 +103,11 @@ describe("server-context hot-reload profiles", () => {
     // 2. Simulate adding a new profile to config (like user editing openclaw.json)
     mockState.cfgProfiles.desktop = { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" };
 
-    // 3. Verify without clearConfigCache, loadConfig() still returns stale cached value
-    const staleCfg = loadConfig();
+    // 3. Verify without clearConfigCache, getRuntimeConfig() still returns stale cached value
+    const staleCfg = getRuntimeConfig();
     expect(staleCfg.browser?.profiles?.desktop).toBeUndefined(); // Cache is stale!
 
-    // 4. Hot-reload should read fresh config for the lookup (createConfigIO().loadConfig()),
-    // without flushing the global loadConfig cache.
+    // 4. Hot-reload uses the refresh source without flushing the global getRuntimeConfig cache.
     const profile = resolveBrowserProfileWithHotReload({
       current: state,
       refreshConfigFromDisk: true,
@@ -119,14 +119,14 @@ describe("server-context hot-reload profiles", () => {
     // 5. Verify the new profile was merged into the cached state
     expect(state.resolved.profiles.desktop).toBeDefined();
 
-    // 6. Verify GLOBAL cache was NOT cleared - subsequent simple loadConfig() still sees STALE value
+    // 6. Verify GLOBAL cache was NOT cleared - subsequent simple getRuntimeConfig() still sees STALE value
     // This confirms the fix: we read fresh config for the specific profile lookup without flushing the global cache
-    const stillStaleCfg = loadConfig();
+    const stillStaleCfg = getRuntimeConfig();
     expect(stillStaleCfg.browser?.profiles?.desktop).toBeUndefined();
   });
 
   it("forProfile still throws for profiles that don't exist in fresh config", async () => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
       server: null,
@@ -145,8 +145,8 @@ describe("server-context hot-reload profiles", () => {
     ).toBeNull();
   });
 
-  it("forProfile refreshes existing profile config after loadConfig cache updates", async () => {
-    const cfg = loadConfig();
+  it("forProfile refreshes existing profile config after getRuntimeConfig cache updates", async () => {
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
       server: null,
@@ -168,7 +168,7 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("listProfiles refreshes config before enumerating profiles", async () => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const state = {
       server: null,
@@ -189,7 +189,7 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("marks existing runtime state for reconcile when profile invariants change", async () => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     const openclawProfile = resolveProfile(resolved, "openclaw");
     expect(openclawProfile).toBeTruthy();
@@ -224,5 +224,207 @@ describe("server-context hot-reload profiles", () => {
     expect(runtime?.profile.cdpPort).toBe(19999);
     expect(runtime?.lastTargetId).toBeNull();
     expect(runtime?.reconcile?.reason).toContain("cdpPort");
+  });
+
+  it("marks local managed runtime state for reconcile when profile headless changes", async () => {
+    const cfg = getRuntimeConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const openclawProfile = resolveProfile(resolved, "openclaw");
+    expect(openclawProfile).toBeTruthy();
+    expect(openclawProfile?.headless).toBe(true);
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "openclaw",
+          {
+            profile: openclawProfile!,
+            running: { pid: 123 } as never,
+            lastTargetId: "tab-1",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    mockState.cfgProfiles.openclaw = {
+      cdpPort: 18800,
+      color: "#FF4500",
+      headless: false,
+    };
+    mockState.cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("openclaw");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.headless).toBe(false);
+    expect(runtime?.lastTargetId).toBeNull();
+    expect(runtime?.reconcile?.reason).toContain("headless");
+  });
+
+  it("marks local managed runtime state for reconcile when profile executablePath changes", async () => {
+    mockState.cfgProfiles.openclaw = {
+      cdpPort: 18800,
+      color: "#FF4500",
+      executablePath: "/usr/bin/chrome-old",
+    };
+    mockState.cachedConfig = null;
+    const cfg = getRuntimeConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const openclawProfile = resolveProfile(resolved, "openclaw");
+    expect(openclawProfile).toBeTruthy();
+    expect(openclawProfile?.executablePath).toBe("/usr/bin/chrome-old");
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "openclaw",
+          {
+            profile: openclawProfile!,
+            running: { pid: 123 } as never,
+            lastTargetId: "tab-1",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    mockState.cfgProfiles.openclaw = {
+      cdpPort: 18800,
+      color: "#FF4500",
+      executablePath: "/usr/bin/chrome-new",
+    };
+    mockState.cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("openclaw");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.executablePath).toBe("/usr/bin/chrome-new");
+    expect(runtime?.lastTargetId).toBeNull();
+    expect(runtime?.reconcile?.reason).toContain("executablePath");
+  });
+
+  it("does not reconcile existing-session runtime when only headless changes", async () => {
+    mockState.cfgProfiles.remote = {
+      cdpUrl: "http://127.0.0.1:9222",
+      color: "#0066CC",
+      headless: true,
+      driver: "existing-session",
+    };
+
+    const cfg = getRuntimeConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const remoteProfile = resolveProfile(resolved, "remote");
+    expect(remoteProfile).toBeTruthy();
+    expect(remoteProfile?.driver).toBe("existing-session");
+    expect(remoteProfile?.attachOnly).toBe(true);
+    expect(remoteProfile?.headless).toBe(true);
+
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "remote",
+          {
+            profile: remoteProfile!,
+            running: { pid: 456 } as never,
+            lastTargetId: "tab-remote",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    mockState.cfgProfiles.remote = {
+      cdpUrl: "http://127.0.0.1:9222",
+      color: "#0066CC",
+      headless: false,
+      driver: "existing-session",
+    };
+    mockState.cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("remote");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.driver).toBe("existing-session");
+    expect(runtime?.profile.headless).toBe(false);
+    expect(runtime?.lastTargetId).toBe("tab-remote");
+    expect(runtime?.reconcile).toBeNull();
+  });
+
+  it("does not reconcile remote cdp runtime when only headless changes", async () => {
+    mockState.cfgProfiles.remote = {
+      cdpUrl: "http://10.0.0.42:9222",
+      color: "#0066CC",
+      headless: true,
+    };
+
+    const cfg = getRuntimeConfig();
+    const resolved = resolveBrowserConfig(cfg.browser, cfg);
+    const remoteProfile = resolveProfile(resolved, "remote");
+    expect(remoteProfile).toBeTruthy();
+    expect(remoteProfile?.driver).toBe("openclaw");
+    expect(remoteProfile?.attachOnly).toBe(false);
+    expect(remoteProfile?.cdpIsLoopback).toBe(false);
+    expect(remoteProfile?.headless).toBe(true);
+
+    const state: BrowserServerState = {
+      server: null,
+      port: 18791,
+      resolved,
+      profiles: new Map([
+        [
+          "remote",
+          {
+            profile: remoteProfile!,
+            running: { pid: 789 } as never,
+            lastTargetId: "tab-remote-cdp",
+            reconcile: null,
+          },
+        ],
+      ]),
+    };
+
+    mockState.cfgProfiles.remote = {
+      cdpUrl: "http://10.0.0.42:9222",
+      color: "#0066CC",
+      headless: false,
+    };
+    mockState.cachedConfig = null;
+
+    refreshResolvedBrowserConfigFromDisk({
+      current: state,
+      refreshConfigFromDisk: true,
+      mode: "cached",
+    });
+
+    const runtime = state.profiles.get("remote");
+    expect(runtime).toBeTruthy();
+    expect(runtime?.profile.driver).toBe("openclaw");
+    expect(runtime?.profile.cdpIsLoopback).toBe(false);
+    expect(runtime?.profile.headless).toBe(false);
+    expect(runtime?.lastTargetId).toBe("tab-remote-cdp");
+    expect(runtime?.reconcile).toBeNull();
   });
 });

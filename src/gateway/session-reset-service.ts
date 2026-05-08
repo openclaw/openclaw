@@ -10,12 +10,12 @@ import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
-import { clearSessionQueues } from "../auto-reply/reply/queue.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
-import { loadConfig } from "../config/config.js";
+import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   snapshotSessionOrigin,
   type SessionEntry,
@@ -30,6 +30,8 @@ import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -44,7 +46,7 @@ import {
 import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readSessionMessages,
+  readSessionMessagesAsync,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
@@ -215,7 +217,7 @@ async function ensureSessionRuntimeCleanup(params: {
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
-  clearSessionQueues([...queueKeys]);
+  clearSessionResetRuntimeState([...queueKeys]);
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
     clearBootstrapSnapshot(params.target.canonicalKey);
@@ -412,6 +414,17 @@ export async function cleanupSessionBeforeMutation(params: {
   if (cleanupError) {
     return cleanupError;
   }
+  const pluginCleanup = await runPluginHostCleanup({
+    cfg: params.cfg,
+    registry: getActivePluginRegistry(),
+    reason: params.reason === "session-reset" ? "reset" : "delete",
+    sessionKey: params.target.canonicalKey ?? params.key,
+  });
+  for (const failure of pluginCleanup.failures) {
+    logVerbose(
+      `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
+    );
+  }
   return await closeAcpRuntimeForSession({
     cfg: params.cfg,
     sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
@@ -420,14 +433,14 @@ export async function cleanupSessionBeforeMutation(params: {
   });
 }
 
-function emitGatewayBeforeResetPluginHook(params: {
+async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   entry?: SessionEntry;
   reason: "new" | "reset";
-}): void {
+}): Promise<void> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_reset")) {
     return;
@@ -441,7 +454,10 @@ function emitGatewayBeforeResetPluginHook(params: {
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = readSessionMessages(sessionId, params.storePath, sessionFile);
+      messages = await readSessionMessagesAsync(sessionId, params.storePath, sessionFile, {
+        mode: "full",
+        reason: "before_reset hook payload",
+      });
     }
   } catch (err) {
     logVerbose(
@@ -477,7 +493,7 @@ export async function performGatewaySessionReset(params: {
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const { cfg, target, storePath } = (() => {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
     return { cfg, target, storePath: target.storePath };
   })();
@@ -617,7 +633,7 @@ export async function performGatewaySessionReset(params: {
     store[primaryKey] = nextEntry;
     return nextEntry;
   });
-  emitGatewayBeforeResetPluginHook({
+  await emitGatewayBeforeResetPluginHook({
     cfg,
     key: params.key,
     target,

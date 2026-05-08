@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { killProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
@@ -109,15 +110,49 @@ export async function createChildAdapter(params: {
     : undefined;
 
   const onStdout = (listener: (chunk: string) => void) => {
+    const stdoutDecoder = createWindowsOutputDecoder();
+    let flushed = false;
+    const flush = () => {
+      if (flushed) {
+        return;
+      }
+      flushed = true;
+      const tail = stdoutDecoder.flush();
+      if (tail) {
+        listener(tail);
+      }
+    };
     child.stdout.on("data", (chunk) => {
-      listener(chunk.toString());
+      const text = stdoutDecoder.decode(chunk);
+      if (text) {
+        listener(text);
+      }
     });
+    child.stdout.once("end", flush);
+    child.stdout.once("close", flush);
   };
 
   const onStderr = (listener: (chunk: string) => void) => {
+    const stderrDecoder = createWindowsOutputDecoder();
+    let flushed = false;
+    const flush = () => {
+      if (flushed) {
+        return;
+      }
+      flushed = true;
+      const tail = stderrDecoder.flush();
+      if (tail) {
+        listener(tail);
+      }
+    };
     child.stderr.on("data", (chunk) => {
-      listener(chunk.toString());
+      const text = stderrDecoder.decode(chunk);
+      if (text) {
+        listener(text);
+      }
     });
+    child.stderr.once("end", flush);
+    child.stderr.once("close", flush);
   };
 
   let waitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
@@ -283,11 +318,20 @@ export async function createChildAdapter(params: {
     return waitPromise;
   };
 
+  // The actual detachment of the spawned child can differ from `useDetached`:
+  // when the detached spawn fails, `spawnWithFallback` retries with the
+  // `no-detach` fallback (detached:false). In that case the child shares the
+  // gateway's process group regardless of intent, so the kill must avoid
+  // group-kill. (#71662 follow-up — caught by Greptile review)
+  const childIsDetached = useDetached && !spawned.usedFallback;
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       if (pid) {
-        killProcessTree(pid);
+        // Pass through whether the child is actually detached. Without this,
+        // `killProcessTree` group-kills via `-pid` and takes out the gateway's
+        // own process group along with the child. (#71662)
+        killProcessTree(pid, { detached: childIsDetached });
       }
       try {
         child.kill("SIGKILL");

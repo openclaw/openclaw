@@ -19,7 +19,7 @@ import {
   setBrowserControlServerReachable,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch } from "./test-fetch.js";
+import { getBrowserTestFetch } from "./test-support/fetch.js";
 
 type ActErrorResponse = {
   error?: string;
@@ -83,6 +83,23 @@ describe("browser control server", () => {
   );
 
   it(
+    "returns ACT_INVALID_REQUEST for malformed coordinate clicks",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postActAndReadError(base, {
+        kind: "clickCoords",
+        x: -1,
+        y: 20,
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("ACT_INVALID_REQUEST");
+      expect(response.body.error).toContain("clickCoords requires non-negative x and y");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns ACT_EXISTING_SESSION_UNSUPPORTED for unsupported existing-session actions",
     async () => {
       setBrowserControlServerProfiles({
@@ -136,6 +153,44 @@ describe("browser control server", () => {
       expect(response.status).toBe(403);
       expect(response.body.code).toBe("ACT_TARGET_ID_MISMATCH");
       expect(response.body.error).toContain("action targetId must match request targetId");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "returns the replacement targetId after an action-triggered target swap",
+    async () => {
+      const base = await startServerAndBase();
+      pwMocks.clickViaPlaywright.mockImplementationOnce(async () => {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string) => {
+            if (url.includes("/json/list")) {
+              return makeResponse([
+                {
+                  id: "fresh5678",
+                  title: "Submitted",
+                  url: "https://submitted.example",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/fresh5678",
+                  type: "page",
+                },
+              ]);
+            }
+            throw new Error(`unexpected fetch: ${url}`);
+          }),
+        );
+      });
+
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
+        kind: "click",
+        ref: "5",
+        targetId: "abcd1234",
+      });
+
+      expect(response).toMatchObject({
+        ok: true,
+        targetId: "fresh5678",
+      });
     },
     slowTimeoutMs,
   );
@@ -202,6 +257,11 @@ describe("browser control server", () => {
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       limit: 1,
     });
+    expect(pwMocks.storeAriaSnapshotRefsViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
+    });
 
     const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
       ok: boolean;
@@ -230,6 +290,47 @@ describe("browser control server", () => {
       ssrfPolicy: {
         dangerouslyAllowPrivateNetwork: true,
       },
+    });
+
+    pwMocks.snapshotRoleViaPlaywright.mockRejectedValueOnce(new Error("playwright stale page"));
+    const fallback = (await realFetch(`${base}/snapshot?format=ai&interactive=true`).then((r) =>
+      r.json(),
+    )) as { ok: boolean; format?: string; snapshot?: string };
+    expect(fallback.ok).toBe(true);
+    expect(fallback.format).toBe("ai");
+    expect(fallback.snapshot).toContain("Fallback");
+    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      urls: undefined,
+      options: {
+        interactive: true,
+        compact: undefined,
+        maxDepth: undefined,
+      },
+    });
+  });
+
+  it("agent contract: doctor deep runs a live snapshot probe", async () => {
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+
+    const report = (await realFetch(`${base}/doctor?deep=true`).then((r) => r.json())) as {
+      ok: boolean;
+      checks?: Array<{ id?: string; status?: string; summary?: string }>;
+    };
+
+    expect(report.ok).toBe(true);
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "live-snapshot",
+          status: "pass",
+        }),
+      ]),
+    );
+    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      limit: 25,
     });
   });
 
@@ -296,6 +397,31 @@ describe("browser control server", () => {
     );
     const [clickSelectorArgs] = pwMocks.clickViaPlaywright.mock.calls[1] ?? [];
     expect((clickSelectorArgs as { doubleClick?: boolean }).doubleClick).toBeUndefined();
+
+    const clickCoords = await postJson<{ ok: boolean; url?: string }>(`${base}/act`, {
+      kind: "clickCoords",
+      x: "42.5",
+      y: 64,
+      doubleClick: "true",
+      button: "left",
+      delayMs: "10",
+    });
+    expect(clickCoords.ok).toBe(true);
+    expect(clickCoords.url).toBe("https://example.com");
+    expect(pwMocks.clickCoordsViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        x: 42.5,
+        y: 64,
+        doubleClick: true,
+        button: "left",
+        delayMs: 10,
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      }),
+    );
 
     const type = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "type",

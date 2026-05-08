@@ -22,11 +22,12 @@ Channel selection:
 - `--channel` required if more than one channel is configured.
 - If exactly one channel is configured, it becomes the default.
 - Values: `discord|googlechat|imessage|matrix|mattermost|msteams|signal|slack|telegram|whatsapp` (Mattermost requires plugin)
+- `openclaw message` resolves the selected channel to its owning plugin when `--channel` or a channel-prefixed target is present; otherwise it loads configured channel plugins for default-channel inference.
 
 Target formats (`--target`):
 
-- WhatsApp: E.164 or group JID
-- Telegram: chat id or `@username`
+- WhatsApp: E.164, group JID, or WhatsApp Channel/Newsletter JID (`...@newsletter`)
+- Telegram: chat id, `@username`, or forum topic target (`-1001234567890:topic:42`, or `--thread-id 42`)
 - Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are treated as channels)
 - Google Chat: `spaces/<spaceId>` or `users/<userId>`
 - Slack: `channel:<id>` or `user:<id>` (raw channel id is accepted)
@@ -75,7 +76,7 @@ Name lookup:
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - Telegram + Discord: `--silent`
-  - WhatsApp only: `--gif-playback`
+  - WhatsApp only: `--gif-playback`; WhatsApp Channels/Newsletters are addressed with their native `@newsletter` JID.
 
 - `poll`
   - Channels: WhatsApp/Telegram/Discord/Matrix/Microsoft Teams
@@ -100,7 +101,8 @@ Name lookup:
 - `read`
   - Channels: Discord/Slack/Matrix
   - Required: `--target`
-  - Optional: `--limit`, `--before`, `--after`
+  - Optional: `--limit`, `--message-id`, `--before`, `--after`
+  - Slack only: `--message-id` reads a specific Slack message timestamp; combine with `--thread-id` to read an exact thread reply.
   - Discord only: `--around`
 
 - `edit`

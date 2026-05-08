@@ -10,7 +10,7 @@ import type { PluginDiagnostic } from "./manifest-types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
 
 function resolveBundledChannelMeta(id: string): ChannelMeta | undefined {
-  return listChatChannels().find((meta) => meta.id === id);
+  return listChatChannels().find((meta) => meta?.id === id);
 }
 
 function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): string[] {
@@ -46,6 +46,19 @@ export function normalizeRegisteredChannelPlugin(params: {
       pluginId: params.pluginId,
       source: params.source,
       message: "channel registration missing id",
+      pushDiagnostic: params.pushDiagnostic,
+    });
+    return null;
+  }
+  if (
+    typeof params.plugin.config?.listAccountIds !== "function" ||
+    typeof params.plugin.config?.resolveAccount !== "function"
+  ) {
+    pushPluginValidationDiagnostic({
+      level: "error",
+      pluginId: params.pluginId,
+      source: params.source,
+      message: `channel "${id}" registration missing required config helpers`,
       pushDiagnostic: params.pushDiagnostic,
     });
     return null;

@@ -12,6 +12,24 @@ import {
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
 const loadPluginMetadataRegistrySnapshotMock = vi.fn();
+const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
+const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
+const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
+const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
+  const params = rawParams as { index?: unknown };
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndexMock(params) ?? {
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    index: params.index ?? createInstalledPluginIndexSnapshot([]),
+    manifestRegistry,
+    plugins: manifestRegistry.plugins,
+    byPluginId: new Map(
+      manifestRegistry.plugins.map((plugin: { id: string }) => [plugin.id, plugin]),
+    ),
+  };
+});
 const applyPluginAutoEnableMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
@@ -19,6 +37,7 @@ const withBundledPluginEnablementCompatMock = vi.fn();
 const listImportedBundledPluginFacadeIdsMock = vi.fn();
 const listImportedRuntimePluginIdsMock = vi.fn();
 let buildPluginSnapshotReport: typeof import("./status.js").buildPluginSnapshotReport;
+let buildPluginRegistrySnapshotReport: typeof import("./status.js").buildPluginRegistrySnapshotReport;
 let buildPluginDiagnosticsReport: typeof import("./status.js").buildPluginDiagnosticsReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
 let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
@@ -28,6 +47,7 @@ let formatPluginCompatibilityNotice: typeof import("./status.js").formatPluginCo
 let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCompatibility;
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfigMock(),
   loadConfig: () => loadConfigMock(),
 }));
 
@@ -42,6 +62,22 @@ vi.mock("./loader.js", () => ({
 vi.mock("./runtime/metadata-registry-loader.js", () => ({
   loadPluginMetadataRegistrySnapshot: (...args: unknown[]) =>
     loadPluginMetadataRegistrySnapshotMock(...args),
+}));
+
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    loadPluginManifestRegistryForPluginRegistryMock(...args),
+  loadPluginRegistrySnapshotWithMetadata: (...args: unknown[]) =>
+    loadPluginRegistrySnapshotWithMetadataMock(...args),
+}));
+
+vi.mock("./manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex: (...args: unknown[]) =>
+    loadPluginManifestRegistryForInstalledIndexMock(...args),
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (...args: unknown[]) => loadPluginMetadataSnapshotMock(...args),
 }));
 
 vi.mock("./providers.js", () => ({
@@ -92,6 +128,23 @@ function setSinglePluginLoadResult(
     plugins: [plugin],
     ...overrides,
   });
+}
+
+function createInstalledPluginIndexSnapshot(
+  plugins: Array<Record<string, unknown>>,
+): Record<string, unknown> {
+  return {
+    version: 1,
+    warning: "test",
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins,
+    diagnostics: [],
+  };
 }
 
 function expectInspectReport(
@@ -154,10 +207,12 @@ function expectMetadataSnapshotLoaderCall(params: {
 }
 
 function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
-  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-    config: params.rawConfig,
-    env: process.env,
-  });
+  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: params.rawConfig,
+      env: process.env,
+    }),
+  );
 }
 
 function createCompatChainFixture() {
@@ -320,6 +375,7 @@ describe("plugin status reports", () => {
       buildPluginDiagnosticsReport,
       buildPluginCompatibilityWarnings,
       buildPluginInspectReport,
+      buildPluginRegistrySnapshotReport,
       buildPluginSnapshotReport,
       formatPluginCompatibilityNotice,
       summarizePluginCompatibility,
@@ -330,6 +386,10 @@ describe("plugin status reports", () => {
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     loadPluginMetadataRegistrySnapshotMock.mockReset();
+    loadPluginManifestRegistryForPluginRegistryMock.mockReset();
+    loadPluginRegistrySnapshotWithMetadataMock.mockReset();
+    loadPluginManifestRegistryForInstalledIndexMock.mockReset();
+    loadPluginMetadataSnapshotMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();
@@ -337,6 +397,19 @@ describe("plugin status reports", () => {
     listImportedBundledPluginFacadeIdsMock.mockReset();
     listImportedRuntimePluginIdsMock.mockReset();
     loadConfigMock.mockReturnValue({});
+    loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
+      snapshot: createInstalledPluginIndexSnapshot([]),
+      source: "derived",
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
       changes: [],
@@ -389,6 +462,41 @@ describe("plugin status reports", () => {
       logger,
       workspaceDir: "/workspace",
       loadModules: false,
+    });
+  });
+
+  it("carries installed-index compatibility metadata into registry snapshot reports", () => {
+    loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
+      snapshot: createInstalledPluginIndexSnapshot([
+        {
+          pluginId: "provider-env-plugin",
+          manifestPath: "/tmp/provider-env-plugin/openclaw.plugin.json",
+          manifestHash: "manifest-hash",
+          rootDir: "/tmp/provider-env-plugin",
+          origin: "workspace",
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: ["provider-auth-env-vars"],
+        },
+      ]),
+      source: "derived",
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue({
+      plugins: [{ id: "provider-env-plugin", name: "Provider Env Plugin" }],
+      diagnostics: [],
+    });
+
+    const report = buildPluginRegistrySnapshotReport({ config: {} });
+
+    expect(report.plugins[0]).toMatchObject({
+      id: "provider-env-plugin",
+      compat: ["provider-auth-env-vars"],
     });
   });
 
@@ -467,6 +575,8 @@ describe("plugin status reports", () => {
     expectInspectPolicy(inspect!, {
       allowPromptInjection: undefined,
       allowConversationAccess: undefined,
+      hookTimeoutMs: undefined,
+      hookTimeouts: undefined,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
@@ -625,6 +735,8 @@ describe("plugin status reports", () => {
     expectInspectPolicy(inspect!, {
       allowPromptInjection: false,
       allowConversationAccess: true,
+      hookTimeoutMs: undefined,
+      hookTimeouts: undefined,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
@@ -752,6 +864,18 @@ describe("plugin status reports", () => {
         createCompatibilityNotice({ pluginId: "legacy-only", code: "legacy-before-agent-start" }),
       ],
     });
+  });
+
+  it("does not warn for explicit startup-lazy metadata", () => {
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "modern-startup-lazy",
+        name: "Modern Startup Lazy",
+        compat: [],
+      }),
+    );
+
+    expectNoCompatibilityWarnings();
   });
 
   it("returns no compatibility warnings for modern capability plugins", () => {

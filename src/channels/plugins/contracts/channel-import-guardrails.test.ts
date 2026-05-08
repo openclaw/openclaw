@@ -1,9 +1,9 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../../test/helpers/plugins/public-artifacts.js";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -12,11 +12,12 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFA
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 const bundledPluginRecords = loadPluginManifestRegistry({
-  cache: true,
   config: {},
 }).plugins.filter((plugin) => plugin.origin === "bundled");
 const bundledPluginRoots = new Map(
-  bundledPluginRecords.map((plugin) => [plugin.id, plugin.rootDir] as const),
+  bundledPluginRecords.map(
+    (plugin) => [plugin.id, resolveBundledPluginSourceRoot(plugin.rootDir)] as const,
+  ),
 );
 const BUNDLED_EXTENSION_IDS = [...bundledPluginRoots.keys()].toSorted(
   (left, right) => right.length - left.length,
@@ -34,6 +35,7 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "msteams",
   "nostr",
   "nextcloud-talk",
+  "qqbot",
   "signal",
   "slack",
   "synology-chat",
@@ -44,6 +46,12 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "zalo",
   "zalouser",
 ]);
+
+function resolveBundledPluginSourceRoot(rootDir: string): string {
+  const sourceRoot = resolve(REPO_ROOT, BUNDLED_PLUGIN_ROOT_DIR, basename(rootDir));
+  return existsSync(sourceRoot) ? sourceRoot : rootDir;
+}
+
 function bundledPluginFile(pluginId: string, relativePath: string): string {
   const rootDir = bundledPluginRoots.get(pluginId);
   if (!rootDir) {
@@ -191,6 +199,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "bluebubbles",
   "device-pair",
   "diagnostics-otel",
+  "diagnostics-prometheus",
   "discord",
   "diffs",
   "feishu",
@@ -210,6 +219,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "open-prose",
   "phone-control",
   "copilot-proxy",
+  "qqbot",
   "sglang",
   "zai",
   "signal",
@@ -229,7 +239,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   // Direct import avoids a circular init path:
-  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> plugin api barrel -> accounts.ts
+  // accounts.ts -> runtime-api.ts -> plugin api barrel -> accounts.ts
   bundledPluginFile("matrix", "src/matrix/accounts.ts"),
   // Config schema stays on the public SDK seam and is covered by dedicated config guardrails.
   bundledPluginFile("msteams", "src/config-schema.ts"),
@@ -341,7 +351,7 @@ function collectExtensionSourceFiles(): string[] {
   }
   extensionSourceFilesCache = bundledPluginRecords.flatMap((plugin) =>
     collectSourceFiles(undefined, {
-      rootDir: plugin.rootDir,
+      rootDir: resolveBundledPluginSourceRoot(plugin.rootDir),
       shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
         classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
         entryName === "api.ts" ||

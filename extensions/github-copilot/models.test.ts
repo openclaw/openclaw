@@ -1,8 +1,5 @@
+import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createProviderUsageFetch,
-  makeResponse,
-} from "../../test/helpers/plugins/provider-usage-fetch.js";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -19,14 +16,21 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
   normalizeModelCompat: (model: Record<string, unknown>) => model,
+  resolveProviderEndpoint: (baseUrl: string) => ({
+    baseUrl,
+    endpointClass: "custom",
+    warnings: [],
+  }),
 }));
 
-const loadJsonFile = vi.fn();
-const saveJsonFile = vi.fn();
+const jsonStoreMocks = vi.hoisted(() => ({
+  loadJsonFile: vi.fn(),
+  saveJsonFile: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/json-store", () => ({
-  loadJsonFile,
-  saveJsonFile,
+  loadJsonFile: jsonStoreMocks.loadJsonFile,
+  saveJsonFile: jsonStoreMocks.saveJsonFile,
 }));
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
@@ -65,7 +69,7 @@ describe("github-copilot model defaults", () => {
   describe("getDefaultCopilotModelIds", () => {
     it("includes claude-opus-4.7", () => {
       expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.7");
-      expect(getDefaultCopilotModelIds()).not.toContain("claude-opus-4.6");
+      expect(getDefaultCopilotModelIds()).toContain("claude-opus-4.6");
     });
 
     it("includes claude-sonnet-4.6", () => {
@@ -135,6 +139,50 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
   });
 
+  it("clones gpt-5.3-codex template for gpt-5.3-codex when not in registry", () => {
+    const template = {
+      id: "gpt-5.2-codex",
+      name: "gpt-5.2-codex",
+      provider: "github-copilot",
+      api: "openai-responses",
+      reasoning: true,
+      contextWindow: 200_000,
+    };
+    const ctx = createMockCtx("gpt-5.3-codex", {
+      "github-copilot/gpt-5.2-codex": template,
+    });
+    const result = requireResolvedModel(ctx);
+    expect(result.id).toBe("gpt-5.3-codex");
+    expect(result.name).toBe("gpt-5.3-codex");
+    expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
+  });
+
+  it("prefers gpt-5.3-codex as template source over gpt-5.2-codex for gpt-5.4", () => {
+    const template53 = {
+      id: "gpt-5.3-codex",
+      name: "gpt-5.3-codex",
+      provider: "github-copilot",
+      api: "openai-responses",
+      reasoning: true,
+      contextWindow: 300_000,
+    };
+    const template52 = {
+      id: "gpt-5.2-codex",
+      name: "gpt-5.2-codex",
+      provider: "github-copilot",
+      api: "openai-responses",
+      reasoning: true,
+      contextWindow: 200_000,
+    };
+    const ctx = createMockCtx("gpt-5.4", {
+      "github-copilot/gpt-5.3-codex": template53,
+      "github-copilot/gpt-5.2-codex": template52,
+    });
+    const result = requireResolvedModel(ctx);
+    expect(result.id).toBe("gpt-5.4");
+    expect((result as unknown as Record<string, unknown>).contextWindow).toBe(300_000);
+  });
+
   it("falls through to synthetic catch-all when codex template is missing", () => {
     const ctx = createMockCtx("gpt-5.4");
     const result = requireResolvedModel(ctx);
@@ -158,11 +206,20 @@ describe("resolveCopilotForwardCompatModel", () => {
     }
   });
 
+  it("infers reasoning=true for Codex model IDs", () => {
+    for (const id of ["gpt-5.4-codex", "gpt-5.5-codex", "gpt-5.4-codex-mini", "gpt-5.3-codex"]) {
+      const ctx = createMockCtx(id);
+      const result = requireResolvedModel(ctx);
+      expect((result as unknown as Record<string, unknown>).reasoning).toBe(true);
+    }
+  });
+
   it("sets reasoning=false for non-reasoning model IDs including mid-string o1/o3", () => {
     for (const id of [
       "gpt-5.4-mini",
       "claude-sonnet-4.6",
       "gpt-4o",
+      "mycodexmodel",
       "audio-o1-hd",
       "turbo-o3-voice",
     ]) {
@@ -248,8 +305,8 @@ describe("github-copilot token", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    loadJsonFile.mockClear();
-    saveJsonFile.mockClear();
+    jsonStoreMocks.loadJsonFile.mockClear();
+    jsonStoreMocks.saveJsonFile.mockClear();
     ({ deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } = await import("./token.js"));
   });
 
@@ -264,7 +321,7 @@ describe("github-copilot token", () => {
 
   it("uses cache when token is still valid", async () => {
     const now = Date.now();
-    loadJsonFile.mockReturnValue({
+    jsonStoreMocks.loadJsonFile.mockReturnValue({
       token: "cached;proxy-ep=proxy.example.com;",
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
@@ -274,19 +331,19 @@ describe("github-copilot token", () => {
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
       cachePath,
-      loadJsonFileImpl: loadJsonFile,
-      saveJsonFileImpl: saveJsonFile,
+      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
+      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     expect(res.token).toBe("cached;proxy-ep=proxy.example.com;");
     expect(res.baseUrl).toBe("https://api.example.com");
-    expect(String(res.source)).toContain("cache:");
+    expect(res.source).toContain("cache:");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("fetches and stores token when cache is missing", async () => {
-    loadJsonFile.mockReturnValue(undefined);
+    jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
 
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
@@ -300,13 +357,13 @@ describe("github-copilot token", () => {
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
       cachePath,
-      loadJsonFileImpl: loadJsonFile,
-      saveJsonFileImpl: saveJsonFile,
+      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
+      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
     expect(res.baseUrl).toBe("https://api.contoso.test");
-    expect(saveJsonFile).toHaveBeenCalledTimes(1);
+    expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
   });
 });

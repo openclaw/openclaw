@@ -1,8 +1,16 @@
-import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  withoutPluginInstallRecords,
+  withPluginInstallRecords,
+} from "../plugins/installed-plugin-index-records.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
+import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
+import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
   resolveHookPackUpdateSelection,
   resolvePluginUpdateSelection,
@@ -14,13 +22,15 @@ export async function runPluginUpdateCommand(params: {
   opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
 }) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
+  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  const cfgWithPluginInstallRecords = withPluginInstallRecords(cfg, pluginInstallRecords);
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
   };
   const pluginSelection = resolvePluginUpdateSelection({
-    installs: cfg.plugins?.installs ?? {},
+    installs: pluginInstallRecords,
     rawId: params.id,
     all: params.opts.all,
   });
@@ -40,7 +50,7 @@ export async function runPluginUpdateCommand(params: {
   }
 
   const pluginResult = await updateNpmInstalledPlugins({
-    config: cfg,
+    config: cfgWithPluginInstallRecords,
     pluginIds: pluginSelection.pluginIds,
     specOverrides: pluginSelection.specOverrides,
     dryRun: params.opts.dryRun,
@@ -83,35 +93,46 @@ export async function runPluginUpdateCommand(params: {
     },
   });
 
-  for (const outcome of pluginResult.outcomes) {
-    if (outcome.status === "error") {
-      defaultRuntime.log(theme.error(outcome.message));
-      continue;
-    }
-    if (outcome.status === "skipped") {
-      defaultRuntime.log(theme.warn(outcome.message));
-      continue;
-    }
-    defaultRuntime.log(outcome.message);
-  }
-
-  for (const outcome of hookResult.outcomes) {
-    if (outcome.status === "error") {
-      defaultRuntime.log(theme.error(outcome.message));
-      continue;
-    }
-    if (outcome.status === "skipped") {
-      defaultRuntime.log(theme.warn(outcome.message));
-      continue;
-    }
-    defaultRuntime.log(outcome.message);
-  }
+  const outcomeSummary = logPluginUpdateOutcomes({
+    outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
+    log: (message) => defaultRuntime.log(message),
+  });
 
   if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
-    await replaceConfigFile({
-      nextConfig: hookResult.config,
-      baseHash: (await sourceSnapshotPromise)?.hash,
-    });
+    const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
+    const shouldPersistPluginInstallIndex =
+      pluginResult.changed || Object.keys(pluginInstallRecords).length > 0;
+    const nextConfig = shouldPersistPluginInstallIndex
+      ? withoutPluginInstallRecords(hookResult.config)
+      : hookResult.config;
+    if (shouldPersistPluginInstallIndex) {
+      await commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords: nextPluginInstallRecords,
+        nextConfig,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+        writeOptions: {
+          afterWrite: { mode: "restart", reason: "plugin source changed" },
+        },
+      });
+    } else {
+      await replaceConfigFile({
+        nextConfig,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
+    }
+    if (pluginResult.changed) {
+      await refreshPluginRegistryAfterConfigMutation({
+        config: nextConfig,
+        reason: "source-changed",
+        installRecords: nextPluginInstallRecords,
+        logger,
+      });
+    }
     defaultRuntime.log("Restart the gateway to load plugins and hooks.");
+  }
+
+  if (outcomeSummary.hasErrors) {
+    defaultRuntime.exit(1);
   }
 }

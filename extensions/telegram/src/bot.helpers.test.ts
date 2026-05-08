@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import { resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
@@ -20,8 +20,8 @@ describe("resolveTelegramStreamMode", () => {
     expect(resolveTelegramStreamMode({ streamMode: "block" })).toBe("block");
   });
 
-  it("maps unified progress mode to partial on Telegram", () => {
-    expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("partial");
+  it("preserves unified progress mode on Telegram", () => {
+    expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("progress");
   });
 });
 

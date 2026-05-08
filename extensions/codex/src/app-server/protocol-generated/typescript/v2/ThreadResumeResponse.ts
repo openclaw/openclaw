@@ -4,30 +4,43 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf.js";
 import type { ReasoningEffort } from "../ReasoningEffort.js";
 import type { ServiceTier } from "../ServiceTier.js";
+import type { ActivePermissionProfile } from "./ActivePermissionProfile.js";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer.js";
 import type { AskForApproval } from "./AskForApproval.js";
 import type { PermissionProfile } from "./PermissionProfile.js";
 import type { SandboxPolicy } from "./SandboxPolicy.js";
 import type { Thread } from "./Thread.js";
 
-export type ThreadResumeResponse = { thread: Thread, model: string, modelProvider: string, serviceTier: ServiceTier | null, cwd: AbsolutePathBuf,
-/**
- * Instruction source files currently loaded for this thread.
- */
-instructionSources: Array<AbsolutePathBuf>, approvalPolicy: AskForApproval,
-/**
- * Reviewer currently used for approval requests on this thread.
- */
-approvalsReviewer: ApprovalsReviewer,
-/**
- * Legacy sandbox policy retained for compatibility. New clients should use
- * `permissionProfile` when present as the canonical active permissions
- * view.
- */
-sandbox: SandboxPolicy,
-/**
- * Canonical active permissions view for this thread when representable.
- * This is `null` for external sandbox policies because external
- * enforcement cannot be round-tripped as a `PermissionProfile`.
- */
-permissionProfile: PermissionProfile | null, reasoningEffort: ReasoningEffort | null, };
+export type ThreadResumeResponse = {
+  thread: Thread;
+  model: string;
+  modelProvider: string;
+  serviceTier: ServiceTier | null;
+  cwd: AbsolutePathBuf;
+  /**
+   * Instruction source files currently loaded for this thread.
+   */
+  instructionSources: Array<AbsolutePathBuf>;
+  approvalPolicy: AskForApproval;
+  /**
+   * Reviewer currently used for approval requests on this thread.
+   */
+  approvalsReviewer: ApprovalsReviewer;
+  /**
+   * Legacy sandbox policy retained for compatibility. Experimental clients
+   * should prefer `permissionProfile` when they need exact runtime
+   * permissions.
+   */
+  sandbox: SandboxPolicy;
+  /**
+   * Full active permissions for this thread. `activePermissionProfile`
+   * carries display/provenance metadata for this runtime profile.
+   */
+  permissionProfile: PermissionProfile | null;
+  /**
+   * Named or implicit built-in profile that produced the active
+   * permissions, when known.
+   */
+  activePermissionProfile: ActivePermissionProfile | null;
+  reasoningEffort: ReasoningEffort | null;
+};

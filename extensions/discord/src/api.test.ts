@@ -1,6 +1,6 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchDiscord } from "./api.js";
+import { DiscordApiError, fetchDiscord, requestDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
 describe("fetchDiscord", () => {
@@ -46,6 +46,60 @@ describe("fetchDiscord", () => {
     ).rejects.toThrow("Discord API /users/@me/guilds failed (404): Not Found");
   });
 
+  it("sanitizes Cloudflare HTML rate limits and applies a fallback cooldown", async () => {
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response(
+          "<!doctype html><html><head><title>Error 1015</title></head><body><h1>You are being rate limited</h1><script>raw()</script></body></html>",
+          { status: 429, headers: { "content-type": "text/html" } },
+        ),
+    );
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect((error as DiscordApiError).retryAfter).toBe(60);
+    const message = String(error);
+    expect(message).toContain("Discord API /users/@me/guilds failed (429)");
+    expect(message).toContain("rate limited by Discord upstream");
+    expect(message).toContain("Error 1015");
+    expect(message).not.toContain("<html");
+    expect(message).not.toContain("<script");
+  });
+
+  it("honors Retry-After for Cloudflare HTML application lookup rate limits", async () => {
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response("<html><title>Error 1015</title><body>rate limited</body></html>", {
+          status: 429,
+          headers: { "content-type": "text/html", "retry-after": "7" },
+        }),
+    );
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect((error as DiscordApiError).retryAfter).toBe(7);
+    const message = String(error);
+    expect(message).toContain("Discord API /oauth2/applications/@me failed (429)");
+    expect(message).toContain("Error 1015");
+    expect(message).not.toContain("<html");
+  });
+
   it("retries rate limits before succeeding", async () => {
     let calls = 0;
     const fetcher = withFetchPreconnect(async () => {
@@ -72,5 +126,24 @@ describe("fetchDiscord", () => {
 
     expect(result).toHaveLength(1);
     expect(calls).toBe(2);
+  });
+
+  it("sends JSON request bodies through the shared retry helper", async () => {
+    let request: RequestInit | undefined;
+    const fetcher = withFetchPreconnect(async (_url, init) => {
+      request = init;
+      return jsonResponse({ id: "42" }, 200);
+    });
+
+    const result = await requestDiscord<{ id: string }>("/channels/c/messages", "test", {
+      body: { content: "hello" },
+      fetcher,
+      retry: { attempts: 1 },
+    });
+
+    expect(result).toEqual({ id: "42" });
+    expect(request?.method).toBe("POST");
+    expect(request?.body).toBe(JSON.stringify({ content: "hello" }));
+    expect(new Headers(request?.headers).get("content-type")).toBe("application/json");
   });
 });

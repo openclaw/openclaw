@@ -5,8 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import chokidar from "chokidar";
-import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node.mjs";
+import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
@@ -16,8 +15,10 @@ const WATCH_IGNORED_PATH_SEGMENTS = new Set([".git", "dist", "node_modules"]);
 const WATCH_LOCK_WAIT_MS = 5_000;
 const WATCH_LOCK_POLL_MS = 100;
 const WATCH_LOCK_DIR = path.join(".local", "watch-node");
+const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 
 const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
+const buildDoctorRunnerArgs = () => [WATCH_NODE_RUNNER, "doctor", "--fix", "--non-interactive"];
 
 const normalizePath = (filePath) =>
   String(filePath ?? "")
@@ -70,6 +71,15 @@ const shouldRestartAfterChildExit = (exitCode, exitSignal) =>
   (typeof exitCode === "number" && WATCH_RESTARTABLE_CHILD_EXIT_CODES.has(exitCode)) ||
   (typeof exitSignal === "string" && WATCH_RESTARTABLE_CHILD_SIGNALS.has(exitSignal));
 
+const isGatewayWatchCommand = (args) => args[0] === "gateway";
+
+const shouldRunAutoDoctor = (deps, autoDoctorAttempted) =>
+  !autoDoctorAttempted &&
+  isGatewayWatchCommand(deps.args) &&
+  !AUTO_DOCTOR_DISABLE_VALUES.has(
+    String(deps.env.OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR ?? "").toLowerCase(),
+  );
+
 const isProcessAlive = (pid, signalProcess) => {
   if (!Number.isInteger(pid) || pid <= 0) {
     return false;
@@ -118,6 +128,39 @@ const writeWatchLock = (lockPath, payload) => {
 
 const logWatcher = (message, deps) => {
   deps.process.stderr?.write?.(`[openclaw] ${message}\n`);
+};
+
+const isInvalidPackageConfigError = (err) => err?.code === "ERR_INVALID_PACKAGE_CONFIG";
+
+const extractInvalidPackageConfigPath = (err) => {
+  const message = String(err?.message ?? "");
+  const match = message.match(/Invalid package config (.+?) while importing /);
+  return match?.[1] ?? null;
+};
+
+const printFriendlyWatchStartupError = (err) => {
+  const packageConfigPath = extractInvalidPackageConfigPath(err);
+
+  console.error("");
+  console.error(
+    "[openclaw] gateway:watch could not start because a dependency package config looks corrupted.",
+  );
+  if (packageConfigPath) {
+    console.error(`[openclaw] Invalid package config: ${packageConfigPath}`);
+  }
+  console.error("[openclaw] This usually means a file in node_modules is empty or truncated.");
+  console.error("[openclaw] Recommended recovery:");
+  console.error("[openclaw]   rm -rf node_modules");
+  console.error("[openclaw]   pnpm store prune");
+  console.error("[openclaw]   pnpm install");
+  console.error("");
+  console.error("[openclaw] Original error:");
+  console.error(err);
+};
+
+const loadChokidar = async () => {
+  const mod = await import("chokidar");
+  return mod.default ?? mod;
 };
 
 const waitForWatcherRelease = async (lockPath, pid, deps) => {
@@ -222,8 +265,8 @@ export async function runWatchMain(params = {}) {
     sleep: params.sleep ?? sleep,
     signalProcess: params.signalProcess ?? ((pid, signal) => process.kill(pid, signal)),
     lockDisabled: params.lockDisabled === true,
-    createWatcher:
-      params.createWatcher ?? ((watchPaths, options) => chokidar.watch(watchPaths, options)),
+    createWatcher: params.createWatcher,
+    loadChokidar: params.loadChokidar ?? loadChokidar,
     watchPaths: params.watchPaths ?? runNodeWatchedPaths,
   };
 
@@ -234,24 +277,23 @@ export async function runWatchMain(params = {}) {
   // The watcher owns process restarts; keep SIGUSR1/config reloads in-process
   // so inherited launchd/systemd markers do not make the child exit and stall.
   childEnv.OPENCLAW_NO_RESPAWN = "1";
+  if (isGatewayWatchCommand(deps.args) && childEnv.OPENCLAW_TRACE_SYNC_IO === undefined) {
+    childEnv.OPENCLAW_TRACE_SYNC_IO = "1";
+  }
   if (deps.args.length > 0) {
     childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
   }
 
-  return await new Promise((resolve) => {
+  return await new Promise((resolve, reject) => {
     let settled = false;
     let shuttingDown = false;
     let restartRequested = false;
     let watchProcess = null;
+    let watcher = null;
     let lockHandle = null;
+    let autoDoctorAttempted = false;
     let onSigInt;
     let onSigTerm;
-
-    const watcher = deps.createWatcher(deps.watchPaths, {
-      ignoreInitial: true,
-      ignored: (watchPath, stats) =>
-        isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, stats),
-    });
 
     const settle = (code) => {
       if (settled) {
@@ -265,7 +307,7 @@ export async function runWatchMain(params = {}) {
         deps.process.off("SIGTERM", onSigTerm);
       }
       releaseWatchLock(lockHandle);
-      watcher.close?.().catch?.(() => {});
+      watcher?.close?.().catch?.(() => {});
       resolve(code);
     };
 
@@ -290,6 +332,84 @@ export async function runWatchMain(params = {}) {
           startRunner();
           return;
         }
+        if (shouldRunAutoDoctor(deps, autoDoctorAttempted)) {
+          runAutoDoctorAndRestart();
+          return;
+        }
+        settle(exitSignal ? 1 : (exitCode ?? 1));
+      });
+    };
+
+    const handleWatcherError = () => {
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      settle(1);
+    };
+
+    const rejectWatcherStartupError = (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      releaseWatchLock(lockHandle);
+      watcher?.close?.().catch?.(() => {});
+      if (onSigInt) {
+        deps.process.off("SIGINT", onSigInt);
+      }
+      if (onSigTerm) {
+        deps.process.off("SIGTERM", onSigTerm);
+      }
+      reject(err);
+    };
+
+    const resolveCreateWatcher = async () => {
+      try {
+        const chokidarModule = await deps.loadChokidar();
+        return (watchPaths, options) => chokidarModule.watch(watchPaths, options);
+      } catch (err) {
+        if (isInvalidPackageConfigError(err)) {
+          printFriendlyWatchStartupError(err);
+        }
+        throw err;
+      }
+    };
+
+    const runAutoDoctorAndRestart = () => {
+      autoDoctorAttempted = true;
+      logWatcher(
+        "Gateway exited early; running `openclaw doctor --fix --non-interactive` once.",
+        deps,
+      );
+      watchProcess = deps.spawn(deps.process.execPath, buildDoctorRunnerArgs(), {
+        cwd: deps.cwd,
+        env: childEnv,
+        stdio: "inherit",
+      });
+      watchProcess.on("error", (error) => {
+        watchProcess = null;
+        logWatcher(`Failed to spawn doctor repair: ${error?.message ?? "unknown error"}`, deps);
+        settle(1);
+      });
+      watchProcess.on("exit", (exitCode, exitSignal) => {
+        watchProcess = null;
+        if (shuttingDown) {
+          return;
+        }
+        if (exitCode === 0 && !exitSignal) {
+          logWatcher("Doctor repair completed; restarting gateway watch child.", deps);
+          startRunner();
+          return;
+        }
+        logWatcher(
+          `Doctor repair failed; gateway:watch exiting with code ${exitSignal ? 1 : (exitCode ?? 1)}.`,
+          deps,
+        );
         settle(exitSignal ? 1 : (exitCode ?? 1));
       });
     };
@@ -308,16 +428,28 @@ export async function runWatchMain(params = {}) {
       }
     };
 
-    watcher.on("add", requestRestart);
-    watcher.on("change", requestRestart);
-    watcher.on("unlink", requestRestart);
-    watcher.on("error", () => {
-      shuttingDown = true;
-      if (watchProcess && typeof watchProcess.kill === "function") {
-        watchProcess.kill(WATCH_RESTART_SIGNAL);
+    const attachWatcher = (createWatcher) => {
+      if (settled) {
+        return;
       }
-      settle(1);
-    });
+      watcher = createWatcher(deps.watchPaths, {
+        ignoreInitial: true,
+        ignored: (watchPath, stats) =>
+          isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, stats),
+      });
+      watcher.on("add", requestRestart);
+      watcher.on("change", requestRestart);
+      watcher.on("unlink", requestRestart);
+      watcher.on("error", handleWatcherError);
+    };
+
+    const startWatcher = () => {
+      if (deps.createWatcher) {
+        attachWatcher(deps.createWatcher);
+        return;
+      }
+      void resolveCreateWatcher().then(attachWatcher).catch(rejectWatcherStartupError);
+    };
 
     onSigInt = () => {
       shuttingDown = true;
@@ -340,6 +472,7 @@ export async function runWatchMain(params = {}) {
     if (deps.lockDisabled) {
       lockHandle = { lockPath: "", pid: deps.process.pid };
       startRunner();
+      startWatcher();
       return;
     }
 
@@ -351,6 +484,7 @@ export async function runWatchMain(params = {}) {
         }
         lockHandle = handle;
         startRunner();
+        startWatcher();
       })
       .catch((error) => {
         logWatcher(`Failed to acquire watcher lock: ${error?.message ?? "unknown error"}`, deps);
@@ -363,7 +497,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runWatchMain()
     .then((code) => process.exit(code))
     .catch((err) => {
-      console.error(err);
+      if (!isInvalidPackageConfigError(err)) {
+        console.error(err);
+      }
       process.exit(1);
     });
 }

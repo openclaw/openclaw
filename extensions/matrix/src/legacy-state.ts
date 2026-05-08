@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveLegacyMatrixFlatStoreTarget } from "./migration-config.js";
 import { resolveMatrixLegacyFlatStoragePaths } from "./storage-paths.js";
 
-export type MatrixLegacyStateMigrationResult = {
+type MatrixLegacyStateMigrationResult = {
   migrated: boolean;
   changes: string[];
   warnings: string[];

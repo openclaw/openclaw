@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addTestHook,
   createEmptyPluginRegistry,
@@ -10,7 +9,8 @@ import {
   resetGlobalHookRunner,
   setActivePluginRegistry,
   type PluginHookRegistration,
-} from "../../../test/helpers/plugins/outbound-delivery.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { slackOutbound } from "./outbound-adapter.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
@@ -90,6 +90,25 @@ describe("slack outbound shared hook wiring", () => {
       }),
     );
     expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes replyToId as Slack threadTs for threaded outbound delivery", async () => {
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "hello" }],
+      accountId: "default",
+      replyToId: "1712000000.000001",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "hello",
+      expect.objectContaining({
+        threadTs: "1712000000.000001",
+      }),
+    );
   });
 
   it("respects cancel from the shared hook without a second adapter pass", async () => {

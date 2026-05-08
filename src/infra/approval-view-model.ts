@@ -68,6 +68,8 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     metadata: buildExecMetadata(request),
     ask: request.request.ask ?? null,
     agentId: request.request.agentId ?? null,
+    warningText: request.request.warningText ?? null,
+    commandAnalysis: request.request.commandAnalysis ?? null,
     commandText,
     commandPreview,
     cwd: request.request.cwd ?? null,

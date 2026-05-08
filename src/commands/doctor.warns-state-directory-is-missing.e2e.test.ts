@@ -111,6 +111,21 @@ describe("doctor command", () => {
       throw new Error("missing browser doctor facade");
     });
     vi.doMock("../plugin-sdk/facade-loader.js", () => ({
+      createLazyFacadeArrayValue: <T extends readonly unknown[]>(load: () => T): T =>
+        new Proxy([], {
+          get(_target, property, receiver) {
+            return Reflect.get(load(), property, receiver);
+          },
+        }) as unknown as T,
+      createLazyFacadeObjectValue: <T extends object>(load: () => T): T =>
+        new Proxy(
+          {},
+          {
+            get(_target, property, receiver) {
+              return Reflect.get(load(), property, receiver);
+            },
+          },
+        ) as T,
       loadBundledPluginPublicSurfaceModuleSync,
     }));
     doctorCommand = await loadDoctorCommandForTest({

@@ -28,11 +28,12 @@ import {
   resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
+  resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
+import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -153,7 +154,7 @@ function resolveConfiguredTextVerbosity(params: {
   );
 }
 
-function resolveRuntimeLabel(
+function resolveExecutionLabel(
   args: Pick<StatusArgs, "config" | "agent" | "sessionKey" | "sessionScope">,
 ): string {
   const sessionKey = args.sessionKey?.trim();
@@ -197,8 +198,18 @@ function resolveRuntimeLabel(
   return `${runtime}/${sandboxMode}`;
 }
 
-function resolveRunnerLabel(
-  args: Pick<StatusArgs, "config" | "sessionEntry"> & { fallbackProvider?: string },
+const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
+  pi: "OpenClaw Pi Default",
+  codex: "OpenAI Codex",
+  "codex-cli": "OpenAI Codex",
+  "claude-cli": "Claude CLI",
+  "google-gemini-cli": "Gemini CLI",
+};
+
+function resolveAgentRuntimeLabel(
+  args: Pick<StatusArgs, "config" | "sessionEntry" | "resolvedHarness"> & {
+    fallbackProvider?: string;
+  },
 ): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
@@ -208,16 +219,28 @@ function resolveRunnerLabel(
     return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
   }
 
+  const runtimeRaw =
+    normalizeOptionalString(args.resolvedHarness) ??
+    normalizeOptionalString(args.sessionEntry?.agentRuntimeOverride) ??
+    normalizeOptionalString(args.sessionEntry?.agentHarnessId);
+  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
+  if (runtime && runtime !== "auto" && runtime !== "default") {
+    return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
+  }
+
   const providerRaw =
     normalizeOptionalString(args.sessionEntry?.modelProvider) ??
     normalizeOptionalString(args.sessionEntry?.providerOverride) ??
     normalizeOptionalString(args.fallbackProvider);
   const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
   if (provider && isCliProvider(provider, args.config)) {
-    return `${provider} (cli)`;
+    return (
+      AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
+      `${provider} (cli)`
+    );
   }
 
-  return "pi (embedded)";
+  return AGENT_RUNTIME_LABELS.pi;
 }
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
@@ -264,14 +287,6 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
 };
 
-const formatHarnessLabel = (harnessId: string | undefined) => {
-  const normalized = normalizeOptionalLowercaseString(harnessId);
-  if (!normalized || normalized === "pi" || normalized === "auto") {
-    return null;
-  }
-  return normalized;
-};
-
 const readUsageFromSessionLog = (
   sessionId?: string,
   sessionEntry?: SessionEntry,
@@ -310,11 +325,12 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    const snapshot = readLatestSessionUsageFromTranscript(
+    const snapshot = readRecentSessionUsageFromTranscript(
       sessionId,
       storePath,
       sessionEntry?.sessionFile,
       agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+      256 * 1024,
     );
     if (!snapshot) {
       return undefined;
@@ -437,6 +453,7 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
 const formatVoiceModeLine = (
   config?: OpenClawConfig,
   sessionEntry?: SessionEntry,
+  agentId?: string,
 ): string | null => {
   if (!config) {
     return null;
@@ -444,12 +461,85 @@ const formatVoiceModeLine = (
   const snapshot = resolveStatusTtsSnapshot({
     cfg: config,
     sessionAuto: sessionEntry?.ttsAuto,
+    agentId,
   });
   if (!snapshot) {
     return null;
   }
-  return `🔊 Voice: ${snapshot.autoMode} · provider=${snapshot.provider} · limit=${snapshot.maxLength} · summary=${snapshot.summarize ? "on" : "off"}`;
+  const parts = [`🔊 Voice: ${snapshot.autoMode}`, `provider=${snapshot.provider}`];
+  if (snapshot.persona) {
+    parts.push(`persona=${snapshot.persona}`);
+  }
+  if (snapshot.displayName) {
+    parts.push(`name=${snapshot.displayName}`);
+  }
+  if (snapshot.model) {
+    parts.push(`model=${snapshot.model}`);
+  }
+  if (snapshot.voice) {
+    parts.push(`voice=${snapshot.voice}`);
+  }
+  if (snapshot.baseUrl) {
+    parts.push(
+      snapshot.customBaseUrl
+        ? `endpoint=custom(${snapshot.baseUrl})`
+        : `endpoint=${snapshot.baseUrl}`,
+    );
+  }
+  parts.push(`limit=${snapshot.maxLength}`, `summary=${snapshot.summarize ? "on" : "off"}`);
+  return parts.join(" · ");
 };
+
+function resolveChannelModelNote(params: {
+  config?: OpenClawConfig;
+  entry?: SessionEntry;
+  selectedProvider: string;
+  selectedModel: string;
+  parentSessionKey?: string;
+}): string | undefined {
+  if (!params.config || !params.entry) {
+    return undefined;
+  }
+  if (
+    normalizeOptionalString(params.entry.modelOverride) ||
+    normalizeOptionalString(params.entry.providerOverride)
+  ) {
+    return undefined;
+  }
+  const channelOverride = resolveChannelModelOverride({
+    cfg: params.config,
+    channel: params.entry.channel ?? params.entry.origin?.provider,
+    groupId: params.entry.groupId,
+    groupChatType: params.entry.chatType ?? params.entry.origin?.chatType,
+    groupChannel: params.entry.groupChannel,
+    groupSubject: params.entry.subject,
+    parentSessionKey: params.parentSessionKey,
+  });
+  if (!channelOverride) {
+    return undefined;
+  }
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.config,
+    defaultProvider: DEFAULT_PROVIDER,
+    allowPluginNormalization: false,
+  });
+  const resolvedOverride = resolveModelRefFromString({
+    raw: channelOverride.model,
+    defaultProvider: DEFAULT_PROVIDER,
+    aliasIndex,
+    allowPluginNormalization: false,
+  });
+  if (!resolvedOverride) {
+    return undefined;
+  }
+  if (
+    resolvedOverride.ref.provider !== params.selectedProvider ||
+    resolvedOverride.ref.model !== params.selectedModel
+  ) {
+    return undefined;
+  }
+  return "channel override";
+}
 
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
@@ -534,7 +624,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
-  let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+  const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
+  const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
+  let totalTokens =
+    freshTotalTokens ??
+    (entry?.totalTokensFresh === false
+      ? undefined
+      : (entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0)));
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
@@ -548,7 +644,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
-      if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
+      if (
+        allowTranscriptContextUsage &&
+        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
+      ) {
         totalTokens = candidate;
       }
       if (!entry?.model && logUsage.model) {
@@ -603,9 +702,20 @@ export function buildStatusMessage(args: StatusArgs): string {
     model: contextLookupModel,
     allowAsyncLoad: false,
   });
+  const channelModelNote = resolveChannelModelNote({
+    config: args.config,
+    entry,
+    selectedProvider,
+    selectedModel,
+    parentSessionKey: args.parentSessionKey,
+  });
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
+      : undefined;
+  const agentContextTokens =
+    typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
+      ? args.agent.contextTokens
       : undefined;
   const explicitRuntimeContextTokens =
     typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
@@ -622,6 +732,15 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
         : explicitConfiguredContextTokens
       : undefined;
+  const channelOverrideContextTokens = channelModelNote
+    ? (explicitRuntimeContextTokens ??
+      cappedConfiguredContextTokens ??
+      (typeof activeContextTokens === "number"
+        ? typeof agentContextTokens === "number"
+          ? Math.min(agentContextTokens, activeContextTokens)
+          : activeContextTokens
+        : agentContextTokens))
+    : undefined;
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
   // snapshot when available. Separately, callers can pass an explicit configured
@@ -668,7 +787,8 @@ export function buildStatusMessage(args: StatusArgs): string {
         cfg: contextConfig,
         ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
         model: contextLookupModel,
-        contextTokensOverride: persistedContextTokens ?? args.agent?.contextTokens,
+        contextTokensOverride:
+          channelOverrideContextTokens ?? persistedContextTokens ?? agentContextTokens,
         fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS);
@@ -678,17 +798,22 @@ export function buildStatusMessage(args: StatusArgs): string {
   const verboseLevel =
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
-  const reasoningLevel = args.resolvedReasoning ?? args.sessionEntry?.reasoningLevel ?? "off";
+  const reasoningLevel =
+    args.resolvedReasoning ??
+    args.sessionEntry?.reasoningLevel ??
+    args.agent?.reasoningDefault ??
+    "off";
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??
     args.agent?.elevatedDefault ??
     "on";
 
-  const runtime = { label: resolveRuntimeLabel(args) };
-  const runnerLabel = resolveRunnerLabel({
+  const execution = { label: resolveExecutionLabel(args) };
+  const agentRuntimeLabel = resolveAgentRuntimeLabel({
     config: args.config,
     sessionEntry: args.sessionEntry,
+    resolvedHarness: args.resolvedHarness,
     fallbackProvider: activeProvider,
   });
 
@@ -743,11 +868,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     model: activeModel,
   });
   const optionParts = [
-    `Runtime: ${runtime.label}`,
-    `Runner: ${runnerLabel}`,
+    `Execution: ${execution.label}`,
+    `Runtime: ${agentRuntimeLabel}`,
     `Think: ${thinkLevel}`,
     formatFastModeLabel(fastMode),
-    formatHarnessLabel(args.resolvedHarness),
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,
@@ -803,50 +927,6 @@ export function buildStatusMessage(args: StatusArgs): string {
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
-  const channelModelNote = (() => {
-    if (!args.config || !entry) {
-      return undefined;
-    }
-    if (
-      normalizeOptionalString(entry.modelOverride) ||
-      normalizeOptionalString(entry.providerOverride)
-    ) {
-      return undefined;
-    }
-    const channelOverride = resolveChannelModelOverride({
-      cfg: args.config,
-      channel: entry.channel ?? entry.origin?.provider,
-      groupId: entry.groupId,
-      groupChatType: entry.chatType ?? entry.origin?.chatType,
-      groupChannel: entry.groupChannel,
-      groupSubject: entry.subject,
-      parentSessionKey: args.parentSessionKey,
-    });
-    if (!channelOverride) {
-      return undefined;
-    }
-    const aliasIndex = buildModelAliasIndex({
-      cfg: args.config,
-      defaultProvider: DEFAULT_PROVIDER,
-      allowPluginNormalization: false,
-    });
-    const resolvedOverride = resolveModelRefFromString({
-      raw: channelOverride.model,
-      defaultProvider: DEFAULT_PROVIDER,
-      aliasIndex,
-      allowPluginNormalization: false,
-    });
-    if (!resolvedOverride) {
-      return undefined;
-    }
-    if (
-      resolvedOverride.ref.provider !== selectedProvider ||
-      resolvedOverride.ref.model !== selectedModel
-    ) {
-      return undefined;
-    }
-    return "channel override";
-  })();
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
 
@@ -876,7 +956,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
-  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
+  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
   return [
     versionLine,

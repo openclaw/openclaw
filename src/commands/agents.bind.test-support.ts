@@ -1,6 +1,7 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 type ReplaceConfigFileResult = Awaited<
@@ -11,7 +12,7 @@ export const readConfigFileSnapshotMock: Mock<(...args: unknown[]) => Promise<un
 export const writeConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi
   .fn()
   .mockResolvedValue(undefined);
-export const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi.fn(
+const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi.fn(
   async (params: { nextConfig: OpenClawConfig }): Promise<ReplaceConfigFileResult> => {
     await writeConfigFileMock(params.nextConfig);
     return {
@@ -19,6 +20,8 @@ export const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown
       previousHash: null,
       snapshot: {} as never,
       nextConfig: params.nextConfig,
+      afterWrite: { mode: "auto" },
+      followUp: { mode: "auto", requiresRestart: false },
     };
   },
 ) as Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -42,17 +45,12 @@ vi.mock("./agents.command-shared.js", () => ({
 
 export const runtime = createTestRuntime();
 
-let agentsCommandModulePromise: Promise<typeof import("./agents.js")> | undefined;
-let agentsBindCommandModulePromise: Promise<typeof import("./agents.commands.bind.js")> | undefined;
-
-export async function loadFreshAgentsCommandModuleForTest() {
-  agentsCommandModulePromise ??= import("./agents.js");
-  return await agentsCommandModulePromise;
-}
+const agentsBindCommandModuleLoader = createLazyImportLoader(
+  () => import("./agents.commands.bind.js"),
+);
 
 export async function loadFreshAgentsBindCommandModuleForTest() {
-  agentsBindCommandModulePromise ??= import("./agents.commands.bind.js");
-  return await agentsBindCommandModulePromise;
+  return await agentsBindCommandModuleLoader.load();
 }
 
 export function resetAgentsBindTestHarness(): void {

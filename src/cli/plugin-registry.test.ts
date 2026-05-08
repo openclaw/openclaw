@@ -29,11 +29,21 @@ function withActivatedPluginIdsForTest<T extends Record<string, unknown>>(
 
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../plugins/loader.js").loadOpenClawPlugins>(),
+  resolveCompatibleRuntimePluginRegistry:
+    vi.fn<typeof import("../plugins/loader.js").resolveCompatibleRuntimePluginRegistry>(),
+  resolveRuntimePluginRegistry:
+    vi.fn<typeof import("../plugins/loader.js").resolveRuntimePluginRegistry>(),
   getActivePluginRegistry: vi.fn<typeof import("../plugins/runtime.js").getActivePluginRegistry>(),
   resolveConfiguredChannelPluginIds:
     vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
+  resolveDiscoverableScopedChannelPluginIds:
+    vi.fn<
+      typeof import("../plugins/channel-plugin-ids.js").resolveDiscoverableScopedChannelPluginIds
+    >(),
   resolveChannelPluginIds:
     vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveChannelPluginIds>(),
+  resolveEffectivePluginIds:
+    vi.fn<typeof import("../plugins/effective-plugin-ids.js").resolveEffectivePluginIds>(),
   resolvePluginRuntimeLoadContext:
     vi.fn<typeof import("../plugins/runtime/load-context.js").resolvePluginRuntimeLoadContext>(),
 }));
@@ -44,6 +54,11 @@ let resetPluginRegistryLoadedForTests: typeof import("./plugin-registry.js").__t
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
     mocks.loadOpenClawPlugins(...args),
+  resolveCompatibleRuntimePluginRegistry: (
+    ...args: Parameters<typeof mocks.resolveCompatibleRuntimePluginRegistry>
+  ) => mocks.resolveCompatibleRuntimePluginRegistry(...args),
+  resolveRuntimePluginRegistry: (...args: Parameters<typeof mocks.resolveRuntimePluginRegistry>) =>
+    mocks.resolveRuntimePluginRegistry(...args),
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
@@ -55,8 +70,16 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveConfiguredChannelPluginIds: (
     ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
   ) => mocks.resolveConfiguredChannelPluginIds(...args),
+  resolveDiscoverableScopedChannelPluginIds: (
+    ...args: Parameters<typeof mocks.resolveDiscoverableScopedChannelPluginIds>
+  ) => mocks.resolveDiscoverableScopedChannelPluginIds(...args),
   resolveChannelPluginIds: (...args: Parameters<typeof mocks.resolveChannelPluginIds>) =>
     mocks.resolveChannelPluginIds(...args),
+}));
+
+vi.mock("../plugins/effective-plugin-ids.js", () => ({
+  resolveEffectivePluginIds: (...args: Parameters<typeof mocks.resolveEffectivePluginIds>) =>
+    mocks.resolveEffectivePluginIds(...args),
 }));
 
 vi.mock("../plugins/runtime/load-context.js", () => ({
@@ -112,13 +135,21 @@ describe("ensurePluginRegistryLoaded", () => {
 
   beforeEach(() => {
     mocks.loadOpenClawPlugins.mockReset();
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReset();
+    mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.getActivePluginRegistry.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();
+    mocks.resolveDiscoverableScopedChannelPluginIds.mockReset();
     mocks.resolveChannelPluginIds.mockReset();
+    mocks.resolveEffectivePluginIds.mockReset();
     mocks.resolvePluginRuntimeLoadContext.mockReset();
     resetPluginRegistryLoadedForTests();
 
     mocks.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(undefined);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
+    mocks.resolveDiscoverableScopedChannelPluginIds.mockReturnValue([]);
+    mocks.resolveEffectivePluginIds.mockReturnValue(["demo"]);
     mocks.resolvePluginRuntimeLoadContext.mockImplementation((options) => {
       const rawConfig = (options?.config ?? {}) as Record<string, unknown>;
       return {
@@ -248,6 +279,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config,
+        onlyPluginIds: ["demo"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
       }),

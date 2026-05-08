@@ -17,10 +17,22 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("font-src 'self' https://fonts.gstatic.com");
   });
 
-  it("limits image loading to same-origin and data URLs", () => {
+  it("allows OpenAI realtime WebRTC offer requests without allowing all HTTPS", () => {
     const csp = buildControlUiCspHeader();
-    expect(csp).toContain("img-src 'self' data:");
-    expect(csp).not.toContain("img-src 'self' data: https:");
+    const connectSrc = csp.split("; ").find((directive) => directive.startsWith("connect-src "));
+    expect(connectSrc?.split(" ")).toEqual([
+      "connect-src",
+      "'self'",
+      "ws:",
+      "wss:",
+      "https://api.openai.com",
+    ]);
+  });
+
+  it("limits image loading to same-origin, data, and managed blob URLs", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).toContain("img-src 'self' data: blob:");
+    expect(csp).not.toContain("img-src 'self' data: blob: https:");
   });
 
   it("includes inline script hashes in script-src when provided", () => {

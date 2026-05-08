@@ -3,12 +3,20 @@ import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
-import { stripEnvelopeFromMessages } from "../gateway/chat-sanitize.js";
+import {
+  projectRecentChatDisplayMessages,
+  resolveEffectiveChatHistoryMaxChars,
+} from "../gateway/chat-display-projection.js";
 import { augmentChatHistoryWithCliSessionImports } from "../gateway/cli-session-history.js";
+import {
+  normalizeLiveAssistantEventText,
+  projectLiveAssistantBufferedText,
+  resolveMergedAssistantText,
+  shouldSuppressAssistantEventForLiveChat,
+} from "../gateway/live-chat-projector.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
 import {
@@ -20,27 +28,24 @@ import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
-  resolveEffectiveChatHistoryMaxChars,
-  sanitizeChatHistoryMessages,
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
 import {
   listAgentsForGateway,
-  listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
-  readSessionMessages,
+  readSessionMessagesAsync,
 } from "../gateway/session-utils.js";
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type {
   ChatSendOptions,
@@ -69,61 +74,8 @@ const silentRuntime = {
   },
 };
 
-function isSilentReplyLeadFragment(text: string): boolean {
-  const normalized = text.trim().toUpperCase();
-  if (!normalized) {
-    return false;
-  }
-  if (!/^[A-Z_]+$/.test(normalized)) {
-    return false;
-  }
-  if (normalized === SILENT_REPLY_TOKEN) {
-    return false;
-  }
-  return SILENT_REPLY_TOKEN.startsWith(normalized);
-}
-
-function appendUniqueSuffix(base: string, suffix: string): string {
-  if (!suffix) {
-    return base;
-  }
-  if (!base) {
-    return suffix;
-  }
-  if (base.endsWith(suffix)) {
-    return base;
-  }
-  const maxOverlap = Math.min(base.length, suffix.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
-      return base + suffix.slice(overlap);
-    }
-  }
-  return base + suffix;
-}
-
-function resolveMergedAssistantText(params: {
-  previousText: string;
-  nextText: string;
-  nextDelta: string;
-}): string {
-  const previous = params.previousText;
-  const next = params.nextText;
-  const delta = params.nextDelta;
-  if (!previous) {
-    return next || delta;
-  }
-  if (next && next.startsWith(previous)) {
-    return next;
-  }
-  if (delta) {
-    return appendUniqueSuffix(previous, delta);
-  }
-  return appendUniqueSuffix(previous, next);
-}
-
 function resolveBtwQuestion(message: string): string | undefined {
-  const match = /^\/btw(?::|\s)+(.*)$/i.exec(message.trim());
+  const match = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(message.trim());
   const question = match?.[1]?.trim();
   return question ? question : undefined;
 }
@@ -244,21 +196,28 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey: opts.sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
+    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+      sessionId && storePath
+        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
+            mode: "recent",
+            maxMessages: max,
+            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+          })
+        : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
       localMessages,
     });
-    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
-    const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = augmentChatHistoryWithCanvasBlocks(
-      sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
+      projectRecentChatDisplayMessages(rawMessages, {
+        maxChars: effectiveMaxChars,
+        maxMessages: max,
+      }),
     );
-    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
@@ -290,24 +249,24 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    return listSessionsFromStore({
+    return (await listSessionsFromStoreAsync({
       cfg,
       storePath,
       store,
       opts: opts ?? {},
-    }) as TuiSessionList;
+    })) as TuiSessionList;
   }
 
   async listAgents(): Promise<TuiAgentsList> {
-    return listAgentsForGateway(loadConfig()) as TuiAgentsList;
+    return listAgentsForGateway(getRuntimeConfig()) as TuiAgentsList;
   }
 
   async patchSession(
     opts: Parameters<TuiBackend["patchSession"]>[0],
   ): Promise<SessionsPatchResult> {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key: opts.key });
     const applied = await updateSessionStore(target.storePath, async (store) => {
       const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
@@ -362,7 +321,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async listModels(): Promise<TuiModelChoice[]> {
     const catalog = await loadGatewayModelCatalog();
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,
@@ -400,8 +359,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatDelta(runId: string, run: LocalRunState) {
-    const text = run.buffer.trim();
-    if (!text || isSilentReplyText(text, SILENT_REPLY_TOKEN) || isSilentReplyLeadFragment(text)) {
+    const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
+      suppressLeadFragments: true,
+    });
+    const text = projected.text.trim();
+    if (!text || projected.suppress) {
       return;
     }
     run.registered = true;
@@ -423,11 +385,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     run.finalSent = true;
     run.registered = true;
-    const text = run.buffer.trim();
-    const shouldIncludeMessage =
-      Boolean(text) &&
-      !isSilentReplyText(text, SILENT_REPLY_TOKEN) &&
-      !isSilentReplyLeadFragment(text);
+    const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
+      suppressLeadFragments: false,
+    });
+    const text = projected.text.trim();
+    const shouldIncludeMessage = Boolean(text) && !projected.suppress;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -505,16 +467,20 @@ export class EmbeddedTuiBackend implements TuiBackend {
       data: evt.data,
     });
 
-    if (evt.stream === "assistant" && !run.isBtw && typeof evt.data?.text === "string") {
-      const nextText = stripInlineDirectiveTagsForDisplay(evt.data.text).text;
-      const nextDelta =
-        typeof evt.data?.delta === "string"
-          ? stripInlineDirectiveTagsForDisplay(evt.data.delta).text
-          : "";
+    if (
+      evt.stream === "assistant" &&
+      !run.isBtw &&
+      typeof evt.data?.text === "string" &&
+      !shouldSuppressAssistantEventForLiveChat(evt.data)
+    ) {
+      const cleaned = normalizeLiveAssistantEventText({
+        text: evt.data.text,
+        delta: evt.data.delta,
+      });
       run.buffer = resolveMergedAssistantText({
         previousText: run.buffer,
-        nextText,
-        nextDelta,
+        nextText: cleaned.text,
+        nextDelta: cleaned.delta,
       });
       this.emitChatDelta(evt.runId, run);
       return;

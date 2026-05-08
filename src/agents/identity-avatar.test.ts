@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
-import { resolveAgentAvatar } from "./identity-avatar.js";
+import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "./identity-avatar.js";
 
 async function writeFile(filePath: string, contents = "avatar") {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -138,7 +138,53 @@ describe("resolveAgentAvatar", () => {
     expect(resolved.kind).toBe("none");
     if (resolved.kind === "none") {
       expect(resolved.reason).toBe("missing");
+      expect(resolved.source).toBe("avatars/missing.png");
+      expect(resolvePublicAgentAvatarSource(resolved)).toBe("avatars/missing.png");
     }
+  });
+
+  it("redacts unsafe public avatar sources", async () => {
+    const root = await createTempAvatarRoot();
+    const workspace = path.join(root, "work");
+    await fs.mkdir(workspace, { recursive: true });
+    const outsidePath = path.join(root, "outside.png");
+    await writeFile(outsidePath);
+
+    const absolute = resolveAgentAvatar(
+      {
+        agents: {
+          list: [{ id: "main", workspace, identity: { avatar: outsidePath } }],
+        },
+      },
+      "main",
+    );
+    expect(absolute.kind).toBe("none");
+    expect(resolvePublicAgentAvatarSource(absolute)).toBeUndefined();
+
+    expect(
+      resolvePublicAgentAvatarSource({
+        kind: "remote",
+        source: "https://example.com/avatar.png?token=secret",
+      }),
+    ).toBe("remote URL");
+    expect(
+      resolvePublicAgentAvatarSource({
+        kind: "data",
+        source: "data:image/png;base64,aaaaaaaa",
+      }),
+    ).toBe("data:image/png;base64,...");
+    expect(
+      resolvePublicAgentAvatarSource({
+        kind: "none",
+        source: "../secret.png",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolvePublicAgentAvatarSource({
+        kind: "none",
+        source: "file:///Users/test/private/avatar.png",
+      }),
+    ).toBeUndefined();
   });
 
   it("rejects local avatars larger than max bytes", async () => {
@@ -173,9 +219,15 @@ describe("resolveAgentAvatar", () => {
 
     const remote = resolveAgentAvatar(cfg, "main");
     expect(remote.kind).toBe("remote");
+    if (remote.kind === "remote") {
+      expect(remote.source).toBe("https://example.com/avatar.png");
+    }
 
     const data = resolveAgentAvatar(cfg, "data");
     expect(data.kind).toBe("data");
+    if (data.kind === "data") {
+      expect(data.source).toBe("data:image/png;base64,aaaa");
+    }
   });
 
   it("resolves local avatar from ui.assistant.avatar when no agents.list identity is set", async () => {
@@ -203,6 +255,57 @@ describe("resolveAgentAvatar", () => {
     const { cfg, workspace } = await setupUiAndConfigAvatarWorkspace();
 
     await expectLocalAvatarPath(cfg, workspace, "ui-avatar.png", { includeUiOverride: true });
+  });
+
+  it("prefers non-default agent avatar over ui.assistant.avatar with includeUiOverride", async () => {
+    const root = await createTempAvatarRoot();
+    const mainWorkspace = path.join(root, "main");
+    const workerWorkspace = path.join(root, "worker");
+    await writeFile(path.join(mainWorkspace, "ui-avatar.png"));
+    await writeFile(path.join(workerWorkspace, "worker-avatar.png"));
+
+    const cfg: OpenClawConfig = {
+      ui: { assistant: { avatar: "ui-avatar.png" } },
+      agents: {
+        list: [
+          { id: "main", workspace: mainWorkspace },
+          { id: "worker", workspace: workerWorkspace, identity: { avatar: "worker-avatar.png" } },
+        ],
+      },
+    };
+
+    const workspaceReal = await fs.realpath(workerWorkspace);
+    const resolved = resolveAgentAvatar(cfg, "worker", { includeUiOverride: true });
+    expect(resolved.kind).toBe("local");
+    if (resolved.kind === "local") {
+      const resolvedReal = await fs.realpath(resolved.filePath);
+      expect(path.relative(workspaceReal, resolvedReal)).toBe("worker-avatar.png");
+    }
+  });
+
+  it("falls back to ui.assistant.avatar for non-default agents without their own avatar", async () => {
+    const root = await createTempAvatarRoot();
+    const mainWorkspace = path.join(root, "main");
+    const workerWorkspace = path.join(root, "worker");
+    await writeFile(path.join(workerWorkspace, "ui-avatar.png"));
+
+    const cfg: OpenClawConfig = {
+      ui: { assistant: { avatar: "ui-avatar.png" } },
+      agents: {
+        list: [
+          { id: "main", workspace: mainWorkspace },
+          { id: "worker", workspace: workerWorkspace },
+        ],
+      },
+    };
+
+    const workspaceReal = await fs.realpath(workerWorkspace);
+    const resolved = resolveAgentAvatar(cfg, "worker", { includeUiOverride: true });
+    expect(resolved.kind).toBe("local");
+    if (resolved.kind === "local") {
+      const resolvedReal = await fs.realpath(resolved.filePath);
+      expect(path.relative(workspaceReal, resolvedReal)).toBe("ui-avatar.png");
+    }
   });
 
   it("ui.assistant.avatar takes priority over IDENTITY.md avatar with includeUiOverride", async () => {

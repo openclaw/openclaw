@@ -1,18 +1,18 @@
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withServer } from "../../../test/helpers/http-test-server.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   postWebhookReplay,
   settleAsyncWork,
-} from "../test-support/lifecycle-test-support.js";
+} from "./test-support/lifecycle-test-support.js";
 import {
   resetLifecycleTestState,
   sendMessageMock,
   setLifecycleRuntimeCore,
   startWebhookLifecycleMonitor,
-} from "../test-support/monitor-mocks-test-support.js";
+} from "./test-support/monitor-mocks-test-support.js";
 
 describe("Zalo reply-once lifecycle", () => {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
@@ -92,20 +92,17 @@ describe("Zalo reply-once lifecycle", () => {
         },
       );
 
-      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
-      expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          AccountId: "acct-zalo-lifecycle",
-          SessionKey: "agent:main:zalo:direct:dm-chat-1",
-          MessageSid: expect.stringContaining("zalo-replay-"),
-          From: "zalo:user-1",
-          To: "zalo:dm-chat-1",
-        }),
-      );
       expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
       expect(recordInboundSessionMock).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionKey: "agent:main:zalo:direct:dm-chat-1",
+          ctx: expect.objectContaining({
+            AccountId: "acct-zalo-lifecycle",
+            SessionKey: "agent:main:zalo:direct:dm-chat-1",
+            MessageSid: expect.stringContaining("zalo-replay-"),
+            From: "zalo:user-1",
+            To: "zalo:dm-chat-1",
+          }),
         }),
       );
       expect(sendMessageMock).toHaveBeenCalledTimes(1);

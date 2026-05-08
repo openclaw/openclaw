@@ -17,7 +17,7 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
-export type CoreToolSection = {
+type CoreToolSection = {
   id: string;
   label: string;
   tools: Array<{
@@ -222,6 +222,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "heartbeat_respond",
+    label: "heartbeat_respond",
+    description: "Record heartbeat outcomes",
+    sectionId: "automation",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "cron",
     label: "cron",
     description: CRON_TOOL_DISPLAY_SUMMARY,
@@ -323,7 +331,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   messaging: {
     allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
   },
-  full: {},
+  full: {
+    allow: ["*"],
+  },
 };
 
 function buildCoreToolGroupMap() {

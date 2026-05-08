@@ -16,13 +16,13 @@ import * as piAi from "@mariozechner/pi-ai";
  * Key behaviours:
  *  - Per-session `OpenAIWebSocketManager` (keyed by sessionId)
  *  - Tracks `previous_response_id` to send only incremental tool-result inputs
- *  - Falls back to `streamSimple` (HTTP) if the WebSocket connection fails
+ *  - Falls back to the OpenClaw HTTP transport if the WebSocket connection fails
  *  - Cleanup helpers for releasing sessions after the run completes
  *
  * Complexity budget & risk mitigation:
  *  - **Transport aware**: respects `transport` (`auto` | `websocket` | `sse`)
  *  - **Transparent fallback in `auto` mode**: connect/send failures fall back to
- *    the existing HTTP `streamSimple`; forced `websocket` mode surfaces WS errors
+ *    the existing HTTP path; forced `websocket` mode surfaces WS errors
  *  - **Zero shared state**: per-session registry; session cleanup on dispose prevents leaks
  *  - **Full parity**: all generation options (temperature, top_p, max_output_tokens,
  *    tool_choice, reasoning) forwarded identically to the HTTP path
@@ -51,14 +51,19 @@ import {
 import {
   buildAssistantMessageFromResponse,
   convertMessagesToInputItems,
+  convertResponseToInputItems,
   convertTools,
   planTurnInput,
 } from "./openai-ws-message-conversion.js";
-import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
+import {
+  buildOpenAIWebSocketResponseCreatePayload,
+  planOpenAIWebSocketRequestPayload,
+} from "./openai-ws-request.js";
+import type { ResponseCreateEvent } from "./openai-ws-types.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { normalizeProviderId } from "./provider-id.js";
-import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
+import { createOpenClawTransportStreamFnForModel } from "./provider-transport-stream.js";
 import {
   buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
@@ -76,6 +81,10 @@ interface WsSession {
   authSignature: string;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
+  /** Last full canonical request, before any incremental previous_response_id delta rewrite. */
+  lastRequestPayload?: ResponseCreateEvent;
+  /** Last response output converted to the same replay form used by future full-context sends. */
+  lastResponseInputItems: ReturnType<typeof convertResponseToInputItems>;
   /** True if the connection has been established at least once. */
   everConnected: boolean;
   /** True once a best-effort warm-up attempt has run for this session. */
@@ -115,7 +124,9 @@ type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAss
 
 const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
   createManager: (options) => new OpenAIWebSocketManager(options),
-  createHttpFallbackStreamFn: (model) => createBoundaryAwareStreamFnForModel(model),
+  // WebSocket auto-mode HTTP fallback must keep the OpenClaw transport path so
+  // degraded sessions do not leak cache-boundary markers or lose strict tools.
+  createHttpFallbackStreamFn: (model) => createOpenClawTransportStreamFnForModel(model),
   streamSimple: (...args) => piAi.streamSimple(...args),
 };
 
@@ -358,6 +369,9 @@ function resetWsSession(params: {
   params.session.everConnected = false;
   params.session.warmUpAttempted = false;
   params.session.broken = false;
+  params.session.lastContextLength = 0;
+  params.session.lastRequestPayload = undefined;
+  params.session.lastResponseInputItems = [];
   if (!params.preserveDegradeUntil) {
     params.session.degradedUntil = null;
   }
@@ -685,8 +699,8 @@ async function runWarmUp(params: {
  * connection; subsequent calls reuse it, sending only incremental tool-result
  * inputs with `previous_response_id`.
  *
- * If the WebSocket connection is unavailable, the function falls back to the
- * standard `streamSimple` HTTP path and logs a warning.
+ * If the WebSocket connection is unavailable, the function falls back to an
+ * OpenClaw HTTP transport when available, or the standard `streamSimple` path.
  *
  * @param apiKey     OpenAI API key
  * @param sessionId  Agent session ID (used as the registry key)
@@ -728,6 +742,7 @@ export function createOpenAIWebSocketStreamFn(
             managerConfigSignature,
             authSignature,
             lastContextLength: 0,
+            lastResponseInputItems: [],
             everConnected: false,
             warmUpAttempted: false,
             broken: false,
@@ -890,27 +905,6 @@ export function createOpenAIWebSocketStreamFn(
           }
         }
 
-        const turnInput = planTurnInput({
-          context,
-          model,
-          previousResponseId: session.manager.previousResponseId,
-          lastContextLength: session.lastContextLength,
-        });
-
-        if (turnInput.mode === "incremental_tool_results") {
-          log.debug(
-            `[ws-stream] session=${sessionId}: incremental send (${turnInput.inputItems.length} tool results) previous_response_id=${turnInput.previousResponseId}`,
-          );
-        } else if (turnInput.mode === "full_context_restart") {
-          log.debug(
-            `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
-          );
-        } else {
-          log.debug(
-            `[ws-stream] session=${sessionId}: full context send (${turnInput.inputItems.length} items)`,
-          );
-        }
-
         turnAttempt++;
         const turnState = resolveProviderTransportTurnState(model, {
           sessionId,
@@ -918,22 +912,45 @@ export function createOpenAIWebSocketStreamFn(
           attempt: turnAttempt,
           transport: "websocket",
         });
-        let payload = buildOpenAIWebSocketResponseCreatePayload({
+        const fullTurnInput = {
+          inputItems: convertMessagesToInputItems(context.messages, model),
+        };
+        let fullPayload = buildOpenAIWebSocketResponseCreatePayload({
           model,
           context,
           options: options as WsOptions | undefined,
-          turnInput,
+          turnInput: fullTurnInput,
           tools: convertTools(context.tools, {
             strict: resolveOpenAIWebSocketStrictToolSetting(model),
           }),
           metadata: turnState?.metadata,
         }) as Record<string, unknown>;
-        const nextPayload = await options?.onPayload?.(payload, model);
-        payload = mergeTransportMetadata(
-          (nextPayload ?? payload) as Record<string, unknown>,
+        const nextPayload = await options?.onPayload?.(fullPayload, model);
+        fullPayload = mergeTransportMetadata(
+          (nextPayload ?? fullPayload) as Record<string, unknown>,
           turnState?.metadata,
         );
-        const requestPayload = payload as Parameters<OpenAIWebSocketManager["send"]>[0];
+        const plannedPayload = planOpenAIWebSocketRequestPayload({
+          fullPayload: fullPayload as ResponseCreateEvent,
+          previousRequestPayload: session.lastRequestPayload,
+          previousResponseId: session.manager.previousResponseId,
+          previousResponseInputItems: session.lastResponseInputItems,
+        });
+        const plannedInputItems = Array.isArray(plannedPayload.payload.input)
+          ? plannedPayload.payload.input
+          : [];
+        if (plannedPayload.mode === "incremental") {
+          log.debug(
+            `[ws-stream] session=${sessionId}: incremental send (${plannedInputItems.length} items) previous_response_id=${plannedPayload.payload.previous_response_id}`,
+          );
+        } else {
+          log.debug(
+            `[ws-stream] session=${sessionId}: full context send (${plannedInputItems.length} items)`,
+          );
+        }
+        const requestPayload = plannedPayload.payload as Parameters<
+          OpenAIWebSocketManager["send"]
+        >[0];
 
         try {
           session.manager.send(requestPayload);
@@ -1167,6 +1184,13 @@ export function createOpenAIWebSocketStreamFn(
                 emittedTextByPart.clear();
                 cleanup();
                 session.lastContextLength = capturedContextLength;
+                session.lastRequestPayload = fullPayload as ResponseCreateEvent;
+                session.lastResponseInputItems = convertResponseToInputItems(event.response, {
+                  api: model.api,
+                  provider: model.provider,
+                  id: model.id,
+                  input: model.input,
+                });
                 const assistantMsg = buildAssistantMessageFromResponse(event.response, {
                   api: model.api,
                   provider: model.provider,
@@ -1324,6 +1348,7 @@ async function fallbackToHttp(
     }
     eventStream.push(event);
   }
+  eventStream.end();
 }
 
 export const __testing = {
@@ -1334,6 +1359,9 @@ export const __testing = {
           ...overrides,
         }
       : defaultOpenAIWsStreamDeps;
+  },
+  getDefaultHttpFallbackStreamFnForTest(model: ProviderRuntimeModel): StreamFn | undefined {
+    return defaultOpenAIWsStreamDeps.createHttpFallbackStreamFn(model);
   },
   setWsDegradeCooldownMsForTest(nextMs?: number) {
     wsDegradeCooldownMsOverride = nextMs;

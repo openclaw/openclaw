@@ -2,18 +2,22 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  bundledDistPluginFile,
+  bundledPluginFile,
+  bundledPluginRoot,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+} from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
   runNodeMain,
 } from "../../scripts/run-node.mjs";
-import {
-  bundledDistPluginFile,
-  bundledPluginFile,
-  bundledPluginRoot,
-} from "../../test/helpers/bundled-plugin-paths.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const ROOT_SRC = "src/index.ts";
@@ -23,8 +27,8 @@ const ROOT_TSDOWN = "tsdown.config.ts";
 const GENERATED_A2UI_BUNDLE = "src/canvas-host/a2ui/a2ui.bundle.js";
 const GENERATED_A2UI_BUNDLE_HASH = "src/canvas-host/a2ui/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
-const BUILD_STAMP = "dist/.buildstamp";
-const RUNTIME_POSTBUILD_STAMP = "dist/.runtime-postbuildstamp";
+const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
+const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
@@ -105,6 +109,10 @@ function expectedBuildSpawn() {
 
 function statusCommandSpawn() {
   return [process.execPath, "openclaw.mjs", "status"];
+}
+
+function gatewayCallStatusCommandSpawn() {
+  return [process.execPath, "openclaw.mjs", "gateway", "call", "status", "--json"];
 }
 
 function resolvePath(tmp: string, relativePath: string) {
@@ -217,6 +225,32 @@ async function runStatusCommand(params: {
   return await runNodeMain({
     cwd: params.tmp,
     args: ["status"],
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      ...params.env,
+    },
+    spawn: params.spawn,
+    ...(params.spawnSync ? { spawnSync: params.spawnSync } : {}),
+    ...(params.runRuntimePostBuild ? { runRuntimePostBuild: params.runRuntimePostBuild } : {}),
+    execPath: process.execPath,
+    platform: process.platform,
+  });
+}
+
+async function runGatewayCallStatusCommand(params: {
+  tmp: string;
+  spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
+  spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  env?: Record<string, string>;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
+}) {
+  return await runNodeMain({
+    cwd: params.tmp,
+    args: ["gateway", "call", "status", "--json"],
     env: {
       ...process.env,
       OPENCLAW_RUNNER_LOG: "0",
@@ -411,6 +445,146 @@ describe("run-node script", () => {
       expect(spawnCalls.at(-1)?.args).toEqual(["openclaw.mjs", "status"]);
       expect(spawnCalls.at(-1)?.env.OPENCLAW_RUN_NODE_OUTPUT_LOG).toBe(outputPath);
       expect(spawnCalls.at(-1)?.stdio).toEqual(["inherit", "pipe", "pipe"]);
+    });
+  });
+
+  it("routes sync I/O trace stderr blocks to the output log without flooding stderr", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp);
+      const outputPath = path.join(tmp, ".artifacts", "gateway-watch-profiles", "output.log");
+      const childStderr = [
+        "normal before\n",
+        "(node:12345) WARNING: Detected use of sync API\n",
+        "    at statSync (node:fs:1739:25)\n",
+        "    at loadConfig (/repo/src/config.ts:1:1)\n",
+        "\n",
+        "normal after\n",
+      ].join("");
+      const spawn = (_cmd: string, args: string[]) =>
+        createPipedExitedProcess({
+          stderr: args[0] === "openclaw.mjs" ? childStderr : "",
+        });
+      const stderrChunks: string[] = [];
+      const stderr = {
+        write: (chunk: string | Buffer) => {
+          stderrChunks.push(String(chunk));
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+      const stdout = {
+        write: () => true,
+      } as unknown as NodeJS.WriteStream;
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR: "1",
+          OPENCLAW_RUN_NODE_OUTPUT_LOG: outputPath,
+        },
+        spawn,
+        stderr,
+        stdout,
+        execPath: process.execPath,
+        platform: process.platform,
+      } as Parameters<typeof runNodeMain>[0] & { stdout: NodeJS.WriteStream });
+
+      expect(exitCode).toBe(0);
+      const terminalStderr = stderrChunks.join("");
+      expect(terminalStderr).toContain("normal before\n");
+      expect(terminalStderr).toContain("normal after\n");
+      expect(terminalStderr).not.toContain("Detected use of sync API");
+      expect(terminalStderr).not.toContain("statSync");
+      await expect(fs.readFile(outputPath, "utf-8")).resolves.toContain(childStderr);
+    });
+  });
+
+  it("adds Node CPU profiling flags to the launched OpenClaw child when requested", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const profileDir = path.join(tmp, ".artifacts", "profiles");
+      const spawnCalls: Array<{ args: string[]; env: Record<string, string | undefined> }> = [];
+      const spawn = (_cmd: string, args: string[], options?: unknown) => {
+        const opts = options as { env?: NodeJS.ProcessEnv } | undefined;
+        spawnCalls.push({ args, env: { ...opts?.env } });
+        return createExitedProcess(0);
+      };
+      const { spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_CPU_PROF_DIR: ".artifacts/profiles",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+        process: createFakeProcess(),
+      });
+
+      expect(exitCode).toBe(0);
+      const childArgs = spawnCalls.at(-1)?.args ?? [];
+      expect(childArgs[0]).toBe("--cpu-prof");
+      expect(childArgs[1]).toBe(`--cpu-prof-dir=${profileDir}`);
+      expect(childArgs[2]).toMatch(
+        /^--cpu-prof-name=openclaw-status-4242-\d{4}-\d{2}-\d{2}T.*\.cpuprofile$/,
+      );
+      expect(childArgs.slice(3)).toEqual(["openclaw.mjs", "status"]);
+      expect(spawnCalls.at(-1)?.env.OPENCLAW_RUN_NODE_CPU_PROF_DIR).toBe(profileDir);
+      expect(fsSync.existsSync(profileDir)).toBe(true);
+    });
+  });
+
+  it("adds Node sync I/O tracing flag to the launched OpenClaw child when requested", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const spawnCalls: string[][] = [];
+      const spawn = (_cmd: string, args: string[]) => {
+        spawnCalls.push(args);
+        return createExitedProcess(0);
+      };
+      const { spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["gateway", "--force"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_TRACE_SYNC_IO: "1",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls.at(-1)).toEqual(["--trace-sync-io", "openclaw.mjs", "gateway", "--force"]);
     });
   });
 
@@ -663,6 +837,134 @@ describe("run-node script", () => {
     });
   });
 
+  it("reruns runtime postbuild for dirty extension package metadata in watch mode", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.ts"]}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_PACKAGE,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${EXTENSION_PACKAGE}\n`,
+      });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        env: { OPENCLAW_WATCH_MODE: "1" },
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
+      expect(runRuntimePostBuild).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("runs QA parity report from source without rebuilding private QA dist", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          "extensions/qa-lab/src/cli.runtime.ts": "export {};\n",
+        },
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: [
+          "qa",
+          "parity-report",
+          "--candidate-summary",
+          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          "--baseline-summary",
+          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+        ],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        [
+          process.execPath,
+          "--import",
+          "tsx",
+          path.join(tmp, "scripts", "qa-parity-report.ts"),
+          "--candidate-summary",
+          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          "--baseline-summary",
+          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+        ],
+      ]);
+    });
+  });
+
+  it("runs QA coverage report from source without rebuilding private QA dist", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          "extensions/qa-lab/src/cli.runtime.ts": "export {};\n",
+        },
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const spawnCalls: string[][] = [];
+      const spawn = (cmd: string, args: string[]) => {
+        spawnCalls.push([cmd, ...args]);
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["qa", "coverage", "--json"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([
+        [
+          process.execPath,
+          "--import",
+          "tsx",
+          path.join(tmp, "scripts", "qa-coverage-report.ts"),
+          "--json",
+        ],
+      ]);
+    });
+  });
+
   it("skips runtime postbuild restaging when the runtime stamp is current", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -804,6 +1106,40 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(23);
+    });
+  });
+
+  it("returns failure and releases the build lock when the compiler spawn errors", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      const spawn = (cmd: string, args: string[] = []) => {
+        if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
+          const events = new EventEmitter();
+          queueMicrotask(() => events.emit("error", new Error("spawn failed")));
+          return {
+            on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
+              events.on(event, cb);
+              return undefined;
+            },
+          };
+        }
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
     });
   });
 
@@ -1020,6 +1356,41 @@ describe("run-node script", () => {
         shouldBuild: true,
         reason: "dirty_watched_tree",
       });
+    });
+  });
+
+  it("does not rebuild for gateway client calls against an existing dirty dist", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+      const exitCode = await runGatewayCallStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([gatewayCallStatusCommandSpawn()]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
     });
   });
 
@@ -1314,6 +1685,38 @@ describe("run-node script", () => {
         expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
         expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
         expect(fakeProcess.listenerCount("exit")).toBe(0);
+      });
+    });
+
+    it("removes a lock left by a dead wrapper process without waiting for age-out", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+        await fs.mkdir(lockDir, { recursive: true });
+        await fs.writeFile(
+          path.join(lockDir, "owner.json"),
+          JSON.stringify({ pid: 987654, args: ["gateway"] }),
+          "utf-8",
+        );
+
+        const fakeProcess = Object.assign(createFakeProcess(), {
+          kill: vi.fn((pid: number, signal?: NodeJS.Signals | number) => {
+            if (pid === 987654 && signal === 0) {
+              const err = new Error("missing process") as Error & { code: string };
+              err.code = "ESRCH";
+              throw err;
+            }
+            return true;
+          }),
+        }) as unknown as NodeJS.Process;
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fakeProcess.kill).toHaveBeenCalledWith(987654, 0);
+        expect(JSON.parse(await fs.readFile(path.join(lockDir, "owner.json"), "utf-8")).pid).toBe(
+          4242,
+        );
+
+        release();
+        expect(fsSync.existsSync(lockDir)).toBe(false);
       });
     });
   });

@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/config.js";
+import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
@@ -28,6 +28,9 @@ export {
   type ResolvedGatewayAuthMode,
   type ResolvedGatewayAuthModeSource,
 } from "./auth-resolve.js";
+
+const LEGACY_OPENCLAW_ENV_NOTE =
+  " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
 
 export type GatewayAuthResult = {
   ok: boolean;
@@ -223,7 +226,7 @@ export function assertGatewayAuthConfigured(
       return;
     }
     throw new Error(
-      "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+      `gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN).${LEGACY_OPENCLAW_ENV_NOTE}`,
     );
   }
   if (auth.mode === "password" && !auth.password) {
@@ -235,7 +238,9 @@ export function assertGatewayAuthConfigured(
         "gateway auth mode is password, but gateway.auth.password contains a provider reference object instead of a resolved string — bootstrap secrets (gateway.auth.password) must be plaintext strings or set via the OPENCLAW_GATEWAY_PASSWORD environment variable because the secrets provider system has not initialised yet at gateway startup", // pragma: allowlist secret
       );
     }
-    throw new Error("gateway auth mode is password, but no password was configured");
+    throw new Error(
+      `gateway auth mode is password, but no password was configured.${LEGACY_OPENCLAW_ENV_NOTE}`,
+    );
   }
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -275,7 +280,7 @@ function authorizeTrustedProxy(params: {
   if (!remoteAddr || !isTrustedProxyAddress(remoteAddr, trustedProxies)) {
     return { reason: "trusted_proxy_untrusted_source" };
   }
-  if (isLoopbackAddress(remoteAddr)) {
+  if (isLoopbackAddress(remoteAddr) && trustedProxyConfig.allowLoopback !== true) {
     return { reason: "trusted_proxy_loopback_source" };
   }
 
@@ -356,6 +361,28 @@ function authorizeTokenAuth(params: {
   }
   params.limiter?.reset(params.ip, params.rateLimitScope);
   return { ok: true, method: "token" };
+}
+
+function authorizePasswordAuth(params: {
+  authPassword?: string;
+  connectPassword?: string;
+  limiter?: AuthRateLimiter;
+  ip?: string;
+  rateLimitScope: string;
+}): GatewayAuthResult {
+  if (!params.authPassword) {
+    return { ok: false, reason: "password_missing_config" };
+  }
+  if (!params.connectPassword) {
+    // Same as token_missing — don't penalize absent credentials.
+    return { ok: false, reason: "password_missing" };
+  }
+  if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
+    params.limiter?.recordFailure(params.ip, params.rateLimitScope);
+    return { ok: false, reason: "password_mismatch" };
+  }
+  params.limiter?.reset(params.ip, params.rateLimitScope);
+  return { ok: true, method: "password" };
 }
 
 export async function authorizeGatewayConnect(
@@ -439,6 +466,26 @@ async function authorizeGatewayConnectCore(
       }
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
+    if (localDirect && auth.password && connectAuth?.password) {
+      if (limiter) {
+        const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
+        if (!rlCheck.allowed) {
+          return {
+            ok: false,
+            reason: "rate_limited",
+            rateLimited: true,
+            retryAfterMs: rlCheck.retryAfterMs,
+          };
+        }
+      }
+      return authorizePasswordAuth({
+        authPassword: auth.password,
+        connectPassword: connectAuth.password,
+        limiter,
+        ip,
+        rateLimitScope,
+      });
+    }
     return { ok: false, reason: result.reason };
   }
 
@@ -489,20 +536,13 @@ async function authorizeGatewayConnectCore(
   }
 
   if (auth.mode === "password") {
-    const password = connectAuth?.password;
-    if (!auth.password) {
-      return { ok: false, reason: "password_missing_config" };
-    }
-    if (!password) {
-      // Same as token_missing — don't penalize absent credentials.
-      return { ok: false, reason: "password_missing" };
-    }
-    if (!safeEqualSecret(password, auth.password)) {
-      limiter?.recordFailure(ip, rateLimitScope);
-      return { ok: false, reason: "password_mismatch" };
-    }
-    limiter?.reset(ip, rateLimitScope);
-    return { ok: true, method: "password" };
+    return authorizePasswordAuth({
+      authPassword: auth.password,
+      connectPassword: connectAuth?.password,
+      limiter,
+      ip,
+      rateLimitScope,
+    });
   }
 
   limiter?.recordFailure(ip, rateLimitScope);

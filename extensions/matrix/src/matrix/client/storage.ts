@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -14,7 +15,7 @@ import {
 import type { MatrixAuth } from "./types.js";
 import type { MatrixStoragePaths } from "./types.js";
 
-export const DEFAULT_ACCOUNT_KEY = "default";
+const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
 const THREAD_BINDINGS_FILENAME = "thread-bindings.json";
 const LEGACY_CRYPTO_MIGRATION_FILENAME = "legacy-crypto-migration.json";
@@ -48,7 +49,7 @@ function resolveLegacyStoragePaths(env: NodeJS.ProcessEnv = process.env): {
 }
 
 function assertLegacyMigrationAccountSelection(params: { accountKey: string }): void {
-  const cfg = getMatrixRuntime().config.loadConfig();
+  const cfg = getMatrixRuntime().config.current() as OpenClawConfig;
   if (!cfg.channels?.matrix || typeof cfg.channels.matrix !== "object") {
     return;
   }

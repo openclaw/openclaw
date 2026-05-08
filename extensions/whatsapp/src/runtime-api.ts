@@ -14,8 +14,8 @@ export {
   ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
 export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-types";
 
 export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 export { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
@@ -27,7 +27,6 @@ export {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppMentionStripRegexes,
 } from "./group-intro.js";
-export { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
 export { createWhatsAppOutboundBase } from "./outbound-base.js";
 export {
   isWhatsAppGroupJid,

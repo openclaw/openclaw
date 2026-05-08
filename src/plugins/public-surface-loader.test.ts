@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
-import pathModule from "node:path";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
 function createTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-public-surface-loader-"));
@@ -21,20 +21,34 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
+  vi.doUnmock("./native-module-require.js");
+  vi.doUnmock("node:module");
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
   }
+  if (originalTrustBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
+  }
 });
 
 describe("bundled plugin public surface loader", () => {
-  it("keeps Windows dist public artifact loads off Jiti native import", async () => {
+  it("uses native require for Windows dist public artifact loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "windows-dist-ok" })));
     vi.doMock("jiti", () => ({
       createJiti,
     }));
+    vi.doMock("./native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: () => ({
+        ok: true,
+        moduleExport: { marker: "windows-dist-ok" },
+      }),
+    }));
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.resetModules();
 
     try {
       const publicSurfaceLoader = await importFreshModule<
@@ -54,12 +68,7 @@ describe("bundled plugin public surface loader", () => {
           artifactBasename: "provider-policy-api.js",
         }).marker,
       ).toBe("windows-dist-ok");
-      expect(createJiti).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          tryNative: false,
-        }),
-      );
+      expect(createJiti).not.toHaveBeenCalled();
     } finally {
       platformSpy.mockRestore();
     }
@@ -84,6 +93,7 @@ describe("bundled plugin public surface loader", () => {
         createRequire: vi.fn(() => requireLoader),
       });
     });
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -102,22 +112,31 @@ describe("bundled plugin public surface loader", () => {
         artifactBasename: "secret-contract-api.js",
       }).marker,
     ).toBe("source-require-ok");
-    expect(requireLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
+    expect(requireLoader).toHaveBeenCalledWith(fs.realpathSync(modulePath));
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("reuses one bundled dist jiti loader across public artifacts with the same native mode", async () => {
+  it("keeps bundled dist public artifacts on the native path", async () => {
     const createJiti = vi.fn(() => vi.fn((modulePath: string) => ({ modulePath })));
     vi.doMock("jiti", () => ({
       createJiti,
     }));
+    vi.doMock("./native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: (modulePath: string) => ({
+        ok: true,
+        moduleExport: { marker: path.basename(path.dirname(modulePath)) },
+      }),
+    }));
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
-    >(import.meta.url, "./public-surface-loader.js?scope=shared-bundled-jiti");
+    >(import.meta.url, "./public-surface-loader.js?scope=bundled-native-public-artifacts");
     const tempRoot = createTempDir();
     const bundledPluginsDir = path.join(tempRoot, "dist");
+    fs.mkdirSync(bundledPluginsDir, { recursive: true });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
 
     const firstPath = path.join(bundledPluginsDir, "demo-a", "api.js");
     const secondPath = path.join(bundledPluginsDir, "demo-b", "api.js");
@@ -126,15 +145,95 @@ describe("bundled plugin public surface loader", () => {
     fs.writeFileSync(firstPath, 'export const marker = "demo-a";\n', "utf8");
     fs.writeFileSync(secondPath, 'export const marker = "demo-b";\n', "utf8");
 
-    publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ modulePath: string }>({
-      dirName: "demo-a",
-      artifactBasename: "api.js",
-    });
-    publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ modulePath: string }>({
-      dirName: "demo-b",
-      artifactBasename: "api.js",
+    expect(
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo-a",
+        artifactBasename: "api.js",
+      }).marker,
+    ).toBe("demo-a");
+    expect(
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo-b",
+        artifactBasename: "api.js",
+      }).marker,
+    ).toBe("demo-b");
+
+    expect(createJiti).not.toHaveBeenCalled();
+  });
+
+  it("does not cache missing public artifact locations", async () => {
+    vi.doMock("./native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: (modulePath: string) => ({
+        ok: true,
+        moduleExport: { marker: path.basename(path.dirname(modulePath)) },
+      }),
+    }));
+    vi.resetModules();
+
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    fs.mkdirSync(bundledPluginsDir, { recursive: true });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=missing-location-retry");
+
+    expect(
+      publicSurfaceLoader.resolveBundledPluginPublicArtifactPath({
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }),
+    ).toBeNull();
+
+    const modulePath = path.join(bundledPluginsDir, "demo", "api.js");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, 'export const marker = "demo";\n', "utf8");
+
+    expect(
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }).marker,
+    ).toBe("demo");
+  });
+
+  it("rejects public artifacts that change after boundary validation", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => ({ marker: "should-not-load" })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+    vi.resetModules();
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=post-validation-identity");
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+
+    const modulePath = path.join(bundledPluginsDir, "demo", "api.js");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, 'export const marker = "demo";\n', "utf8");
+
+    const realStatSync = fs.statSync.bind(fs);
+    const moduleRealPath = fs.realpathSync(modulePath);
+    vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
+      const stat = realStatSync(target, options);
+      if (fs.realpathSync(target) !== moduleRealPath) {
+        return stat;
+      }
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+        ino: Number(stat.ino) + 1,
+      });
     });
 
-    expect(createJiti).toHaveBeenCalledTimes(1);
+    expect(() =>
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }),
+    ).toThrow(/changed after validation/);
+    expect(createJiti).not.toHaveBeenCalled();
   });
 });

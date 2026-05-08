@@ -5,6 +5,18 @@ import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-po
 type SlackAppConstructor = typeof import("@slack/bolt").App;
 type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
 type SlackSocketModeReceiverConstructor = typeof import("@slack/bolt").SocketModeReceiver;
+type SlackSocketModeReceiverOptions = ConstructorParameters<SlackSocketModeReceiverConstructor>[0];
+type SlackSocketModeConfig = Pick<
+  SlackSocketModeReceiverOptions,
+  "clientPingTimeout" | "serverPingTimeout" | "pingPongLoggingEnabled"
+>;
+type SlackSdkLogger = NonNullable<SlackSocketModeReceiverOptions["logger"]>;
+type SlackSdkLogLevel = ReturnType<SlackSdkLogger["getLevel"]>;
+
+const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
+const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from the server";
+const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
+  /^The logLevel given to .+ was ignored as you also gave logger$/;
 
 export type SlackBoltResolvedExports = {
   App: SlackAppConstructor;
@@ -16,6 +28,14 @@ type SlackSocketShutdownClient = {
   shuttingDown?: boolean;
 };
 type Constructor = abstract new (...args: never[]) => unknown;
+type SlackSelfFilterArgs = {
+  context?: {
+    botId?: string;
+    botUserId?: string;
+  };
+  event?: unknown;
+  message?: unknown;
+};
 
 function isConstructorFunction<
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Constructor guard preserves the requested concrete Slack constructor type.
@@ -118,6 +138,75 @@ export function publishSlackDisconnectedStatus(
   });
 }
 
+function isSlackSocketPongTimeoutWarning(args: readonly unknown[]) {
+  return (
+    typeof args[0] === "string" && args[0].startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX)
+  );
+}
+
+function isSlackSocketSelfInflictedLoggerWarning(args: readonly unknown[]) {
+  return typeof args[0] === "string" && SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE.test(args[0]);
+}
+
+export function createSlackSocketModeLogger(
+  sink: Pick<typeof console, "debug" | "info" | "warn" | "error"> = console,
+): SlackSdkLogger {
+  let level = "info" as SlackSdkLogLevel;
+  let name = "socket-mode";
+  const prefix = () => `socket-mode:${name}`;
+  return {
+    debug: () => {},
+    info: () => {},
+    warn: (...args: unknown[]) => {
+      if (isSlackSocketPongTimeoutWarning(args) || isSlackSocketSelfInflictedLoggerWarning(args)) {
+        return;
+      }
+      sink.warn(prefix(), ...args);
+    },
+    error: (...args: unknown[]) => sink.error(prefix(), ...args),
+    setLevel: (nextLevel) => {
+      level = nextLevel;
+    },
+    getLevel: () => level,
+    setName: (nextName) => {
+      name = nextName;
+    },
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
+  const botId = args.context?.botId;
+  const botUserId = args.context?.botUserId;
+  const message = asRecord(args.message);
+  if (message?.subtype === "bot_message" && botId && message.bot_id === botId) {
+    return true;
+  }
+
+  const event = asRecord(args.event);
+  if (
+    event?.type === "message" &&
+    event.subtype === "message_changed" &&
+    event.user === botUserId
+  ) {
+    return false;
+  }
+
+  const eventsWhichShouldBeKept = new Set(["member_joined_channel", "member_left_channel"]);
+  return Boolean(
+    botUserId &&
+    event &&
+    event.user === botUserId &&
+    typeof event.type === "string" &&
+    !eventsWhichShouldBeKept.has(event.type),
+  );
+}
+
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
   slackMode: "socket" | "http";
@@ -126,16 +215,28 @@ export function createSlackBoltApp(params: {
   signingSecret?: string;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
+  socketMode?: SlackSocketModeConfig;
 }) {
+  const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
+    appToken: params.appToken ?? "",
+    autoReconnectEnabled: false,
+    clientPingTimeout:
+      params.socketMode?.clientPingTimeout ?? OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS,
+    logger: createSlackSocketModeLogger(),
+    installerOptions: {
+      clientOptions: params.clientOptions,
+    },
+  };
+  if (params.socketMode?.serverPingTimeout !== undefined) {
+    socketModeReceiverOptions.serverPingTimeout = params.socketMode.serverPingTimeout;
+  }
+  if (params.socketMode?.pingPongLoggingEnabled !== undefined) {
+    socketModeReceiverOptions.pingPongLoggingEnabled = params.socketMode.pingPongLoggingEnabled;
+  }
+
   const receiver =
     params.slackMode === "socket"
-      ? new params.interop.SocketModeReceiver({
-          appToken: params.appToken ?? "",
-          autoReconnectEnabled: false,
-          installerOptions: {
-            clientOptions: params.clientOptions,
-          },
-        })
+      ? new params.interop.SocketModeReceiver(socketModeReceiverOptions)
       : new params.interop.HTTPReceiver({
           signingSecret: params.signingSecret ?? "",
           endpoints: params.slackWebhookPath,
@@ -144,6 +245,17 @@ export function createSlackBoltApp(params: {
     token: params.botToken,
     receiver,
     clientOptions: params.clientOptions,
+    ignoreSelf: false,
+    // Bolt eagerly starts an auth.test promise in the constructor when token
+    // verification is enabled. Invalid tokens can reject before any listener
+    // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
+    tokenVerificationEnabled: false,
+  });
+  app.use(async (args) => {
+    if (shouldSkipOpenClawSlackSelfEvent(args)) {
+      return;
+    }
+    await args.next();
   });
   return { app, receiver };
 }

@@ -3,6 +3,7 @@ import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   GeneratedImageAsset,
+  ImageGenerationBackground,
   ImageGenerationIgnoredOverride,
   ImageGenerationNormalization,
   ImageGenerationOutputFormat,
@@ -25,7 +26,9 @@ export type GenerateImageParams = {
   resolution?: ImageGenerationResolution;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
+  background?: ImageGenerationBackground;
   inputImages?: ImageGenerationSourceImage[];
+  autoProviderFallback?: boolean;
   /** Optional per-request provider timeout in milliseconds. */
   timeoutMs?: number;
   providerOptions?: ImageGenerationProviderOptions;

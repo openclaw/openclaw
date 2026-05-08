@@ -337,4 +337,74 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
   });
+
+  it("aborts the in-flight runId when only pendingChatRunId is set", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const addSystem = vi.fn();
+    const setActivityStatus = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: null,
+      pendingChatRunId: "run-pending",
+    });
+
+    const { abortActive } = createSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      chatLog: {
+        addSystem,
+        clearAll: vi.fn(),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn((raw?: string) => raw ?? "agent:main:main"),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus,
+    });
+
+    await abortActive();
+
+    expect(abortChat).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      runId: "run-pending",
+    });
+    expect(addSystem).not.toHaveBeenCalledWith("no active run");
+    expect(state.pendingChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("aborted");
+  });
+
+  it("remembers the selected session after history loads", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [{ key: "agent:main:main", sessionId: "session-main" }],
+    });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [],
+    });
+    const rememberSessionKey = vi.fn();
+    const state = createBaseState();
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+      rememberSessionKey,
+    });
+
+    await runLoadHistory();
+
+    expect(state.currentSessionId).toBe("session-main");
+    expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
+  });
 });

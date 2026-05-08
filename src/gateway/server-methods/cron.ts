@@ -1,4 +1,3 @@
-import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -12,6 +11,10 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  resolveTargetPrefixedChannel,
+  validateTargetProviderPrefix,
+} from "../../infra/outbound/channel-target-prefix.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -33,7 +36,6 @@ function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
   return listConfiguredAnnounceChannelIdsForConfig({
     config: cfg,
     env: process.env,
-    cache: true,
   });
 }
 
@@ -68,20 +70,63 @@ function assertConfiguredAnnounceChannel(params: {
   throw new Error(`${params.field} must be one of: ${configuredChannels.join(", ")}`);
 }
 
+function resolveAnnounceValidationChannel(params: {
+  channel?: string;
+  to?: string;
+}): string | undefined {
+  if (params.channel && params.channel !== "last") {
+    return params.channel;
+  }
+  return resolveTargetPrefixedChannel(params.to) ?? params.channel;
+}
+
+function assertCompatibleAnnounceTarget(params: {
+  channel?: string;
+  to?: string;
+  field: "delivery.channel" | "delivery.failureDestination.channel";
+}) {
+  if (!params.channel || params.channel === "last") {
+    return;
+  }
+  const error = validateTargetProviderPrefix({
+    channel: params.channel,
+    to: params.to,
+  });
+  if (error) {
+    throw new Error(`${params.field}: ${error.message}`);
+  }
+}
+
 function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery?: CronDelivery }) {
-  if (params.delivery?.mode === "announce") {
+  if (params.delivery && (params.delivery.mode ?? "announce") === "announce") {
+    assertCompatibleAnnounceTarget({
+      channel: params.delivery.channel,
+      to: params.delivery.to,
+      field: "delivery.channel",
+    });
     assertConfiguredAnnounceChannel({
       cfg: params.cfg,
-      channel: params.delivery.channel,
+      channel: resolveAnnounceValidationChannel({
+        channel: params.delivery.channel,
+        to: params.delivery.to,
+      }),
       field: "delivery.channel",
     });
   }
 
   const failureDestination = params.delivery?.failureDestination;
   if (failureDestination && (failureDestination.mode ?? "announce") === "announce") {
+    assertCompatibleAnnounceTarget({
+      channel: failureDestination.channel,
+      to: failureDestination.to,
+      field: "delivery.failureDestination.channel",
+    });
     assertConfiguredAnnounceChannel({
       cfg: params.cfg,
-      channel: failureDestination.channel,
+      channel: resolveAnnounceValidationChannel({
+        channel: failureDestination.channel,
+        to: failureDestination.to,
+      }),
       field: "delivery.failureDestination.channel",
     });
   }
@@ -165,7 +210,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir: p.sortDir,
     });
     const deliveryPreviews = await resolveCronDeliveryPreviews({
-      cfg: loadConfig(),
+      cfg: context.getRuntimeConfig(),
       defaultAgentId: context.cron.getDefaultAgentId(),
       jobs: page.jobs,
     });
@@ -220,7 +265,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const jobCreate = normalized as unknown as CronJobCreate;
-    const cfg = loadConfig();
+    const cfg = context.getRuntimeConfig();
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -243,7 +288,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(jobCreate);
+    let job: Awaited<ReturnType<typeof context.cron.add>>;
+    try {
+      job = await context.cron.add(jobCreate);
+    } catch (err) {
+      if (!(err instanceof TypeError) && !(err instanceof RangeError)) {
+        throw err;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.add params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
@@ -292,7 +353,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const patch = p.patch as unknown as CronJobPatch;
-    const cfg = loadConfig();
+    const cfg = context.getRuntimeConfig();
     if (patch.schedule) {
       const timestampValidation = validateScheduleTimestamp(patch.schedule);
       if (!timestampValidation.ok) {
@@ -322,7 +383,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.update(jobId, patch);
+    let job: Awaited<ReturnType<typeof context.cron.update>>;
+    try {
+      job = await context.cron.update(jobId, patch);
+    } catch (err) {
+      if (!(err instanceof TypeError) && !(err instanceof RangeError)) {
+        throw err;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.update params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     context.logGateway.info("cron: job updated", { jobId });
     respond(true, job, undefined);
   },

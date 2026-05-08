@@ -12,6 +12,7 @@ import {
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -97,6 +98,9 @@ function getColorForConsole(): ChalkInstance {
     typeof process.env.FORCE_COLOR === "string" &&
     process.env.FORCE_COLOR.trim().length > 0 &&
     process.env.FORCE_COLOR.trim() !== "0";
+  if (hasForceColor) {
+    return new Chalk({ level: 1 });
+  }
   if (process.env.NO_COLOR && !hasForceColor) {
     return new Chalk({ level: 0 });
   }
@@ -215,13 +219,15 @@ function formatConsoleLine(opts: {
   const displaySubsystem =
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
-    return JSON.stringify({
-      time: formatConsoleTimestamp("json"),
-      level: opts.level,
-      subsystem: displaySubsystem,
-      message: opts.message,
-      ...opts.meta,
-    });
+    return redactSensitiveText(
+      JSON.stringify({
+        time: formatConsoleTimestamp("json"),
+        level: opts.level,
+        subsystem: displaySubsystem,
+        message: opts.message,
+        ...opts.meta,
+      }),
+    );
   }
   const color = getColorForConsole();
   const prefix = `[${displaySubsystem}]`;
@@ -234,7 +240,8 @@ function formatConsoleLine(opts: {
         : opts.level === "debug" || opts.level === "trace"
           ? color.gray
           : color.cyan;
-  const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
+  const redactedMessage = redactSensitiveText(opts.message);
+  const displayMessage = stripRedundantSubsystemPrefixForConsole(redactedMessage, displaySubsystem);
   const time = (() => {
     if (opts.style === "pretty") {
       return color.gray(formatConsoleTimestamp("pretty"));
@@ -249,19 +256,24 @@ function formatConsoleLine(opts: {
   return `${head} ${levelColor(displayMessage)}`;
 }
 
-function writeConsoleLine(level: LogLevel, line: string) {
+function writeConsoleLine(level: LogLevel, line: string, opts: { redacted?: boolean } = {}) {
   clearActiveProgressLine();
   const sanitized =
     process.platform === "win32" && process.env.GITHUB_ACTIONS === "true"
       ? line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?").replace(/[\uD800-\uDFFF]/g, "?")
       : line;
+  // Subsystem console output bypasses the patched console.* capture handler in
+  // ./console.ts to avoid recursion. Normal formatted messages are redacted
+  // before colorization; keep this exit guard for raw writes and structured
+  // lines that reach the sink already serialized (#73284).
+  const redacted = opts.redacted ? sanitized : redactSensitiveText(sanitized);
   const sink = loggingState.rawConsole ?? console;
   if (loggingState.forceConsoleToStderr || level === "error" || level === "fatal") {
-    (sink.error ?? console.error)(sanitized);
+    (sink.error ?? console.error)(redacted);
   } else if (level === "warn") {
-    (sink.warn ?? console.warn)(sanitized);
+    (sink.warn ?? console.warn)(redacted);
   } else {
-    (sink.log ?? console.log)(sanitized);
+    (sink.log ?? console.log)(redacted);
   }
 }
 
@@ -324,7 +336,6 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
-  let fileLogger: TsLogger<LogObj> | null = null;
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -347,10 +358,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      if (!fileLogger) {
-        fileLogger = getChildLogger({ subsystem: resolvedSubsystem });
-      }
-      logToFile(fileLogger, level, message, fileMeta);
+      logToFile(getChildLogger({ subsystem: resolvedSubsystem }), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -375,6 +383,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         style: consoleSettings.style,
         meta: fileMeta,
       }),
+      { redacted: true },
     );
   };
 
@@ -413,10 +422,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem: resolvedSubsystem });
-        }
-        logToFile(fileLogger, "info", message, { raw: true });
+        logToFile(getChildLogger({ subsystem: resolvedSubsystem }), "info", message, { raw: true });
       }
       if (
         shouldLogToConsole("info", { level: getConsoleSettings().level }) &&

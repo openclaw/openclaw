@@ -30,6 +30,11 @@ export type ResolvedSlackAccount = {
   config: SlackAccountConfig;
 } & SlackAccountSurfaceFields;
 
+export type SlackConfigAccessorAccount = {
+  allowFrom: string[] | undefined;
+  defaultTo: string | undefined;
+};
+
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack");
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
@@ -64,6 +69,53 @@ export function mergeSlackAccountConfig(
     accounts: cfg.channels?.slack?.accounts as Record<string, Partial<SlackAccountConfig>>,
     accountId,
   });
+}
+
+export function resolveSlackAccountAllowFrom(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string[] | undefined {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
+  const accountConfig = resolveSlackAccountConfig(params.cfg, accountId);
+  const rootConfig = params.cfg.channels?.slack as SlackAccountConfig | undefined;
+  const allowFrom = resolveChannelDmAllowFrom({
+    account: accountConfig as Record<string, unknown> | undefined,
+    parent: rootConfig as Record<string, unknown> | undefined,
+  });
+  return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
+}
+
+export function resolveSlackConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): SlackConfigAccessorAccount {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
+  const config = mergeSlackAccountConfig(params.cfg, accountId);
+  return {
+    allowFrom: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId }),
+    defaultTo: config.defaultTo,
+  };
+}
+
+export function resolveSlackAccountDmPolicy(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): ChannelDmPolicy | undefined {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
+  const accountConfig = resolveSlackAccountConfig(params.cfg, accountId);
+  const rootConfig = params.cfg.channels?.slack as SlackAccountConfig | undefined;
+  const policy = resolveChannelDmPolicy({
+    account: accountConfig as Record<string, unknown> | undefined,
+    parent: rootConfig as Record<string, unknown> | undefined,
+    defaultPolicy: "pairing",
+  });
+  return normalizeChannelDmPolicy(policy);
 }
 
 export function resolveSlackAccount(params: {

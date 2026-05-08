@@ -2,7 +2,10 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { basenameFromMediaSource, safeFileURLToPath } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  basenameFromMediaSource,
+  safeFileURLToPath,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
@@ -11,6 +14,7 @@ import { resolveBlueBubblesMessageId } from "./monitor-reply-cache.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles } from "./send.js";
+import { buildBlueBubblesChatContextFromTarget } from "./targets.js";
 
 const HTTP_URL_RE = /^https?:\/\//i;
 const MB = 1024 * 1024;
@@ -265,9 +269,14 @@ export async function sendBlueBubblesMedia(params: {
     }
   }
 
-  // Resolve short ID (e.g., "5") to full UUID
+  // Resolve short ID (e.g., "5") to full UUID, scoped to `to` so a short ID
+  // tied to a message in a different chat cannot silently redirect the media
+  // reply into the wrong conversation (cross-chat guard).
   const replyToMessageGuid = replyToId?.trim()
-    ? resolveBlueBubblesMessageId(replyToId.trim(), { requireKnownShortId: true })
+    ? resolveBlueBubblesMessageId(replyToId.trim(), {
+        requireKnownShortId: true,
+        chatContext: buildBlueBubblesChatContextFromTarget(to),
+      })
     : undefined;
 
   const attachmentResult = await sendBlueBubblesAttachment({

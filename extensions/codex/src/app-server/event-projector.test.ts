@@ -3,16 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetAgentEventsForTest } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
-} from "../../../../src/plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerEventProjector,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
+import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -78,8 +80,14 @@ async function createProjectorWithAssistantHooks() {
   return { onAssistantMessageStart, onPartialReply, projector };
 }
 
+beforeEach(() => {
+  resetAgentEventsForTest();
+});
+
 afterEach(async () => {
+  resetAgentEventsForTest();
   resetGlobalHookRunner();
+  resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
   for (const tempDir of tempDirs) {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -123,6 +131,34 @@ function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNotificati
   return forCurrentTurn("item/agentMessage/delta", { itemId, delta });
 }
 
+function appServerError(params: { message: string; willRetry: boolean }): ProjectorNotification {
+  return forCurrentTurn("error", {
+    error: {
+      message: params.message,
+      codexErrorInfo: null,
+      additionalDetails: null,
+    },
+    willRetry: params.willRetry,
+  });
+}
+
+function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
+  return {
+    method: "account/rateLimits/updated",
+    params: {
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+    },
+  } as ProjectorNotification;
+}
+
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
   return {
     method: "turn/completed",
@@ -150,7 +186,7 @@ describe("CodexAppServerEventProjector", () => {
             outputTokens: 100_000,
           },
           last: {
-            totalTokens: 14,
+            totalTokens: 12,
             inputTokens: 5,
             cachedInputTokens: 2,
             outputTokens: 7,
@@ -169,12 +205,12 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
-    expect(result.attemptUsage).toMatchObject({ input: 5, output: 7, cacheRead: 2, total: 14 });
+    expect(result.attemptUsage).toMatchObject({ input: 3, output: 7, cacheRead: 2, total: 12 });
     expect(result.lastAssistant?.usage).toMatchObject({
-      input: 5,
+      input: 3,
       output: 7,
       cacheRead: 2,
-      totalTokens: 14,
+      totalTokens: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
@@ -229,6 +265,129 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
   });
 
+  it("does not fail a completed reply after a retryable app-server error notification", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("still working"));
+    await projector.handleNotification(
+      appServerError({ message: "stream disconnected", willRetry: true }),
+    );
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "final answer" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["final answer"]);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.lastAssistant?.stopReason).toBe("stop");
+    expect(result.lastAssistant?.errorMessage).toBeUndefined();
+  });
+
+  it("uses nested app-server error messages for terminal errors", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      appServerError({ message: "stream failed permanently", willRetry: false }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toBe("stream failed permanently");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastAssistant).toBeUndefined();
+  });
+
+  it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
+    const projector = await createProjector();
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+
+    await projector.handleNotification(rateLimitsUpdated(resetsAt));
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+          additionalDetails: null,
+        },
+        willRetry: false,
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptError).toContain("Run /codex account");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
+  it("uses Codex rate-limit resets for failed turns", async () => {
+    const projector = await createProjector();
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+
+    await projector.handleNotification(rateLimitsUpdated(resetsAt));
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: {
+            message: "You've reached your usage limit.",
+            codexErrorInfo: "usageLimitExceeded",
+            additionalDetails: null,
+          },
+          items: [],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
+  it("uses a recent Codex rate-limit snapshot when failed turns omit reset details", async () => {
+    const projector = await createProjector();
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    rememberCodexRateLimits({
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+      rateLimitsByLimitId: null,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: {
+            message: "You've reached your usage limit.",
+            codexErrorInfo: "usageLimitExceeded",
+            additionalDetails: null,
+          },
+          items: [],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
   it("normalizes snake_case current token usage fields", async () => {
     const projector = await createProjector();
 
@@ -238,7 +397,7 @@ describe("CodexAppServerEventProjector", () => {
         tokenUsage: {
           total: { total_tokens: 1_000_000 },
           last_token_usage: {
-            total_tokens: 20,
+            total_tokens: 17,
             input_tokens: 8,
             cached_input_tokens: 3,
             output_tokens: 9,
@@ -249,12 +408,12 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.attemptUsage).toMatchObject({ input: 8, output: 9, cacheRead: 3, total: 20 });
+    expect(result.attemptUsage).toMatchObject({ input: 5, output: 9, cacheRead: 3, total: 17 });
     expect(result.lastAssistant?.usage).toMatchObject({
-      input: 8,
+      input: 5,
       output: 9,
       cacheRead: 3,
-      totalTokens: 20,
+      totalTokens: 17,
     });
   });
 
@@ -529,6 +688,38 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
+      text: "🛠️ Bash: `run tests (in /workspace)`",
+    });
+  });
+
+  it("can emit raw verbose tool summaries through onToolResult", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      toolProgressDetail: "raw",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith({
       text: "🛠️ Bash: `` run tests (in /workspace), `pnpm test extensions/codex` ``",
     });
   });
@@ -538,6 +729,7 @@ describe("CodexAppServerEventProjector", () => {
     const projector = await createProjector({
       ...(await createParams()),
       verboseLevel: "on",
+      toolProgressDetail: "raw",
       onToolResult,
     });
 
@@ -729,6 +921,7 @@ describe("CodexAppServerEventProjector", () => {
 
   it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
     const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks();
+    const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -740,6 +933,7 @@ describe("CodexAppServerEventProjector", () => {
         item: { type: "contextCompaction", id: "compact-1" },
       }),
     );
+    expect(openSpy).not.toHaveBeenCalled();
 
     expect(beforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({

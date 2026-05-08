@@ -58,7 +58,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     Other useful CLI checks: `openclaw status --all`, `openclaw logs --follow`,
     `openclaw gateway status`, `openclaw health --verbose`.
 
-    Quick debug loop: [First 60 seconds if something is broken](#first-60-seconds-if-something-is-broken).
+    Quick debug loop: [First 60 seconds if something is broken](/help/faq#first-60-seconds-if-something-is-broken).
     Install docs: [Install](/install), [Installer flags](/install/installer), [Updating](/install/updating).
 
   </Accordion>
@@ -121,7 +121,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     - **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy Control UI/WebSocket auth (no pasted shared secret, assumes trusted gateway host); HTTP APIs still require shared-secret auth unless you deliberately use private-ingress `none` or trusted-proxy HTTP auth.
       Bad concurrent Serve auth attempts from the same client are serialized before the failed-auth limiter records them, so the second bad retry can already show `retry later`.
     - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"` (or configure password auth), open `http://<tailscale-ip>:18789/`, then paste the matching shared secret in dashboard settings.
-    - **Identity-aware reverse proxy**: keep the Gateway behind a non-loopback trusted proxy, configure `gateway.auth.mode: "trusted-proxy"`, then open the proxy URL.
+    - **Identity-aware reverse proxy**: keep the Gateway behind a trusted proxy, configure `gateway.auth.mode: "trusted-proxy"`, then open the proxy URL. Same-host loopback proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`.
     - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`. Shared-secret auth still applies over the tunnel; paste the configured token or password if prompted.
 
     See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth details.
@@ -226,7 +226,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     up **memory + bootstrap files**, but **not** session history or auth. Those live
     under `~/.openclaw/` (for example `~/.openclaw/agents/<agentId>/sessions/`).
 
-    Related: [Migrating](/install/migrating), [Where things live on disk](#where-things-live-on-disk),
+    Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#where-things-live-on-disk),
     [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
     [Remote mode](/gateway/remote).
 
@@ -594,11 +594,11 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Use
-    `openai-codex/gpt-5.5` for Codex OAuth through the default PI runner. Use
-    `openai/gpt-5.4` for current direct OpenAI API-key access. GPT-5.5 direct
-    API-key access is supported once OpenAI enables it on the public API; today
-    GPT-5.5 uses subscription/OAuth via `openai-codex/gpt-5.5` or native Codex
-    app-server runs with `openai/gpt-5.5` and `embeddedHarness.runtime: "codex"`.
+    `openai/gpt-5.5` with `agentRuntime.id: "codex"` for the common setup:
+    ChatGPT/Codex subscription auth plus native Codex app-server execution. Use
+    `openai-codex/gpt-5.5` only when you want Codex OAuth through the default
+    PI runner. Use `openai/gpt-5.5` without the Codex runtime override for
+    direct OpenAI API-key access.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
@@ -606,16 +606,17 @@ and troubleshooting see the main [FAQ](/help/faq).
     `openai-codex` is the provider and auth-profile id for ChatGPT/Codex OAuth.
     It is also the explicit PI model prefix for Codex OAuth:
 
-    - `openai/gpt-5.4` = current direct OpenAI API-key route in PI
-    - `openai/gpt-5.5` = future direct API-key route once OpenAI enables GPT-5.5 on the API
+    - `openai/gpt-5.5` + `agentRuntime.id: "codex"` = ChatGPT/Codex subscription auth with native Codex runtime
     - `openai-codex/gpt-5.5` = Codex OAuth route in PI
-    - `openai/gpt-5.5` + `embeddedHarness.runtime: "codex"` = native Codex app-server route
+    - `openai/gpt-5.5` without a Codex runtime override = direct OpenAI API-key route in PI
     - `openai-codex:...` = auth profile id, not a model ref
 
     If you want the direct OpenAI Platform billing/limit path, set
     `OPENAI_API_KEY`. If you want ChatGPT/Codex subscription auth, sign in with
-    `openclaw models auth login --provider openai-codex` and use
-    `openai-codex/*` model refs for PI runs.
+    `openclaw models auth login --provider openai-codex`. For native Codex
+    runtime, keep the model ref as `openai/gpt-5.5` and set
+    `agentRuntime.id: "codex"`. Use `openai-codex/*` model refs only for PI
+    runs.
 
   </Accordion>
 
@@ -768,32 +769,34 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I switch between npm and git installs later?">
-    Yes. Install the other flavor, then run Doctor so the gateway service points at the new entrypoint.
-    This **does not delete your data** - it only changes the OpenClaw code install. Your state
-    (`~/.openclaw`) and workspace (`~/.openclaw/workspace`) stay untouched.
+    Yes. Use `openclaw update --channel ...` when OpenClaw is already installed.
+    This **does not delete your data** - it only changes the OpenClaw code install.
+    Your state (`~/.openclaw`) and workspace (`~/.openclaw/workspace`) stay untouched.
 
     From npm to git:
 
     ```bash
-    git clone https://github.com/openclaw/openclaw.git
-    cd openclaw
-    pnpm install
-    pnpm build
-    openclaw doctor
-    openclaw gateway restart
+    openclaw update --channel dev
     ```
 
     From git to npm:
 
     ```bash
-    npm install -g openclaw@latest
-    openclaw doctor
-    openclaw gateway restart
+    openclaw update --channel stable
     ```
 
-    Doctor detects a gateway service entrypoint mismatch and offers to rewrite the service config to match the current install (use `--repair` in automation).
+    Add `--dry-run` to preview the planned mode switch first. The updater runs
+    Doctor follow-ups, refreshes plugin sources for the target channel, and
+    restarts the gateway unless you pass `--no-restart`.
 
-    Backup tips: see [Backup strategy](#where-things-live-on-disk).
+    The installer can force either mode too:
+
+    ```bash
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
+    ```
+
+    Backup tips: see [Backup strategy](/help/faq#where-things-live-on-disk).
 
   </Accordion>
 

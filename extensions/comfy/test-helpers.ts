@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expect, vi } from "vitest";
 
@@ -20,6 +20,16 @@ type ComfyCloudJobResponseOptions = {
 };
 
 export function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        comfy: { config },
+      },
+    },
+  } as unknown as OpenClawConfig;
+}
+
+export function buildLegacyComfyConfig(config: Record<string, unknown>): OpenClawConfig {
   return {
     models: {
       providers: {

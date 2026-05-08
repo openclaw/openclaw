@@ -1,6 +1,8 @@
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
@@ -15,6 +17,7 @@ import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { detectMime } from "../media/mime.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
@@ -54,10 +57,13 @@ import { resolveRequestClientIp } from "./net.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
+const CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE = "assistant-media";
+const CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS = 5 * 60 * 1000;
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
+const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
 export type ControlUiRequestOptions = {
   basePath?: string;
@@ -102,6 +108,8 @@ function contentTypeForExt(ext: string): string {
       return "image/x-icon";
     case ".txt":
       return "text/plain; charset=utf-8";
+    case ".webmanifest":
+      return "application/manifest+json; charset=utf-8";
     default:
       return "application/octet-stream";
   }
@@ -127,17 +135,36 @@ const STATIC_ASSET_EXTENSIONS = new Set([
   ".webp",
   ".ico",
   ".txt",
+  ".webmanifest",
 ]);
 
 export type ControlUiAvatarResolution =
-  | { kind: "none"; reason: string }
-  | { kind: "local"; filePath: string }
-  | { kind: "remote"; url: string }
-  | { kind: "data"; url: string };
+  | { kind: "none"; reason: string; source?: string | null }
+  | { kind: "local"; filePath: string; source?: string | null }
+  | { kind: "remote"; url: string; source?: string | null }
+  | { kind: "data"; url: string; source?: string | null };
 
 type ControlUiAvatarMeta = {
   avatarUrl: string | null;
+  avatarSource: string | null;
+  avatarStatus: ControlUiAvatarResolution["kind"];
+  avatarReason: string | null;
 };
+
+function controlUiAvatarResolutionMeta(resolved: ControlUiAvatarResolution | null): {
+  avatarSource: string | null;
+  avatarStatus: ControlUiAvatarResolution["kind"] | null;
+  avatarReason: string | null;
+} {
+  if (!resolved) {
+    return { avatarSource: null, avatarStatus: null, avatarReason: null };
+  }
+  return {
+    avatarSource: resolvePublicAgentAvatarSource(resolved) ?? null,
+    avatarStatus: resolved.kind,
+    avatarReason: resolved.kind === "none" ? resolved.reason : null,
+  };
+}
 
 function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("X-Frame-Options", "DENY");
@@ -247,6 +274,7 @@ async function authorizeControlUiReadRequest(
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
     allowQueryToken?: boolean;
+    requiredOperatorMethod?: string;
   },
 ): Promise<boolean> {
   if (!opts?.auth) {
@@ -309,7 +337,10 @@ async function authorizeControlUiReadRequest(
   const requestedScopes = resolveTrustedHttpOperatorScopes(req, {
     trustDeclaredOperatorScopes,
   });
-  const scopeAuth = authorizeOperatorScopesForMethod("assistant.media.get", requestedScopes);
+  const scopeAuth = authorizeOperatorScopesForMethod(
+    opts.requiredOperatorMethod ?? "assistant.media.get",
+    requestedScopes,
+  );
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {
       ok: false,
@@ -350,6 +381,64 @@ async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean
 type AssistantMediaAvailability =
   | { available: true }
   | { available: false; reason: string; code: string };
+
+type AssistantMediaTicketPayload = {
+  scope: typeof CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE;
+  source: string;
+  exp: number;
+};
+
+function signAssistantMediaTicketPayload(encodedPayload: string): string {
+  return createHmac("sha256", controlUiAssistantMediaTicketSecret)
+    .update(encodedPayload)
+    .digest("base64url");
+}
+
+function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
+  const exp = nowMs + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS;
+  const payload: AssistantMediaTicketPayload = {
+    scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
+    source,
+    exp,
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const sig = signAssistantMediaTicketPayload(encodedPayload);
+  return {
+    mediaTicket: `v1.${encodedPayload}.${sig}`,
+    mediaTicketExpiresAt: new Date(exp).toISOString(),
+  };
+}
+
+function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs = Date.now()) {
+  const parts = ticket?.split(".");
+  if (!parts || parts.length !== 3 || parts[0] !== "v1") {
+    return false;
+  }
+  const [, encodedPayload, sig] = parts;
+  if (!encodedPayload || !sig) {
+    return false;
+  }
+  const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
+  const sigBuffer = Buffer.from(sig, "base64url");
+  const expectedBuffer = Buffer.from(expectedSig, "base64url");
+  if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
+    return false;
+  }
+  try {
+    const payload = JSON.parse(
+      Buffer.from(encodedPayload, "base64url").toString("utf8"),
+    ) as Partial<AssistantMediaTicketPayload>;
+    return (
+      payload.scope === CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE &&
+      payload.source === source &&
+      typeof payload.exp === "number" &&
+      Number.isFinite(payload.exp) &&
+      payload.exp >= nowMs
+    );
+  } catch {
+    return false;
+  }
+}
 
 function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
   if (err instanceof SafeOpenError) {
@@ -401,8 +490,9 @@ async function resolveAssistantMediaAvailability(
   localRoots: readonly string[],
 ): Promise<AssistantMediaAvailability> {
   try {
-    await assertLocalMediaAllowed(source, localRoots);
-    const opened = await openLocalFileSafely({ filePath: source });
+    const localPath = await resolveMediaReferenceLocalPath(source);
+    await assertLocalMediaAllowed(localPath, localRoots);
+    const opened = await openLocalFileSafely({ filePath: localPath });
     await opened.handle.close();
     return { available: true };
   } catch (err) {
@@ -433,7 +523,16 @@ export async function handleControlUiAssistantMediaRequest(
   }
 
   applyControlUiSecurityHeaders(res);
+  const source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");
+  if (!source) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+  const isMetaRequest = url.searchParams.get("meta") === "1";
+  const hasValidMediaTicket =
+    !isMetaRequest && verifyAssistantMediaTicket(url.searchParams.get("mediaTicket"), source);
   if (
+    !hasValidMediaTicket &&
     !(await authorizeControlUiReadRequest(req, res, {
       auth: opts?.auth,
       trustedProxies: opts?.trustedProxies,
@@ -444,22 +543,24 @@ export async function handleControlUiAssistantMediaRequest(
   ) {
     return true;
   }
-  const source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");
-  if (!source) {
-    respondControlUiNotFound(res);
-    return true;
-  }
   const localRoots = opts?.config
     ? getAgentScopedMediaLocalRoots(opts.config, opts.agentId)
     : getDefaultLocalRoots();
 
-  if (url.searchParams.get("meta") === "1") {
+  if (isMetaRequest) {
     const availability = await resolveAssistantMediaAvailability(source, localRoots);
-    sendJson(res, 200, availability);
+    sendJson(
+      res,
+      200,
+      availability.available
+        ? { ...availability, ...createAssistantMediaTicket(source) }
+        : availability,
+    );
     return true;
   }
 
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
+  let localPath = source;
   let handleClosed = false;
   const closeOpenedHandle = async () => {
     if (!opened || handleClosed) {
@@ -469,8 +570,9 @@ export async function handleControlUiAssistantMediaRequest(
     await opened.handle.close().catch(() => {});
   };
   try {
-    await assertLocalMediaAllowed(source, localRoots);
-    opened = await openLocalFileSafely({ filePath: source });
+    localPath = await resolveMediaReferenceLocalPath(source);
+    await assertLocalMediaAllowed(localPath, localRoots);
+    opened = await openLocalFileSafely({ filePath: localPath });
     const sniffLength = Math.min(opened.stat.size, 8192);
     const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
     const bytesRead =
@@ -479,7 +581,7 @@ export async function handleControlUiAssistantMediaRequest(
         : 0;
     const mime = await detectMime({
       buffer: sniffBuffer?.subarray(0, bytesRead),
-      filePath: source,
+      filePath: localPath,
     });
     if (mime) {
       res.setHeader("Content-Type", mime);
@@ -543,6 +645,13 @@ export async function handleControlUiAvatarRequest(
   }
 
   applyControlUiSecurityHeaders(res);
+  const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
+  const agentId = agentIdParts[0] ?? "";
+  if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+
   if (
     !(await authorizeControlUiReadRequest(req, res, {
       auth: opts.auth,
@@ -554,22 +663,21 @@ export async function handleControlUiAvatarRequest(
     return true;
   }
 
-  const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
-  const agentId = agentIdParts[0] ?? "";
-  if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
-    respondControlUiNotFound(res);
-    return true;
-  }
-
   if (url.searchParams.get("meta") === "1") {
     const resolved = opts.resolveAvatar(agentId);
+    const meta = controlUiAvatarResolutionMeta(resolved);
     const avatarUrl =
       resolved.kind === "local"
         ? buildControlUiAvatarUrl(basePath, agentId)
         : resolved.kind === "remote" || resolved.kind === "data"
           ? resolved.url
           : null;
-    sendJson(res, 200, { avatarUrl } satisfies ControlUiAvatarMeta);
+    sendJson(res, 200, {
+      avatarUrl,
+      avatarSource: meta.avatarSource,
+      avatarStatus: meta.avatarStatus ?? resolved.kind,
+      avatarReason: meta.avatarReason,
+    } satisfies ControlUiAvatarMeta);
     return true;
   }
 
@@ -740,6 +848,11 @@ export async function handleControlUiHttpRequest(
       agentId: identity.agentId,
       basePath,
     });
+    const avatarMeta = config
+      ? controlUiAvatarResolutionMeta(
+          resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true }),
+        )
+      : controlUiAvatarResolutionMeta(null);
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -751,6 +864,9 @@ export async function handleControlUiHttpRequest(
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
+      assistantAvatarSource: avatarMeta.avatarSource,
+      assistantAvatarStatus: avatarMeta.avatarStatus,
+      assistantAvatarReason: avatarMeta.avatarReason,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
@@ -761,6 +877,7 @@ export async function handleControlUiHttpRequest(
             ? "strict"
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
+      chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

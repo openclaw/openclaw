@@ -14,6 +14,7 @@ import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
+import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
   initialMs: 2000,
@@ -27,10 +28,11 @@ const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
-const CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS = 10_000;
+const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
+  TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
+);
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
-type TelegramApiAbortSignal = Parameters<TelegramBot["api"]["getUpdates"]>[1];
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -49,9 +51,6 @@ const waitForGracefulStop = async (stop: () => Promise<void>) => {
   }
 };
 
-const telegramApiTimeoutSignal = (timeoutMs: number): TelegramApiAbortSignal =>
-  AbortSignal.timeout(timeoutMs) as unknown as TelegramApiAbortSignal;
-
 const resolvePollingStallThresholdMs = (value: number | undefined): number => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_POLL_STALL_THRESHOLD_MS;
@@ -68,6 +67,7 @@ type TelegramPollingSessionOpts = {
   accountId: string;
   runtime: Parameters<typeof createTelegramBot>[0]["runtime"];
   proxyFetch: Parameters<typeof createTelegramBot>[0]["proxyFetch"];
+  botInfo?: Parameters<typeof createTelegramBot>[0]["botInfo"];
   abortSignal?: AbortSignal;
   runnerOptions: RunOptions<unknown>;
   getLastUpdateId: () => number | null;
@@ -188,7 +188,9 @@ export class TelegramPollingSession {
         proxyFetch: this.opts.proxyFetch,
         config: this.opts.config,
         accountId: this.opts.accountId,
+        botInfo: this.opts.botInfo,
         fetchAbortSignal: fetchAbortController.signal,
+        minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,
         updateOffset: {
           lastUpdateId: this.opts.getLastUpdateId(),
           onUpdateId: this.opts.persistUpdateId,
@@ -217,6 +219,12 @@ export class TelegramPollingSession {
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
+      if (isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+        this.opts.log(
+          `[telegram] deleteWebhook failed with a recoverable network error; continuing to polling so getUpdates can confirm webhook state: ${formatErrorMessage(err)}`,
+        );
+        return "ready";
+      }
       const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
         err,
         "Telegram webhook cleanup failed",
@@ -225,24 +233,7 @@ export class TelegramPollingSession {
     }
   }
 
-  async #confirmPersistedOffset(bot: TelegramBot): Promise<void> {
-    const lastUpdateId = this.opts.getLastUpdateId();
-    if (lastUpdateId === null || lastUpdateId >= Number.MAX_SAFE_INTEGER) {
-      return;
-    }
-    try {
-      await bot.api.getUpdates(
-        { offset: lastUpdateId + 1, limit: 1, timeout: 0 },
-        telegramApiTimeoutSignal(CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS),
-      );
-    } catch {
-      // Non-fatal: runner middleware still skips duplicates via shouldSkipUpdate.
-    }
-  }
-
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
-    await this.#confirmPersistedOffset(bot);
-
     const liveness = new TelegramPollingLivenessTracker({
       onPollSuccess: (finishedAt) => this.#status.notePollSuccess(finishedAt),
     });
@@ -317,7 +308,6 @@ export class TelegramPollingSession {
 
       const stall = liveness.detectStall({
         thresholdMs: this.#stallThresholdMs,
-        runnerIsRunning: runner.isRunning(),
       });
       if (stall) {
         this.#transportState.markDirty();
@@ -381,11 +371,14 @@ export class TelegramPollingSession {
       }
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
+      const conflictHint = isConflict
+        ? " Another OpenClaw gateway, script, or Telegram poller may be using this bot token; stop the duplicate poller or switch this account to webhook mode."
+        : "";
       this.opts.log(
-        `[telegram][diag] polling cycle error reason=${reason} ${liveness.formatDiagnosticFields("lastGetUpdatesError")} err=${errMsg}`,
+        `[telegram][diag] polling cycle error reason=${reason} ${liveness.formatDiagnosticFields("lastGetUpdatesError")} err=${errMsg}${conflictHint}`,
       );
       const shouldRestart = await this.#waitBeforeRestart(
-        (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
+        (delay) => `Telegram ${reason}: ${errMsg};${conflictHint} retrying in ${delay}.`,
       );
       return shouldRestart ? "continue" : "exit";
     } finally {

@@ -3,13 +3,16 @@ import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
+import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { isPlainObject, resolveUserPath } from "../utils.js";
@@ -54,11 +57,12 @@ type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js")
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
-let setupPluginConfigModulePromise: Promise<SetupPluginConfigModule> | undefined;
+const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigModule>(
+  () => import("../wizard/setup.plugin-config.js"),
+);
 
 function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
-  setupPluginConfigModulePromise ??= import("../wizard/setup.plugin-config.js");
-  return setupPluginConfigModulePromise;
+  return setupPluginConfigModuleLoader.load();
 }
 
 function mergeWizardConfigOntoLatest(current: unknown, base: unknown, next: unknown): unknown {
@@ -108,6 +112,7 @@ async function runGatewayHealthCheck(params: {
     port: params.port,
     customBindHost: params.cfg.gateway?.customBindHost,
     basePath: undefined,
+    tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
   });
   const remoteUrl = params.cfg.gateway?.remote?.url?.trim();
   const wsUrl = params.cfg.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
@@ -197,9 +202,13 @@ async function promptWebToolsConfig(
   type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
   const { isCodexNativeWebSearchRelevant } = await import("../agents/codex-native-web-search.js");
-  const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
+  const hasManagedSearchProviders =
+    resolvePluginContributionOwners({
+      config: nextConfig,
+      contribution: "contracts",
+      matches: "webSearchProviders",
+    }).length > 0;
 
   note(
     [
@@ -213,7 +222,7 @@ async function promptWebToolsConfig(
   const enableSearch = guardCancel(
     await confirm({
       message: "Enable web_search?",
-      initialValue: existingSearch?.enabled ?? searchProviderOptions.length > 0,
+      initialValue: existingSearch?.enabled ?? hasManagedSearchProviders,
     }),
     runtime,
   );
@@ -295,8 +304,10 @@ async function promptWebToolsConfig(
       }
     }
 
-    if (searchProviderOptions.length === 0) {
-      if (configureManagedProvider) {
+    if (configureManagedProvider) {
+      const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
+      const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
+      if (searchProviderOptions.length === 0) {
         note(
           [
             "No web search providers are currently available under this plugin policy.",
@@ -305,23 +316,23 @@ async function promptWebToolsConfig(
           ].join("\n"),
           "Web search",
         );
-      }
-      if (nextSearch.openaiCodex?.enabled !== true) {
+        if (nextSearch.openaiCodex?.enabled !== true) {
+          nextSearch = {
+            ...existingSearch,
+            enabled: false,
+          };
+        }
+      } else {
+        workingConfig = await setupSearch(workingConfig, runtime, prompter);
         nextSearch = {
-          ...existingSearch,
-          enabled: false,
+          ...workingConfig.tools?.web?.search,
+          enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+          openaiCodex: {
+            ...existingSearch?.openaiCodex,
+            ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
+          },
         };
       }
-    } else if (configureManagedProvider) {
-      workingConfig = await setupSearch(workingConfig, runtime, prompter);
-      nextSearch = {
-        ...workingConfig.tools?.web?.search,
-        enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
-        openaiCodex: {
-          ...existingSearch?.openaiCodex,
-          ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
-        },
-      };
     }
   }
 
@@ -456,10 +467,11 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await replaceConfigFile({
+      const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: remoteConfig,
         ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
       });
+      remoteConfig = committed.config;
       currentBaseHash = undefined;
       logConfigUpdated(runtime);
       outro("Remote gateway configured.");
@@ -495,10 +507,11 @@ export async function runConfigureWizard(
       const maxRetries = 3;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-          await replaceConfigFile({
+          const committed = await commitConfigWithPendingPluginInstalls({
             nextConfig,
             ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
           });
+          nextConfig = committed.config;
 
           // After successful write, re-read the snapshot to get the new hash
           const freshSnapshot = await readConfigFileSnapshot();
@@ -576,7 +589,10 @@ export async function runConfigureWizard(
           },
         },
       };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime);
+      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+        skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+        skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+      });
     };
 
     const configureChannelsSection = async () => {
@@ -754,6 +770,7 @@ export async function runConfigureWizard(
       port: gatewayPort,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     const newPassword =
       process.env.OPENCLAW_GATEWAY_PASSWORD ??

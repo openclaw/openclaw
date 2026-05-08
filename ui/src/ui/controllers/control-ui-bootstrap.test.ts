@@ -12,11 +12,15 @@ describe("loadControlUiBootstrapConfig", () => {
         basePath: "/openclaw",
         assistantName: "Ops",
         assistantAvatar: "O",
+        assistantAvatarSource: "avatars/ops.png",
+        assistantAvatarStatus: "none",
+        assistantAvatarReason: "missing",
         assistantAgentId: "main",
         serverVersion: "2026.3.7",
         localMediaPreviewRoots: ["/tmp/openclaw"],
         embedSandbox: "scripts",
         allowExternalEmbedUrls: true,
+        chatMessageMaxWidth: "min(1280px, 82%)",
       }),
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -25,10 +29,14 @@ describe("loadControlUiBootstrapConfig", () => {
       basePath: "/openclaw",
       assistantName: "Assistant",
       assistantAvatar: null,
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
       assistantAgentId: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
+      chatMessageMaxWidth: null,
       serverVersion: null,
     };
 
@@ -40,11 +48,150 @@ describe("loadControlUiBootstrapConfig", () => {
     );
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
+    expect(state.assistantAvatarSource).toBe("avatars/ops.png");
+    expect(state.assistantAvatarStatus).toBe("none");
+    expect(state.assistantAvatarReason).toBe("missing");
     expect(state.assistantAgentId).toBe("main");
     expect(state.serverVersion).toBe("2026.3.7");
     expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
     expect(state.embedSandboxMode).toBe("scripts");
     expect(state.allowExternalEmbedUrls).toBe(true);
+    expect(state.chatMessageMaxWidth).toBe("min(1280px, 82%)");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("can refresh runtime bootstrap settings without clobbering session identity", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Main",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+        embedSandbox: "trusted",
+        allowExternalEmbedUrls: true,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Worker",
+      assistantAvatar: "W",
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: "worker",
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+
+    expect(state.assistantName).toBe("Worker");
+    expect(state.assistantAvatar).toBe("W");
+    expect(state.assistantAgentId).toBe("worker");
+    expect(state.serverVersion).toBe("2026.4.27");
+    expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
+    expect(state.embedSandboxMode).toBe("trusted");
+    expect(state.allowExternalEmbedUrls).toBe(true);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("does not apply default-agent bootstrap identity to an active non-default session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "AI大管家",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+        embedSandbox: "trusted",
+        allowExternalEmbedUrls: true,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      sessionKey: "agent:fs-daying:main",
+      assistantName: "大颖",
+      assistantAvatar: "D",
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: "fs-daying",
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.assistantName).toBe("大颖");
+    expect(state.assistantAvatar).toBe("D");
+    expect(state.assistantAgentId).toBe("fs-daying");
+    expect(state.serverVersion).toBe("2026.4.27");
+    expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
+    expect(state.embedSandboxMode).toBe("trusted");
+    expect(state.allowExternalEmbedUrls).toBe(true);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps local assistant avatar override when default-agent bootstrap identity is skipped", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Main",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        serverVersion: "2026.4.27",
+        localMediaPreviewRoots: [],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: false,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    vi.stubGlobal("localStorage", {
+      getItem: vi.fn(() => JSON.stringify({ avatar: "data:image/png;base64,local" })),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    } as unknown as Storage);
+
+    const state = {
+      basePath: "",
+      sessionKey: "agent:worker:main",
+      assistantName: "Worker",
+      assistantAvatar: "W",
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: "worker",
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(state.assistantName).toBe("Worker");
+    expect(state.assistantAvatar).toBe("data:image/png;base64,local");
+    expect(state.assistantAvatarSource).toBe("data:image/png;base64,local");
+    expect(state.assistantAvatarStatus).toBe("data");
+    expect(state.assistantAvatarReason).toBeNull();
+    expect(state.assistantAgentId).toBe("worker");
 
     vi.unstubAllGlobals();
   });

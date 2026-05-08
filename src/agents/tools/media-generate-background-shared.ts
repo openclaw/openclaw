@@ -1,23 +1,21 @@
 import crypto from "node:crypto";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
 } from "../../tasks/detached-task-runtime.js";
-import { sendMessage } from "../../tasks/task-registry-delivery-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
+const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
 
 export type MediaGenerationTaskHandle = {
   taskId: string;
@@ -63,7 +61,14 @@ type WakeMediaGenerationTaskCompletionParams = {
   statsLine?: string;
 };
 
-export function createMediaGenerationTaskRun(params: {
+function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
+  registerAgentRunContext(handle.runId, {
+    sessionKey: handle.requesterSessionKey,
+    lastActiveAt: Date.now(),
+  });
+}
+
+function createMediaGenerationTaskRun(params: {
   sessionKey?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
@@ -97,13 +102,15 @@ export function createMediaGenerationTaskRun(params: {
       lastEventAt: Date.now(),
       progressSummary: params.queuedProgressSummary,
     });
-    return {
+    const handle = {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
       requesterOrigin: params.requesterOrigin,
       taskLabel: params.prompt,
     };
+    touchMediaGenerationTaskRunContext(handle);
+    return handle;
   } catch (error) {
     log.warn("Failed to create media generation task ledger record", {
       sessionKey,
@@ -115,7 +122,7 @@ export function createMediaGenerationTaskRun(params: {
   }
 }
 
-export function recordMediaGenerationTaskProgress(params: {
+function recordMediaGenerationTaskProgress(params: {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
   eventSummary?: string;
@@ -123,6 +130,7 @@ export function recordMediaGenerationTaskProgress(params: {
   if (!params.handle) {
     return;
   }
+  touchMediaGenerationTaskRunContext(params.handle);
   recordTaskRunProgressByRunId({
     runId: params.handle.runId,
     runtime: "cli",
@@ -133,7 +141,31 @@ export function recordMediaGenerationTaskProgress(params: {
   });
 }
 
-export function completeMediaGenerationTaskRun(params: {
+export async function withMediaGenerationTaskKeepalive<T>(params: {
+  handle: MediaGenerationTaskHandle | null;
+  progressSummary: string;
+  eventSummary?: string;
+  run: () => Promise<T>;
+}): Promise<T> {
+  if (!params.handle) {
+    return await params.run();
+  }
+  const interval = setInterval(() => {
+    recordMediaGenerationTaskProgress({
+      handle: params.handle,
+      progressSummary: params.progressSummary,
+      eventSummary: params.eventSummary,
+    });
+  }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
+  interval.unref?.();
+  try {
+    return await params.run();
+  } finally {
+    clearInterval(interval);
+  }
+}
+
+function completeMediaGenerationTaskRun(params: {
   handle: MediaGenerationTaskHandle | null;
   provider: string;
   model: string;
@@ -144,20 +176,24 @@ export function completeMediaGenerationTaskRun(params: {
   if (!params.handle) {
     return;
   }
-  const endedAt = Date.now();
-  const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
-  completeTaskRunByRunId({
-    runId: params.handle.runId,
-    runtime: "cli",
-    sessionKey: params.handle.requesterSessionKey,
-    endedAt,
-    lastEventAt: endedAt,
-    progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
-    terminalSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
-  });
+  try {
+    const endedAt = Date.now();
+    const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
+    completeTaskRunByRunId({
+      runId: params.handle.runId,
+      runtime: "cli",
+      sessionKey: params.handle.requesterSessionKey,
+      endedAt,
+      lastEventAt: endedAt,
+      progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
+      terminalSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+    });
+  } finally {
+    clearAgentRunContext(params.handle.runId);
+  }
 }
 
-export function failMediaGenerationTaskRun(params: {
+function failMediaGenerationTaskRun(params: {
   handle: MediaGenerationTaskHandle | null;
   error: unknown;
   progressSummary: string;
@@ -165,18 +201,22 @@ export function failMediaGenerationTaskRun(params: {
   if (!params.handle) {
     return;
   }
-  const endedAt = Date.now();
-  const errorText = formatErrorMessage(params.error);
-  failTaskRunByRunId({
-    runId: params.handle.runId,
-    runtime: "cli",
-    sessionKey: params.handle.requesterSessionKey,
-    endedAt,
-    lastEventAt: endedAt,
-    error: errorText,
-    progressSummary: params.progressSummary,
-    terminalSummary: errorText,
-  });
+  try {
+    const endedAt = Date.now();
+    const errorText = formatErrorMessage(params.error);
+    failTaskRunByRunId({
+      runId: params.handle.runId,
+      runtime: "cli",
+      sessionKey: params.handle.requesterSessionKey,
+      endedAt,
+      lastEventAt: endedAt,
+      error: errorText,
+      progressSummary: params.progressSummary,
+      terminalSummary: errorText,
+    });
+  } finally {
+    clearAgentRunContext(params.handle.runId);
+  }
 }
 
 function buildMediaGenerationReplyInstruction(params: {
@@ -184,12 +224,7 @@ function buildMediaGenerationReplyInstruction(params: {
   completionLabel: string;
 }) {
   if (params.status === "ok") {
-    return [
-      `A completed ${params.completionLabel} generation task is ready for user delivery.`,
-      `Prefer the message tool for delivery: use action="send" to the current/original chat, put your user-facing caption in message, attach each generated file with path/filePath using the exact path from the result, then reply ONLY: ${SILENT_REPLY_TOKEN}.`,
-      `If you cannot use the message tool, reply in your normal assistant voice and include the exact MEDIA: lines from the result so OpenClaw attaches the finished ${params.completionLabel}.`,
-      "Keep internal task/session details private and do not copy the internal event text verbatim.",
-    ].join(" ");
+    return `Tell the user the ${params.completionLabel} is ready. If visible source delivery requires the message tool, send it there with the generated media attached.`;
   }
   return [
     `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed.`,
@@ -198,49 +233,7 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
-function isAsyncMediaDirectSendEnabled(config: OpenClawConfig | undefined): boolean {
-  return config?.tools?.media?.asyncCompletion?.directSend === true;
-}
-
-async function maybeDeliverMediaGenerationResultDirectly(params: {
-  handle: MediaGenerationTaskHandle;
-  status: "ok" | "error";
-  result: string;
-  idempotencyKey: string;
-}): Promise<boolean> {
-  const origin = params.handle.requesterOrigin;
-  const channel = origin?.channel?.trim();
-  const to = origin?.to?.trim();
-  if (!channel || !to) {
-    return false;
-  }
-  const parsed = parseReplyDirectives(params.result);
-  const content = parsed.text.trim();
-  const mediaUrls = parsed.mediaUrls?.filter((entry) => entry.trim().length > 0);
-  const requesterAgentId = parseAgentSessionKey(params.handle.requesterSessionKey)?.agentId;
-  await sendMessage({
-    channel,
-    to,
-    accountId: origin?.accountId,
-    threadId: origin?.threadId,
-    content:
-      content ||
-      (params.status === "ok"
-        ? `Finished ${params.handle.taskLabel}.`
-        : "Background media generation failed."),
-    ...(mediaUrls?.length ? { mediaUrls } : {}),
-    agentId: requesterAgentId,
-    idempotencyKey: params.idempotencyKey,
-    mirror: {
-      sessionKey: params.handle.requesterSessionKey,
-      agentId: requesterAgentId,
-      idempotencyKey: params.idempotencyKey,
-    },
-  });
-  return true;
-}
-
-export async function wakeMediaGenerationTaskCompletion(params: {
+async function wakeMediaGenerationTaskCompletion(params: {
   config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
@@ -257,26 +250,6 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     return;
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
-  if (isAsyncMediaDirectSendEnabled(params.config)) {
-    try {
-      const deliveredDirect = await maybeDeliverMediaGenerationResultDirectly({
-        handle: params.handle,
-        status: params.status,
-        result: params.result,
-        idempotencyKey: announceId,
-      });
-      if (deliveredDirect) {
-        return;
-      }
-    } catch (error) {
-      log.warn("Media generation direct completion delivery failed; falling back to announce", {
-        taskId: params.handle.taskId,
-        runId: params.handle.runId,
-        toolName: params.toolName,
-        error,
-      });
-    }
-  }
   const internalEvents: AgentInternalEvent[] = [
     {
       type: "task_completion",

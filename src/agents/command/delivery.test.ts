@@ -215,6 +215,52 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
   });
 
+  it("reports successful requested delivery", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([]);
+
+    const delivered = await deliverMediaReplyForTest({
+      key: "agent:tester:slack:direct:alice",
+      agentId: "tester",
+    } as never);
+
+    expect(delivered.deliverySucceeded).toBe(true);
+  });
+
+  it("does not report success when best-effort delivery records an error", async () => {
+    deliverOutboundPayloadsMock.mockImplementationOnce(async (params: unknown) => {
+      (params as { onError?: (err: unknown) => void }).onError?.(new Error("send failed"));
+      return [];
+    });
+
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        bestEffortDeliver: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "here you go" }],
+      result: createResult(),
+    });
+
+    expect(delivered.deliverySucceeded).toBe(false);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("send failed"));
+  });
+
   it("threads agentId into the normalizer when sessionKey is unresolved", async () => {
     createReplyMediaPathNormalizerMock.mockReturnValue(async (payload: ReplyPayload) => payload);
     deliverOutboundPayloadsMock.mockResolvedValue([]);
@@ -262,5 +308,49 @@ describe("normalizeAgentCommandReplyPayloads", () => {
         text: "[[buttons: Release menu | Choose an action | Retry:retry, Ignore:ignore]]",
       },
     ]);
+  });
+
+  it("merges result metadata overrides into JSON output and returned results", async () => {
+    const runtime = {
+      log: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "test",
+        json: true,
+        resultMetaOverrides: {
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "local" }],
+      result: createResult(),
+    });
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      {
+        payloads: [{ text: "local", mediaUrl: null }],
+        meta: {
+          durationMs: 1,
+          transport: "embedded",
+          fallbackFrom: "gateway",
+        },
+      },
+      2,
+    );
+    expect(delivered.meta).toMatchObject({
+      durationMs: 1,
+      transport: "embedded",
+      fallbackFrom: "gateway",
+    });
   });
 });

@@ -49,7 +49,24 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
   return out;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  expect(value && typeof value === "object" && !Array.isArray(value)).toBe(true);
+  return value as Record<string, unknown>;
+}
+
 describe("config footprint guardrails", () => {
+  it("keeps plugin entry config generic in the generated base schema", () => {
+    const root = asRecord(GENERATED_BASE_CONFIG_SCHEMA.schema);
+    const plugins = asRecord(asRecord(root.properties).plugins);
+    const entries = asRecord(asRecord(plugins.properties).entries);
+    const entry = asRecord(entries.additionalProperties);
+    const pluginConfig = asRecord(asRecord(entry.properties).config);
+
+    expect(pluginConfig.type).toBe("object");
+    expect(pluginConfig.additionalProperties).toEqual({});
+    expect(pluginConfig.properties).toBeUndefined();
+  });
+
   it("keeps retired legacy paths out of the generated base config schema", () => {
     const basePaths = new Set(collectSchemaPaths(GENERATED_BASE_CONFIG_SCHEMA.schema));
 
@@ -94,7 +111,7 @@ describe("config footprint guardrails", () => {
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {
-    const pluginIds = ["bluebubbles", "matrix", "mattermost", "nextcloud-talk", "tlon"];
+    const pluginIds = ["bluebubbles", "matrix", "nextcloud-talk", "tlon"];
 
     for (const pluginId of pluginIds) {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
@@ -143,5 +160,47 @@ describe("config footprint guardrails", () => {
     expect(source).toContain(
       "return ssrfPolicyFromDangerouslyAllowPrivateNetwork(allowPrivateNetwork);",
     );
+  });
+
+  it("keeps bundled channel schemas out of the generic channel config SDK surface", () => {
+    const source = readSource("src/plugin-sdk/channel-config-schema.ts");
+    const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
+    const legacySource = readSource("src/plugin-sdk/channel-config-schema-legacy.ts");
+    const bundledSection = bundledSource.slice(
+      bundledSource.indexOf("Bundled-channel config schemas"),
+    );
+    const bundledSchemaExportBlocks = Array.from(
+      bundledSection.matchAll(
+        /export \{(?<exports>[^}]*)\} from "\.\.\/config\/zod-schema\.providers-(?:core|whatsapp)\.js";/g,
+      ),
+    )
+      .map((match) => match.groups?.exports)
+      .filter((block): block is string => Boolean(block));
+    expect(bundledSchemaExportBlocks).toHaveLength(2);
+    const exportedSchemaNames = Array.from(
+      bundledSchemaExportBlocks.join("\n").matchAll(/\b([A-Z][A-Za-z0-9]+ConfigSchema)\b/g),
+    )
+      .map((match) => match[1])
+      .filter((name): name is string => Boolean(name))
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(exportedSchemaNames).toEqual([
+      "DiscordConfigSchema",
+      "GoogleChatConfigSchema",
+      "IMessageConfigSchema",
+      "MSTeamsConfigSchema",
+      "SignalConfigSchema",
+      "SlackConfigSchema",
+      "TelegramConfigSchema",
+      "WhatsAppConfigSchema",
+    ]);
+    for (const schemaName of exportedSchemaNames) {
+      expect(source).not.toContain(schemaName);
+    }
+    expect(bundledSource).toContain("Bundled-channel config schemas");
+    expect(bundledSource).toContain("openclaw/plugin-sdk/channel-config-schema");
+    expect(legacySource).toContain("Compatibility surface for bundled channel schemas");
+    expect(legacySource).toContain("openclaw/plugin-sdk/bundled-channel-config-schema");
+    expect(legacySource).toContain('export * from "./bundled-channel-config-schema.js";');
   });
 });

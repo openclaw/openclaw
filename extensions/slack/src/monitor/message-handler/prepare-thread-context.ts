@@ -1,5 +1,5 @@
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
-import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
+import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   filterSupplementalContextItems,
@@ -10,14 +10,18 @@ import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch } from "../allow-list.js";
 import { readSessionUpdatedAt } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
-import {
-  resolveSlackMedia,
-  resolveSlackThreadHistory,
-  type SlackMediaResult,
-  type SlackThreadStarter,
-} from "../media.js";
+import type { SlackMediaResult } from "../media-types.js";
+import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
 
-export type SlackThreadContextData = {
+type SlackMediaModule = typeof import("../media.js");
+let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
+
+function loadSlackMediaModule(): Promise<SlackMediaModule> {
+  slackMediaModulePromise ??= import("../media.js");
+  return slackMediaModulePromise;
+}
+
+type SlackThreadContextData = {
   threadStarterBody: string | undefined;
   threadHistoryBody: string | undefined;
   threadSessionPreviousTimestamp: number | undefined;
@@ -122,6 +126,7 @@ export async function resolveSlackThreadContextData(params: {
     const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? `: ${snippet}` : ""}`;
     if (!params.effectiveDirectMedia && starter.files && starter.files.length > 0) {
+      const { resolveSlackMedia } = await loadSlackMediaModule();
       threadStarterMedia = await resolveSlackMedia({
         files: starter.files,
         token: params.ctx.botToken,

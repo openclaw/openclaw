@@ -29,6 +29,7 @@ class MockWebSocket {
   private errorHandlers: WsEventHandlers["error"][] = [];
   readonly sent: string[] = [];
   closeCalls = 0;
+  lastClose: { code?: number; reason?: string } | null = null;
   terminateCalls = 0;
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
@@ -62,6 +63,7 @@ class MockWebSocket {
 
   close(code?: number, reason?: string): void {
     this.closeCalls += 1;
+    this.lastClose = { code, reason };
     this.readyState = MockWebSocket.CLOSING;
     if (this.autoCloseOnClose) {
       this.emitClose(code ?? 1000, reason ?? "");
@@ -335,6 +337,73 @@ describe("GatewayClient request errors", () => {
 
     client.stop();
   });
+
+  it("retries startup-unavailable connect failures without terminal callbacks", async () => {
+    vi.useFakeTimers();
+    wsInstances.length = 0;
+    logDebugMock.mockClear();
+    logErrorMock.mockClear();
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      onClose,
+      onConnectError,
+    });
+    try {
+      client.start();
+      const ws = getLatestWs();
+      ws.emitOpen();
+      ws.emitMessage(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "nonce-1" },
+        }),
+      );
+      const connectFrame = JSON.parse(
+        ws.sent.find((frame) => frame.includes('"method":"connect"')) ?? "{}",
+      ) as { id?: string };
+
+      ws.emitMessage(
+        JSON.stringify({
+          type: "res",
+          id: connectFrame.id,
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "gateway starting; retry shortly",
+            details: { reason: "startup-sidecars" },
+            retryable: true,
+            retryAfterMs: 250,
+          },
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve();
+      }
+
+      expect(onConnectError).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(ws.lastClose).toEqual({ code: 1013, reason: "gateway starting" });
+      expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed:"),
+      );
+      expect(wsInstances).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(wsInstances).toHaveLength(2);
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("GatewayClient close handling", () => {
@@ -393,6 +462,48 @@ describe("GatewayClient close handling", () => {
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
     client.stop();
+  });
+
+  it("keeps a managed reconnect timer after gateway restart closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      getLatestWs().emitClose(1012, "service restart");
+
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(wsInstances).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(wsInstances).toHaveLength(2);
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears pending reconnect timers on stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      getLatestWs().emitClose(1012, "service restart");
+      client.stop();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(wsInstances).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("force-terminates a lingering socket after stop", async () => {
@@ -827,9 +938,11 @@ describe("GatewayClient connect auth payload", () => {
   });
 
   it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {
+    const onReconnectPaused = vi.fn();
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
+      onReconnectPaused,
     });
 
     const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
@@ -838,6 +951,41 @@ describe("GatewayClient connect auth payload", () => {
       firstWs: ws1,
       connectId: firstConnect.id,
       failureDetails: { code: "AUTH_TOKEN_MISSING" },
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_TOKEN_MISSING",
+    });
+  });
+
+  it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({
+      deviceId: expect.any(String),
+      role: "operator",
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_DEVICE_TOKEN_MISMATCH",
     });
   });
 

@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { BlueBubblesCoreRuntime, WebhookTarget } from "./monitor-shared.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -29,12 +29,12 @@ function sanitizeDebounceEntry(entry: BlueBubblesDebounceEntry): BlueBubblesDebo
   };
 }
 
-export type BlueBubblesDebouncer = {
+type BlueBubblesDebouncer = {
   enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
   flushKey: (key: string) => Promise<void>;
 };
 
-export type BlueBubblesDebounceRegistry = {
+type BlueBubblesDebounceRegistry = {
   getOrCreateDebouncer: (target: WebhookTarget) => BlueBubblesDebouncer;
   removeDebouncer: (target: WebhookTarget) => void;
 };

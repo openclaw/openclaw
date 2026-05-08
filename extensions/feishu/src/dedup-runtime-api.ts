@@ -1,5 +1,1 @@
-export {
-  createDedupeCache,
-  createPersistentDedupe,
-  readJsonFileWithFallback,
-} from "../runtime-api.js";
+export { createPersistentDedupe } from "openclaw/plugin-sdk/persistent-dedupe";

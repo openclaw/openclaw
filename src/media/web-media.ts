@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveCanvasHttpPathToLocalPath } from "../gateway/canvas-documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
@@ -19,6 +20,7 @@ import {
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
+import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 import {
   detectMime,
   extensionForMime,
@@ -27,7 +29,6 @@ import {
   mimeTypeFromFilePath,
   normalizeMimeType,
 } from "./mime.js";
-import { resolveMediaBufferPath } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -58,42 +59,16 @@ type WebMediaOptions = {
 };
 
 async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | null> {
-  if (!mediaUrl.startsWith("media://")) {
+  if (!/^media:\/\//i.test(mediaUrl)) {
     return null;
   }
-  let parsed: URL;
   try {
-    parsed = new URL(mediaUrl);
+    return (await resolveInboundMediaReference(mediaUrl))?.physicalPath ?? null;
   } catch (err) {
-    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`, {
-      cause: err,
-    });
-  }
-  if (parsed.hostname !== "inbound") {
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
-      `Unsupported media URI location: ${parsed.hostname || "(missing)"}`,
-    );
-  }
-  let id: string;
-  try {
-    id = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-  } catch (err) {
-    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`, {
-      cause: err,
-    });
-  }
-  if (!id || id.includes("/")) {
-    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`);
-  }
-  try {
-    return await resolveMediaBufferPath(id, "inbound");
-  } catch (err) {
-    throw new LocalMediaAccessError(
-      "invalid-path",
-      err instanceof Error ? err.message : `Invalid media URI: ${mediaUrl}`,
-      { cause: err },
-    );
+    if (err instanceof MediaReferenceError) {
+      throw new LocalMediaAccessError(err.code, err.message, { cause: err });
+    }
+    throw err;
   }
 }
 
@@ -228,6 +203,23 @@ function formatCapLimit(label: string, cap: number, size: number): string {
 
 function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
+}
+
+function isOptionalImageOptimizerUnavailable(err: unknown): boolean {
+  const messages: string[] = [];
+  let current: unknown = err;
+  while (current instanceof Error) {
+    messages.push(current.message);
+    current = current.cause;
+  }
+  const detail = messages.join("\n").toLowerCase();
+  return (
+    detail.includes("optional dependency sharp is required") ||
+    detail.includes("cannot find package 'sharp'") ||
+    detail.includes('cannot find package "sharp"') ||
+    detail.includes("cannot find module 'sharp'") ||
+    detail.includes('cannot find module "sharp"')
+  );
 }
 
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
@@ -417,7 +409,29 @@ async function loadWebMediaInternal(
     meta?: { contentType?: string; fileName?: string },
   ) => {
     const originalSize = buffer.length;
-    const optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+    let optimized: OptimizedImage;
+    try {
+      optimized = await optimizeImageWithFallback({ buffer, cap, meta });
+    } catch (err) {
+      if (
+        isOptionalImageOptimizerUnavailable(err) &&
+        !isHeicSource(meta ?? {}) &&
+        buffer.length <= cap
+      ) {
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `Image optimizer unavailable; sending original ${formatMb(buffer.length)}MB media without optimization`,
+          );
+        }
+        return {
+          buffer,
+          contentType: meta?.contentType,
+          kind: "image" as const,
+          fileName: meta?.fileName,
+        };
+      }
+      throw err;
+    }
     logOptimizedImage({ originalSize, optimized });
 
     if (optimized.buffer.length > cap) {
@@ -642,6 +656,8 @@ export async function optimizeImageToJpeg(
     resizeSide: number;
     quality: number;
   } | null = null;
+  let firstResizeError: unknown;
+  const errors: string[] = [];
 
   for (const side of sides) {
     for (const quality of qualities) {
@@ -664,7 +680,12 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch {
+      } catch (err) {
+        firstResizeError ??= err;
+        const message = formatErrorMessage(err).trim();
+        if (message && !errors.includes(message)) {
+          errors.push(message);
+        }
         // Continue trying other size/quality combinations
       }
     }
@@ -679,7 +700,8 @@ export async function optimizeImageToJpeg(
     };
   }
 
-  throw new Error("Failed to optimize image");
+  const detail = errors.length > 0 ? `: ${errors.slice(0, 3).join("; ")}` : "";
+  throw new Error(`Failed to optimize image${detail}`, { cause: firstResizeError });
 }
 
 export { optimizeImageToPng };

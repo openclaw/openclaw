@@ -1,5 +1,9 @@
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginChannelRegistryVersion,
+  getActivePluginRegistry,
+  getActivePluginRegistryVersion,
+} from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
 
 export type ChannelKind = ChannelId;
@@ -14,7 +18,9 @@ export type GatewayReloadPlan = {
   restartCron: boolean;
   restartHeartbeat: boolean;
   restartHealthMonitor: boolean;
+  reloadPlugins: boolean;
   restartChannels: Set<ChannelKind>;
+  disposeMcpRuntimes: boolean;
   noopPaths: string[];
 };
 
@@ -30,9 +36,11 @@ type ReloadAction =
   | "restart-cron"
   | "restart-heartbeat"
   | "restart-health-monitor"
+  | "reload-plugins"
+  | "dispose-mcp-runtimes"
   | `restart-channel:${ChannelId}`;
 
-export type GatewayReloadPlanOptions = {
+type GatewayReloadPlanOptions = {
   noopPaths?: Iterable<string>;
   forceChangedPaths?: Iterable<string>;
 };
@@ -75,6 +83,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   {
+    prefix: "models.pricing",
+    kind: "restart",
+  },
+  {
     prefix: "models",
     kind: "hot",
     actions: ["restart-heartbeat"],
@@ -86,6 +98,9 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
+  { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
+  { prefix: "plugins.load", kind: "restart" },
+  { prefix: "plugins.installs", kind: "restart" },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
@@ -104,7 +119,7 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "talk", kind: "none" },
   { prefix: "skills", kind: "none" },
   { prefix: "secrets", kind: "none" },
-  { prefix: "plugins", kind: "restart" },
+  { prefix: "plugins", kind: "hot", actions: ["reload-plugins", "dispose-mcp-runtimes"] },
   { prefix: "ui", kind: "none" },
   { prefix: "gateway", kind: "restart" },
   { prefix: "discovery", kind: "restart" },
@@ -113,12 +128,22 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 
 let cachedReloadRules: ReloadRule[] | null = null;
 let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
+let cachedActiveRegistryVersion = -1;
+let cachedChannelRegistryVersion = -1;
 
 function listReloadRules(): ReloadRule[] {
   const registry = getActivePluginRegistry();
-  if (registry !== cachedRegistry) {
+  const activeRegistryVersion = getActivePluginRegistryVersion();
+  const channelRegistryVersion = getActivePluginChannelRegistryVersion();
+  if (
+    registry !== cachedRegistry ||
+    activeRegistryVersion !== cachedActiveRegistryVersion ||
+    channelRegistryVersion !== cachedChannelRegistryVersion
+  ) {
     cachedReloadRules = null;
     cachedRegistry = registry;
+    cachedActiveRegistryVersion = activeRegistryVersion;
+    cachedChannelRegistryVersion = channelRegistryVersion;
   }
   if (cachedReloadRules) {
     return cachedReloadRules;
@@ -142,6 +167,17 @@ function listReloadRules(): ReloadRule[] {
         ),
       ),
   );
+  const channelPluginStateRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
+    {
+      prefix: `plugins.entries.${plugin.id}`,
+      kind: "hot",
+      actions: [
+        "reload-plugins",
+        "dispose-mcp-runtimes",
+        `restart-channel:${plugin.id}` as ReloadAction,
+      ],
+    },
+  ]);
   const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
     (entry.registration.restartPrefixes ?? [])
       .map(
@@ -169,6 +205,7 @@ function listReloadRules(): ReloadRule[] {
     ...BASE_RELOAD_RULES,
     ...pluginReloadRules,
     ...channelReloadRules,
+    ...channelPluginStateRules,
     ...BASE_RELOAD_RULES_TAIL,
   ];
   cachedReloadRules = rules;
@@ -185,6 +222,8 @@ function matchRule(path: string): ReloadRule | null {
 }
 
 function isPluginInstallTimestampPath(path: string): boolean {
+  // Legacy compatibility only: new plugin install metadata lives in the
+  // managed plugin index, but old config writes may still touch this path.
   return /^plugins\.installs\..+\.(installedAt|resolvedAt)$/.test(path);
 }
 
@@ -196,6 +235,8 @@ function getPluginInstallRecords(config: unknown): Record<string, unknown> {
   if (!isPlainObject(plugins)) {
     return {};
   }
+  // Keep legacy config install records out of gateway restart decisions while
+  // migration/doctor moves them into the managed plugin index install records.
   const installs = plugins.installs;
   return isPlainObject(installs) ? installs : {};
 }
@@ -261,7 +302,9 @@ export function buildGatewayReloadPlan(
     restartCron: false,
     restartHeartbeat: false,
     restartHealthMonitor: false,
+    reloadPlugins: false,
     restartChannels: new Set(),
+    disposeMcpRuntimes: false,
     noopPaths: [],
   };
 
@@ -286,6 +329,12 @@ export function buildGatewayReloadPlan(
         break;
       case "restart-health-monitor":
         plan.restartHealthMonitor = true;
+        break;
+      case "reload-plugins":
+        plan.reloadPlugins = true;
+        break;
+      case "dispose-mcp-runtimes":
+        plan.disposeMcpRuntimes = true;
         break;
       default:
         break;

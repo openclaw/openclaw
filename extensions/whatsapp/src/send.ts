@@ -1,11 +1,12 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import {
   convertMarkdownTables,
   resolveMarkdownTableMode,
 } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -15,9 +16,10 @@ import {
 } from "./accounts.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
+import { isWhatsAppNewsletterJid } from "./normalize.js";
 import {
-  normalizeWhatsAppLoadedMedia,
   normalizeWhatsAppPayloadText,
+  prepareWhatsAppOutboundMedia,
   resolveWhatsAppOutboundMediaUrls,
 } from "./outbound-media-contract.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
@@ -67,6 +69,7 @@ export async function sendMessageWhatsApp(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
+    audioAsVoice?: boolean;
     accountId?: string;
     quotedMessageKey?: {
       id: string;
@@ -114,8 +117,9 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
+    let visibleTextAfterVoice: string | undefined;
     if (primaryMediaUrl) {
-      const media = normalizeWhatsAppLoadedMedia(
+      const media = await prepareWhatsAppOutboundMedia(
         await loadOutboundMediaFromUrl(primaryMediaUrl, {
           maxBytes: resolveWhatsAppMediaMaxBytes(account),
           mediaAccess: options.mediaAccess,
@@ -127,7 +131,10 @@ export async function sendMessageWhatsApp(
       const caption = text || undefined;
       mediaBuffer = media.buffer;
       mediaType = media.mimetype;
-      if (media.kind === "document") {
+      if (media.kind === "audio" && caption) {
+        visibleTextAfterVoice = caption;
+        text = "";
+      } else if (media.kind === "document") {
         text = caption ?? "";
         documentFileName = media.fileName;
       } else {
@@ -136,7 +143,9 @@ export async function sendMessageWhatsApp(
     }
     outboundLog.info(`Sending message -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""}`);
     logger.info({ jid: redactedJid, hasMedia: Boolean(primaryMediaUrl) }, "sending message");
-    await active.sendComposingTo(to);
+    if (!isWhatsAppNewsletterJid(jid)) {
+      await active.sendComposingTo(to);
+    }
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
@@ -151,6 +160,13 @@ export async function sendMessageWhatsApp(
     const result = sendOptions
       ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
       : await active.sendMessage(to, text, mediaBuffer, mediaType);
+    if (visibleTextAfterVoice) {
+      if (sendOptions) {
+        await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined, sendOptions);
+      } else {
+        await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined);
+      }
+    }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
@@ -179,7 +195,9 @@ export async function sendTypingWhatsApp(
     cfg,
     accountId: options.accountId,
   });
-  await active.sendComposingTo(to);
+  if (!isWhatsAppNewsletterJid(toWhatsappJid(to))) {
+    await active.sendComposingTo(to);
+  }
 }
 
 export async function sendReactionWhatsApp(

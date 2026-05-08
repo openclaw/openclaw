@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
-import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  type RetryableHeartbeatBusySkipReason,
+  requestHeartbeat,
+  resetHeartbeatWakeStateForTests,
+} from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
@@ -44,21 +50,58 @@ describe("startHeartbeatRunner", () => {
     });
   }
 
-  function createRequestsInFlightRunSpy(skipCount: number) {
+  function createRetryableBusyRunSpy(reason: RetryableHeartbeatBusySkipReason, skipCount: number) {
     let callCount = 0;
     return vi.fn().mockImplementation(async () => {
       callCount++;
       if (callCount <= skipCount) {
-        return { status: "skipped", reason: "requests-in-flight" } as const;
+        return { status: "skipped", reason } as const;
       }
       return { status: "ran", durationMs: 1 } as const;
     });
   }
 
+  function wake(
+    reason: string,
+    opts: Partial<Parameters<typeof requestHeartbeat>[0]> = {},
+  ): Parameters<typeof requestHeartbeat>[0] {
+    const source =
+      opts.source ??
+      (reason === "interval"
+        ? "interval"
+        : reason === "manual"
+          ? "manual"
+          : reason === "retry"
+            ? "retry"
+            : reason === "exec-event"
+              ? "exec-event"
+              : reason === "background-task"
+                ? "background-task"
+                : reason === "background-task-blocked"
+                  ? "background-task-blocked"
+                  : reason.startsWith("cron:")
+                    ? "cron"
+                    : reason.startsWith("hook:")
+                      ? "hook"
+                      : "other");
+    const intent =
+      opts.intent ??
+      (reason === "interval"
+        ? "scheduled"
+        : reason === "manual"
+          ? "manual"
+          : reason === "wake" ||
+              reason === "background-task" ||
+              reason === "background-task-blocked"
+            ? "immediate"
+            : "event");
+    return { source, intent, reason, ...opts };
+  }
+
   async function expectWakeDispatch(params: {
     cfg: OpenClawConfig;
     runSpy: RunOnce;
-    wake: Parameters<typeof requestHeartbeatNow>[0];
+    wake: Parameters<typeof requestHeartbeat>[0];
     expectedCall: Record<string, unknown>;
   }) {
     const runner = startHeartbeatRunner({
@@ -67,7 +110,7 @@ describe("startHeartbeatRunner", () => {
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
-    requestHeartbeatNow(params.wake);
+    requestHeartbeat(params.wake);
     await vi.advanceTimersByTimeAsync(1);
 
     expect(params.runSpy).toHaveBeenCalledTimes(1);
@@ -127,6 +170,27 @@ describe("startHeartbeatRunner", () => {
         (call) => call[0]?.agentId === "ops" && call[0]?.heartbeat?.every === "15m",
       ),
     ).toBe(true);
+
+    runner.stop();
+  });
+
+  it("schedules every configured agent when only global heartbeat defaults exist", async () => {
+    useFakeHeartbeatTime();
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main" }, { id: "ops" }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const mainDueMs = resolveDueFromNow(0, 30 * 60_000, "main");
+    const opsDueMs = resolveDueFromNow(0, 30 * 60_000, "ops");
+
+    await vi.advanceTimersByTimeAsync(Math.max(mainDueMs, opsDueMs) + 1);
+
+    expect(runSpy.mock.calls.map((call) => call[0]?.agentId)).toEqual(
+      expect.arrayContaining(["main", "ops"]),
+    );
 
     runner.stop();
   });
@@ -214,7 +278,7 @@ describe("startHeartbeatRunner", () => {
   it("reschedules timer when runOnce returns requests-in-flight", async () => {
     useFakeHeartbeatTime();
 
-    const runSpy = createRequestsInFlightRunSpy(1);
+    const runSpy = createRetryableBusyRunSpy(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, 1);
 
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
@@ -235,6 +299,27 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("reschedules timer when runOnce returns cron-in-progress", async () => {
+    useFakeHeartbeatTime();
+
+    const runSpy = createRetryableBusyRunSpy(HEARTBEAT_SKIP_CRON_IN_PROGRESS, 1);
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const firstDueMs = resolveDueFromNow(0, 30 * 60_000, "main");
+
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
   it("does not push nextDueMs forward on repeated requests-in-flight skips", async () => {
     useFakeHeartbeatTime();
 
@@ -246,7 +331,7 @@ describe("startHeartbeatRunner", () => {
       callTimes.push(Date.now());
       callCount++;
       if (callCount <= 5) {
-        return { status: "skipped", reason: "requests-in-flight" } as const;
+        return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
       }
       return { status: "ran", durationMs: 1 } as const;
     });
@@ -265,7 +350,7 @@ describe("startHeartbeatRunner", () => {
 
     // Simulate 4 more retries at short intervals (wake layer retries).
     for (let i = 0; i < 4; i++) {
-      requestHeartbeatNow({ reason: "retry", coalesceMs: 0 });
+      requestHeartbeat(wake("retry", { coalesceMs: 0 }));
       await vi.advanceTimersByTimeAsync(1_000);
     }
     expect(callTimes.some((time) => time >= firstDueMs + intervalMs)).toBe(false);
@@ -290,6 +375,32 @@ describe("startHeartbeatRunner", () => {
       } as OpenClawConfig,
       runSpy,
       wake: {
+        source: "cron",
+        intent: "event",
+        reason: "cron:job-123",
+        agentId: "ops",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "ops",
+        reason: "cron:job-123",
+        sessionKey: "agent:ops:discord:channel:alerts",
+      },
+    });
+
+    runner.stop();
+  });
+
+  it("routes targeted wake requests to agents enabled by global defaults", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: heartbeatConfig([{ id: "main" }, { id: "ops" }]),
+      runSpy,
+      wake: {
+        source: "cron",
+        intent: "event",
         reason: "cron:job-123",
         agentId: "ops",
         sessionKey: "agent:ops:discord:channel:alerts",
@@ -324,6 +435,8 @@ describe("startHeartbeatRunner", () => {
       } as OpenClawConfig,
       runSpy,
       wake: {
+        source: "cron",
+        intent: "event",
         reason: "cron:job-123",
         agentId: "ops",
         sessionKey: "agent:ops:discord:channel:alerts",
@@ -346,6 +459,24 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("clamps oversized scheduler delays so heartbeats do not fire in a tight loop (#71414)", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    // 365d resolves to ~31_536_000_000 ms, well past Node setTimeout's
+    // 2_147_483_647 ms cap. Without clamping, setTimeout would fire after
+    // 1ms and re-arm in a tight loop, exhausting the runner.
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "365d" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    // Advance well past the broken 1ms re-arm but well under the clamped cap
+    // (~24.85d). If the bug is present, runSpy gets called many times.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
@@ -358,6 +489,8 @@ describe("startHeartbeatRunner", () => {
       } as OpenClawConfig,
       runSpy,
       wake: {
+        source: "exec-event",
+        intent: "event",
         reason: "exec-event",
         sessionKey: "agent:main:main",
         coalesceMs: 0,
@@ -369,6 +502,242 @@ describe("startHeartbeatRunner", () => {
       },
     });
     expect(runSpy.mock.calls.some((call) => call[0]?.agentId === "finance")).toBe(false);
+
+    runner.stop();
+  });
+
+  // Regression for runaway heartbeat loop: backgrounded `process.start` exits
+  // call `requestHeartbeat({reason: "exec-event"})` from
+  // `bash-tools.exec-runtime.ts:347` (`maybeNotifyOnExit`). If a heartbeat run
+  // uses backgrounded tools (response-tracker sync, conversation monitors,
+  // etc.), each background process exit triggers another heartbeat run because
+  // the dispatcher (`heartbeat-runner.ts:1805`) only enforces `nextDueMs` when
+  // `reason === "interval"`, and the targeted branch has no cooldown gate at
+  // all. Observed in production: heartbeat configured `every: 30m` fires every
+  // ~10s, pegging the gateway event loop with eventLoopDelayMaxMs >6s spikes.
+  it("does not bypass interval cooldown for repeated exec-event wakes within nextDueMs", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    // First exec-event wake: agent just woke from a backgrounded tool exit.
+    // This one legitimately fires the run.
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Simulate the runaway: 4 more exec-event wakes from backgrounded process
+    // exits, fired well within the configured 30m interval. These should be
+    // debounced by the cooldown — the agent just ran, nothing has changed.
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(10_000); // 10s between background exits
+      requestHeartbeat({
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+    }
+
+    // Total elapsed: ~40s. Configured `every` is 30m. Subsequent exec-events
+    // should NOT trigger fresh runs within the cooldown window.
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    runner.stop();
+  });
+
+  it("preserves immediate delivery for repeated bare wake reasons", async () => {
+    // 'wake' is the immediate-path reason from `openclaw system event --mode now`
+    // and must NOT be deferred. Verify the runner allows multiple back-to-back
+    // wake requests through (subject only to the flood guard backstop).
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    // Three 'wake' requests with 200ms between them — none should be deferred.
+    for (let i = 0; i < 3; i++) {
+      requestHeartbeat({
+        source: "manual",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(200);
+    }
+
+    expect(runSpy).toHaveBeenCalledTimes(3);
+    runner.stop();
+  });
+
+  it("preserves immediate delivery for repeated background-task wakes", async () => {
+    // Task-registry terminal updates wake the heartbeat with reason
+    // 'background-task'. Documented as immediate so users don't wait for the
+    // next scheduled tick to see task completion notifications.
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    for (let i = 0; i < 3; i++) {
+      requestHeartbeat({
+        source: "background-task",
+        intent: "immediate",
+        reason: "background-task",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(200);
+    }
+
+    expect(runSpy).toHaveBeenCalledTimes(3);
+    runner.stop();
+  });
+
+  it("preserves immediate delivery for blocked background-task follow-ups", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    requestHeartbeat({
+      source: "background-task-blocked",
+      intent: "immediate",
+      reason: "background-task-blocked",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        reason: "background-task-blocked",
+        sessionKey: "agent:main:main",
+      }),
+    );
+    runner.stop();
+  });
+
+  it.each([
+    { reason: "hook:wake", label: "hook wake-now" },
+    { reason: "hook:job-123", label: "hook agent wake-now announcement" },
+    { reason: "cron:job-123", label: "cron wake-now" },
+  ])("preserves immediate delivery for $label after a recent run", async ({ reason }) => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    requestHeartbeat({
+      source: reason.startsWith("cron:") ? "cron" : "hook",
+      intent: "immediate",
+      reason,
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ reason, sessionKey: "agent:main:main" }),
+    );
+    runner.stop();
+  });
+
+  it("retryable busy skip does not poison the cooldown for the next retry", async () => {
+    // Reproduces P2 finding from #75439 review: if a targeted exec-event wake
+    // hits requests-in-flight on its first attempt, the wake layer retries the
+    // same reason. The cooldown must NOT have been advanced by the busy attempt
+    // — otherwise the retry would falsely defer with `not-due`/`min-spacing`.
+    useFakeHeartbeatTime();
+    let attempt = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
+      }
+      return { status: "ran", durationMs: 1 } as const;
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Wake layer retries via DEFAULT_RETRY_MS (1s). Advance past it.
+    await vi.advanceTimersByTimeAsync(1500);
+
+    // The retry must NOT be deferred to `not-due` or `min-spacing`. Since the
+    // first attempt was a retryable busy skip, the cooldown bookkeeping was
+    // never recorded — so the retry should reach runOnce normally.
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ reason: "exec-event", sessionKey: "agent:main:main" }),
+    );
+    await expect(runSpy.mock.results[1]?.value).resolves.toEqual({
+      status: "ran",
+      durationMs: 1,
+    });
 
     runner.stop();
   });

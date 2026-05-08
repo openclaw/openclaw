@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  getMemorySearchManagerMockConfigs,
+  getMemorySearchManagerMockParams,
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
 } from "./memory-tool-manager-mock.js";
+import { createMemorySearchTool } from "./tools.js";
 import {
+  asOpenClawConfig,
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./tools.test-helpers.js";
@@ -102,5 +106,68 @@ describe("memory_search unavailable payloads", () => {
     expect((result.details as { debug?: { searchMs?: number } }).debug?.searchMs).toEqual(
       expect.any(Number),
     );
+  });
+
+  it("uses explicit plugin context agent over synthetic active-memory session keys", async () => {
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        agents: {
+          list: [
+            { id: "main", default: true, memorySearch: { enabled: false } },
+            { id: "recall", memorySearch: { enabled: true } },
+          ],
+        },
+      }),
+      agentId: "recall",
+      agentSessionKey: "explicit:user-session:active-memory:abc123",
+    });
+
+    await tool.execute("recall", { query: "favorite food" });
+
+    expect(getMemorySearchManagerMockParams().at(-1)?.agentId).toBe("recall");
+  });
+
+  it("re-resolves config when executing a previously created tool", async () => {
+    const startupConfig = asOpenClawConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
+            model: "nomic-embed-text",
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+      memory: {
+        backend: "builtin",
+      },
+    });
+    const patchedConfig = asOpenClawConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+      memory: {
+        backend: "builtin",
+      },
+    });
+    let liveConfig = startupConfig;
+    const tool = createMemorySearchTool({
+      config: startupConfig,
+      getConfig: () => liveConfig,
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    liveConfig = patchedConfig;
+    await tool.execute("patched-config", { query: "provider switch" });
+
+    expect(getMemorySearchManagerMockConfigs()).toEqual([patchedConfig]);
   });
 });

@@ -4,7 +4,7 @@ import {
   type PluginManifestCommandAliasRegistry,
   type PluginManifestCommandAliasRecord,
 } from "./manifest-command-aliases.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadManifestMetadataRegistry } from "./manifest-contract-eligibility.js";
 
 export function resolveManifestCommandAliasOwner(params: {
   command: string | undefined;
@@ -15,11 +15,11 @@ export function resolveManifestCommandAliasOwner(params: {
 }): PluginManifestCommandAliasRecord | undefined {
   const registry =
     params.registry ??
-    loadPluginManifestRegistry({
+    loadManifestMetadataRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
-    });
+    }).manifestRegistry;
   return resolveManifestCommandAliasOwnerInRegistry({
     command: params.command,
     registry,

@@ -68,7 +68,7 @@ function sanitizeConfigPatchValue(value: unknown): unknown {
   return next;
 }
 
-export function mergeConfigPatch<T>(base: T, patch: unknown): T {
+function mergeConfigPatch<T>(base: T, patch: unknown): T {
   if (!isPlainRecord(base) || !isPlainRecord(patch)) {
     return sanitizeConfigPatchValue(patch) as T;
   }
@@ -119,11 +119,21 @@ export function applyProviderAuthConfigPatch(
   };
 }
 
-export function applyDefaultModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
+export function applyDefaultModel(
+  cfg: OpenClawConfig,
+  model: string,
+  opts?: { preserveExistingPrimary?: boolean },
+): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[model] = models[model] ?? {};
 
   const existingModel = cfg.agents?.defaults?.model;
+  const existingPrimary =
+    typeof existingModel === "string"
+      ? existingModel
+      : existingModel && typeof existingModel === "object"
+        ? (existingModel as { primary?: string }).primary
+        : undefined;
   return {
     ...cfg,
     agents: {
@@ -135,7 +145,7 @@ export function applyDefaultModel(cfg: OpenClawConfig, model: string): OpenClawC
           ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
             ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
             : undefined),
-          primary: model,
+          primary: opts?.preserveExistingPrimary === true ? (existingPrimary ?? model) : model,
         },
       },
     },

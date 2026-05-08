@@ -1,6 +1,9 @@
 import path from "node:path";
-import { fileTypeFromBuffer } from "file-type";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
+
+/** @internal */
+export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
@@ -18,6 +21,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/opus": ".opus",
   "audio/x-m4a": ".m4a",
   "audio/mp4": ".m4a",
+  "audio/x-caf": ".caf",
   "video/mp4": ".mp4",
   "video/quicktime": ".mov",
   "application/pdf": ".pdf",
@@ -63,6 +67,8 @@ const AUDIO_FILE_EXTENSIONS = new Set([
   ".wav",
 ]);
 
+const fileTypeModuleLoader = createLazyImportLoader(() => import("file-type"));
+
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
@@ -71,16 +77,40 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   return cleaned || undefined;
 }
 
+/** @internal */
+export function sliceMimeSniffBuffer(buffer: Buffer): Buffer {
+  if (buffer.byteLength <= FILE_TYPE_SNIFF_MAX_BYTES) {
+    return buffer;
+  }
+  return buffer.subarray(0, FILE_TYPE_SNIFF_MAX_BYTES);
+}
+
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   if (!buffer) {
     return undefined;
   }
   try {
-    const type = await fileTypeFromBuffer(buffer);
-    return type?.mime ?? undefined;
+    const { fileTypeFromBuffer } = await fileTypeModuleLoader.load();
+    const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
+    if (type?.mime) {
+      return type.mime;
+    }
   } catch {
-    return undefined;
+    // fall through to manual magic-byte sniffs
   }
+  return sniffKnownAudioMagic(buffer);
+}
+
+// Fallbacks for audio containers `file-type` doesn't recognize natively (e.g.
+// Apple's CAF, used by iMessage voice memos when produced by `afconvert`).
+// Without this the host-local-media validator drops these buffers as unknown
+// binary blobs because the sniff returns undefined, even though the file is
+// a valid audio container.
+function sniffKnownAudioMagic(buffer: Buffer): string | undefined {
+  if (buffer.byteLength >= 4 && buffer.toString("ascii", 0, 4) === "caff") {
+    return "audio/x-caf";
+  }
+  return undefined;
 }
 
 export function getFileExtension(filePath?: string | null): string | undefined {

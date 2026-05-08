@@ -130,7 +130,7 @@ export type MatrixDeviceVerificationStatusLike = {
   signedByOwner?: boolean;
 };
 
-export type MatrixKeyBackupInfo = {
+type MatrixKeyBackupInfo = {
   algorithm: string;
   auth_data: Record<string, unknown>;
   count?: number;
@@ -138,24 +138,24 @@ export type MatrixKeyBackupInfo = {
   version?: string;
 };
 
-export type MatrixKeyBackupTrustInfo = {
+type MatrixKeyBackupTrustInfo = {
   trusted: boolean;
   matchesDecryptionKey: boolean;
 };
 
-export type MatrixRoomKeyBackupRestoreResult = {
+type MatrixRoomKeyBackupRestoreResult = {
   total: number;
   imported: number;
 };
 
-export type MatrixImportRoomKeyProgress = {
+type MatrixImportRoomKeyProgress = {
   stage: string;
   successes?: number;
   failures?: number;
   total?: number;
 };
 
-export type MatrixSecretStorageKeyDescription = {
+type MatrixSecretStorageKeyDescription = {
   passphrase?: unknown;
   name?: string;
   [key: string]: unknown;
@@ -232,6 +232,14 @@ export type MatrixCryptoBootstrapApi = {
   }) => Promise<MatrixRoomKeyBackupRestoreResult>;
   setDeviceVerified?: (userId: string, deviceId: string, verified?: boolean) => Promise<void>;
   crossSignDevice?: (deviceId: string) => Promise<void>;
+  getOwnIdentity?: () => Promise<
+    | {
+        free?: () => void;
+        isVerified?: () => boolean;
+        verify?: () => Promise<unknown>;
+      }
+    | undefined
+  >;
   isCrossSigningReady?: () => Promise<boolean>;
   userHasCrossSigningKeys?: (userId?: string, downloadUncached?: boolean) => Promise<boolean>;
 };

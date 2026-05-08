@@ -1,15 +1,20 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { listManifestProviderContributionIds } from "./manifest-contribution-ids.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import { type LoadPluginRegistryParams, type PluginRegistrySnapshot } from "./plugin-registry.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
 const DANGEROUS_PROVIDER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-let providerRuntimePromise: Promise<typeof import("./provider-discovery.runtime.js")> | undefined;
+const providerRuntimeLoader = createLazyImportLoader(
+  () => import("./provider-discovery.runtime.js"),
+);
 
 function loadProviderRuntime() {
-  providerRuntimePromise ??= import("./provider-discovery.runtime.js");
-  return providerRuntimePromise;
+  return providerRuntimeLoader.load();
 }
 
 function resolveProviderCatalogHook(provider: ProviderPlugin) {
@@ -28,7 +33,7 @@ function isSafeProviderConfigKey(value: string): boolean {
   return value !== "" && !DANGEROUS_PROVIDER_KEYS.has(value);
 }
 
-export async function resolvePluginDiscoveryProviders(params: {
+export type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -36,7 +41,37 @@ export async function resolvePluginDiscoveryProviders(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-}): Promise<ProviderPlugin[]> {
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+};
+
+export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
+  index?: PluginRegistrySnapshot;
+  includeDisabled?: boolean;
+};
+
+function sortedValues(values: Iterable<string>): string[] {
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveInstalledPluginProviderContributionIds(
+  params: ResolveInstalledPluginProviderContributionIdsParams = {},
+): string[] {
+  const registryParams =
+    params.candidates && params.preferPersisted === undefined
+      ? { ...params, preferPersisted: false }
+      : params;
+  return sortedValues(
+    listManifestProviderContributionIds({
+      ...registryParams,
+      index: params.index,
+      includeDisabled: params.includeDisabled,
+    }),
+  );
+}
+
+export async function resolveRuntimePluginDiscoveryProviders(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderPlugin[]> {
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)
     .filter((provider) => resolveProviderCatalogOrderHook(provider));

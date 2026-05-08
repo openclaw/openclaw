@@ -1,7 +1,8 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildGroupDisplayName,
@@ -354,6 +355,52 @@ describe("sessions", () => {
     expect(store[sessionKey]?.origin?.label).toBe("Family");
     expect(store[sessionKey]?.origin?.provider).toBe("demo-chat");
     expect(store[sessionKey]?.origin?.chatType).toBe("group");
+  });
+
+  it("updateLastRoute skips missing sessions when creation is disabled", async () => {
+    const sessionKey = "agent:main:demo-chat:group:room-123";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute-no-create",
+      entries: {},
+    });
+
+    const result = await updateLastRoute({
+      storePath,
+      sessionKey,
+      deliveryContext: {
+        channel: "demo-chat",
+        to: "room-123",
+      },
+      createIfMissing: false,
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(result).toBeNull();
+    expect(store[sessionKey]).toBeUndefined();
+  });
+
+  it("updateLastRoute updates existing sessions when creation is disabled", async () => {
+    const sessionKey = "agent:main:demo-chat:group:room-123";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute-existing-no-create",
+      entries: {
+        [sessionKey]: buildMainSessionEntry(),
+      },
+    });
+
+    await updateLastRoute({
+      storePath,
+      sessionKey,
+      deliveryContext: {
+        channel: "demo-chat",
+        to: "room-123",
+      },
+      createIfMissing: false,
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.lastChannel).toBe("demo-chat");
+    expect(store[sessionKey]?.lastTo).toBe("room-123");
   });
 
   it("updateLastRoute does not bump updatedAt on existing sessions (#49515)", async () => {
@@ -752,7 +799,7 @@ describe("sessions", () => {
     await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
   });
 
-  it("updateSessionStoreEntry re-reads disk inside lock instead of using stale cache", async () => {
+  it("updateSessionStoreEntry re-reads disk inside the writer slot instead of using stale cache", async () => {
     const mainSessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({
       prefix: "updateSessionStoreEntry-cache-bypass",
@@ -791,5 +838,92 @@ describe("sessions", () => {
     const store = loadSessionStore(storePath);
     expect(store[mainSessionKey]?.providerOverride).toBe("anthropic");
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
+  });
+
+  it("updateSessionStore uses the writer-owned mutable cache without disk read or parse", async () => {
+    const mainSessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStore-mutable-cache",
+      entries: {
+        [mainSessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 123,
+          thinkingLevel: "low",
+        },
+      },
+    });
+
+    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
+
+    const readSpy = vi.spyOn(fsSync, "readFileSync");
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      await updateSessionStore(
+        storePath,
+        (store) => {
+          const existing = store[mainSessionKey];
+          if (!existing) {
+            throw new Error("missing session entry");
+          }
+          store[mainSessionKey] = {
+            ...existing,
+            thinkingLevel: "high",
+          };
+        },
+        { skipMaintenance: true },
+      );
+
+      expect(readSpy).not.toHaveBeenCalled();
+      expect(parseSpy).not.toHaveBeenCalled();
+    } finally {
+      readSpy.mockRestore();
+      parseSpy.mockRestore();
+    }
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
+  });
+
+  it("updateSessionStore drops a borrowed cache entry when a mutator throws", async () => {
+    const mainSessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStore-mutable-cache-throw",
+      entries: {
+        [mainSessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 123,
+          thinkingLevel: "low",
+        },
+      },
+    });
+
+    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
+
+    await expect(
+      updateSessionStore(
+        storePath,
+        (store) => {
+          const existing = store[mainSessionKey];
+          if (!existing) {
+            throw new Error("missing session entry");
+          }
+          store[mainSessionKey] = {
+            ...existing,
+            thinkingLevel: "mutated-before-throw",
+          };
+          throw new Error("boom");
+        },
+        { skipMaintenance: true },
+      ),
+    ).rejects.toThrow("boom");
+
+    const readSpy = vi.spyOn(fsSync, "readFileSync");
+    try {
+      const store = loadSessionStore(storePath);
+      expect(readSpy).toHaveBeenCalled();
+      expect(store[mainSessionKey]?.thinkingLevel).toBe("low");
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 });

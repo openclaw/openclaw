@@ -1,6 +1,6 @@
-import OpenClawKit
 import Foundation
 import Observation
+import OpenClawKit
 import OSLog
 import UniformTypeIdentifiers
 
@@ -14,6 +14,7 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 
 @MainActor
 @Observable
+// swiftlint:disable:next type_body_length
 public final class OpenClawChatViewModel {
     public static let defaultModelSelectionID = "__default__"
 
@@ -659,8 +660,8 @@ public final class OpenClawChatViewModel {
             self.errorText = "Unable to compact the session. Please try again."
             let nsError = error as NSError
             chatUILogger.error(
-                "session compact failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public) details=\(String(describing: error), privacy: .private)"
-            )
+                "compact failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)")
+            chatUILogger.error("compact details=\(String(describing: error), privacy: .private)")
             return
         }
 
@@ -733,7 +734,10 @@ public final class OpenClawChatViewModel {
                 self.latestModelSelectionRequestIDsBySession.removeValue(forKey: sessionKey)
             }
             if self.lastSuccessfulModelSelectionIDsBySession[sessionKey] == previous {
-                self.applySuccessfulModelSelection(previous, sessionKey: sessionKey, syncSelection: sessionKey == self.sessionKey)
+                self.applySuccessfulModelSelection(
+                    previous,
+                    sessionKey: sessionKey,
+                    syncSelection: sessionKey == self.sessionKey)
             }
             guard sessionKey == self.sessionKey else { return }
             self.modelSelectionID = previous
@@ -856,7 +860,8 @@ public final class OpenClawChatViewModel {
             syncSelection: syncSelection)
     }
 
-    private func resolvedSessionModelIdentity(forSelectionID selectionID: String) -> (modelID: String?, modelProvider: String?) {
+    private func resolvedSessionModelIdentity(forSelectionID selectionID: String)
+    -> (modelID: String?, modelProvider: String?) {
         guard let modelRef = self.modelRef(forSelectionID: selectionID) else {
             return (nil, nil)
         }
@@ -945,6 +950,8 @@ public final class OpenClawChatViewModel {
             Task { await self.pollHealthIfNeeded(force: false) }
         case let .chat(chat):
             self.handleChatEvent(chat)
+        case let .sessionMessage(message):
+            self.handleSessionMessageEvent(message)
         case let .agent(agent):
             self.handleAgentEvent(agent)
         case .seqGap:
@@ -955,6 +962,26 @@ public final class OpenClawChatViewModel {
                 await self.pollHealthIfNeeded(force: true)
             }
         }
+    }
+
+    private func handleSessionMessageEvent(_ payload: OpenClawSessionMessageEventPayload) {
+        if let sessionKey = payload.sessionKey,
+           !Self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey)
+        {
+            return
+        }
+
+        guard let message = payload.message else { return }
+        guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" else {
+            return
+        }
+        if self.pendingRunCount > 0 {
+            return
+        }
+
+        let sanitized = Self.stripInboundMetadata(from: message)
+        let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
+        self.messages = Self.dedupeMessages(reconciled)
     }
 
     private func handleChatEvent(_ chat: OpenClawChatEventPayload) {

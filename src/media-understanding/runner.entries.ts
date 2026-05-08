@@ -4,7 +4,6 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
   mergeModelProviderRequestOverrides,
   sanitizeConfiguredModelProviderRequest,
@@ -28,8 +27,7 @@ import {
   CLI_OUTPUT_MAX_BUFFER,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
-  resolveDefaultMediaModel,
-} from "./defaults.js";
+} from "./defaults.constants.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -46,6 +44,26 @@ import type {
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
+
+let cachedModelAuth: {
+  resolveApiKeyForProvider: ResolveApiKeyForProvider;
+  requireApiKey: RequireApiKey;
+} | null = null;
+
+async function loadModelAuth() {
+  cachedModelAuth ??= await import("../agents/model-auth.js");
+  return cachedModelAuth;
+}
+
+function resolveLiteralProviderApiKey(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): string | null {
+  const value = params.cfg.models?.providers?.[params.providerId]?.apiKey;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
 
 function sanitizeProviderHeaders(
   headers: Record<string, unknown> | undefined,
@@ -374,7 +392,7 @@ function resolveEntryRunOptions(params: {
   return { maxBytes, maxChars, timeoutMs, prompt };
 }
 
-function resolveAudioRequestOverrides(config: MediaUnderstandingConfig | undefined): {
+function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
   prompt?: string;
   language?: string;
 } {
@@ -394,6 +412,20 @@ async function resolveProviderExecutionAuth(params: {
   entry: MediaUnderstandingModelConfig;
   agentDir?: string;
 }) {
+  const literalApiKey = resolveLiteralProviderApiKey({
+    cfg: params.cfg,
+    providerId: params.providerId,
+  });
+  if (literalApiKey) {
+    return {
+      apiKeys: collectProviderApiKeysForExecution({
+        provider: params.providerId,
+        primaryApiKey: literalApiKey,
+      }),
+      providerConfig: params.cfg.models?.providers?.[params.providerId],
+    };
+  }
+  const { requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
   const auth = await resolveApiKeyForProvider({
     provider: params.providerId,
     cfg: params.cfg,
@@ -538,6 +570,7 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
     const imageInput = {
       buffer: media.buffer,
@@ -545,7 +578,7 @@ export async function runProviderEntry(params: {
       mime: media.mime,
       model: modelId,
       provider: providerId,
-      prompt,
+      prompt: requestOverrides.prompt ?? prompt,
       timeoutMs,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
@@ -577,7 +610,7 @@ export async function runProviderEntry(params: {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
     const transcribeAudio = provider.transcribeAudio;
-    const requestOverrides = resolveAudioRequestOverrides(params.config);
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
@@ -598,7 +631,7 @@ export async function runProviderEntry(params: {
     });
     const model =
       entry.model?.trim() ||
-      resolveDefaultMediaModel({
+      (await import("./defaults.js")).resolveDefaultMediaModel({
         cfg,
         providerId,
         capability: "audio",
@@ -703,7 +736,7 @@ export async function runCliEntry(params: {
   if (!command) {
     throw new Error(`CLI entry missing command for ${capability}`);
   }
-  const requestOverrides = resolveAudioRequestOverrides(params.config);
+  const requestOverrides = resolveMediaRequestOverrides(params.config);
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,

@@ -1,5 +1,5 @@
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import { registerMatrixCliMetadata } from "./cli-metadata.js";
 import entry, { registerMatrixFullRuntime } from "./index.js";
 
@@ -69,6 +69,34 @@ describe("matrix plugin", () => {
     expect(entry.setChannelRuntime).toEqual(expect.any(Function));
   });
 
+  it("wires CLI metadata through the bundled entry", () => {
+    const registerCli = vi.fn();
+    const registerGatewayMethod = vi.fn();
+    const api = createTestPluginApi({
+      id: "matrix",
+      name: "Matrix",
+      source: "test",
+      config: {},
+      runtime: {} as never,
+      registrationMode: "cli-metadata",
+      registerCli,
+      registerGatewayMethod,
+    });
+
+    entry.register(api);
+
+    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
+      descriptors: [
+        {
+          name: "matrix",
+          description: "Manage Matrix accounts, verification, devices, and profile state",
+          hasSubcommands: true,
+        },
+      ],
+    });
+    expect(registerGatewayMethod).not.toHaveBeenCalled();
+  });
+
   it("registers subagent lifecycle hooks during full runtime registration", () => {
     const on = vi.fn();
     const registerGatewayMethod = vi.fn();
@@ -85,6 +113,7 @@ describe("matrix plugin", () => {
 
     registerMatrixFullRuntime(api);
 
+    expect(runtimeMocks.ensureMatrixCryptoRuntime).not.toHaveBeenCalled();
     expect(on.mock.calls.map(([hookName]) => hookName)).toEqual([
       "subagent_spawning",
       "subagent_ended",

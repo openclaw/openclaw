@@ -3,7 +3,6 @@ import { tmpdir as getOsTmpDir } from "node:os";
 import path from "node:path";
 
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
-const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
 
 type ResolvePreferredOpenClawTmpDirOptions = {
   accessSync?: (path: string, mode?: number) => void;
@@ -31,9 +30,16 @@ function isNodeErrorWithCode(err: unknown, code: string): err is MaybeNodeError 
   );
 }
 
+type ResolvePreferredOpenClawTmpDirInternalOptions = ResolvePreferredOpenClawTmpDirOptions & {
+  /** Test seam for the host platform; defaults to `process.platform`. */
+  platform?: NodeJS.Platform;
+};
+
 export function resolvePreferredOpenClawTmpDir(
-  options: ResolvePreferredOpenClawTmpDirOptions = {},
+  options: ResolvePreferredOpenClawTmpDirInternalOptions = {},
 ): string {
+  // Evaluated here (not at module load) so this file is safe to import in browser bundles.
+  const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
   const accessSync = options.accessSync ?? fs.accessSync;
   const chmodSync = options.chmodSync ?? fs.chmodSync;
   const lstatSync = options.lstatSync ?? fs.lstatSync;
@@ -49,6 +55,7 @@ export function resolvePreferredOpenClawTmpDir(
       }
     });
   const tmpdir = typeof options.tmpdir === "function" ? options.tmpdir : getOsTmpDir;
+  const platform = options.platform ?? process.platform;
   const uid = getuid();
 
   const isSecureDirForUser = (st: { mode?: number; uid?: number }): boolean => {
@@ -68,7 +75,11 @@ export function resolvePreferredOpenClawTmpDir(
   const fallback = (): string => {
     const base = tmpdir();
     const suffix = uid === undefined ? "openclaw" : `openclaw-${uid}`;
-    return path.join(base, suffix);
+    // Use the platform-specific joiner so Windows fallbacks stay in pure
+    // backslash form even when the host process is non-Windows (e.g. when
+    // tests inject `platform: "win32"` on a Linux runner).
+    const joiner = platform === "win32" ? path.win32.join : path.join;
+    return joiner(base, suffix);
   };
 
   const isTrustedTmpDir = (st: {
@@ -105,10 +116,24 @@ export function resolvePreferredOpenClawTmpDir(
       if (uid !== undefined && typeof st.uid === "number" && st.uid !== uid) {
         return false;
       }
-      if (typeof st.mode !== "number" || (st.mode & 0o022) === 0) {
+      if (typeof st.mode !== "number") {
         return false;
       }
-      chmodSync(candidatePath, 0o700);
+      if ((st.mode & 0o022) === 0) {
+        return resolveDirState(candidatePath) === "available";
+      }
+      try {
+        chmodSync(candidatePath, 0o700);
+      } catch (chmodErr) {
+        if (
+          isNodeErrorWithCode(chmodErr, "EPERM") ||
+          isNodeErrorWithCode(chmodErr, "EACCES") ||
+          isNodeErrorWithCode(chmodErr, "ENOENT")
+        ) {
+          return resolveDirState(candidatePath) === "available";
+        }
+        throw chmodErr;
+      }
       warn(`[openclaw] tightened permissions on temp dir: ${candidatePath}`);
       return resolveDirState(candidatePath) === "available";
     } catch {
@@ -139,6 +164,17 @@ export function resolvePreferredOpenClawTmpDir(
     }
     return fallbackPath;
   };
+
+  // On Windows, Node resolves the POSIX path `/tmp` to `C:\tmp` (relative to
+  // the current drive root). Many Windows hosts have `C:\tmp` because Git,
+  // MSYS2, and other Unix-compat tools create it; the existing logic then
+  // happily writes logs and TTS files to `C:\tmp\openclaw\` while every
+  // other code path expects `%TEMP%\openclaw\`. Skip the POSIX preferred
+  // path entirely on Windows so the function falls through to the
+  // os.tmpdir() fallback (#60713).
+  if (platform === "win32") {
+    return ensureTrustedFallbackDir();
+  }
 
   const existingPreferredState = resolveDirState(POSIX_OPENCLAW_TMP_DIR);
   if (existingPreferredState === "available") {

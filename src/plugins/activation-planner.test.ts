@@ -1,11 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
 }));
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mocks.loadPluginManifestRegistry(...args),
+vi.mock("./plugin-registry-contributions.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    mocks.loadPluginManifestRegistryForPluginRegistry(...args),
 }));
 
 let resolveManifestActivationPluginIds: typeof import("./activation-planner.js").resolveManifestActivationPluginIds;
@@ -18,8 +19,8 @@ describe("activation planner", () => {
   });
 
   beforeEach(() => {
-    mocks.loadPluginManifestRegistry.mockReset();
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         {
           id: "memory-core",
@@ -34,6 +35,16 @@ describe("activation planner", () => {
         {
           id: "device-pair",
           commandAliases: [{ name: "pair", kind: "runtime-slash" }],
+          providers: [],
+          channels: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "bundled",
+        },
+        {
+          id: "browser",
+          commandAliases: [{ name: "browser" }],
           providers: [],
           channels: [],
           cliBackends: [],
@@ -86,6 +97,15 @@ describe("activation planner", () => {
         },
       }),
     ).toEqual(["memory-core"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "command",
+          command: "browser",
+        },
+      }),
+    ).toEqual(["browser"]);
 
     expect(
       resolveManifestActivationPluginIds({
@@ -281,7 +301,7 @@ describe("activation planner", () => {
   });
 
   it("returns capability reasons from explicit hints and manifest ownership", () => {
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [
         {
           id: "explicit-provider",

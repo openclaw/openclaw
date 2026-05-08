@@ -1,5 +1,5 @@
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
 import { resolveSlackChannelConfig } from "./channel-config.js";
@@ -77,6 +77,34 @@ describe("resolveSlackChannelConfig", () => {
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({ allowed: true, requireMention: false });
+  });
+
+  it("matches channel-prefixed config keys when Slack delivers a bare channel ID", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C0AJYR3BVTJ",
+      channels: { "channel:C0AJYR3BVTJ": { enabled: true, requireMention: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({
+      allowed: true,
+      requireMention: false,
+      matchKey: "channel:C0AJYR3BVTJ",
+      matchSource: "direct",
+    });
+  });
+
+  it("matches lowercase channel-prefixed config keys when Slack delivers uppercase channel IDs", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C0AJYR3BVTJ",
+      channels: { "channel:c0ajyr3bvtj": { enabled: true, requireMention: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({
+      allowed: true,
+      requireMention: false,
+      matchKey: "channel:c0ajyr3bvtj",
+      matchSource: "direct",
+    });
   });
 
   it("blocks channel-name route matches by default", () => {
@@ -193,6 +221,18 @@ describe("resolveSlackSystemEventSessionKey", () => {
     const ctx = createSlackMonitorContext(baseParams());
     expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
       "agent:main:slack:channel:c123",
+    );
+  });
+
+  it("uses the configured default agent for fallback system-event sessions", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      cfg: {
+        agents: { list: [{ id: "ops", default: true }] },
+      },
+    });
+    expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
+      "agent:ops:slack:channel:c123",
     );
   });
 

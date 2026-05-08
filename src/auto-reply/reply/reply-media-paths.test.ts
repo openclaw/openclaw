@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -300,6 +302,64 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
+  it("keeps managed outbound media under the shared media root with sandbox mapping", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/Users/peter/.openclaw/media/outbound/generated.png",
+      mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
+    });
+    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("drops managed outbound media symlinks escaping the shared media root without sandbox mapping", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-media-state-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-media-outside-"));
+    const outsideFile = path.join(outsideDir, "secret.png");
+    const symlinkPath = path.join(stateDir, "media", "outbound", "linked-secret.png");
+    try {
+      await fs.mkdir(path.dirname(symlinkPath), { recursive: true });
+      await fs.writeFile(outsideFile, "secret", "utf8");
+      await fs.symlink(outsideFile, symlinkPath);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const normalize = createReplyMediaPathNormalizer({
+        cfg: {},
+        sessionKey: "session-key",
+        workspaceDir: "/tmp/agent-workspace",
+      });
+
+      const result = await normalize({
+        mediaUrls: [symlinkPath],
+      });
+
+      expect(result).toMatchObject({
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      });
+      expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(symlinkPath, { force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("drops host-local media when shared outbound attachment policy rejects it", async () => {
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
       new Error("Local media path is not under an allowed directory"),
@@ -414,6 +474,40 @@ describe("createReplyMediaPathNormalizer", () => {
       agentId: expect.any(String),
       workspaceDir: "/tmp/agent-workspace",
       mediaSources: [absolutePath],
+      sessionKey: "session-key",
+      messageProvider: undefined,
+      accountId: undefined,
+      requesterSenderId: undefined,
+      requesterSenderName: undefined,
+      requesterSenderUsername: undefined,
+      requesterSenderE164: undefined,
+      groupId: undefined,
+      groupChannel: undefined,
+      groupSpace: undefined,
+    });
+  });
+
+  it("passes home-relative local media sources into shared outbound media access", async () => {
+    const homeRelativePath = "~/Pictures/chart.png";
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: { tools: { fs: { workspaceOnly: false } } },
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: [homeRelativePath],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/tmp/outbound-media/chart.png",
+      mediaUrls: ["/tmp/outbound-media/chart.png"],
+    });
+    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith({
+      cfg: { tools: { fs: { workspaceOnly: false } } },
+      agentId: expect.any(String),
+      workspaceDir: "/tmp/agent-workspace",
+      mediaSources: [homeRelativePath],
       sessionKey: "session-key",
       messageProvider: undefined,
       accountId: undefined,

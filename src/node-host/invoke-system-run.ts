@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
+  describeInterpreterInlineEval,
+  type InterpreterInlineEvalHit,
+} from "../infra/command-analysis/inline-eval.js";
+import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import {
   addDurableCommandApproval,
   hasDurableExecApproval,
   persistAllowAlwaysPatterns,
@@ -14,10 +19,6 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
-import {
-  describeInterpreterInlineEval,
-  detectInterpreterInlineEvalArgv,
-} from "../infra/exec-inline-eval.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
@@ -106,7 +107,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
   durableApprovalSatisfied: boolean;
   strictInlineEval: boolean;
-  inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
+  inlineEvalHit: InterpreterInlineEvalHit | null;
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
   allowlistSatisfied: boolean;
@@ -189,15 +190,15 @@ export type HandleSystemRunInvokeOptions = {
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
   preferMacAppExecHost: boolean;
-  loadConfig?: () => OpenClawConfig;
+  getRuntimeConfig?: () => OpenClawConfig;
 };
 
 async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<OpenClawConfig> {
-  if (opts.loadConfig) {
-    return opts.loadConfig();
+  if (opts.getRuntimeConfig) {
+    return opts.getRuntimeConfig();
   }
-  const { loadConfig } = await import("../config/config.js");
-  return loadConfig();
+  const { getRuntimeConfig } = await import("../config/config.js");
+  return getRuntimeConfig();
 }
 
 async function sendSystemRunDenied(
@@ -248,7 +249,6 @@ async function sendSystemRunCompleted(
   });
 }
 
-export { formatSystemRunAllowlistMissMessage } from "./exec-policy.js";
 export { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 
 async function parseSystemRunPhase(
@@ -405,13 +405,7 @@ async function evaluateSystemRunPolicyPhase(
     });
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
-  const inlineEvalHit = strictInlineEval
-    ? (segments
-        .map((segment) =>
-          detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
-        )
-        .find((entry) => entry !== null) ?? null)
-    : null;
+  const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;
   const isWindows = process.platform === "win32";
   // Detect Windows wrapper transport from the same shell-wrapper view used to
   // derive the inner payload. That keeps `cmd.exe /c` approval-gated even when

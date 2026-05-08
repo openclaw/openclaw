@@ -3,15 +3,19 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
+  loadPluginMetadataSnapshot: vi.fn(),
   resolveDiscoveredProviderPluginIds: vi.fn(),
   resolvePluginProviders: vi.fn(),
   loadSource: vi.fn(),
 }));
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
-}));
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-metadata-snapshot.js")>();
+  return {
+    ...actual,
+    loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  };
+});
 
 vi.mock("./providers.js", () => ({
   resolveDiscoveredProviderPluginIds: mocks.resolveDiscoveredProviderPluginIds,
@@ -78,9 +82,12 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["deepseek"]);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [createManifestPlugin("deepseek")],
-      diagnostics: [],
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPlugin("deepseek")],
+        diagnostics: [],
+      },
     });
   });
 
@@ -110,20 +117,23 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       "kilocode",
       "unused",
     ]);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        createManifestPlugin("codex"),
-        createManifestPlugin("deepseek"),
-        createManifestPluginWithoutDiscovery({
-          id: "kilocode",
-          providerAuthEnvVars: { kilocode: ["KILOCODE_API_KEY"] },
-        }),
-        createManifestPluginWithoutDiscovery({
-          id: "unused",
-          providerAuthEnvVars: { unused: ["UNUSED_API_KEY"] },
-        }),
-      ],
-      diagnostics: [],
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPlugin("codex"),
+          createManifestPlugin("deepseek"),
+          createManifestPluginWithoutDiscovery({
+            id: "kilocode",
+            providerAuthEnvVars: { kilocode: ["KILOCODE_API_KEY"] },
+          }),
+          createManifestPluginWithoutDiscovery({
+            id: "unused",
+            providerAuthEnvVars: { unused: ["UNUSED_API_KEY"] },
+          }),
+        ],
+        diagnostics: [],
+      },
     });
     mocks.loadSource.mockImplementation((modulePath: string) =>
       modulePath.includes("/codex/")
@@ -144,6 +154,66 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     );
   });
 
+  it("shares one metadata snapshot between provider id discovery and entry loading", () => {
+    const registry = { plugins: [] };
+    const manifestRegistry = {
+      plugins: [createManifestPlugin("deepseek")],
+      diagnostics: [],
+    };
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: registry,
+      manifestRegistry,
+    });
+    mocks.loadSource.mockReturnValue(createProvider({ id: "deepseek", mode: "catalog" }));
+
+    resolvePluginDiscoveryProvidersRuntime({ config: {}, env: {} as NodeJS.ProcessEnv });
+
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
+      config: {},
+      env: {},
+    });
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(mocks.resolveDiscoveredProviderPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registry,
+        manifestRegistry,
+      }),
+    );
+  });
+
+  it("uses a provided plugin metadata snapshot without rebuilding registry metadata", () => {
+    const registry = { plugins: [] };
+    const manifestRegistry = {
+      plugins: [createManifestPlugin("deepseek")],
+      diagnostics: [],
+    };
+    mocks.loadSource.mockReturnValue(createProvider({ id: "deepseek", mode: "catalog" }));
+
+    expect(
+      resolvePluginDiscoveryProvidersRuntime({
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        pluginMetadataSnapshot: {
+          index: registry as never,
+          manifestRegistry,
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        id: "deepseek",
+        pluginId: "deepseek",
+      }),
+    ]);
+
+    expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(mocks.resolveDiscoveredProviderPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registry,
+        manifestRegistry,
+      }),
+    );
+  });
+
   it("returns static-only discovery entries for callers that explicitly request them", () => {
     const staticProvider = createProvider({ id: "deepseek", mode: "static" });
     mocks.loadSource.mockReturnValue(staticProvider);
@@ -155,6 +225,20 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
         staticCatalog: staticProvider.staticCatalog,
       }),
     ]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to full plugin loading when discovery entries are requested only", () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithoutDiscovery({ id: "deepseek" })],
+        diagnostics: [],
+      },
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toEqual([]);
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toEqual([]);
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
 });

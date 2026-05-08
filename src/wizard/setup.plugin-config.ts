@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
@@ -16,13 +17,13 @@ export type ConfigurablePlugin = {
   jsonSchema?: JsonSchemaObject;
 };
 
-type ManifestRegistryModule = typeof import("../plugins/manifest-registry.js");
+type PluginMetadataSnapshotModule = typeof import("../plugins/plugin-metadata-snapshot.js");
 
-let manifestRegistryModulePromise: Promise<ManifestRegistryModule> | undefined;
+let pluginMetadataSnapshotModulePromise: Promise<PluginMetadataSnapshotModule> | undefined;
 
-function loadManifestRegistryModule(): Promise<ManifestRegistryModule> {
-  manifestRegistryModulePromise ??= import("../plugins/manifest-registry.js");
-  return manifestRegistryModulePromise;
+function loadPluginMetadataSnapshotModule(): Promise<PluginMetadataSnapshotModule> {
+  pluginMetadataSnapshotModulePromise ??= import("../plugins/plugin-metadata-snapshot.js");
+  return pluginMetadataSnapshotModulePromise;
 }
 
 type JsonSchemaProperty = {
@@ -138,6 +139,22 @@ export function discoverUnconfiguredPlugins(params: {
       const val = getPath(existing, toPathSegments(key));
       return val === undefined || val === null || val === "";
     });
+  });
+}
+
+async function listEnabledConfigurableManifestPlugins(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+}): Promise<readonly PluginManifestRecord[]> {
+  const { loadPluginMetadataSnapshot } = await loadPluginMetadataSnapshotModule();
+  const snapshot = loadPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+  });
+  return snapshot.plugins.filter((plugin) => {
+    const entry = params.config.plugins?.entries?.[plugin.id];
+    return plugin.enabledByDefault || entry?.enabled === true;
   });
 }
 
@@ -299,19 +316,13 @@ export async function setupPluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await loadManifestRegistryModule();
-  const registry = loadPluginManifestRegistry({
+  const manifestPlugins = await listEnabledConfigurableManifestPlugins({
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
 
   const unconfigured = discoverUnconfiguredPlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      // Only show enabled plugins
-      const entry = params.config.plugins?.entries?.[p.id];
-      // Plugin is discoverable if it's enabled or enabledByDefault and not denied
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins,
     config: params.config,
   });
 
@@ -361,17 +372,13 @@ export async function configurePluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await loadManifestRegistryModule();
-  const registry = loadPluginManifestRegistry({
+  const manifestPlugins = await listEnabledConfigurableManifestPlugins({
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
 
   const configurable = discoverConfigurablePlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      const entry = params.config.plugins?.entries?.[p.id];
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins,
   });
 
   if (configurable.length === 0) {

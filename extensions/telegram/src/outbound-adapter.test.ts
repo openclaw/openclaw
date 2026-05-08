@@ -98,6 +98,57 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
   });
 
+  it("uses interactive button labels as fallback text for button-only payloads", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-buttons", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "- Retry",
+      expect.objectContaining({
+        buttons: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      }),
+    );
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
+  });
+
+  it("forwards audioAsVoice payload media to Telegram voice sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "voice caption",
+        mediaUrl: "file:///tmp/note.ogg",
+        audioAsVoice: true,
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "voice caption",
+      expect.objectContaining({
+        mediaUrl: "file:///tmp/note.ogg",
+        asVoice: true,
+      }),
+    );
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-voice", chatId: "12345" });
+  });
+
   it("passes delivery pin notify requests to Telegram pinning", async () => {
     pinMessageTelegramMock.mockResolvedValueOnce({ ok: true, messageId: "tg-1", chatId: "12345" });
 

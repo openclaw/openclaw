@@ -7,6 +7,7 @@ vi.mock("../send.js", () => ({
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
+let resolveDeliveredSlackReplyThreadTs: typeof import("./replies.js").resolveDeliveredSlackReplyThreadTs;
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { deliverSlackSlashReplies } from "./replies.js";
 
@@ -27,8 +28,12 @@ function baseParams(overrides?: Record<string, unknown>) {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({ createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } =
-      await import("./replies.js"));
+    ({
+      createSlackReplyDeliveryPlan,
+      deliverReplies,
+      resolveDeliveredSlackReplyThreadTs,
+      resolveSlackThreadTs,
+    } = await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -171,6 +176,41 @@ describe("deliverReplies identity passthrough", () => {
   });
 });
 
+describe("resolveDeliveredSlackReplyThreadTs", () => {
+  beforeAll(async () => {
+    ({ resolveDeliveredSlackReplyThreadTs } = await import("./replies.js"));
+  });
+
+  it("prefers explicit reply targets when reply tags are enabled", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "first",
+        payloadReplyToId: "explicit-thread",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("explicit-thread");
+  });
+
+  it("ignores explicit reply tags when replyToMode is off", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "off",
+        payloadReplyToId: "explicit-thread",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("planned-thread");
+  });
+
+  it("falls back to the planned reply thread when no explicit reply tag exists", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "batched",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("planned-thread");
+  });
+});
+
 describe("resolveSlackThreadTs fallback classification", () => {
   const threadTs = "1234567890.123456";
   const messageTs = "9999999999.999999";
@@ -255,6 +295,33 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(respond).toHaveBeenCalledWith({
       text,
       response_type: "ephemeral",
+    });
+  });
+
+  it("sends block-only slash replies instead of dropping them", async () => {
+    const respond = vi.fn(async () => undefined);
+    const blocks = [{ type: "divider" }];
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          channelData: {
+            slack: {
+              blocks,
+            },
+          },
+        },
+      ],
+      respond,
+      ephemeral: false,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith({
+      text: "",
+      blocks,
+      response_type: "in_channel",
     });
   });
 });

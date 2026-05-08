@@ -51,6 +51,33 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
+  it("extracts audioAsVoice from text MEDIA directives", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "Generated audio\n[[audio_as_voice]]\nMEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps audioAsVoice when the tag and MEDIA path are in separate text blocks", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "[[audio_as_voice]]" },
+          { type: "text", text: "MEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
   it("extracts structured media trust markers", () => {
     expect(
       extractToolResultMediaArtifact({
@@ -313,6 +340,24 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual(["/tmp/screenshot.png"]);
   });
 
+  it("keeps trusted TTS local media when the raw built-in name is absent", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "tts",
+        ["/tmp/reply.opus"],
+        {
+          details: {
+            media: {
+              mediaUrl: "/tmp/reply.opus",
+              trustedLocalMedia: true,
+            },
+          },
+        },
+        new Set(["web_search"]),
+      ),
+    ).toEqual(["/tmp/reply.opus"]);
+  });
+
   it("keeps local media for bundled plugin tool names registered in this run", () => {
     // music_generate is a bundled-plugin trusted tool; when the runner
     // registers it for this run, its raw name must be allowed through the
@@ -338,6 +383,24 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual([]);
   });
 
+  it("does not let non-TTS trustedLocalMedia bypass the exact-name gate", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "Web_Search",
+        ["/etc/passwd"],
+        {
+          details: {
+            media: {
+              mediaUrl: "/etc/passwd",
+              trustedLocalMedia: true,
+            },
+          },
+        },
+        new Set(["web_search"]),
+      ),
+    ).toEqual([]);
+  });
+
   it("still allows remote media for colliding aliases", () => {
     expect(
       filterToolResultMediaUrls(
@@ -355,6 +418,21 @@ describe("extractToolResultMediaPaths", () => {
         details: {
           mcpServer: "probe",
           mcpTool: "browser",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not trust external TTS results with trustedLocalMedia", () => {
+    expect(
+      filterToolResultMediaUrls("tts", ["/tmp/reply.opus"], {
+        details: {
+          mcpServer: "probe",
+          mcpTool: "tts",
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            trustedLocalMedia: true,
+          },
         },
       }),
     ).toEqual([]);

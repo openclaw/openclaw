@@ -7,15 +7,15 @@ import {
   resolveInboundMentionDecision,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -73,9 +73,52 @@ export type TelegramInboundBodyResult = {
   effectiveWasMentioned: boolean;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
+  audioTranscribedMediaIndex?: number;
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
 };
+
+function formatAudioTranscriptForAgent(transcript: string): string {
+  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
+}
+
+type TelegramSavedMediaKind = "audio" | "document" | "image" | "video";
+
+function resolveSavedMediaKind(contentType: string | undefined): TelegramSavedMediaKind {
+  const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
+  if (normalized?.startsWith("audio/")) {
+    return "audio";
+  }
+  if (normalized?.startsWith("image/")) {
+    return "image";
+  }
+  if (normalized?.startsWith("video/")) {
+    return "video";
+  }
+  return "document";
+}
+
+function formatSavedMediaPlaceholder(allMedia: TelegramMediaRef[]): string | undefined {
+  if (allMedia.length === 0) {
+    return undefined;
+  }
+  const kinds = allMedia.map((media) => resolveSavedMediaKind(media.contentType));
+  const firstKind = kinds[0] ?? "document";
+  const kind = kinds.every((candidate) => candidate === firstKind) ? firstKind : "document";
+  if (allMedia.length === 1) {
+    return `<media:${kind}>`;
+  }
+  if (kind === "image") {
+    return `<media:image> (${allMedia.length} images)`;
+  }
+  if (kind === "video") {
+    return `<media:video> (${allMedia.length} videos)`;
+  }
+  if (kind === "audio") {
+    return `<media:audio> (${allMedia.length} audio attachments)`;
+  }
+  return `<media:document> (${allMedia.length} attachments)`;
+}
 
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
@@ -101,6 +144,7 @@ export async function resolveTelegramInboundBody(params: {
   senderUsername: string;
   sessionKey?: string;
   resolvedThreadId?: number;
+  replyThreadId?: number;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
@@ -124,6 +168,7 @@ export async function resolveTelegramInboundBody(params: {
     senderUsername,
     sessionKey,
     resolvedThreadId,
+    replyThreadId,
     routeAgentId,
     effectiveGroupAllow,
     effectiveDmAllow,
@@ -211,6 +256,12 @@ export async function resolveTelegramInboundBody(params: {
     try {
       const { transcribeFirstAudio } = await loadMediaUnderstandingRuntime();
       const tempCtx: MsgContext = {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: `telegram:${chatId}`,
+        AccountId: accountId,
+        MessageThreadId: replyThreadId,
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
         MediaTypes:
           allMedia.length > 0
@@ -226,16 +277,26 @@ export async function resolveTelegramInboundBody(params: {
       logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
     }
   }
+  const audioTranscribedMediaIndex =
+    preflightTranscript === undefined
+      ? undefined
+      : allMedia.findIndex((media) => media.contentType?.startsWith("audio/"));
 
   if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
-    bodyText = preflightTranscript;
+    bodyText = formatAudioTranscriptForAgent(preflightTranscript);
   }
 
+  const savedMediaPlaceholder = formatSavedMediaPlaceholder(allMedia);
+  if (!hasAudio && savedMediaPlaceholder && placeholder && bodyText === placeholder) {
+    bodyText = savedMediaPlaceholder;
+  }
   if (!bodyText && allMedia.length > 0) {
     if (hasAudio) {
-      bodyText = preflightTranscript || "<media:audio>";
+      bodyText = preflightTranscript
+        ? formatAudioTranscriptForAgent(preflightTranscript)
+        : "<media:audio>";
     } else {
-      bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
+      bodyText = savedMediaPlaceholder ?? "<media:document>";
     }
   }
 
@@ -357,6 +418,9 @@ export async function resolveTelegramInboundBody(params: {
     effectiveWasMentioned,
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,
+    ...(audioTranscribedMediaIndex !== undefined && audioTranscribedMediaIndex >= 0
+      ? { audioTranscribedMediaIndex }
+      : {}),
     stickerCacheHit,
     locationData: locationData ?? undefined,
   };

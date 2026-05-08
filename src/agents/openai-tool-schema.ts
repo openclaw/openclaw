@@ -1,8 +1,5 @@
 import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
-export {
-  resolveOpenAIStrictToolSetting,
-  resolvesToNativeOpenAIStrictTools,
-} from "./openai-strict-tool-setting.js";
+export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 
 type ToolWithParameters = {
   name?: unknown;
@@ -10,14 +7,14 @@ type ToolWithParameters = {
 };
 
 export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
-  return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}));
+  return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}), 0);
 }
 
-function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
+function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry);
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
       changed ||= next !== entry;
       return next;
     });
@@ -31,7 +28,10 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
   let changed = false;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    const next = normalizeStrictOpenAIJsonSchemaRecursive(value);
+    const next = normalizeStrictOpenAIJsonSchemaRecursive(
+      value,
+      key === "properties" ? depth : depth + 1,
+    );
     normalized[key] = next;
     changed ||= next !== value;
   }
@@ -45,6 +45,10 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown): unknown {
         : undefined;
     if (properties && Object.keys(properties).length === 0 && !Array.isArray(normalized.required)) {
       normalized.required = [];
+      changed = true;
+    }
+    if (depth === 0 && !("additionalProperties" in normalized)) {
+      normalized.additionalProperties = false;
       changed = true;
     }
   }
@@ -63,7 +67,7 @@ export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
 }
 
-export type OpenAIStrictToolSchemaDiagnostic = {
+type OpenAIStrictToolSchemaDiagnostic = {
   toolIndex: number;
   toolName?: string;
   violations: string[];

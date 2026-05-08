@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { buildDispatchInboundCaptureMock } from "openclaw/plugin-sdk/channel-contract-testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildDispatchInboundCaptureMock } from "../../../../src/channels/plugins/contracts/inbound-testkit.js";
 
 type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
   Body?: string;
@@ -134,6 +134,32 @@ describe("signal mention gating", () => {
     expect(getCapturedCtx()?.WasMentioned).toBe(false);
   });
 
+  it("allows explicitly configured Signal groups by group id without a mention", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            inbound: { debounceMs: 0 },
+            groupChat: { mentionPatterns: ["@bot"] },
+          },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["group:g1"],
+              groups: { g1: {} },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["group:g1"],
+      }),
+    );
+
+    await handler(makeGroupEvent({ message: "hello everyone" }));
+    expect(capturedCtx).toBeTruthy();
+    expect(getCapturedCtx()?.WasMentioned).toBe(false);
+  });
+
   it("records pending history for skipped group messages", async () => {
     const { handler, groupHistories } = createMentionGatedHistoryHandler();
     await handler(makeGroupEvent({ message: "hello from alice" }));
@@ -232,7 +258,7 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeTruthy();
-    const body = String(getCapturedCtx()?.Body ?? "");
+    const body = getCapturedCtx()?.Body ?? "";
     expect(body).toContain("@123e4567 hi @+15550002222");
     expect(body).not.toContain(placeholder);
   });
@@ -255,7 +281,7 @@ describe("signal mention gating", () => {
     );
 
     expect(capturedCtx).toBeTruthy();
-    expect(String(getCapturedCtx()?.Body ?? "")).toContain("@123e4567");
+    expect(getCapturedCtx()?.Body ?? "").toContain("@123e4567");
     expect(getCapturedCtx()?.WasMentioned).toBe(true);
   });
 });
