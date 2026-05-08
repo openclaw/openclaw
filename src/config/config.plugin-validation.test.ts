@@ -684,6 +684,49 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("surfaces invalid Codex native plugin marketplaces as config diagnostics", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              codexPlugins: {
+                enabled: true,
+                plugins: {
+                  github: {
+                    enabled: true,
+                    marketplaceName: "not-openai-curated",
+                    pluginName: "github",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName",
+          message: expect.stringContaining("invalid config"),
+        }),
+      );
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+              "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName" &&
+            issue.allowedValues?.includes("openai-curated"),
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("does not require native config schemas for enabled bundle plugins", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },

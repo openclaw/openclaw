@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
   CODEX_COMPUTER_USE_CONFIG_KEYS,
+  CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
+  CODEX_PLUGINS_CONFIG_KEYS,
   codexAppServerStartOptionsKey,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
+  resolveCodexPluginsPolicy,
 } from "./config.js";
 
 describe("Codex app-server config", () => {
@@ -152,6 +155,71 @@ describe("Codex app-server config", () => {
       codexDynamicToolsLoading: "direct",
       codexDynamicToolsExclude: ["custom_tool"],
     });
+  });
+
+  it("parses native Codex plugin policy without treating wildcard as supported config", () => {
+    const config = readCodexPluginConfig({
+      appServer: { mode: "guardian" },
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: false,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+            allow_destructive_actions: true,
+          },
+          slack: {
+            enabled: false,
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+          },
+        },
+      },
+    });
+
+    expect(config.appServer?.mode).toBe("guardian");
+    expect(config.codexPlugins?.enabled).toBe(true);
+
+    const policy = resolveCodexPluginsPolicy(config);
+    expect(policy).toEqual({
+      configured: true,
+      enabled: true,
+      allowDestructiveActions: false,
+      pluginPolicies: [
+        {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated",
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+        },
+        {
+          configKey: "slack",
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          enabled: false,
+          allowDestructiveActions: false,
+        },
+      ],
+    });
+  });
+
+  it("rejects non-curated native plugin identities", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          gmail: {
+            marketplaceName: "custom-market",
+            pluginName: "gmail",
+          },
+        },
+      },
+    });
+
+    expect(config.codexPlugins).toBeUndefined();
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toEqual([]);
   });
 
   it("treats configured and environment commands as explicit overrides", () => {
@@ -392,6 +460,10 @@ describe("Codex app-server config", () => {
         properties: {
           appServer: { properties: Record<string, unknown> };
           computerUse: { properties: Record<string, unknown> };
+          codexPlugins: {
+            properties: Record<string, unknown>;
+            additionalProperties: boolean;
+          };
         };
       };
       uiHints: Record<string, unknown>;
@@ -411,6 +483,21 @@ describe("Codex app-server config", () => {
     for (const key of CODEX_COMPUTER_USE_CONFIG_KEYS) {
       expect(manifest.uiHints[`computerUse.${key}`]).toBeTruthy();
     }
+    const codexPluginsProperties = manifest.configSchema.properties.codexPlugins;
+    const codexPluginsManifestKeys = Object.keys(codexPluginsProperties.properties).toSorted();
+    expect(codexPluginsManifestKeys).toEqual([...CODEX_PLUGINS_CONFIG_KEYS].toSorted());
+    expect(codexPluginsProperties.additionalProperties).toBe(false);
+    for (const key of CODEX_PLUGINS_CONFIG_KEYS) {
+      expect(manifest.uiHints[`codexPlugins.${key}`]).toBeTruthy();
+    }
+    const pluginEntryProperties = (
+      codexPluginsProperties.properties.plugins as {
+        additionalProperties: { properties: Record<string, unknown> };
+      }
+    ).additionalProperties.properties;
+    expect(Object.keys(pluginEntryProperties).toSorted()).toEqual(
+      [...CODEX_PLUGIN_ENTRY_CONFIG_KEYS].toSorted(),
+    );
   });
 
   it("does not schema-default mode-derived policy fields", async () => {

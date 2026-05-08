@@ -60,6 +60,69 @@ describe("codex app-server session binding", () => {
     await expect(fs.stat(resolveCodexAppServerBindingPath(sessionFile))).resolves.toBeTruthy();
   });
 
+  it("round-trips plugin app policy context with app ids as record keys", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    const pluginAppPolicyContext = {
+      fingerprint: "plugin-policy-1",
+      apps: {
+        "google-calendar-app": {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated" as const,
+          pluginName: "google-calendar",
+          allowDestructiveActions: true,
+          mcpServerNames: ["google-calendar"],
+        },
+      },
+      pluginAppIds: {
+        "google-calendar": ["google-calendar-app"],
+      },
+    };
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-123",
+      cwd: tempDir,
+      pluginAppPolicyContext,
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("rejects old plugin app policy entries that duplicate the app id", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    await fs.writeFile(
+      resolveCodexAppServerBindingPath(sessionFile),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-123",
+        sessionFile,
+        cwd: tempDir,
+        pluginAppPolicyContext: {
+          fingerprint: "plugin-policy-1",
+          apps: {
+            "google-calendar-app": {
+              appId: "google-calendar-app",
+              configKey: "google-calendar",
+              marketplaceName: "openai-curated",
+              pluginName: "google-calendar",
+              allowDestructiveActions: true,
+              mcpServerNames: ["google-calendar"],
+            },
+          },
+          pluginAppIds: {
+            "google-calendar": ["google-calendar-app"],
+          },
+        },
+        createdAt: "2026-05-03T00:00:00.000Z",
+        updatedAt: "2026-05-03T00:00:00.000Z",
+      })}\n`,
+    );
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.pluginAppPolicyContext).toBeUndefined();
+  });
+
   it("does not persist public OpenAI as the provider for Codex-native auth bindings", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await writeCodexAppServerBinding(

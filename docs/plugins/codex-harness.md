@@ -563,9 +563,11 @@ openclaw migrate apply codex --yes
 ```
 
 The Codex migration provider copies skills into the current OpenClaw agent
-workspace. Codex native plugins, hooks, and config files are reported or archived
-for manual review instead of being activated automatically, because they can
-execute commands, expose MCP servers, or carry credentials.
+workspace. For source-installed `openai-curated` Codex plugins, migration also
+calls Codex app-server `plugin/install` and records explicit native plugin
+config under `plugins.entries.codex.config.codexPlugins`. Codex config files,
+hooks, and cached plugin bundles that are not source-installed curated plugins
+remain report-only manual-review items.
 
 Auth is selected in this order:
 
@@ -629,6 +631,7 @@ Supported top-level Codex plugin fields:
 | `codexDynamicToolsProfile` | `"native-first"` | Use `"openclaw-compat"` to expose the full OpenClaw dynamic tool set to Codex app-server. |
 | `codexDynamicToolsLoading` | `"searchable"`   | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.  |
 | `codexDynamicToolsExclude` | `[]`             | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.               |
+| `codexPlugins`             | disabled         | Native Codex plugin/app support for migrated source-installed curated plugins.            |
 
 Supported `appServer` fields:
 
@@ -683,6 +686,106 @@ Environment overrides remain available for local testing:
 `OPENCLAW_CODEX_APP_SERVER_MODE=guardian` for one-off local testing. Config is
 preferred for repeatable deployments because it keeps the plugin behavior in the
 same reviewed file as the rest of the Codex harness setup.
+
+## Native Codex plugins
+
+Native Codex plugin support uses Codex app-server's own app and plugin
+capabilities in the same Codex thread as the OpenClaw harness turn. OpenClaw
+does not translate Codex plugins into synthetic `codex_plugin_*` OpenClaw
+dynamic tools. That keeps plugin calls in the native Codex transcript and avoids
+starting a second ephemeral Codex thread for each plugin invocation.
+
+Codex plugins only work when the selected OpenClaw agent runtime is the native
+Codex harness. The `codexPlugins` config has no effect on Pi runs, normal
+OpenAI provider runs, ACP conversation bindings, or other harnesses, because
+those paths do not create Codex app-server threads with native `apps` config.
+
+V1 support is intentionally narrow:
+
+- Only `openai-curated` plugins that were already installed in the source Codex
+  app-server inventory are migration-eligible.
+- Migration writes explicit plugin identities with `marketplaceName` and
+  `pluginName`; it does not write local `marketplacePath` cache paths.
+- `codexPlugins.enabled` is the global enablement switch. There is no
+  `plugins["*"]` wildcard and no config key that grants arbitrary install
+  authority.
+- Unsupported marketplaces, cached plugin bundles, hooks, and Codex config files
+  are preserved in the migration report for manual review.
+
+Example migrated config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          codexPlugins: {
+            enabled: true,
+            allow_destructive_actions: false,
+            plugins: {
+              "google-calendar": {
+                enabled: true,
+                marketplaceName: "openai-curated",
+                pluginName: "google-calendar",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Thread app config is computed when OpenClaw establishes a Codex harness session
+or replaces a stale Codex thread binding. It is not recomputed on every turn.
+After changing `codexPlugins`, use `/new`, `/reset`, or restart the gateway so
+future Codex harness sessions start with the updated app set.
+
+OpenClaw reads Codex app inventory through app-server `app/list`, caches it for
+one hour, and refreshes stale or missing entries asynchronously. A plugin app is
+exposed only when OpenClaw can map it back to the migrated plugin through stable
+ownership: an exact app id from plugin detail, a known MCP server name, or
+unique stable metadata. Display-name-only or ambiguous ownership is excluded
+until the next inventory refresh proves ownership.
+
+Plugin-owned app tools use Codex's native app configuration. OpenClaw injects a
+restrictive `config.apps` patch for the Codex thread: `_default` is disabled and
+only apps owned by enabled migrated plugins are enabled. OpenClaw sets
+app-level `destructive_enabled` from the effective global/per-plugin
+`allow_destructive_actions` policy and lets Codex enforce destructive tool
+metadata from its native app tool annotations. Plugin apps are emitted with
+`open_world_enabled: true`; OpenClaw does not expose a separate plugin
+open-world policy knob. OpenClaw does not maintain per-plugin destructive
+tool-name deny lists. Tool approval mode is prompted by default for plugin
+apps, because OpenClaw does not have an interactive app-elicitation UI in this
+same-thread path.
+
+Destructive plugin elicitations fail closed by default:
+
+- Global `allow_destructive_actions` defaults to `false`.
+- Per-plugin `allow_destructive_actions` overrides the global policy for that
+  plugin.
+- When policy is `false`, OpenClaw returns a deterministic decline.
+- When policy is `true`, OpenClaw auto-accepts only safe schemas it can map to
+  an approval response, such as a boolean approve field.
+- Missing plugin identity, ambiguous ownership, a missing turn id, a wrong turn
+  id, or an unsafe elicitation schema declines instead of prompting.
+
+Common diagnostics:
+
+- `auth_required`: migration installed the plugin but one of its apps still
+  needs authentication. The explicit plugin entry is written disabled until you
+  reauthorize and enable it.
+- `marketplace_missing` or `plugin_missing`: the target Codex app-server cannot
+  see the expected `openai-curated` marketplace or plugin.
+- `app_inventory_missing` or `app_inventory_stale`: app readiness came from an
+  empty or stale cache; OpenClaw schedules an async refresh and excludes plugin
+  apps until ownership/readiness is known.
+- `app_ownership_ambiguous`: app inventory only matched by display name, so the
+  app is not exposed to the Codex thread.
 
 ## Computer use
 
