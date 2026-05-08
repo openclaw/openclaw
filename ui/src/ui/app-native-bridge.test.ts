@@ -21,9 +21,7 @@ function makeBridge(): FakeBridge {
     posted,
     listeners,
     postMessage: vi.fn((msg: unknown) => posted.push(msg)),
-    addEventListener: vi.fn((_type: string, fn: (e: MessageEvent) => void) =>
-      listeners.push(fn),
-    ),
+    addEventListener: vi.fn((_type: string, fn: (e: MessageEvent) => void) => listeners.push(fn)),
     removeEventListener: vi.fn((_type: string, fn: (e: MessageEvent) => void) => {
       const i = listeners.indexOf(fn);
       if (i !== -1) {
