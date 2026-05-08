@@ -20,6 +20,7 @@ import {
   MAX_TRAVERSAL_DEPTH,
   OcPathError,
   findOcPaths,
+  formatOcPath,
   parseOcPath,
   resolveOcPath,
   setOcPath,
@@ -219,6 +220,131 @@ describe('wave-23 pitfalls — round-trip', () => {
       const parsed = parseOcPath(s);
       const reparsed = parseOcPath(s);
       expect(parsed).toEqual(reparsed);
+    }
+  });
+});
+
+// ---------- Containment pitfalls -----------------------------------------
+
+describe('wave-23 pitfalls — file-slot containment', () => {
+  // oc:// paths are workspace-relative. Absolute paths and `..` segments
+  // would let a hostile workflow / skill manifest persuade
+  // `openclaw path resolve|set|emit` into reading or writing arbitrary
+  // filesystem locations (Node `path.resolve(cwd, absolute)` returns
+  // `absolute`, bypassing the workspace root). Reject at parseOcPath
+  // and formatOcPath for symmetric defense.
+  it('rejects an absolute POSIX file slot', () => {
+    expect(() => parseOcPath('oc:///etc/passwd')).toThrow(/Empty segment/);
+    // Quoted form — same containment violation, different parse path.
+    expect(() => parseOcPath('oc://"/etc/passwd"/section')).toThrow(/Absolute file slot/);
+  });
+
+  it('rejects a Windows drive-letter file slot', () => {
+    expect(() => parseOcPath('oc://"C:/Windows/System32/foo"/section')).toThrow(
+      /Absolute file slot/,
+    );
+    expect(() => parseOcPath('oc://"C:\\\\Windows\\\\System32"/section')).toThrow(
+      /Absolute file slot/,
+    );
+  });
+
+  it('rejects a leading-backslash file slot', () => {
+    expect(() => parseOcPath('oc://"\\\\srv\\\\share\\\\foo"/section')).toThrow(
+      /Absolute file slot/,
+    );
+  });
+
+  it('rejects a parent-directory escape via plain `..`', () => {
+    expect(() => parseOcPath('oc://"../foo"/section')).toThrow(/Parent-directory/);
+    expect(() => parseOcPath('oc://".."/section')).toThrow(/Parent-directory/);
+  });
+
+  it('rejects a parent-directory escape mid-path', () => {
+    expect(() => parseOcPath('oc://"foo/../bar"/section')).toThrow(/Parent-directory/);
+  });
+
+  it('does not decode URL-encoded `..` — literal `%2E%2E` is treated as a filename', () => {
+    // The substrate does NOT do URL decoding — `%2E%2E` is the literal
+    // five-character filename, not a parent-directory escape. Documented
+    // limitation: consumers that pre-decode (HTTP layers, browser UI)
+    // are responsible for normalizing before invoking parseOcPath.
+    // Pin the current behavior so a future "let's decode for them" PR
+    // sees the explicit choice.
+    const p = parseOcPath('oc://"%2E%2E/foo"/section');
+    expect(p.file).toBe('%2E%2E/foo');
+  });
+
+  it('formatOcPath rejects an OcPath struct with absolute file', () => {
+    expect(() => formatOcPath({ file: '/etc/passwd' })).toThrow(/Absolute file slot/);
+    expect(() => formatOcPath({ file: 'C:/Windows' })).toThrow(/Absolute file slot/);
+  });
+
+  it('formatOcPath rejects an OcPath struct with parent-directory file', () => {
+    expect(() => formatOcPath({ file: '..' })).toThrow(/Parent-directory/);
+    expect(() => formatOcPath({ file: '../etc/passwd' })).toThrow(/Parent-directory/);
+    expect(() => formatOcPath({ file: 'foo/../bar' })).toThrow(/Parent-directory/);
+  });
+});
+
+// ---------- formatOcPath ↔ parseOcPath round-trip ------------------------
+
+describe('wave-23 pitfalls — format/parse round-trip', () => {
+  // The contract on oc-path.ts:13 — `formatOcPath(parseOcPath(s)) === s`
+  // for any string the formatter accepts. Round-trip breaks were
+  // observable on (a) struct fields with empty dotted sub-segments
+  // (`section: 'foo.'` → `oc://X/foo.""` → re-parses with `section:
+  // 'foo.""'`) and (b) struct fields with control chars (formatter
+  // emitted unquoted, parser refused). Pin both directions.
+  it('formatOcPath rejects empty dotted sub-segment in a slot', () => {
+    expect(() => formatOcPath({ file: 'a.md', section: 'foo.' })).toThrow(
+      /Empty dotted sub-segment/,
+    );
+    expect(() => formatOcPath({ file: 'a.md', section: '.foo' })).toThrow(
+      /Empty dotted sub-segment/,
+    );
+    expect(() => formatOcPath({ file: 'a.md', section: 'foo..bar' })).toThrow(
+      /Empty dotted sub-segment/,
+    );
+  });
+
+  it('formatOcPath rejects control characters in any slot', () => {
+    expect(() => formatOcPath({ file: 'a.md', section: 'sec\x00tion' })).toThrow(
+      /Control character/,
+    );
+    expect(() => formatOcPath({ file: 'a.md', section: 'sec\x01tion' })).toThrow(
+      /Control character/,
+    );
+    expect(() => formatOcPath({ file: 'a.md', section: 'tab\ttion' })).toThrow(
+      /Control character/,
+    );
+    expect(() => formatOcPath({ file: 'a\x00b.md' })).toThrow(/Control character/);
+  });
+
+  it('round-trips every shape parseOcPath accepts', () => {
+    // For every valid input, formatOcPath(parseOcPath(s)) MUST be
+    // re-parseable to the same struct. Don't string-compare (the
+    // formatter normalizes quoting); parse the round-tripped output
+    // and compare structs.
+    const inputs = [
+      'oc://X',
+      'oc://X/a',
+      'oc://X/a/b',
+      'oc://X/a/b/c',
+      'oc://X/a.b.c',
+      'oc://X/a?session=s1',
+      'oc://X/[frontmatter]/key',
+      'oc://X/steps/$last/id',
+      'oc://X/steps/-2/id',
+      'oc://X/steps/[id=foo]/cmd',
+      'oc://X/steps/{a,b}/cmd',
+      'oc://X/"foo/bar"/baz',
+      'oc://X/agents/"anthropic/claude-opus-4-7"/alias',
+    ];
+    for (const s of inputs) {
+      const parsed = parseOcPath(s);
+      const formatted = formatOcPath(parsed);
+      const reparsed = parseOcPath(formatted);
+      expect(reparsed).toEqual(parsed);
     }
   });
 });

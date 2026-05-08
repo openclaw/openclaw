@@ -219,6 +219,29 @@ export function parseOcPath(input: string): OcPath {
   const fileSeg = segments[0];
   const file = isQuotedSeg(fileSeg) ? unquoteSeg(fileSeg) : fileSeg;
 
+  // Containment — `oc://` paths address files **relative to the workspace
+  // root**. Absolute paths and parent-directory escapes (`..`) would let a
+  // hostile workflow / skill manifest persuade `openclaw path resolve|set
+  // |emit` into reading or writing arbitrary filesystem locations. Reject
+  // both before the path leaks into `resolveFsPath` (which would resolve
+  // an absolute slot away from `cwd` per Node `path.resolve` semantics).
+  // Quoted-segment unquoting (above) means `oc://".."/x` and
+  // `oc://"../foo"/x` are caught by the same check.
+  if (file.startsWith('/') || file.startsWith('\\') || /^[a-zA-Z]:/.test(file)) {
+    throw new OcPathError(
+      `Absolute file slot not allowed (oc:// paths are workspace-relative): ${printable(input)}`,
+      input,
+      'OC_PATH_ABSOLUTE_FILE',
+    );
+  }
+  if (file.split(/[\\/]/).some((seg) => seg === '..')) {
+    throw new OcPathError(
+      `Parent-directory segment ('..') not allowed in oc:// file slot: ${printable(input)}`,
+      input,
+      'OC_PATH_PARENT_TRAVERSAL',
+    );
+  }
+
   const result: OcPath = {
     file,
     ...(segments[1] !== undefined ? { section: segments[1] } : {}),
@@ -239,6 +262,32 @@ export function parseOcPath(input: string): OcPath {
 export function formatOcPath(path: OcPath): string {
   if (!path.file || path.file.length === 0) {
     throw new OcPathError('oc:// path requires a file', '', 'OC_PATH_FILE_REQUIRED');
+  }
+  // Symmetric defense with parseOcPath — an `OcPath` struct constructed
+  // programmatically with `file: '..'` or `file: '/etc/passwd'` would
+  // otherwise emit a path that either round-trips into a traversal or
+  // is rejected at parse time, breaking the contract on line 13. Refuse
+  // here so the caller sees the violation at the format boundary.
+  if (path.file.startsWith('/') || path.file.startsWith('\\') || /^[a-zA-Z]:/.test(path.file)) {
+    throw new OcPathError(
+      `Absolute file slot not allowed in OcPath struct: ${printable(path.file)}`,
+      path.file,
+      'OC_PATH_ABSOLUTE_FILE',
+    );
+  }
+  if (path.file.split(/[\\/]/).some((seg) => seg === '..')) {
+    throw new OcPathError(
+      `Parent-directory segment ('..') not allowed in OcPath.file: ${printable(path.file)}`,
+      path.file,
+      'OC_PATH_PARENT_TRAVERSAL',
+    );
+  }
+  if (hasControlChar(path.file)) {
+    throw new OcPathError(
+      `Control character in OcPath.file: ${printable(path.file)}`,
+      path.file,
+      'OC_PATH_CONTROL_CHAR',
+    );
   }
   if (path.item !== undefined && path.section === undefined) {
     throw new OcPathError(
@@ -283,8 +332,33 @@ export function formatOcPath(path: OcPath): string {
     if (sub.startsWith('{') && sub.endsWith('}')) {return sub;} // union
     return quoteSeg(sub);
   };
-  const formatSlot = (slot: string): string =>
-    splitRespectingBrackets(slot, '.').map(formatSubSegment).join('.');
+  // Reject content the parser would refuse on the way back in. Without
+  // these guards a struct like `{section:'foo.'}` would emit
+  // `oc://X/foo.""` (an empty quoted sub-segment) and re-parse with
+  // `section: 'foo.""'` — silent round-trip mangling. Mirrors
+  // validateSubSegment's empty + control-char checks at the format
+  // boundary so callers see the violation here, not on the next parse.
+  const validateSubForFormat = (sub: string, slotName: string): void => {
+    if (sub.length === 0) {
+      throw new OcPathError(
+        `Empty dotted sub-segment in OcPath.${slotName}`,
+        path.file,
+        'OC_PATH_EMPTY_SUB_SEGMENT',
+      );
+    }
+    if (hasControlChar(sub)) {
+      throw new OcPathError(
+        `Control character in OcPath.${slotName} sub-segment "${printable(sub)}"`,
+        path.file,
+        'OC_PATH_CONTROL_CHAR',
+      );
+    }
+  };
+  const formatSlot = (slot: string, slotName: string): string => {
+    const subs = splitRespectingBrackets(slot, '.');
+    for (const sub of subs) {validateSubForFormat(sub, slotName);}
+    return subs.map(formatSubSegment).join('.');
+  };
 
   // The file slot uses simpler quoting than section/item/field: dots
   // are normal in filenames (`AGENTS.md`) and don't need quoting; we
@@ -295,9 +369,9 @@ export function formatOcPath(path: OcPath): string {
   const fileNeedsQuote = /[/[\]{}?&%"\s]/.test(path.file);
   const formattedFile = fileNeedsQuote ? quoteSeg(path.file) : path.file;
   let out = OC_SCHEME + formattedFile;
-  if (path.section !== undefined) {out += '/' + formatSlot(path.section);}
-  if (path.item !== undefined) {out += '/' + formatSlot(path.item);}
-  if (path.field !== undefined) {out += '/' + formatSlot(path.field);}
+  if (path.section !== undefined) {out += '/' + formatSlot(path.section, 'section');}
+  if (path.item !== undefined) {out += '/' + formatSlot(path.item, 'item');}
+  if (path.field !== undefined) {out += '/' + formatSlot(path.field, 'field');}
   if (path.session !== undefined) {out += '?session=' + path.session;}
   return out;
 }
