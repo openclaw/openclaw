@@ -30,7 +30,6 @@ type TranscriptEvent = Record<string, unknown>;
 
 let previousStateDir: string | undefined;
 let stateDir = "";
-let storePath = "";
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -43,7 +42,6 @@ afterEach(() => {
   if (stateDir) {
     fs.rmSync(stateDir, { recursive: true, force: true });
     stateDir = "";
-    storePath = "";
   }
 });
 
@@ -51,8 +49,7 @@ function setupState(prefix = "openclaw-session-utils-sqlite-") {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   process.env.OPENCLAW_STATE_DIR = stateDir;
-  storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
 }
 
 function transcriptPath(sessionId: string, agentId = "main"): string {
@@ -110,12 +107,10 @@ describe("SQLite transcript readers", () => {
       ],
     });
 
-    expect(readFirstUserMessageFromTranscript(sessionId, storePath)).toBe("First user question");
-    expect(readLastMessagePreviewFromTranscript(sessionId, storePath)).toBe(
-      "Final assistant reply",
-    );
-    await expect(readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath)).resolves.toEqual(
-      readSessionTitleFieldsFromTranscript(sessionId, storePath),
+    expect(readFirstUserMessageFromTranscript(sessionId)).toBe("First user question");
+    expect(readLastMessagePreviewFromTranscript(sessionId)).toBe("Final assistant reply");
+    await expect(readSessionTitleFieldsFromTranscriptAsync(sessionId)).resolves.toEqual(
+      readSessionTitleFieldsFromTranscript(sessionId),
     );
   });
 
@@ -132,7 +127,7 @@ describe("SQLite transcript readers", () => {
       ],
     });
 
-    expect(readFirstUserMessageFromTranscript(sessionId, storePath)).toBe("Real user message");
+    expect(readFirstUserMessageFromTranscript(sessionId)).toBe("Real user message");
   });
 
   test("reads active branches, compaction markers, counts, and bounded recent messages", async () => {
@@ -174,19 +169,17 @@ describe("SQLite transcript readers", () => {
     });
 
     expect(
-      readSessionMessages(sessionId, storePath).map(
-        (entry) => (entry as { content?: unknown }).content,
-      ),
+      readSessionMessages(sessionId).map((entry) => (entry as { content?: unknown }).content),
     ).toEqual(["root", "active branch", [{ type: "text", text: "Compaction" }], "tail"]);
-    expect(readSessionMessageCount(sessionId, storePath)).toBe(4);
-    await expect(readSessionMessageCountAsync(sessionId, storePath)).resolves.toBe(4);
+    expect(readSessionMessageCount(sessionId)).toBe(4);
+    await expect(readSessionMessageCountAsync(sessionId)).resolves.toBe(4);
     expect(
-      readRecentSessionMessages(sessionId, storePath, undefined, { maxMessages: 2 }).map(
+      readRecentSessionMessages(sessionId, undefined, { maxMessages: 2 }).map(
         (entry) => (entry as { content?: unknown }).content,
       ),
     ).toEqual([[{ type: "text", text: "Compaction" }], "tail"]);
     await expect(
-      readSessionMessagesAsync(sessionId, storePath, undefined, {
+      readSessionMessagesAsync(sessionId, undefined, {
         mode: "recent",
         maxMessages: 1,
       }),
@@ -208,7 +201,7 @@ describe("SQLite transcript readers", () => {
     });
 
     expect(
-      readRecentSessionMessagesWithStats(sessionId, storePath, undefined, { maxMessages: 2 }),
+      readRecentSessionMessagesWithStats(sessionId, undefined, { maxMessages: 2 }),
     ).toMatchObject({
       totalMessages: 4,
       messages: [
@@ -217,7 +210,7 @@ describe("SQLite transcript readers", () => {
       ],
     });
     await expect(
-      readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
+      readRecentSessionMessagesWithStatsAsync(sessionId, undefined, {
         maxMessages: 1,
       }),
     ).resolves.toMatchObject({
@@ -239,7 +232,6 @@ describe("SQLite transcript readers", () => {
 
     const result = readRecentSessionTranscriptLines({
       sessionId,
-      storePath,
       maxLines: 3,
     });
     expect(result?.totalLines).toBe(11);
@@ -270,7 +262,7 @@ describe("SQLite transcript readers", () => {
       ],
     });
 
-    expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toMatchObject({
+    expect(readLatestSessionUsageFromTranscript(sessionId)).toMatchObject({
       modelProvider: "openai",
       model: "gpt-5.4",
       inputTokens: 30,
@@ -278,26 +270,18 @@ describe("SQLite transcript readers", () => {
       cacheRead: 8,
       costUsd: 0.30000000000000004,
     });
-    await expect(
-      readLatestSessionUsageFromTranscriptAsync(sessionId, storePath),
-    ).resolves.toMatchObject({
+    await expect(readLatestSessionUsageFromTranscriptAsync(sessionId)).resolves.toMatchObject({
       inputTokens: 30,
       outputTokens: 6,
     });
     await expect(
-      readLatestRecentSessionUsageFromTranscriptAsync(
-        sessionId,
-        storePath,
-        undefined,
-        undefined,
-        1024,
-      ),
+      readLatestRecentSessionUsageFromTranscriptAsync(sessionId, undefined, undefined, 1024),
     ).resolves.toMatchObject({ inputTokens: 20, outputTokens: 4 });
     await expect(
-      readRecentSessionUsageFromTranscriptAsync(sessionId, storePath, undefined, undefined, 1024),
+      readRecentSessionUsageFromTranscriptAsync(sessionId, undefined, undefined, 1024),
     ).resolves.toMatchObject({ inputTokens: 20, outputTokens: 4 });
     expect(
-      readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 1024),
+      readRecentSessionUsageFromTranscript(sessionId, undefined, undefined, 1024),
     ).toMatchObject({ inputTokens: 30, outputTokens: 6 });
   });
 
@@ -311,14 +295,7 @@ describe("SQLite transcript readers", () => {
       ),
     });
 
-    const result = readSessionPreviewItemsFromTranscript(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      3,
-      120,
-    );
+    const result = readSessionPreviewItemsFromTranscript(sessionId, undefined, undefined, 3, 120);
     expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(result[1]?.text).toContain("call weather");
   });
@@ -334,7 +311,7 @@ describe("SQLite transcript readers", () => {
       events: [header(sessionId), message("user", "from ops")],
     });
 
-    expect(readSessionMessages(sessionId, storePath, filePath)).toEqual([
+    expect(readSessionMessages(sessionId, filePath)).toEqual([
       expect.objectContaining({ content: "from ops" }),
     ]);
   });
