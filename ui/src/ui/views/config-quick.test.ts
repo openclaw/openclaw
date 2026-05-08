@@ -256,8 +256,8 @@ describe("renderQuickSettings", () => {
     const clear = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Clear override",
     );
-    expect(clear?.textContent?.trim()).toBe("Clear override");
-    clear?.dispatchEvent(new Event("click"));
+    expect(clear).toBeInstanceOf(HTMLButtonElement);
+    clear!.dispatchEvent(new Event("click"));
 
     expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
   });
@@ -358,7 +358,8 @@ describe("renderQuickSettings", () => {
     const customButton = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Import",
     );
-    customButton?.click();
+    expect(customButton).toBeInstanceOf(HTMLButtonElement);
+    customButton!.click();
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     expect(setTheme).not.toHaveBeenCalled();
@@ -385,7 +386,8 @@ describe("renderQuickSettings", () => {
     const customButton = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Light Green",
     );
-    customButton?.click();
+    expect(customButton).toBeInstanceOf(HTMLButtonElement);
+    customButton!.click();
 
     expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();
