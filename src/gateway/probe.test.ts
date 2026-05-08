@@ -31,7 +31,7 @@ const deviceIdentityState = vi.hoisted(() => ({
     scopes: ["operator.read"],
     updatedAtMs: 1,
   } as Record<string, unknown> | null,
-  identityPaths: [] as unknown[],
+  identityEnvs: [] as unknown[],
   tokenParams: [] as unknown[],
 }));
 
@@ -137,8 +137,8 @@ vi.mock("../infra/device-identity.js", () => ({
     }
     return deviceIdentityState.value;
   },
-  loadDeviceIdentityIfPresent: (filePath: unknown) => {
-    deviceIdentityState.identityPaths.push(filePath);
+  loadDeviceIdentityIfPresentForEnv: (env: unknown) => {
+    deviceIdentityState.identityEnvs.push(env);
     if (deviceIdentityState.throwOnLoad) {
       throw new Error("read-only identity dir");
     }
@@ -171,7 +171,7 @@ describe("probeGateway", () => {
       scopes: ["operator.read"],
       updatedAtMs: 1,
     };
-    deviceIdentityState.identityPaths = [];
+    deviceIdentityState.identityEnvs = [];
     deviceIdentityState.tokenParams = [];
     gatewayClientState.startMode = "hello";
     gatewayClientState.options = null;
@@ -287,9 +287,7 @@ describe("probeGateway", () => {
       env,
     });
 
-    expect(deviceIdentityState.identityPaths).toEqual([
-      "/tmp/openclaw-probe-service-state/identity/device.json",
-    ]);
+    expect(deviceIdentityState.identityEnvs).toEqual([env]);
     expect(deviceIdentityState.tokenParams).toEqual([
       {
         deviceId: "test-device-identity",

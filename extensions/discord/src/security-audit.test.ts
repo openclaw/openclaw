@@ -165,7 +165,7 @@ describe("Discord security audit findings", () => {
         "channels.discord.allowFrom:Alice#1234",
         "channels.discord.guilds.123.users:trusted.operator",
         "channels.discord.guilds.123.channels.general.users:security-team",
-        "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
+        "SQLite pairing state:team.owner",
       ],
       detailExcludes: ["<@123456789012345678>"],
     },

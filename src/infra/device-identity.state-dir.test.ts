@@ -5,6 +5,7 @@ import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   importLegacyDeviceIdentityFileToSqlite,
   loadDeviceIdentityIfPresent,
+  loadDeviceIdentityIfPresentForEnv,
   loadOrCreateDeviceIdentity,
 } from "./device-identity.js";
 
@@ -14,6 +15,7 @@ describe("device identity state dir defaults", () => {
       const identity = loadOrCreateDeviceIdentity();
       const identityPath = path.join(stateDir, "identity", "device.json");
       expect(loadDeviceIdentityIfPresent(identityPath)?.deviceId).toBe(identity.deviceId);
+      expect(loadDeviceIdentityIfPresentForEnv(process.env)?.deviceId).toBe(identity.deviceId);
     });
   });
 
