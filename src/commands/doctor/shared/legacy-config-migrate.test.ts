@@ -19,6 +19,13 @@ function migrateLegacyConfigForTest(raw: unknown): {
     : { config: next as OpenClawConfig, changes };
 }
 
+function expectMigrationChangesToIncludeFragments(changes: string[], fragments: string[]): void {
+  const unmatchedFragments = fragments.filter((fragment) =>
+    changes.every((change) => !change.includes(fragment)),
+  );
+  expect({ changes, unmatchedFragments }).toMatchObject({ unmatchedFragments: [] });
+}
+
 describe("legacy session maintenance migrate", () => {
   it("removes deprecated session.maintenance.rotateBytes", () => {
     const res = migrateLegacyConfigForTest({
@@ -315,7 +322,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
   });
 
-  it("moves legacy embeddedHarness runtime policy into agentRuntime", () => {
+  it("removes ignored agent-wide runtime policy", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
@@ -339,20 +346,14 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toEqual(
       expect.arrayContaining([
-        "Moved agents.defaults.embeddedHarness → agents.defaults.agentRuntime.",
-        "Moved agents.list.0.embeddedHarness → agents.list.0.agentRuntime.",
+        "Removed agents.defaults.embeddedHarness; runtime is now provider/model scoped.",
+        "Removed agents.list.0.embeddedHarness; runtime is now provider/model scoped.",
+        "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
       ]),
     );
-    expect(res.config?.agents?.defaults).toEqual({
-      agentRuntime: {
-        id: "claude-cli",
-      },
-    });
+    expect(res.config?.agents?.defaults).toEqual({});
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "reviewer",
-      agentRuntime: {
-        id: "codex",
-      },
     });
   });
 
@@ -655,8 +656,11 @@ describe("legacy migrate heartbeat config", () => {
     });
 
     expect(res.changes).toContain("Removed empty top-level heartbeat.");
-    expect(res.config).not.toBeNull();
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+    expect(res.config).toEqual(expect.any(Object));
+    if (res.config === null) {
+      throw new Error("Expected migrated config");
+    }
+    expect((res.config as { heartbeat?: unknown }).heartbeat).toBeUndefined();
   });
 });
 
@@ -672,8 +676,10 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
-    expect(res.changes.some((c) => c.includes("bind=lan"))).toBe(true);
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "gateway.controlUi.allowedOrigins",
+      "bind=lan",
+    ]);
   });
 
   it("seeds allowedOrigins using configured port", () => {
@@ -740,7 +746,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
+    expectMigrationChangesToIncludeFragments(res.changes, ["gateway.controlUi.allowedOrigins"]);
   });
 
   it("does not migrate loopback bind — returns null", () => {

@@ -96,7 +96,17 @@ describe("FileBackedMatrixSyncStore", () => {
         type: "com.openclaw.test",
       },
     ]);
-    expect(savedSync?.roomsData.join?.["!room:example.org"]).toEqual(expect.any(Object));
+    expect(savedSync?.roomsData.join?.["!room:example.org"]).toMatchObject({
+      timeline: {
+        events: [
+          {
+            event_id: "$message",
+            sender: "@user:example.org",
+            type: "m.room.message",
+          },
+        ],
+      },
+    });
     expect(secondStore.hasSavedSyncFromCleanShutdown()).toBe(false);
   });
 

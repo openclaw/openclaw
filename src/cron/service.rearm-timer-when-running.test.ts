@@ -78,7 +78,7 @@ describe("CronService - timer re-arm when running (#12025)", () => {
 
     // The timer must be re-armed so the scheduler continues ticking,
     // with a fixed 60s delay to avoid hot-looping.
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toEqual(expect.anything());
     expect(timeoutSpy).toHaveBeenCalled();
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
@@ -138,7 +138,7 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(state.running).toBe(true);
-    expect(state.timer).not.toBeNull();
+    expect(state.timer).toEqual(expect.anything());
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)

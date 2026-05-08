@@ -72,7 +72,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       }),
     });
 
-    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload).toBeDefined();
     expect(resolveGroupActivation).toHaveBeenCalledWith(
       expect.objectContaining({
         chatId: -1001234567890,

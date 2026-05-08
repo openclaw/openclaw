@@ -126,7 +126,7 @@ describe("memory search citations", () => {
 });
 
 describe("memory tools", () => {
-  it("does not throw when memory_search fails (e.g. embeddings 429)", async () => {
+  it("returns unavailable details when memory_search fails (e.g. embeddings 429)", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");
     });
@@ -142,7 +142,7 @@ describe("memory tools", () => {
     });
   });
 
-  it("does not throw when memory_get fails", async () => {
+  it("returns disabled details when memory_get fails", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
       throw new Error("path required");
     });

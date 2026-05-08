@@ -210,8 +210,11 @@ describe("backup commands", () => {
       expect(result.archivePath).toBe(
         path.join(backupDir, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
       );
-      expect(capturedManifest).not.toBeNull();
-      expect(capturedOnWriteEntry).not.toBeNull();
+      expect(capturedManifest).toEqual(expect.objectContaining({ assets: expect.any(Array) }));
+      expect(capturedOnWriteEntry).toEqual(expect.any(Function));
+      if (capturedManifest === null || capturedOnWriteEntry === null) {
+        throw new Error("Expected backup manifest and archive entry callback");
+      }
       const manifest = capturedManifest as unknown as {
         assets: Array<{ kind: string; archivePath: string }>;
       };
@@ -385,7 +388,7 @@ describe("backup commands", () => {
       });
 
       expect(result.includeWorkspace).toBe(false);
-      expect(result.assets.some((asset) => asset.kind === "workspace")).toBe(false);
+      expect(result.assets.map((asset) => asset.kind)).not.toContain("workspace");
 
       const configOnly = await backupCreateCommand(runtime, {
         dryRun: true,

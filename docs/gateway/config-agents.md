@@ -336,9 +336,6 @@ Time format in system prompt. Default: `auto` (OS preference).
         fallbacks: ["openai/gpt-5.4-mini"],
       },
       params: { cacheRetention: "long" }, // global default provider params
-      agentRuntime: {
-        id: "pi", // pi | auto | registered harness id, e.g. codex
-      },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
       thinkingDefault: "low",
@@ -398,25 +395,28 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `params.chat_template_kwargs`: vLLM/OpenAI-compatible chat-template arguments merged into top-level `api: "openai-completions"` request bodies. For `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true`; explicit `chat_template_kwargs` override generated defaults, and `extra_body.chat_template_kwargs` still has final precedence. For vLLM Qwen thinking controls, set `params.qwenThinkingFormat` to `"chat-template"` or `"top-level"` on that model entry.
 - `compat.supportedReasoningEfforts`: per-model OpenAI-compatible reasoning effort list. Include `"xhigh"` for custom endpoints that truly accept it; OpenClaw then exposes `/think xhigh` in command menus, Gateway session rows, session patch validation, agent CLI validation, and `llm-task` validation for that configured provider/model. Use `compat.reasoningEffortMap` when the backend wants a provider-specific value for a canonical level.
 - `params.preserveThinking`: Z.AI-only opt-in for preserved thinking. When enabled and thinking is on, OpenClaw sends `thinking.clear_thinking: false` and replays prior `reasoning_content`; see [Z.AI thinking and preserved thinking](/providers/zai#thinking-and-preserved-thinking).
-- `agentRuntime`: default low-level agent runtime policy. Omitted id defaults to OpenClaw Pi. Use `id: "pi"` to force the built-in PI harness, `id: "auto"` to let registered plugin harnesses claim supported models and use PI when none match, a registered harness id such as `id: "codex"` to require that harness, or a supported CLI backend alias such as `id: "claude-cli"`. Explicit plugin runtimes fail closed when the harness is unavailable or fails. Keep model refs canonical as `provider/model`; select Codex, Claude CLI, Gemini CLI, and other execution backends through runtime config instead of legacy runtime provider prefixes. See [Agent runtimes](/concepts/agent-runtimes) for how this differs from provider/model selection.
+- Runtime policy belongs on providers or models, not on `agents.defaults`. Use `models.providers.<provider>.agentRuntime` for provider-wide rules or `agents.defaults.models["provider/model"].agentRuntime` / `agents.list[].models["provider/model"].agentRuntime` for model-specific rules. OpenAI agent models on the official OpenAI provider select Codex by default.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 4.
 
-### `agents.defaults.agentRuntime`
-
-`agentRuntime` controls which low-level executor runs agent turns. Most
-deployments should keep the default OpenClaw Pi runtime. Use it when a trusted
-plugin provides a native harness, such as the bundled Codex app-server harness,
-or when you want a supported CLI backend such as Claude CLI. For the mental
-model, see [Agent runtimes](/concepts/agent-runtimes).
+### Runtime policy
 
 ```json5
 {
+  models: {
+    providers: {
+      openai: {
+        agentRuntime: { id: "codex" },
+      },
+    },
+  },
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      agentRuntime: {
-        id: "codex",
+      models: {
+        "anthropic/claude-opus-4-7": {
+          agentRuntime: { id: "claude-cli" },
+        },
       },
     },
   },
@@ -425,11 +425,9 @@ model, see [Agent runtimes](/concepts/agent-runtimes).
 
 - `id`: `"auto"`, `"pi"`, a registered plugin harness id, or a supported CLI backend alias. The bundled Codex plugin registers `codex`; the bundled Anthropic plugin provides the `claude-cli` CLI backend.
 - `id: "auto"` lets registered plugin harnesses claim supported turns and uses PI when no harness matches. An explicit plugin runtime such as `id: "codex"` requires that harness and fails closed if it is unavailable or fails.
-- Environment override: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `id` for that process.
-- OpenAI agent models use the Codex harness by default; `agentRuntime.id: "codex"` remains valid when you want to make that explicit.
-- For Claude CLI deployments, prefer `model: "anthropic/claude-opus-4-7"` plus `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/claude-opus-4-7` model refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in `agentRuntime.id`.
-- Older runtime-policy keys are rewritten to `agentRuntime` by `openclaw doctor --fix`.
-- Harness choice is pinned per session id after the first embedded run. Config/env changes affect new or reset sessions, not an existing transcript. Legacy OpenAI sessions with transcript history but no recorded pin use Codex; stale OpenAI PI pins can be repaired with `openclaw doctor --fix`. `/status` reports the effective runtime, for example `Runtime: OpenClaw Pi Default` or `Runtime: OpenAI Codex`.
+- Whole-agent runtime keys are legacy. `agents.defaults.agentRuntime`, `agents.list[].agentRuntime`, session runtime pins, and `OPENCLAW_AGENT_RUNTIME` are ignored by runtime selection. Run `openclaw doctor --fix` to remove stale values.
+- OpenAI agent models use the Codex harness by default; provider/model `agentRuntime.id: "codex"` remains valid when you want to make that explicit.
+- For Claude CLI deployments, prefer `model: "anthropic/claude-opus-4-7"` plus model-scoped `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/claude-opus-4-7` model refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in provider/model runtime policy.
 - This only controls text agent-turn execution. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
@@ -959,7 +957,6 @@ for provider examples and precedence.
         thinkingDefault: "high", // per-agent thinking level override
         reasoningDefault: "on", // per-agent reasoning visibility override
         fastModeDefault: false, // per-agent fast mode override
-        agentRuntime: { id: "auto" },
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
         tts: {
           providers: {
@@ -1006,7 +1003,7 @@ for provider examples and precedence.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
-- `agentRuntime`: optional per-agent low-level runtime policy override. Use `{ id: "codex" }` to make one agent Codex-only while other agents keep the default PI fallback in `auto` mode.
+- `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.

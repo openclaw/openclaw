@@ -484,8 +484,10 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager({ mode: "full" });
-    expect(releaseUpdate).not.toBeNull();
-    (releaseUpdate as (() => void) | null)?.();
+    if (releaseUpdate === null) {
+      throw new Error("Expected qmd update release callback");
+    }
+    releaseUpdate();
     await manager?.close();
   });
 
@@ -2468,8 +2470,8 @@ describe("QmdMemoryManager", () => {
       isMcporterCommand(call[0]),
     );
     expect(mcporterCalls.length).toBeGreaterThan(0);
-    expect(mcporterCalls.some((call: unknown[]) => (call[1] as string[])[0] === "daemon")).toBe(
-      false,
+    expect(mcporterCalls.map((call: unknown[]) => (call[1] as string[])[0])).not.toContain(
+      "daemon",
     );
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("cold-start"));
 
@@ -2970,7 +2972,7 @@ describe("QmdMemoryManager", () => {
     await manager.search("hello again", { sessionKey: "agent:main:slack:dm:u123" });
 
     expect(selectors.length).toBeGreaterThanOrEqual(2);
-    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
+    expect(selectors.filter((selector) => selector !== "qmd.query")).toEqual([]);
     expect(logWarnMock).not.toHaveBeenCalledWith(
       expect.stringContaining("falling back to v1 tool names"),
     );
@@ -3039,7 +3041,7 @@ describe("QmdMemoryManager", () => {
 
     expect(runMcporterSpy).toHaveBeenCalled();
     expect(selectors.length).toBeGreaterThanOrEqual(1);
-    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
+    expect(selectors.filter((selector) => selector !== "qmd.query")).toEqual([]);
     expect(logWarnMock).not.toHaveBeenCalledWith(
       expect.stringContaining("falling back to v1 tool names"),
     );
@@ -3396,8 +3398,9 @@ describe("QmdMemoryManager", () => {
     });
 
     expect(results).toHaveLength(4);
-    expect(results.some((entry) => entry.source === "memory")).toBe(true);
-    expect(results.some((entry) => entry.source === "sessions")).toBe(true);
+    expect(results.map((entry) => entry.source)).toEqual(
+      expect.arrayContaining(["memory", "sessions"]),
+    );
     await manager.close();
   });
 

@@ -142,7 +142,7 @@ describe("archive helpers", () => {
       },
     });
 
-    expect(() => checker({ path: "package", type: "Directory", size: 0 })).not.toThrow();
+    checker({ path: "package", type: "Directory", size: 0 });
     checker({ path: "package/a.txt", type: "File", size: 6 });
     expectTarPreflightError(
       checker,

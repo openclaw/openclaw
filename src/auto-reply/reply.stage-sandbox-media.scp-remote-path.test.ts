@@ -107,6 +107,7 @@ describe("stageSandboxMedia scp remote paths", () => {
         workspaceDir,
       });
 
+      expect(childProcessMocks.spawn.mock.calls[0]?.[0]).toBe("scp");
       const remoteCacheRoot = join(CONFIG_DIR, "media", "remote-cache");
       const expectedSafeDir = join(remoteCacheRoot, slugifySessionKey(sessionKey));
       try {

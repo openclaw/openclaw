@@ -394,7 +394,7 @@ describe("Codex plugin thread config", () => {
     expect(request.mock.calls.filter(([method]) => method === "app/list").length).toBeGreaterThan(
       0,
     );
-    expect(appListParams.some((params) => params.forceRefetch)).toBe(true);
+    expect(appListParams.map((params) => params.forceRefetch)).toContain(true);
   });
 
   it("surfaces critical post-install refresh failures and keeps plugin apps disabled", async () => {

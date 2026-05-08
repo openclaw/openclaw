@@ -274,9 +274,10 @@ describe("scripts/docker/setup.sh", () => {
     expect(gatewayStartIdx).toBeGreaterThanOrEqual(0);
 
     const prestartLines = lines.slice(0, gatewayStartIdx);
-    expect(prestartLines.some((line) => /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line))).toBe(
-      false,
+    const prestartCliRunLines = prestartLines.filter((line) =>
+      /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line),
     );
+    expect(prestartCliRunLines).toEqual([]);
   });
 
   it("forces BuildKit for local and sandbox docker builds", async () => {
@@ -297,7 +298,10 @@ describe("scripts/docker/setup.sh", () => {
       line.startsWith("build "),
     );
     expect(buildLines.length).toBeGreaterThanOrEqual(2);
-    expect(buildLines.every((line) => line.includes("DOCKER_BUILDKIT=1"))).toBe(true);
+    const buildLinesWithoutBuildKit = buildLines.filter(
+      (line) => !line.includes("DOCKER_BUILDKIT=1"),
+    );
+    expect(buildLinesWithoutBuildKit).toEqual([]);
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {

@@ -2,6 +2,7 @@ import type { Node as TreeSitterNode } from "web-tree-sitter";
 import type { InterpreterInlineEvalHit } from "../command-analysis/inline-eval.js";
 import {
   detectCarriedShellBuiltinArgv,
+  detectCarrierInlineEvalArgv as detectSharedCarrierInlineEvalArgv,
   detectCommandCarrierArgv,
   detectInlineEvalArgv,
   detectShellWrapperThroughCarrierArgv,
@@ -894,7 +895,6 @@ function shellWrapperPayloadForParsing(
 }
 
 type InlineEvalHit = InterpreterInlineEvalHit;
-
 function recordInlineEvalRisk(
   inlineEval: InlineEvalHit,
   text: string,
@@ -939,7 +939,7 @@ function recordCommandRisks(
   }
   const normalizedExecutable = normalizeExecutableToken(executable);
   recordDynamicArgumentRisks(normalizedExecutable, dynamicArguments, output);
-  const inlineEval = detectInlineEvalArgv(argv);
+  const inlineEval = detectInlineEvalArgv(argv) ?? detectSharedCarrierInlineEvalArgv(argv);
   if (inlineEval) {
     recordInlineEvalRisk(inlineEval, text, span, output);
   }
@@ -1078,6 +1078,10 @@ async function walk(
         argv: parsed.argv,
         text: node.text,
         span,
+        executableSpan:
+          nameNode !== null
+            ? spanFromNode(nameNode, state.spanBase)
+            : (parsed.arguments[0]?.span ?? span),
       };
       if (step.executable) {
         output.commands.push(step);

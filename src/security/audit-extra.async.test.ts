@@ -160,7 +160,9 @@ description: test skill
     await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
 
     const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-    expect(findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);
+    expect(findings.map((finding) => finding.checkId)).toContain(
+      "plugins.code_safety.entry_escape",
+    );
   });
 
   it("ignores install backup and debris dirs when scanning installed plugin roots", async () => {
@@ -255,7 +257,9 @@ description: test skill
       await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
 
       const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-      expect(findings.some((f) => f.checkId === "plugins.code_safety.scan_failed")).toBe(true);
+      expect(findings.map((finding) => finding.checkId)).toContain(
+        "plugins.code_safety.scan_failed",
+      );
     } finally {
       scanSpy.mockRestore();
     }

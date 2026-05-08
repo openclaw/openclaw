@@ -1101,7 +1101,10 @@ describe("google-meet plugin", () => {
       "/drive/v3/files/doc-1/export",
       "/drive/v3/files/doc-2/export",
     ]);
-    expect(driveCalls.every((url) => url.searchParams.get("mimeType") === "text/plain")).toBe(true);
+    expect(driveCalls.map((url) => url.searchParams.get("mimeType"))).toEqual([
+      "text/plain",
+      "text/plain",
+    ]);
   });
 
   it("fetches only the latest Meet conference record for a meeting", async () => {
@@ -1862,9 +1865,9 @@ describe("google-meet plugin", () => {
           }),
         ]),
       );
-      expect(result.details.checks?.some((check) => check.id === "chrome-local-audio-device")).toBe(
-        false,
-      );
+      expect(
+        result.details.checks?.filter((check) => check.id === "chrome-local-audio-device"),
+      ).toEqual([]);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });

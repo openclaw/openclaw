@@ -104,12 +104,13 @@ describe("video generate background helpers", () => {
       sessionKey: "agent:main:discord:channel:123",
     });
 
+    const beforeProgress = Date.now();
     recordVideoGenerationTaskProgress({
       handle,
       progressSummary: "Generating video",
     });
 
-    expect(getAgentRunContext(handle.runId)?.lastActiveAt).toEqual(expect.any(Number));
+    expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
 
     failVideoGenerationTaskRun({
       handle,

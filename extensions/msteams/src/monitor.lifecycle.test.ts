@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
+import type { MSTeamsActivityHandler, MSTeamsMessageHandlerDeps } from "./monitor-handler.js";
 import type { MSTeamsPollStore } from "./polls.js";
 
 type FakeServer = EventEmitter & {
@@ -11,6 +12,34 @@ type FakeServer = EventEmitter & {
   requestTimeout: number;
   headersTimeout: number;
 };
+
+type MSTeamsChannelResolution = {
+  input: string;
+  resolved: boolean;
+  teamId?: string;
+  channelId?: string;
+};
+
+type MSTeamsUserResolution = {
+  input: string;
+  resolved: boolean;
+  id?: string;
+};
+
+type ResolveMSTeamsChannelAllowlistMock = (params: {
+  cfg: unknown;
+  entries: string[];
+}) => Promise<MSTeamsChannelResolution[]>;
+
+type ResolveMSTeamsUserAllowlistMock = (params: {
+  cfg: unknown;
+  entries: string[];
+}) => Promise<MSTeamsUserResolution[]>;
+
+type RegisterMSTeamsHandlersMock = (
+  handler: MSTeamsActivityHandler,
+  deps: MSTeamsMessageHandlerDeps,
+) => MSTeamsActivityHandler;
 
 const expressControl = vi.hoisted(() => ({
   mode: { value: "listening" as "listening" | "error" },
@@ -94,9 +123,7 @@ vi.mock("express", () => {
 });
 
 const registerMSTeamsHandlers = vi.hoisted(() =>
-  vi.fn(() => ({
-    run: vi.fn(async () => {}),
-  })),
+  vi.fn<RegisterMSTeamsHandlersMock>((handler) => handler),
 );
 const createMSTeamsAdapter = vi.hoisted(() =>
   vi.fn(() => ({
@@ -118,12 +145,12 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
 );
 
 vi.mock("./monitor-handler.js", () => ({
-  registerMSTeamsHandlers: (...args: unknown[]) => registerMSTeamsHandlers(...args),
+  registerMSTeamsHandlers,
 }));
 
 const resolveAllowlistMocks = vi.hoisted(() => ({
-  resolveMSTeamsChannelAllowlist: vi.fn(async () => []),
-  resolveMSTeamsUserAllowlist: vi.fn(async () => []),
+  resolveMSTeamsChannelAllowlist: vi.fn<ResolveMSTeamsChannelAllowlistMock>(async () => []),
+  resolveMSTeamsUserAllowlist: vi.fn<ResolveMSTeamsUserAllowlistMock>(async () => []),
 }));
 
 vi.mock("./resolve-allowlist.js", () => ({
@@ -195,6 +222,16 @@ function createStores() {
   };
 }
 
+function requireRegisteredMSTeamsConfig(): OpenClawConfig {
+  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
+    | { cfg?: OpenClawConfig }
+    | undefined;
+  if (!registered?.cfg) {
+    throw new Error("expected registered MSTeams handler config");
+  }
+  return registered.cfg;
+}
+
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -261,7 +298,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(app.use).toHaveBeenCalledTimes(4);
 
     const jsonMiddleware = vi.mocked((await import("express")).json).mock.results[0]?.value;
-    expect(jsonMiddleware).toEqual(expect.any(Function));
+    if (typeof jsonMiddleware !== "function") {
+      throw new Error("expected Express JSON middleware");
+    }
     expect(app.use.mock.calls[1]?.[0]).not.toBe(jsonMiddleware);
     expect(app.use.mock.calls[2]?.[0]).toBe(jsonMiddleware);
 
@@ -331,13 +370,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       entries: ["Product/Roadmap"],
     });
 
-    const registeredCfg = registerMSTeamsHandlers.mock.calls[0]?.[1] as { cfg: OpenClawConfig };
-    expect(registeredCfg.cfg.channels?.msteams?.allowFrom).toEqual([
+    const registeredCfg = requireRegisteredMSTeamsConfig();
+    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual([
       "Alice",
       "user:40a1a0ed-4ff2-4164-a219-55518990c197",
       "40a1a0ed-4ff2-4164-a219-55518990c197",
     ]);
-    expect(registeredCfg.cfg.channels?.msteams?.groupAllowFrom).toEqual([
+    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual([
       "Bob",
       "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198",
       "50a1a0ed-4ff2-4164-a219-55518990c198",
@@ -383,9 +422,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       entries: ["Bob"],
     });
 
-    const registeredCfg = registerMSTeamsHandlers.mock.calls[0]?.[1] as { cfg: OpenClawConfig };
-    expect(registeredCfg.cfg.channels?.msteams?.allowFrom).toEqual(["Alice", "alice-aad"]);
-    expect(registeredCfg.cfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob", "bob-aad"]);
+    const registeredCfg = requireRegisteredMSTeamsConfig();
+    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual(["Alice", "alice-aad"]);
+    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob", "bob-aad"]);
 
     abort.abort();
     await task;

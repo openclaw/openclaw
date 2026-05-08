@@ -758,10 +758,10 @@ Successfully processed 1 files`;
         isDir: false,
         env,
       });
-      expect(result).not.toBeNull();
-      expect(result?.command).toBe(DEFAULT_ICACLS);
-      expect(result?.args).toContain("C:\\test\\file.txt");
-      expect(result?.args).toContain("/inheritance:r");
+      expect(result).toMatchObject({
+        command: DEFAULT_ICACLS,
+        args: expect.arrayContaining(["C:\\test\\file.txt", "/inheritance:r"]),
+      });
     });
 
     it("uses a validated SystemRoot for the structured command executable", () => {
@@ -781,9 +781,10 @@ Successfully processed 1 files`;
         userInfo: mockUserInfo,
       });
       // Should return a valid command using the system username
-      expect(result).not.toBeNull();
-      expect(result?.command).toBe(DEFAULT_ICACLS);
-      expect(result?.args).toContain(`${MOCK_USERNAME}:F`);
+      expect(result).toMatchObject({
+        command: DEFAULT_ICACLS,
+        args: expect.arrayContaining([`${MOCK_USERNAME}:F`]),
+      });
     });
 
     it("includes display string matching formatIcaclsResetCommand", () => {

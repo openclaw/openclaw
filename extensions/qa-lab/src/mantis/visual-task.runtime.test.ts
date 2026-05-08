@@ -102,7 +102,8 @@ describe("mantis visual task runtime", () => {
       ]),
     );
     expect(stagedVideoPath).not.toBe(finalVideoPath);
-    expect(path.basename(stagedVideoPath ?? "")).toBe(path.basename(finalVideoPath));
+    expect(path.basename(stagedVideoPath ?? "")).toContain(path.basename(finalVideoPath));
+    expect(path.basename(stagedVideoPath ?? "")).toMatch(/\.part$/);
     await expect(fs.stat(stagedVideoPath ?? "")).rejects.toThrow();
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
     await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
