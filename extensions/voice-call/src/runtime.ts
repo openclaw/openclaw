@@ -421,6 +421,9 @@ export async function createVoiceCallRuntime(params: {
             });
             consultPromise
               .then((result: { text: string }) => {
+                log.info(
+                  `[voice-call] Email-first path: background consult resolved for call=${callId}, result="${result.text.slice(0, 120)}"`,
+                );
                 spawnEmailDeliveryAgent({
                   cfg,
                   agentRuntime,
@@ -472,6 +475,9 @@ export async function createVoiceCallRuntime(params: {
             );
             consultPromise
               .then((r: { text: string }) => {
+                log.info(
+                  `[voice-call] Timeout path: background consult resolved for call=${callId}, result="${r.text.slice(0, 120)}"`,
+                );
                 spawnEmailDeliveryAgent({
                   cfg,
                   agentRuntime,

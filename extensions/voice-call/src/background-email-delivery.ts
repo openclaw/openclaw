@@ -71,7 +71,7 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
   } = params;
 
   logger.info(
-    `[voice-call] Spawning email delivery agent for session=${sessionKey}, agent=${agentId}, question="${question.slice(0, 80)}"`,
+    `[voice-call] Spawning email delivery agent for session=${sessionKey}, agent=${agentId}, question="${question.slice(0, 80)}", consultResult="${consultResult.slice(0, 120)}"`,
   );
 
   const promptParts = [
