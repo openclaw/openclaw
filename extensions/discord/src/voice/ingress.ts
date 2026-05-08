@@ -1,4 +1,7 @@
+import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
 import { buildDiscordGroupSystemPrompt } from "../monitor/inbound-context.js";
@@ -9,9 +12,14 @@ import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 export const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 
 export type DiscordVoiceIngressContext = {
-  extraSystemPrompt: string | undefined;
+  extraSystemPrompt?: string;
   senderIsOwner: boolean;
   speakerLabel: string;
+};
+
+export type DiscordVoiceAgentTurnResult = {
+  context: DiscordVoiceIngressContext;
+  text: string;
 };
 
 export async function resolveDiscordVoiceIngressContext(params: {
@@ -53,5 +61,57 @@ export async function resolveDiscordVoiceIngressContext(params: {
     extraSystemPrompt: buildDiscordGroupSystemPrompt(access.channelConfig),
     senderIsOwner: speaker.senderIsOwner,
     speakerLabel: speaker.label,
+  };
+}
+
+export async function runDiscordVoiceAgentTurn(params: {
+  entry: VoiceSessionEntry;
+  userId: string;
+  message: string;
+  cfg: OpenClawConfig;
+  discordConfig: DiscordAccountConfig;
+  runtime: RuntimeEnv;
+  context?: DiscordVoiceIngressContext;
+  ownerAllowFrom?: string[];
+  fetchGuildName: (guildId: string) => Promise<string | undefined>;
+  speakerContext: DiscordVoiceSpeakerContextResolver;
+}): Promise<DiscordVoiceAgentTurnResult | null> {
+  const context =
+    params.context ??
+    (await resolveDiscordVoiceIngressContext({
+      entry: params.entry,
+      userId: params.userId,
+      cfg: params.cfg,
+      discordConfig: params.discordConfig,
+      ownerAllowFrom: params.ownerAllowFrom,
+      fetchGuildName: params.fetchGuildName,
+      speakerContext: params.speakerContext,
+    }));
+  if (!context) {
+    return null;
+  }
+  const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
+  const result = await agentCommandFromIngress(
+    {
+      message: params.message,
+      sessionKey: params.entry.route.sessionKey,
+      agentId: params.entry.route.agentId,
+      messageChannel: "discord",
+      messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
+      extraSystemPrompt: context.extraSystemPrompt,
+      senderIsOwner: context.senderIsOwner,
+      allowModelOverride: Boolean(voiceModel),
+      model: voiceModel,
+      deliver: false,
+    },
+    params.runtime,
+  );
+  return {
+    context,
+    text: (result.payloads ?? [])
+      .map((payload) => payload.text)
+      .filter((text) => typeof text === "string" && text.trim())
+      .join("\n")
+      .trim(),
   };
 }

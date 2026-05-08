@@ -1,5 +1,4 @@
 import { PassThrough } from "node:stream";
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   buildRealtimeVoiceAgentConsultChatMessage,
@@ -18,18 +17,20 @@ import {
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   convertDiscordPcm48kStereoToRealtimePcm24kMono,
   convertRealtimePcm24kMonoToDiscordPcm48kStereo,
 } from "./audio.js";
-import { DISCORD_VOICE_MESSAGE_PROVIDER } from "./ingress.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
-import { logVoiceVerbose, type VoiceSessionEntry } from "./session.js";
+import {
+  logVoiceVerbose,
+  type VoiceRealtimeSession,
+  type VoiceRealtimeSpeakerContext,
+  type VoiceSessionEntry,
+} from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_REALTIME_TALKBACK_DEBOUNCE_MS = 350;
@@ -37,11 +38,7 @@ const DISCORD_REALTIME_FALLBACK_TEXT = "I hit an error while checking that. Plea
 
 export type DiscordVoiceMode = "stt-tts" | "talk-buffer" | "bidi";
 
-type DiscordRealtimeSpeakerContext = {
-  extraSystemPrompt?: string;
-  senderIsOwner: boolean;
-  speakerLabel: string;
-};
+type DiscordRealtimeSpeakerContext = VoiceRealtimeSpeakerContext & { userId: string };
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
@@ -61,7 +58,7 @@ export function buildDiscordSpeakExactUserMessage(text: string): string {
   ].join("\n");
 }
 
-export class DiscordRealtimeVoiceSession {
+export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private bridge: RealtimeVoiceBridgeSession | null = null;
   private outputStream: PassThrough | null = null;
   private readonly talkback: RealtimeVoiceAgentTalkbackQueue;
@@ -74,7 +71,11 @@ export class DiscordRealtimeVoiceSession {
       discordConfig: DiscordAccountConfig;
       entry: VoiceSessionEntry;
       mode: Exclude<DiscordVoiceMode, "stt-tts">;
-      runtime: RuntimeEnv;
+      runAgentTurn: (params: {
+        context: VoiceRealtimeSpeakerContext;
+        message: string;
+        userId: string;
+      }) => Promise<string>;
     },
   ) {
     this.talkback = createRealtimeVoiceAgentTalkbackQueue({
@@ -159,8 +160,8 @@ export class DiscordRealtimeVoiceSession {
     this.bridge = null;
   }
 
-  setSpeakerContext(context: DiscordRealtimeSpeakerContext): void {
-    this.speakerContext = context;
+  setSpeakerContext(context: VoiceRealtimeSpeakerContext, userId: string): void {
+    this.speakerContext = { ...context, userId };
   }
 
   sendInputAudio(discordPcm48kStereo: Buffer): void {
@@ -248,28 +249,15 @@ export class DiscordRealtimeVoiceSession {
   }
 
   private async runAgentTurn(params: { message: string }): Promise<string> {
-    const voiceModel = normalizeOptionalString(this.params.discordConfig.voice?.model);
     const context = this.speakerContext;
-    const result = await agentCommandFromIngress(
-      {
-        message: params.message,
-        sessionKey: this.params.entry.route.sessionKey,
-        agentId: this.params.entry.route.agentId,
-        messageChannel: "discord",
-        messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
-        extraSystemPrompt: context?.extraSystemPrompt,
-        senderIsOwner: context?.senderIsOwner ?? false,
-        allowModelOverride: Boolean(voiceModel),
-        model: voiceModel,
-        deliver: false,
-      },
-      this.params.runtime,
-    );
-    return (result.payloads ?? [])
-      .map((payload) => payload.text)
-      .filter((text) => typeof text === "string" && text.trim())
-      .join("\n")
-      .trim();
+    if (!context) {
+      return "";
+    }
+    return this.params.runAgentTurn({
+      context,
+      message: params.message,
+      userId: context.userId,
+    });
   }
 }
 

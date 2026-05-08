@@ -1,11 +1,9 @@
 import path from "node:path";
 import { Readable } from "node:stream";
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { DISCORD_VOICE_MESSAGE_PROVIDER, resolveDiscordVoiceIngressContext } from "./ingress.js";
+import { resolveDiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import {
@@ -79,29 +77,25 @@ export async function processDiscordVoiceSegment(params: {
   );
 
   const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
-  const modelOverride = normalizeOptionalString(params.discordConfig.voice?.model);
-
-  const result = await agentCommandFromIngress(
-    {
-      message: prompt,
-      sessionKey: entry.route.sessionKey,
-      agentId: entry.route.agentId,
-      messageChannel: "discord",
-      messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
-      extraSystemPrompt: ingress.extraSystemPrompt,
-      senderIsOwner: ingress.senderIsOwner,
-      allowModelOverride: Boolean(modelOverride),
-      model: modelOverride,
-      deliver: false,
-    },
-    params.runtime,
-  );
-
-  const replyText = (result.payloads ?? [])
-    .map((payload) => payload.text)
-    .filter((text) => typeof text === "string" && text.trim())
-    .join("\n")
-    .trim();
+  const turn = await runDiscordVoiceAgentTurn({
+    entry,
+    userId,
+    message: prompt,
+    cfg: params.cfg,
+    discordConfig: params.discordConfig,
+    runtime: params.runtime,
+    context: ingress,
+    ownerAllowFrom: params.ownerAllowFrom,
+    fetchGuildName: params.fetchGuildName,
+    speakerContext: params.speakerContext,
+  });
+  if (!turn) {
+    logVoiceVerbose(
+      `segment unauthorized before agent turn: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+    );
+    return;
+  }
+  const replyText = turn.text;
 
   if (!replyText) {
     logVoiceVerbose(

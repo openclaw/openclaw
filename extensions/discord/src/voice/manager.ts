@@ -20,7 +20,7 @@ import {
   stopVoiceCaptureState,
 } from "./capture-state.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
-import { resolveDiscordVoiceIngressContext } from "./ingress.js";
+import { resolveDiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 import {
   DiscordRealtimeVoiceSession,
   isDiscordRealtimeVoiceMode,
@@ -376,7 +376,8 @@ export class DiscordVoiceManager {
         discordConfig: this.params.discordConfig,
         entry,
         mode: voiceMode,
-        runtime: this.params.runtime,
+        runAgentTurn: ({ context, message, userId }) =>
+          this.runDiscordRealtimeAgentTurn({ context, entry, message, userId }),
       });
       try {
         await entry.realtime.connect();
@@ -640,12 +641,49 @@ export class DiscordVoiceManager {
       );
       return;
     }
-    realtime.setSpeakerContext(ingress);
+    realtime.setSpeakerContext(ingress, userId);
     await decodeOpusStreamChunks(stream, {
       onChunk: (pcm) => realtime.sendInputAudio(pcm),
       onVerbose: logVoiceVerbose,
       onWarn: (message) => logger.warn(message),
     });
+  }
+
+  private async runDiscordRealtimeAgentTurn(params: {
+    context: {
+      extraSystemPrompt?: string;
+      senderIsOwner: boolean;
+      speakerLabel: string;
+    };
+    entry: VoiceSessionEntry;
+    message: string;
+    userId: string;
+  }): Promise<string> {
+    const { context, entry, message, userId } = params;
+    const turn = await runDiscordVoiceAgentTurn({
+      entry,
+      userId,
+      message,
+      cfg: this.params.cfg,
+      discordConfig: this.params.discordConfig,
+      runtime: this.params.runtime,
+      context,
+      ownerAllowFrom: this.ownerAllowFrom,
+      fetchGuildName: async (guildId) => {
+        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
+        return guild && typeof guild.name === "string" && guild.name.trim()
+          ? guild.name
+          : undefined;
+      },
+      speakerContext: this.speakerContext,
+    });
+    if (!turn) {
+      logVoiceVerbose(
+        `realtime agent unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+      return "";
+    }
+    return turn.text;
   }
 
   private async processSegment(params: {

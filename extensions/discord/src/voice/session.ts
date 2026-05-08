@@ -2,7 +2,6 @@ import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { ChannelType } from "../internal/discord.js";
 import type { VoiceCaptureState } from "./capture-state.js";
-import type { DiscordRealtimeVoiceSession } from "./realtime.js";
 import type { VoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 export const MIN_SEGMENT_SECONDS = 0.35;
@@ -26,6 +25,20 @@ export type VoiceOperationResult = {
   guildId?: string;
 };
 
+export type VoiceRealtimeSpeakerContext = {
+  extraSystemPrompt?: string;
+  senderIsOwner: boolean;
+  speakerLabel: string;
+};
+
+export type VoiceRealtimeSession = {
+  close: () => void;
+  connect: () => Promise<void>;
+  handleBargeIn: () => void;
+  sendInputAudio: (discordPcm48kStereo: Buffer) => void;
+  setSpeakerContext: (context: VoiceRealtimeSpeakerContext, userId: string) => void;
+};
+
 export type VoiceSessionEntry = {
   guildId: string;
   guildName?: string;
@@ -38,7 +51,7 @@ export type VoiceSessionEntry = {
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
-  realtime?: DiscordRealtimeVoiceSession;
+  realtime?: VoiceRealtimeSession;
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: () => void;
 };
