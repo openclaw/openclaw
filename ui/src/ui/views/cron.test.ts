@@ -145,13 +145,11 @@ describe("cron view", () => {
     expect(container.textContent).toContain("All delivery");
     expect(container.textContent).not.toContain("multi-select");
 
-    const statusOk = container.querySelector(
+    const statusOk = getElement(
+      container,
       '.cron-filter-dropdown[data-filter="status"] input[value="ok"]',
+      HTMLInputElement,
     );
-    expect(statusOk).not.toBeNull();
-    if (!(statusOk instanceof HTMLInputElement)) {
-      return;
-    }
     statusOk.checked = true;
     statusOk.dispatchEvent(new Event("change", { bubbles: true }));
 
@@ -160,25 +158,21 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Due");
     expect(container.textContent).not.toContain("Next 13");
 
-    const scheduleSelect = container.querySelector(
+    const scheduleSelect = getElement(
+      container,
       'select[data-test-id="cron-jobs-schedule-filter"]',
+      HTMLSelectElement,
     );
-    expect(scheduleSelect).not.toBeNull();
-    if (!(scheduleSelect instanceof HTMLSelectElement)) {
-      return;
-    }
     scheduleSelect.value = "cron";
     scheduleSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsScheduleKindFilter: "cron" });
 
-    const lastRunSelect = container.querySelector(
+    const lastRunSelect = getElement(
+      container,
       'select[data-test-id="cron-jobs-last-status-filter"]',
+      HTMLSelectElement,
     );
-    expect(lastRunSelect).not.toBeNull();
-    if (!(lastRunSelect instanceof HTMLSelectElement)) {
-      return;
-    }
     lastRunSelect.value = "error";
     lastRunSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
