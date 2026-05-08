@@ -89,7 +89,7 @@ describe("pi package graph guardrails", () => {
 
     expectNoGraphViolations(
       piOverrides,
-      `pnpm.overrides must not target Pi packages. Found: ${piOverrides.join(", ") || "<none>"}. Pi-specific overrides can silently create an unsupported package graph.`,
+      `pnpm-workspace.yaml overrides must not target Pi packages. Found: ${piOverrides.join(", ") || "<none>"}. Pi-specific overrides can silently create an unsupported package graph.`,
     );
   });
 });
