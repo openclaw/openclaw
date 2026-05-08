@@ -478,6 +478,7 @@ export function createAcpReplyProjector(params: {
         typeof event.size === "number" &&
         params.onTokenUsage
       ) {
+        // Fire BEFORE the display dedupe/visibility gate so persistence always receives the latest values regardless of repeat-suppression.
         await params.onTokenUsage({ used: event.used, size: event.size, total: event.used });
       }
       if (!isAcpTagVisible(settings, event.tag)) {

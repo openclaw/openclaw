@@ -34,33 +34,11 @@ import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js
  * after the fix.
  */
 
-/**
- * Future-shape of the projector params with the `onTokenUsage` callback the
- * fix will add. Defined locally so the test compiles today without modifying
- * production code. After the fix lands, this `type` can be removed and the
- * test can call `createAcpReplyProjector` directly with `onTokenUsage`.
- */
 type AcpTokenUsage = {
   used: number;
   size: number;
   total: number;
 };
-
-type AcpProjectorParamsWithUsage = Parameters<typeof createAcpReplyProjector>[0] & {
-  onTokenUsage?: (usage: AcpTokenUsage) => void | Promise<void>;
-};
-
-type CreateAcpProjectorWithUsage = (
-  params: AcpProjectorParamsWithUsage,
-) => ReturnType<typeof createAcpReplyProjector>;
-
-/**
- * Cast the production factory through the future-shape param type. The runtime
- * value is unchanged — this is purely a compile-time shim so we can pass
- * `onTokenUsage` without `any` and without editing production code.
- */
-const createProjector: CreateAcpProjectorWithUsage =
-  createAcpReplyProjector as unknown as CreateAcpProjectorWithUsage;
 
 type Delivery = { kind: string; text?: string };
 
@@ -69,7 +47,7 @@ function createHarness(params?: {
   onTokenUsage?: (usage: AcpTokenUsage) => void | Promise<void>;
 }) {
   const deliveries: Delivery[] = [];
-  const projector = createProjector({
+  const projector = createAcpReplyProjector({
     cfg: createCfg(params?.cfgOverrides),
     shouldSendToolSummaries: true,
     deliver: async (kind, payload) => {
