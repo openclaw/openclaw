@@ -923,90 +923,73 @@ export const zh_CN: TranslationMap = {
     hidePassword: "隐藏密码",
     togglePasswordVisibility: "切换密码可见性",
     failure: {
-      rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      rawError: "原始错误",
+      docsAuth: "Control UI 认证文档",
+      docsPairing: "设备配对文档",
+      docsInsecure: "不安全 HTTP 文档",
       authRequired: {
-        title: "Auth required",
-        summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
-        stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+        title: "需要认证",
+        summary: "Gateway 可以访问，但此浏览器连接前需要匹配的令牌或密码。",
+        stepPaste: "粘贴 openclaw dashboard --no-open 提供的令牌，或输入已配置的密码。",
         stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
+          "如果未配置令牌，请在 Gateway 主机上运行 openclaw doctor --generate-gateway-token。",
+        stepConnect: "更新凭据后再次点击 Connect。",
       },
       authFailed: {
-        title: "Auth did not match",
-        summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
-        stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
-        stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
-        stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+        title: "认证不匹配",
+        summary: "提供的凭据被拒绝。最常见原因是令牌已过期，或令牌来自另一个 Gateway URL。",
+        stepDashboard: "运行 openclaw dashboard --no-open 并打开新的 URL，或粘贴其中的令牌。",
+        stepReplace: "替换过期的令牌/密码；不要复用另一个 Gateway URL 的令牌。",
+        stepMode: "一次只使用一种匹配的认证模式：令牌模式使用 gateway token，密码模式使用密码。",
       },
       rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
-        stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
+        title: "失败尝试过多",
+        summary: "Gateway 正在临时限制此客户端的认证尝试。",
+        stepStop: "暂时停止从此标签页重试。",
+        stepWait: "等待认证限制器冷却，然后使用修正后的凭据重新连接。",
+        stepCheckClients: "如果这是共享主机，请检查其他客户端是否在重复错误重试。",
       },
       pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
-        summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
-        upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
+        title: "需要设备配对",
+        scopeTitle: "Scope 升级待批准",
+        roleTitle: "角色升级待批准",
+        metadataTitle: "设备刷新待批准",
+        summary: "此浏览器需要 Gateway 主机的一次性批准后才能使用 Control UI。",
+        upgradeSummary: "此浏览器已知，但请求的访问权限已变更，需要重新批准。",
+        stepList: "在 Gateway 主机上运行 openclaw devices list。",
+        stepApproveId: "批准此请求：openclaw devices approve {requestId}。",
+        stepApprove: "从该列表批准待处理的浏览器/设备请求。",
+        stepReconnect: "批准完成后重新连接。",
       },
       insecure: {
-        title: "Secure browser context required",
-        summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
-        stepLocalCompat:
-          "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
-        stepAvoidDisable: "Avoid disabling device auth for remote HTTP access.",
+        title: "需要安全浏览器上下文",
+        summary: "此页面通过普通 HTTP 运行，因此浏览器无法创建 Gateway 期望的设备身份。",
+        stepHttps: "使用 HTTPS/Tailscale Serve，或在 Gateway 主机上打开 http://127.0.0.1:18789。",
+        stepLocalCompat: "如需本地仅令牌兼容，设置 gateway.controlUi.allowInsecureAuth: true。",
+        stepAvoidDisable: "避免为远程 HTTP 访问禁用设备认证。",
       },
       origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
+        title: "浏览器来源不被允许",
+        summary: "Gateway 在接受 Control UI 连接前拒绝了此页面来源。",
+        stepAllowedOrigins: "将此浏览器来源添加到 gateway.controlUi.allowedOrigins。",
+        stepFullOrigin: "使用完整来源，例如 http://localhost:5173，不要使用通配符模式。",
+        stepRestart: "更改允许来源后重启或重新加载 Gateway。",
       },
       protocol: {
-        title: "Protocol mismatch",
-        summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+        title: "协议不匹配",
+        summary: "提供的 Control UI 与正在运行的 Gateway 对支持的连接协议不一致。",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
-        stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
-        stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+          "使用 openclaw dashboard 重新打开提供的 dashboard，确保 UI 和 Gateway 来自同一安装。",
+        stepDevUi: "如果使用 pnpm ui:dev，请基于当前 checkout 重新构建或重启开发 UI。",
+        stepRestart: "更新 OpenClaw 后重启 Gateway，使其提供当前协议。",
       },
       network: {
-        title: "Could not connect",
-        summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
-        stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+        title: "无法连接",
+        summary: "浏览器无法完成 Gateway 连接。重试凭据前请检查目标和传输方式。",
+        stepGateway: "使用 openclaw status 或 openclaw gateway run 确认 Gateway 正在运行。",
+        stepUrl: "检查 WebSocket URL；当 Gateway 位于 HTTPS/Tailscale Serve 后面时使用 wss://。",
         stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+          "使用 openclaw dashboard --no-open 重新打开 dashboard，以重新复制当前 URL 和认证详情。",
       },
     },
   },

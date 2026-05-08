@@ -943,90 +943,94 @@ export const tr: TranslationMap = {
     hidePassword: "Parolayı gizle",
     togglePasswordVisibility: "Parola görünürlüğünü değiştir",
     failure: {
-      rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      rawError: "Ham hata",
+      docsAuth: "Control UI kimlik doğrulama belgeleri",
+      docsPairing: "Cihaz eşleştirme belgeleri",
+      docsInsecure: "Güvensiz HTTP belgeleri",
       authRequired: {
-        title: "Auth required",
+        title: "Kimlik doğrulama gerekli",
         summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
+          "Gateway erişilebilir, ancak bu tarayıcı bağlanmadan önce eşleşen bir token veya parola gerekir.",
         stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+          "openclaw dashboard --no-open çıktısındaki tokenı yapıştırın veya yapılandırılmış parolayı girin.",
         stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
+          "Token yapılandırılmamışsa Gateway ana makinesinde openclaw doctor --generate-gateway-token çalıştırın.",
+        stepConnect: "Kimlik bilgisini güncelledikten sonra Connect düğmesine tekrar tıklayın.",
       },
       authFailed: {
-        title: "Auth did not match",
+        title: "Kimlik doğrulama eşleşmedi",
         summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
+          "Sağlanan kimlik bilgisi reddedildi. En yaygın neden eski bir token veya başka bir Gateway URL’sinden kopyalanmış tokendır.",
         stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+          "openclaw dashboard --no-open çalıştırın ve yeni URL’yi açın veya tokenını yapıştırın.",
         stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
+          "Eski token/parola değerlerini değiştirin; başka bir Gateway URL’sinden tokenı yeniden kullanmayın.",
         stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+          "Aynı anda tek bir eşleşen auth modu kullanın: token modu için gateway token, parola modu için parola.",
       },
       rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
+        title: "Çok fazla başarısız deneme",
+        summary: "Gateway bu istemci için kimlik doğrulama denemelerini geçici olarak sınırlıyor.",
+        stepStop: "Bu sekmeden bir süre yeniden denemeyi bırakın.",
         stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
+          "Auth sınırlayıcının soğumasını bekleyin, ardından düzeltilmiş kimlik bilgisiyle yeniden bağlanın.",
+        stepCheckClients:
+          "Bu paylaşılan bir host ise diğer istemcilerde yinelenen hatalı denemeleri kontrol edin.",
       },
       pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
+        title: "Cihaz eşleştirmesi gerekli",
+        scopeTitle: "Scope yükseltmesi bekliyor",
+        roleTitle: "Rol yükseltmesi bekliyor",
+        metadataTitle: "Cihaz yenilemesi bekliyor",
         summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
+          "Bu tarayıcının Control UI kullanabilmesi için Gateway hostundan tek seferlik onay gerekir.",
         upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
+          "Bu tarayıcı zaten biliniyor, ancak istenen erişim değişti ve yeni onay gerekiyor.",
+        stepList: "Gateway hostunda openclaw devices list çalıştırın.",
+        stepApproveId: "Bu isteği onaylayın: openclaw devices approve {requestId}.",
+        stepApprove: "Bu listedeki bekleyen tarayıcı/cihaz isteğini onaylayın.",
+        stepReconnect: "Onay tamamlandıktan sonra yeniden bağlanın.",
       },
       insecure: {
-        title: "Secure browser context required",
+        title: "Güvenli tarayıcı bağlamı gerekli",
         summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+          "Bu sayfa düz HTTP üzerinden çalışıyor, bu yüzden tarayıcı Gateway’in beklediği cihaz kimliğini oluşturamıyor.",
+        stepHttps:
+          "HTTPS/Tailscale Serve kullanın veya Gateway hostunda http://127.0.0.1:18789 adresini açın.",
         stepLocalCompat:
-          "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
-        stepAvoidDisable: "Avoid disabling device auth for remote HTTP access.",
+          "Yerel yalnızca-token uyumluluğu için gateway.controlUi.allowInsecureAuth: true ayarlayın.",
+        stepAvoidDisable: "Uzak HTTP erişimi için cihaz authunu devre dışı bırakmaktan kaçının.",
       },
       origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
+        title: "Tarayıcı originine izin verilmiyor",
+        summary: "Gateway, Control UI bağlantısını kabul etmeden önce bu sayfa originini reddetti.",
+        stepAllowedOrigins: "Bu tarayıcı originini gateway.controlUi.allowedOrigins içine ekleyin.",
+        stepFullOrigin:
+          "http://localhost:5173 gibi tam originler kullanın, wildcard kalıpları kullanmayın.",
+        stepRestart:
+          "İzin verilen originleri değiştirdikten sonra Gateway’i yeniden başlatın veya yeniden yükleyin.",
       },
       protocol: {
-        title: "Protocol mismatch",
+        title: "Protokol uyuşmazlığı",
         summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+          "Sunulan Control UI ile çalışan Gateway desteklenen bağlantı protokolü konusunda uyuşmuyor.",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+          "UI ve Gateway aynı kurulumdan gelsin diye sunulan dashboardı openclaw dashboard ile yeniden açın.",
         stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
+          "pnpm ui:dev kullanıyorsanız geliştirme UI’sini mevcut checkouta göre yeniden derleyin veya yeniden başlatın.",
         stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+          "OpenClaw güncellemesinden sonra Gateway’i yeniden başlatın, böylece güncel protokolü sunsun.",
       },
       network: {
-        title: "Could not connect",
+        title: "Bağlanılamadı",
         summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
+          "Tarayıcı Gateway bağlantısını tamamlayamadı. Kimlik bilgilerini yeniden denemeden önce hedefi ve taşıma yolunu kontrol edin.",
+        stepGateway:
+          "openclaw status veya openclaw gateway run ile Gateway’in çalıştığını doğrulayın.",
         stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "WebSocket URL’sini kontrol edin ve Gateway HTTPS/Tailscale Serve arkasındaysa wss:// kullanın.",
         stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+          "Geçerli URL ve auth ayrıntılarını yeniden kopyalamak için dashboardı openclaw dashboard --no-open ile yeniden açın.",
       },
     },
   },

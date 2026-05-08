@@ -939,90 +939,94 @@ export const fa: TranslationMap = {
     hidePassword: "پنهان کردن گذرواژه",
     togglePasswordVisibility: "تغییر نمایش گذرواژه",
     failure: {
-      rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      rawError: "خطای خام",
+      docsAuth: "مستندات احراز هویت Control UI",
+      docsPairing: "مستندات جفت سازی دستگاه",
+      docsInsecure: "مستندات HTTP ناامن",
       authRequired: {
-        title: "Auth required",
+        title: "احراز هویت لازم است",
         summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
+          "Gateway در دسترس است، اما قبل از اتصال این مرورگر به یک توکن یا گذرواژه منطبق نیاز دارد.",
         stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+          "توکن openclaw dashboard --no-open را جای گذاری کنید یا گذرواژه پیکربندی شده را وارد کنید.",
         stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
+          "اگر توکنی پیکربندی نشده است، openclaw doctor --generate-gateway-token را روی میزبان Gateway اجرا کنید.",
+        stepConnect: "پس از به روز کردن اعتبارنامه، دوباره روی Connect کلیک کنید.",
       },
       authFailed: {
-        title: "Auth did not match",
+        title: "احراز هویت مطابقت نداشت",
         summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
+          "اعتبارنامه ارائه شده رد شد. رایج ترین علت، توکن قدیمی یا توکنی است که از URL یک Gateway دیگر کپی شده است.",
         stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+          "openclaw dashboard --no-open را اجرا کنید و URL تازه را باز کنید یا توکن آن را جای گذاری کنید.",
         stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
+          "مقادیر قدیمی توکن/گذرواژه را جایگزین کنید؛ از توکن URL یک Gateway دیگر دوباره استفاده نکنید.",
         stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+          "هر بار فقط یک حالت احراز هویت منطبق استفاده کنید: توکن gateway برای حالت توکن، گذرواژه برای حالت گذرواژه.",
       },
       rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
+        title: "تلاش های ناموفق بیش از حد",
+        summary: "Gateway به طور موقت تلاش های احراز هویت این کلاینت را محدود می کند.",
+        stepStop: "برای لحظه ای از این زبانه دوباره تلاش نکنید.",
         stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
+          "صبر کنید محدودکننده احراز هویت آرام شود، سپس با اعتبارنامه اصلاح شده دوباره وصل شوید.",
+        stepCheckClients:
+          "اگر این میزبان مشترک است، کلاینت های دیگر را برای تلاش های نادرست تکراری بررسی کنید.",
       },
       pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
+        title: "جفت سازی دستگاه لازم است",
+        scopeTitle: "ارتقای scope در انتظار است",
+        roleTitle: "ارتقای نقش در انتظار است",
+        metadataTitle: "به روزرسانی دستگاه در انتظار است",
         summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
+          "این مرورگر قبل از استفاده از Control UI به تأیید یک باره از میزبان Gateway نیاز دارد.",
         upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
+          "این مرورگر از قبل شناخته شده است، اما دسترسی درخواستی تغییر کرده و به تأیید تازه نیاز دارد.",
+        stepList: "openclaw devices list را روی میزبان Gateway اجرا کنید.",
+        stepApproveId: "این درخواست را تأیید کنید: openclaw devices approve {requestId}.",
+        stepApprove: "درخواست در انتظار مرورگر/دستگاه را از آن فهرست تأیید کنید.",
+        stepReconnect: "پس از تکمیل تأیید، دوباره وصل شوید.",
       },
       insecure: {
-        title: "Secure browser context required",
+        title: "زمینه امن مرورگر لازم است",
         summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+          "این صفحه روی HTTP ساده اجرا می شود، بنابراین مرورگر نمی تواند هویت دستگاه مورد انتظار Gateway را بسازد.",
+        stepHttps:
+          "از HTTPS/Tailscale Serve استفاده کنید یا http://127.0.0.1:18789 را روی میزبان Gateway باز کنید.",
         stepLocalCompat:
-          "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
-        stepAvoidDisable: "Avoid disabling device auth for remote HTTP access.",
+          "برای سازگاری محلی فقط با توکن، gateway.controlUi.allowInsecureAuth: true را تنظیم کنید.",
+        stepAvoidDisable:
+          "از غیرفعال کردن احراز هویت دستگاه برای دسترسی HTTP راه دور خودداری کنید.",
       },
       origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
+        title: "مبدأ مرورگر مجاز نیست",
+        summary: "Gateway پیش از پذیرش اتصال Control UI، مبدأ این صفحه را رد کرد.",
+        stepAllowedOrigins: "این مبدأ مرورگر را به gateway.controlUi.allowedOrigins اضافه کنید.",
+        stepFullOrigin:
+          "از مبدأهای کامل مانند http://localhost:5173 استفاده کنید، نه الگوهای wildcard.",
+        stepRestart: "پس از تغییر مبدأهای مجاز، Gateway را دوباره راه اندازی یا بارگذاری کنید.",
       },
       protocol: {
-        title: "Protocol mismatch",
+        title: "عدم تطابق پروتکل",
         summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+          "Control UI سرو شده و Gateway در حال اجرا درباره پروتکل اتصال پشتیبانی شده توافق ندارند.",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+          "داشبورد سرو شده را با openclaw dashboard دوباره باز کنید تا UI و Gateway از همان نصب باشند.",
         stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
+          "اگر از pnpm ui:dev استفاده می کنید، UI توسعه را بر اساس checkout فعلی دوباره بسازید یا راه اندازی کنید.",
         stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+          "پس از به روزرسانی OpenClaw، Gateway را دوباره راه اندازی کنید تا پروتکل فعلی را سرو کند.",
       },
       network: {
-        title: "Could not connect",
+        title: "اتصال برقرار نشد",
         summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
+          "مرورگر نتوانست اتصال Gateway را کامل کند. پیش از تلاش دوباره با اعتبارنامه ها، هدف و انتقال را بررسی کنید.",
+        stepGateway:
+          "با openclaw status یا openclaw gateway run تأیید کنید که Gateway در حال اجرا است.",
         stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "URL WebSocket را بررسی کنید و وقتی Gateway پشت HTTPS/Tailscale Serve است از wss:// استفاده کنید.",
         stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+          "داشبورد را با openclaw dashboard --no-open دوباره باز کنید تا URL و جزئیات احراز هویت فعلی را دوباره کپی کنید.",
       },
     },
   },

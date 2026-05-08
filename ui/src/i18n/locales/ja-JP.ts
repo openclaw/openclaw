@@ -941,90 +941,93 @@ export const ja_JP: TranslationMap = {
     hidePassword: "パスワードを非表示",
     togglePasswordVisibility: "パスワードの表示/非表示を切り替え",
     failure: {
-      rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      rawError: "生のエラー",
+      docsAuth: "Control UI 認証ドキュメント",
+      docsPairing: "デバイスペアリングのドキュメント",
+      docsInsecure: "安全でない HTTP のドキュメント",
       authRequired: {
-        title: "Auth required",
+        title: "認証が必要です",
         summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
+          "Gateway には到達できますが、このブラウザーが接続する前に一致するトークンまたはパスワードが必要です。",
         stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+          "openclaw dashboard --no-open のトークンを貼り付けるか、構成済みのパスワードを入力します。",
         stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
+          "トークンが構成されていない場合は、Gateway ホストで openclaw doctor --generate-gateway-token を実行します。",
+        stepConnect: "認証情報を更新したら、もう一度 Connect をクリックします。",
       },
       authFailed: {
-        title: "Auth did not match",
+        title: "認証が一致しません",
         summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
+          "指定された認証情報は拒否されました。最も一般的な原因は、古いトークン、または別の Gateway URL からコピーしたトークンです。",
         stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+          "openclaw dashboard --no-open を実行し、新しい URL を開くか、そのトークンを貼り付けます。",
         stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
+          "古いトークン/パスワード値を置き換えてください。別の Gateway URL のトークンは再利用しないでください。",
         stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+          "一致する認証モードを一度に 1 つだけ使用します。トークンモードでは gateway token、パスワードモードではパスワードを使います。",
       },
       rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
-        stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
+        title: "失敗した試行が多すぎます",
+        summary: "Gateway はこのクライアントの認証試行を一時的に制限しています。",
+        stepStop: "このタブからの再試行をしばらく停止します。",
+        stepWait: "認証リミッターが落ち着くのを待ってから、修正した認証情報で再接続します。",
+        stepCheckClients:
+          "共有ホストの場合は、他のクライアントが誤った再試行を繰り返していないか確認します。",
       },
       pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
+        title: "デバイスペアリングが必要です",
+        scopeTitle: "スコープのアップグレードが保留中です",
+        roleTitle: "ロールのアップグレードが保留中です",
+        metadataTitle: "デバイス更新が保留中です",
         summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
+          "このブラウザーで Control UI を使用するには、Gateway ホストからの一度限りの承認が必要です。",
         upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
+          "このブラウザーは既に認識されていますが、要求されたアクセスが変わったため、新しい承認が必要です。",
+        stepList: "Gateway ホストで openclaw devices list を実行します。",
+        stepApproveId: "このリクエストを承認します: openclaw devices approve {requestId}.",
+        stepApprove: "その一覧から保留中のブラウザー/デバイスリクエストを承認します。",
+        stepReconnect: "承認が完了したら再接続します。",
       },
       insecure: {
-        title: "Secure browser context required",
+        title: "安全なブラウザーコンテキストが必要です",
         summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+          "このページは通常の HTTP で実行されているため、ブラウザーは Gateway が期待するデバイス ID を作成できません。",
+        stepHttps:
+          "HTTPS/Tailscale Serve を使用するか、Gateway ホストで http://127.0.0.1:18789 を開きます。",
         stepLocalCompat:
-          "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
-        stepAvoidDisable: "Avoid disabling device auth for remote HTTP access.",
+          "ローカルのトークンのみの互換性には、gateway.controlUi.allowInsecureAuth: true を設定します。",
+        stepAvoidDisable:
+          "リモート HTTP アクセスのためにデバイス認証を無効にすることは避けてください。",
       },
       origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
+        title: "ブラウザーオリジンは許可されていません",
+        summary: "Gateway は Control UI 接続を受け入れる前に、このページのオリジンを拒否しました。",
+        stepAllowedOrigins:
+          "このブラウザーオリジンを gateway.controlUi.allowedOrigins に追加します。",
+        stepFullOrigin:
+          "http://localhost:5173 のような完全なオリジンを使用し、ワイルドカードパターンは使わないでください。",
+        stepRestart: "許可オリジンを変更した後、Gateway を再起動または再読み込みします。",
       },
       protocol: {
-        title: "Protocol mismatch",
+        title: "プロトコルが一致しません",
         summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+          "提供された Control UI と実行中の Gateway で、サポートされる接続プロトコルが一致していません。",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+          "openclaw dashboard で提供元の dashboard を開き直し、UI と Gateway が同じインストールから来るようにします。",
         stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
-        stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+          "pnpm ui:dev を使用している場合は、現在の checkout に対して開発 UI を再ビルドまたは再起動します。",
+        stepRestart: "OpenClaw 更新後に Gateway を再起動し、現在のプロトコルを提供させます。",
       },
       network: {
-        title: "Could not connect",
+        title: "接続できません",
         summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
+          "ブラウザーは Gateway 接続を完了できませんでした。認証情報を再試行する前に、ターゲットとトランスポートを確認してください。",
+        stepGateway:
+          "openclaw status または openclaw gateway run で Gateway が実行中であることを確認します。",
         stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "WebSocket URL を確認し、Gateway が HTTPS/Tailscale Serve の背後にある場合は wss:// を使用します。",
         stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+          "openclaw dashboard --no-open で dashboard を開き直し、現在の URL と認証詳細を再コピーします。",
       },
     },
   },

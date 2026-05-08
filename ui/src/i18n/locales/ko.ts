@@ -934,90 +934,90 @@ export const ko: TranslationMap = {
     hidePassword: "비밀번호 숨기기",
     togglePasswordVisibility: "비밀번호 표시 여부 전환",
     failure: {
-      rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      rawError: "원시 오류",
+      docsAuth: "Control UI 인증 문서",
+      docsPairing: "장치 페어링 문서",
+      docsInsecure: "안전하지 않은 HTTP 문서",
       authRequired: {
-        title: "Auth required",
+        title: "인증 필요",
         summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
-        stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+          "Gateway에 연결할 수 있지만 이 브라우저가 연결되기 전에 일치하는 토큰 또는 비밀번호가 필요합니다.",
+        stepPaste: "openclaw dashboard --no-open의 토큰을 붙여넣거나 구성된 비밀번호를 입력하세요.",
         stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
+          "토큰이 구성되어 있지 않으면 Gateway 호스트에서 openclaw doctor --generate-gateway-token을 실행하세요.",
+        stepConnect: "자격 증명을 업데이트한 뒤 Connect를 다시 클릭하세요.",
       },
       authFailed: {
-        title: "Auth did not match",
+        title: "인증이 일치하지 않음",
         summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
+          "제공한 자격 증명이 거부되었습니다. 가장 흔한 원인은 오래된 토큰이거나 다른 Gateway URL에서 복사한 토큰입니다.",
         stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+          "openclaw dashboard --no-open을 실행하고 새 URL을 열거나 해당 토큰을 붙여넣으세요.",
         stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
+          "오래된 토큰/비밀번호 값을 교체하세요. 다른 Gateway URL의 토큰을 재사용하지 마세요.",
         stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+          "한 번에 하나의 일치하는 인증 모드만 사용하세요. 토큰 모드에는 gateway token, 비밀번호 모드에는 비밀번호를 사용합니다.",
       },
       rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
-        stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
+        title: "실패한 시도가 너무 많음",
+        summary: "Gateway가 이 클라이언트의 인증 시도를 일시적으로 제한하고 있습니다.",
+        stepStop: "이 탭에서 잠시 재시도를 중지하세요.",
+        stepWait: "인증 제한기가 식을 때까지 기다린 뒤 수정된 자격 증명으로 다시 연결하세요.",
+        stepCheckClients:
+          "공유 호스트라면 다른 클라이언트가 잘못된 재시도를 반복하는지 확인하세요.",
       },
       pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
-        summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
+        title: "장치 페어링 필요",
+        scopeTitle: "Scope 업그레이드 대기 중",
+        roleTitle: "역할 업그레이드 대기 중",
+        metadataTitle: "장치 새로 고침 대기 중",
+        summary: "이 브라우저가 Control UI를 사용하려면 Gateway 호스트의 일회성 승인이 필요합니다.",
         upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
+          "이 브라우저는 이미 알려져 있지만 요청한 액세스가 변경되어 새 승인이 필요합니다.",
+        stepList: "Gateway 호스트에서 openclaw devices list를 실행하세요.",
+        stepApproveId: "이 요청을 승인하세요: openclaw devices approve {requestId}.",
+        stepApprove: "해당 목록에서 대기 중인 브라우저/장치 요청을 승인하세요.",
+        stepReconnect: "승인이 완료된 뒤 다시 연결하세요.",
       },
       insecure: {
-        title: "Secure browser context required",
+        title: "안전한 브라우저 컨텍스트 필요",
         summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+          "이 페이지는 일반 HTTP에서 실행 중이므로 브라우저가 Gateway가 기대하는 장치 ID를 만들 수 없습니다.",
+        stepHttps:
+          "HTTPS/Tailscale Serve를 사용하거나 Gateway 호스트에서 http://127.0.0.1:18789를 여세요.",
         stepLocalCompat:
-          "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
-        stepAvoidDisable: "Avoid disabling device auth for remote HTTP access.",
+          "로컬 토큰 전용 호환성을 위해 gateway.controlUi.allowInsecureAuth: true를 설정하세요.",
+        stepAvoidDisable: "원격 HTTP 액세스를 위해 장치 인증을 비활성화하지 마세요.",
       },
       origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
+        title: "브라우저 origin이 허용되지 않음",
+        summary: "Gateway가 Control UI 연결을 수락하기 전에 이 페이지 origin을 거부했습니다.",
+        stepAllowedOrigins: "이 브라우저 origin을 gateway.controlUi.allowedOrigins에 추가하세요.",
+        stepFullOrigin:
+          "와일드카드 패턴이 아니라 http://localhost:5173 같은 전체 origin을 사용하세요.",
+        stepRestart: "허용 origin을 변경한 뒤 Gateway를 다시 시작하거나 다시 로드하세요.",
       },
       protocol: {
-        title: "Protocol mismatch",
+        title: "프로토콜 불일치",
         summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+          "제공된 Control UI와 실행 중인 Gateway가 지원되는 연결 프로토콜에 동의하지 않습니다.",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+          "UI와 Gateway가 같은 설치에서 오도록 openclaw dashboard로 제공된 dashboard를 다시 여세요.",
         stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
+          "pnpm ui:dev를 사용하는 경우 현재 checkout 기준으로 개발 UI를 다시 빌드하거나 다시 시작하세요.",
         stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+          "OpenClaw를 업데이트한 뒤 Gateway를 다시 시작하여 현재 프로토콜을 제공하게 하세요.",
       },
       network: {
-        title: "Could not connect",
+        title: "연결할 수 없음",
         summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
+          "브라우저가 Gateway 연결을 완료할 수 없습니다. 자격 증명을 다시 시도하기 전에 대상과 전송 방식을 확인하세요.",
+        stepGateway:
+          "openclaw status 또는 openclaw gateway run으로 Gateway가 실행 중인지 확인하세요.",
         stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "WebSocket URL을 확인하고 Gateway가 HTTPS/Tailscale Serve 뒤에 있으면 wss://를 사용하세요.",
         stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+          "openclaw dashboard --no-open으로 dashboard를 다시 열어 현재 URL과 인증 세부 정보를 다시 복사하세요.",
       },
     },
   },

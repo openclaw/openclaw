@@ -935,90 +935,87 @@ export const vi: TranslationMap = {
     hidePassword: "Ẩn mật khẩu",
     togglePasswordVisibility: "Bật/tắt hiển thị mật khẩu",
     failure: {
-      rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      rawError: "Lỗi thô",
+      docsAuth: "Tài liệu xác thực Control UI",
+      docsPairing: "Tài liệu ghép đôi thiết bị",
+      docsInsecure: "Tài liệu HTTP không an toàn",
       authRequired: {
-        title: "Auth required",
+        title: "Cần xác thực",
         summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
-        stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+          "Gateway có thể truy cập được, nhưng cần token hoặc mật khẩu khớp trước khi trình duyệt này có thể kết nối.",
+        stepPaste: "Dán token từ openclaw dashboard --no-open hoặc nhập mật khẩu đã cấu hình.",
         stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
+          "Nếu chưa cấu hình token, hãy chạy openclaw doctor --generate-gateway-token trên máy chủ Gateway.",
+        stepConnect: "Nhấp Connect lần nữa sau khi cập nhật thông tin xác thực.",
       },
       authFailed: {
-        title: "Auth did not match",
+        title: "Xác thực không khớp",
         summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
-        stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+          "Thông tin xác thực đã cung cấp bị từ chối. Nguyên nhân phổ biến nhất là token cũ hoặc token sao chép từ một Gateway URL khác.",
+        stepDashboard: "Chạy openclaw dashboard --no-open rồi mở URL mới hoặc dán token của nó.",
         stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
+          "Thay các giá trị token/mật khẩu cũ; không dùng lại token từ Gateway URL khác.",
         stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+          "Mỗi lần chỉ dùng một chế độ auth khớp: gateway token cho chế độ token, mật khẩu cho chế độ password.",
       },
       rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
-        stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
+        title: "Quá nhiều lần thử thất bại",
+        summary: "Gateway đang tạm thời giới hạn các lần thử xác thực cho client này.",
+        stepStop: "Tạm dừng thử lại từ tab này trong giây lát.",
+        stepWait: "Chờ bộ giới hạn auth hạ nhiệt, rồi kết nối lại bằng thông tin xác thực đã sửa.",
+        stepCheckClients:
+          "Nếu đây là máy chủ dùng chung, hãy kiểm tra các client khác có thử sai lặp lại không.",
       },
       pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
+        title: "Cần ghép đôi thiết bị",
+        scopeTitle: "Nâng cấp scope đang chờ",
+        roleTitle: "Nâng cấp vai trò đang chờ",
+        metadataTitle: "Làm mới thiết bị đang chờ",
         summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
+          "Trình duyệt này cần phê duyệt một lần từ máy chủ Gateway trước khi dùng Control UI.",
         upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
+          "Trình duyệt này đã được biết đến, nhưng quyền truy cập yêu cầu đã thay đổi và cần phê duyệt mới.",
+        stepList: "Chạy openclaw devices list trên máy chủ Gateway.",
+        stepApproveId: "Phê duyệt yêu cầu này: openclaw devices approve {requestId}.",
+        stepApprove: "Phê duyệt yêu cầu trình duyệt/thiết bị đang chờ trong danh sách đó.",
+        stepReconnect: "Kết nối lại sau khi phê duyệt hoàn tất.",
       },
       insecure: {
-        title: "Secure browser context required",
+        title: "Cần ngữ cảnh trình duyệt an toàn",
         summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+          "Trang này đang chạy qua HTTP thường, nên trình duyệt không thể tạo danh tính thiết bị mà Gateway mong đợi.",
+        stepHttps:
+          "Dùng HTTPS/Tailscale Serve, hoặc mở http://127.0.0.1:18789 trên máy chủ Gateway.",
         stepLocalCompat:
-          "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
-        stepAvoidDisable: "Avoid disabling device auth for remote HTTP access.",
+          "Để tương thích cục bộ chỉ dùng token, đặt gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable: "Tránh tắt auth thiết bị cho truy cập HTTP từ xa.",
       },
       origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
+        title: "Origin trình duyệt không được phép",
+        summary: "Gateway đã từ chối origin của trang này trước khi chấp nhận kết nối Control UI.",
+        stepAllowedOrigins: "Thêm origin trình duyệt này vào gateway.controlUi.allowedOrigins.",
+        stepFullOrigin: "Dùng origin đầy đủ như http://localhost:5173, không dùng mẫu wildcard.",
+        stepRestart: "Khởi động lại hoặc tải lại Gateway sau khi thay đổi origin được phép.",
       },
       protocol: {
-        title: "Protocol mismatch",
+        title: "Không khớp giao thức",
         summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+          "Control UI được phục vụ và Gateway đang chạy không thống nhất về giao thức kết nối được hỗ trợ.",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+          "Mở lại dashboard được phục vụ bằng openclaw dashboard để UI và Gateway đến từ cùng một bản cài đặt.",
         stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
+          "Nếu dùng pnpm ui:dev, hãy build lại hoặc khởi động lại UI dev theo checkout hiện tại.",
         stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+          "Khởi động lại Gateway sau khi cập nhật OpenClaw để nó phục vụ giao thức hiện tại.",
       },
       network: {
-        title: "Could not connect",
+        title: "Không thể kết nối",
         summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
-        stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "Trình duyệt không thể hoàn tất kết nối Gateway. Kiểm tra đích và transport trước khi thử lại thông tin xác thực.",
+        stepGateway: "Xác nhận Gateway đang chạy bằng openclaw status hoặc openclaw gateway run.",
+        stepUrl: "Kiểm tra WebSocket URL và dùng wss:// khi Gateway nằm sau HTTPS/Tailscale Serve.",
         stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+          "Mở lại dashboard bằng openclaw dashboard --no-open để sao chép lại URL và chi tiết auth hiện tại.",
       },
     },
   },

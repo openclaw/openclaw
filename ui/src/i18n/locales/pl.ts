@@ -944,90 +944,91 @@ export const pl: TranslationMap = {
     hidePassword: "Ukryj hasło",
     togglePasswordVisibility: "Przełącz widoczność hasła",
     failure: {
-      rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      rawError: "Surowy błąd",
+      docsAuth: "Dokumentacja uwierzytelniania Control UI",
+      docsPairing: "Dokumentacja parowania urządzeń",
+      docsInsecure: "Dokumentacja niebezpiecznego HTTP",
       authRequired: {
-        title: "Auth required",
+        title: "Wymagane uwierzytelnienie",
         summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
-        stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+          "Gateway jest osiągalny, ale wymaga pasującego tokenu lub hasła, zanim ta przeglądarka będzie mogła się połączyć.",
+        stepPaste: "Wklej token z openclaw dashboard --no-open albo wpisz skonfigurowane hasło.",
         stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
+          "Jeśli token nie jest skonfigurowany, uruchom openclaw doctor --generate-gateway-token na hoście Gateway.",
+        stepConnect: "Kliknij ponownie Connect po zaktualizowaniu poświadczeń.",
       },
       authFailed: {
-        title: "Auth did not match",
+        title: "Uwierzytelnienie nie pasuje",
         summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
+          "Podane poświadczenia zostały odrzucone. Najczęstsza przyczyna to nieaktualny token lub token skopiowany z innego URL Gateway.",
         stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+          "Uruchom openclaw dashboard --no-open i otwórz świeży URL albo wklej jego token.",
         stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
+          "Zastąp nieaktualne wartości tokenu/hasła; nie używaj ponownie tokenu z innego URL Gateway.",
         stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+          "Używaj naraz jednego pasującego trybu auth: token gateway dla trybu tokenu, hasło dla trybu hasła.",
       },
       rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
+        title: "Zbyt wiele nieudanych prób",
+        summary: "Gateway tymczasowo ogranicza próby uwierzytelniania dla tego klienta.",
+        stepStop: "Przestań na chwilę ponawiać próby z tej karty.",
         stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
+          "Poczekaj, aż limiter auth ostygnie, a potem połącz się ponownie z poprawionymi poświadczeniami.",
+        stepCheckClients:
+          "Jeśli to współdzielony host, sprawdź inne klienty pod kątem powtarzanych błędnych prób.",
       },
       pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
+        title: "Wymagane parowanie urządzenia",
+        scopeTitle: "Oczekuje podniesienie scope",
+        roleTitle: "Oczekuje podniesienie roli",
+        metadataTitle: "Oczekuje odświeżenie urządzenia",
         summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
+          "Ta przeglądarka wymaga jednorazowej zgody z hosta Gateway, zanim będzie mogła używać Control UI.",
         upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
+          "Ta przeglądarka jest już znana, ale żądany dostęp się zmienił i wymaga nowej zgody.",
+        stepList: "Uruchom openclaw devices list na hoście Gateway.",
+        stepApproveId: "Zatwierdź to żądanie: openclaw devices approve {requestId}.",
+        stepApprove: "Zatwierdź oczekujące żądanie przeglądarki/urządzenia z tej listy.",
+        stepReconnect: "Po zakończeniu zatwierdzania połącz się ponownie.",
       },
       insecure: {
-        title: "Secure browser context required",
+        title: "Wymagany bezpieczny kontekst przeglądarki",
         summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+          "Ta strona działa przez zwykły HTTP, więc przeglądarka nie może utworzyć tożsamości urządzenia oczekiwanej przez Gateway.",
+        stepHttps:
+          "Użyj HTTPS/Tailscale Serve albo otwórz http://127.0.0.1:18789 na hoście Gateway.",
         stepLocalCompat:
-          "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
-        stepAvoidDisable: "Avoid disabling device auth for remote HTTP access.",
+          "Dla lokalnej zgodności tylko z tokenem ustaw gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable: "Unikaj wyłączania auth urządzenia dla zdalnego dostępu HTTP.",
       },
       origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
+        title: "Origin przeglądarki niedozwolony",
+        summary: "Gateway odrzucił origin tej strony przed zaakceptowaniem połączenia Control UI.",
+        stepAllowedOrigins: "Dodaj ten origin przeglądarki do gateway.controlUi.allowedOrigins.",
+        stepFullOrigin:
+          "Używaj pełnych originów, takich jak http://localhost:5173, nie wzorców wildcard.",
+        stepRestart: "Po zmianie dozwolonych originów zrestartuj lub przeładuj Gateway.",
       },
       protocol: {
-        title: "Protocol mismatch",
+        title: "Niezgodność protokołu",
         summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+          "Udostępniana Control UI i działający Gateway nie zgadzają się co do obsługiwanego protokołu połączenia.",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+          "Otwórz ponownie udostępniany dashboard poleceniem openclaw dashboard, aby UI i Gateway pochodziły z tej samej instalacji.",
         stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
+          "Jeśli używasz pnpm ui:dev, przebuduj lub uruchom ponownie UI dev względem bieżącego checkoutu.",
         stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+          "Zrestartuj Gateway po aktualizacji OpenClaw, aby udostępniał bieżący protokół.",
       },
       network: {
-        title: "Could not connect",
+        title: "Nie udało się połączyć",
         summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
-        stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "Przeglądarka nie mogła dokończyć połączenia z Gateway. Sprawdź cel i transport przed ponowną próbą z poświadczeniami.",
+        stepGateway:
+          "Potwierdź, że Gateway działa, używając openclaw status lub openclaw gateway run.",
+        stepUrl: "Sprawdź URL WebSocket i użyj wss://, gdy Gateway jest za HTTPS/Tailscale Serve.",
         stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+          "Otwórz ponownie dashboard przez openclaw dashboard --no-open, aby skopiować bieżący URL i szczegóły auth.",
       },
     },
   },

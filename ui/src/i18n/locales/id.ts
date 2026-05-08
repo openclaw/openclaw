@@ -938,90 +938,92 @@ export const id: TranslationMap = {
     hidePassword: "Sembunyikan kata sandi",
     togglePasswordVisibility: "Alihkan visibilitas kata sandi",
     failure: {
-      rawError: "Raw error",
-      docsAuth: "Control UI auth docs",
-      docsPairing: "Device pairing docs",
-      docsInsecure: "Insecure HTTP docs",
+      rawError: "Error mentah",
+      docsAuth: "Dokumentasi auth Control UI",
+      docsPairing: "Dokumentasi pemasangan perangkat",
+      docsInsecure: "Dokumentasi HTTP tidak aman",
       authRequired: {
-        title: "Auth required",
+        title: "Auth diperlukan",
         summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
+          "Gateway dapat dijangkau, tetapi memerlukan token atau kata sandi yang cocok sebelum browser ini dapat terhubung.",
         stepPaste:
-          "Paste the token from openclaw dashboard --no-open or enter the configured password.",
+          "Tempel token dari openclaw dashboard --no-open atau masukkan kata sandi yang dikonfigurasi.",
         stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
+          "Jika belum ada token yang dikonfigurasi, jalankan openclaw doctor --generate-gateway-token di host Gateway.",
+        stepConnect: "Klik Connect lagi setelah memperbarui kredensial.",
       },
       authFailed: {
-        title: "Auth did not match",
+        title: "Auth tidak cocok",
         summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
+          "Kredensial yang diberikan ditolak. Penyebab paling umum adalah token kedaluwarsa atau token yang disalin dari URL Gateway lain.",
         stepDashboard:
-          "Run openclaw dashboard --no-open and open the fresh URL or paste its token.",
+          "Jalankan openclaw dashboard --no-open lalu buka URL baru atau tempel tokennya.",
         stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
+          "Ganti nilai token/kata sandi yang lama; jangan gunakan ulang token dari URL Gateway lain.",
         stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+          "Gunakan satu mode auth yang cocok pada satu waktu: token gateway untuk mode token, kata sandi untuk mode kata sandi.",
       },
       rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
+        title: "Terlalu banyak percobaan gagal",
+        summary: "Gateway sementara membatasi percobaan autentikasi untuk klien ini.",
+        stepStop: "Berhenti mencoba ulang dari tab ini sebentar.",
         stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
+          "Tunggu pembatas auth mereda, lalu hubungkan ulang dengan kredensial yang sudah diperbaiki.",
+        stepCheckClients:
+          "Jika ini host bersama, periksa klien lain yang terus mencoba dengan kredensial salah.",
       },
       pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
+        title: "Pemasangan perangkat diperlukan",
+        scopeTitle: "Peningkatan scope tertunda",
+        roleTitle: "Peningkatan peran tertunda",
+        metadataTitle: "Penyegaran perangkat tertunda",
         summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
+          "Browser ini memerlukan persetujuan satu kali dari host Gateway sebelum dapat menggunakan Control UI.",
         upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
+          "Browser ini sudah dikenal, tetapi akses yang diminta berubah dan memerlukan persetujuan baru.",
+        stepList: "Jalankan openclaw devices list di host Gateway.",
+        stepApproveId: "Setujui permintaan ini: openclaw devices approve {requestId}.",
+        stepApprove: "Setujui permintaan browser/perangkat yang tertunda dari daftar tersebut.",
+        stepReconnect: "Hubungkan ulang setelah persetujuan selesai.",
       },
       insecure: {
-        title: "Secure browser context required",
+        title: "Konteks browser aman diperlukan",
         summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+          "Halaman ini berjalan melalui HTTP biasa, sehingga browser tidak dapat membuat identitas perangkat yang diharapkan Gateway.",
+        stepHttps:
+          "Gunakan HTTPS/Tailscale Serve, atau buka http://127.0.0.1:18789 di host Gateway.",
         stepLocalCompat:
-          "For local token-only compatibility, set gateway.controlUi.allowInsecureAuth: true.",
-        stepAvoidDisable: "Avoid disabling device auth for remote HTTP access.",
+          "Untuk kompatibilitas lokal hanya-token, setel gateway.controlUi.allowInsecureAuth: true.",
+        stepAvoidDisable: "Hindari menonaktifkan auth perangkat untuk akses HTTP jarak jauh.",
       },
       origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
+        title: "Origin browser tidak diizinkan",
+        summary: "Gateway menolak origin halaman ini sebelum menerima koneksi Control UI.",
+        stepAllowedOrigins: "Tambahkan origin browser ini ke gateway.controlUi.allowedOrigins.",
+        stepFullOrigin:
+          "Gunakan origin lengkap seperti http://localhost:5173, bukan pola wildcard.",
+        stepRestart: "Mulai ulang atau muat ulang Gateway setelah mengubah origin yang diizinkan.",
       },
       protocol: {
-        title: "Protocol mismatch",
+        title: "Protokol tidak cocok",
         summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+          "Control UI yang disajikan dan Gateway yang berjalan tidak sepakat tentang protokol koneksi yang didukung.",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+          "Buka kembali dashboard yang disajikan dengan openclaw dashboard agar UI dan Gateway berasal dari instalasi yang sama.",
         stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
+          "Jika menggunakan pnpm ui:dev, bangun ulang atau mulai ulang UI dev terhadap checkout saat ini.",
         stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+          "Mulai ulang Gateway setelah memperbarui OpenClaw agar menyajikan protokol saat ini.",
       },
       network: {
-        title: "Could not connect",
+        title: "Tidak dapat terhubung",
         summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
+          "Browser tidak dapat menyelesaikan koneksi Gateway. Periksa target dan transport sebelum mencoba ulang kredensial.",
+        stepGateway: "Pastikan Gateway berjalan dengan openclaw status atau openclaw gateway run.",
         stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
+          "Periksa URL WebSocket dan gunakan wss:// saat Gateway berada di belakang HTTPS/Tailscale Serve.",
         stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+          "Buka kembali dashboard dengan openclaw dashboard --no-open untuk menyalin ulang URL dan detail auth saat ini.",
       },
     },
   },
