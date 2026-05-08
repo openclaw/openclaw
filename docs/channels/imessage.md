@@ -662,7 +662,7 @@ Each replayed row is fed through the live dispatch path (`evaluateIMessageInboun
 
 ### Cursor and retry semantics
 
-Catchup keeps a per-account cursor at `~/.openclaw/state/imessage/catchup/<account>__<hash>.json`:
+Catchup keeps a per-account cursor at `<openclawStateDir>/imessage/catchup/<account>__<hash>.json` (the OpenClaw state dir defaults to `~/.openclaw`, overridable with `OPENCLAW_STATE_DIR`):
 
 ```json
 {
