@@ -10,6 +10,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
+const INTERNAL_DOCS_DIRS = ["internal"];
 const DEFAULT_CLAWHUB_SOURCE_REPO = "openclaw/clawhub";
 const CLAWHUB_DOCS_TARGET_DIR = "clawhub";
 const CLAWHUB_REPO_ENV = "OPENCLAW_DOCS_SYNC_CLAWHUB_REPO";
@@ -458,6 +459,22 @@ function repairGeneratedLocaleDocs(targetDocsDir) {
   }
 }
 
+function pruneInternalDocs(targetDocsDir) {
+  let pruned = 0;
+  for (const relativeDir of INTERNAL_DOCS_DIRS) {
+    const dirPath = path.join(targetDocsDir, relativeDir);
+    if (!fs.existsSync(dirPath)) {
+      continue;
+    }
+    fs.rmSync(dirPath, { recursive: true, force: true });
+    pruned += 1;
+  }
+
+  if (pruned > 0) {
+    console.log(`Pruned ${pruned} internal-only docs director${pruned === 1 ? "y" : "ies"}.`);
+  }
+}
+
 function shouldExcludeClawHubDocsPath(relativePath) {
   const normalized = normalizeSlashes(relativePath);
   return (
@@ -642,10 +659,12 @@ function syncDocsTree(targetRoot, options = {}) {
     "P .i18n/README.md",
     "--exclude",
     ".i18n/README.md",
+    ...INTERNAL_DOCS_DIRS.flatMap((dir) => ["--exclude", `${dir}/`]),
     ...localeFilters,
     `${SOURCE_DOCS_DIR}/`,
     `${targetDocsDir}/`,
   ]);
+  pruneInternalDocs(targetDocsDir);
 
   for (const locale of GENERATED_LOCALES) {
     const sourceTmPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.tmFile);
