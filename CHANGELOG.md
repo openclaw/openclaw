@@ -196,6 +196,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/macOS: `openclaw gateway stop --disable` now persists the LaunchAgent disable bit even after a previous bootout left the service not loaded, keeping the explicit stay-down path reliable. (#78412) Thanks @wdeveloper16.
 - CLI/status: keep lean `openclaw status --json` off manifest-backed channel discovery so configured-channel checks do not repeatedly rescan plugin metadata. Fixes #79129.
 - Control UI/chat: hide retired and non-public Google Gemini model IDs from chat model catalogs and route the bare `gemini-3-pro` alias to Gemini 3.1 Pro Preview instead of the shut-down Gemini 3 Pro Preview. Thanks @BunsDev.
+- CLI/infer: canonicalize case-only catalog model refs in `infer model run --model` so mixed-case provider/model strings resolve to the canonical catalog entry instead of failing with `Unknown model`. (#78940) Thanks @ai-hpc.
 - CLI/install: refuse state-mutating OpenClaw CLI runs as root by default, keep an explicit `OPENCLAW_ALLOW_ROOT=1` escape hatch for intentional root/container use, and update DigitalOcean setup guidance to run OpenClaw as a non-root user. Fixes #67478. Thanks @Jerry-Xin and @natechicago.
 - Auto-reply/media: resolve `scp` from `PATH` when staging sandbox media so nonstandard OpenSSH installs can copy remote attachments.
 - Agents/PI: route PI-native OpenAI-compatible default streams through OpenClaw boundary-aware transports so local-compatible model runs keep API-key injection and transport policy.
