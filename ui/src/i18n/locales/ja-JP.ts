@@ -713,11 +713,11 @@ export const ja_JP: TranslationMap = {
       all: "すべて",
     },
     scope: {
-      instance: "Current instance",
-      instanceHint: "Show only the active session id for each logical session.",
-      family: "Historical lineage",
-      familyHint: "Roll up known rotated transcript-backed session ids.",
-      familyIncluded: "Historical lineage includes {count} session instances.",
+      instance: "現在のインスタンス",
+      instanceHint: "各論理セッションについて、アクティブなセッション ID のみを表示します。",
+      family: "履歴系譜",
+      familyHint: "既知のローテーション済みトランスクリプト基盤のセッション ID を集計します。",
+      familyIncluded: "履歴系譜には {count} 件のセッションインスタンスが含まれます。",
     },
     filters: {
       title: "フィルター",
