@@ -15,6 +15,29 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toEqual(expect.arrayContaining(["node.pluginSurface.refresh"]));
   });
 
+  it("advertises task control RPCs", () => {
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining([
+        "tasks.list",
+        "tasks.get",
+        "tasks.cancel",
+        "tasks.flows.list",
+        "tasks.flows.get",
+        "tasks.flows.cancel",
+      ]),
+    );
+  });
+
+  it("advertises assistant safe metadata RPCs", () => {
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining([
+        "assistant.status",
+        "assistant.decisions.list",
+        "assistant.continueCandidates",
+      ]),
+    );
+  });
+
   it("advertises the versioned Talk session RPCs", () => {
     expect(listGatewayMethods()).toEqual(
       expect.arrayContaining([

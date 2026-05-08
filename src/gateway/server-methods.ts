@@ -11,6 +11,7 @@ import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { artifactsHandlers } from "./server-methods/artifacts.js";
+import { assistantHandlers } from "./server-methods/assistant.js";
 import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import { commandsHandlers } from "./server-methods/commands.js";
@@ -37,6 +38,7 @@ import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { tasksHandlers } from "./server-methods/tasks.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
 import { toolsEffectiveHandlers } from "./server-methods/tools-effective.js";
 import { toolsInvokeHandlers } from "./server-methods/tools-invoke.js";
@@ -53,6 +55,8 @@ const CONTROL_PLANE_WRITE_METHODS = new Set([
   "config.apply",
   "config.patch",
   "gateway.restart.request",
+  "tasks.cancel",
+  "tasks.flows.cancel",
   "update.run",
 ]);
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
@@ -107,6 +111,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...configHandlers,
   ...wizardHandlers,
   ...talkHandlers,
+  ...tasksHandlers,
   ...toolsCatalogHandlers,
   ...toolsEffectiveHandlers,
   ...toolsInvokeHandlers,
@@ -123,6 +128,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...usageHandlers,
   ...agentHandlers,
   ...agentsHandlers,
+  ...assistantHandlers,
   ...artifactsHandlers,
 };
 

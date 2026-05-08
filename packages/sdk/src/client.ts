@@ -4,6 +4,9 @@ import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
   AgentRunParams,
+  AssistantContinueCandidatesResult,
+  AssistantDecisionsListResult,
+  AssistantStatusResult,
   ArtifactQuery,
   ArtifactsDownloadResult,
   ArtifactsGetResult,
@@ -20,6 +23,14 @@ import type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
+  TaskFlowsCancelResult,
+  TaskFlowsGetResult,
+  TaskFlowsListParams,
+  TaskFlowsListResult,
+  TasksCancelResult,
+  TasksGetResult,
+  TasksListParams,
+  TasksListResult,
   ToolInvokeParams,
   ToolInvokeResult,
 } from "./types.js";
@@ -276,6 +287,7 @@ function normalizeChatProjectionEvent(
 
 export class OpenClaw {
   readonly agents: AgentsNamespace;
+  readonly assistant: AssistantNamespace;
   readonly sessions: SessionsNamespace;
   readonly runs: RunsNamespace;
   readonly tasks: TasksNamespace;
@@ -304,6 +316,7 @@ export class OpenClaw {
         requestTimeoutMs: options.requestTimeoutMs,
       });
     this.agents = new AgentsNamespace(this);
+    this.assistant = new AssistantNamespace(this);
     this.sessions = new SessionsNamespace(this);
     this.runs = new RunsNamespace(this);
     this.tasks = new TasksNamespace(this);
@@ -640,6 +653,22 @@ export class AgentsNamespace {
   }
 }
 
+export class AssistantNamespace {
+  constructor(private readonly client: OpenClaw) {}
+
+  async status(): Promise<AssistantStatusResult> {
+    return await this.client.request("assistant.status", {});
+  }
+
+  async decisions(): Promise<AssistantDecisionsListResult> {
+    return await this.client.request("assistant.decisions.list", {});
+  }
+
+  async continueCandidates(): Promise<AssistantContinueCandidatesResult> {
+    return await this.client.request("assistant.continueCandidates", {});
+  }
+}
+
 export class SessionsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -721,23 +750,41 @@ class RpcNamespace {
 }
 
 export class TasksNamespace extends RpcNamespace {
+  readonly flows: TaskFlowsNamespace;
+
   constructor(client: OpenClaw) {
     super(client, "tasks");
+    this.flows = new TaskFlowsNamespace(client);
   }
 
-  async list(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.tasks.list");
+  async list(params?: TasksListParams): Promise<TasksListResult> {
+    return await this.call("list", params ?? {});
   }
 
-  async get(taskId: string): Promise<unknown> {
-    void taskId;
-    return unsupportedGatewayApi("oc.tasks.get");
+  async get(taskId: string): Promise<TasksGetResult> {
+    return await this.call("get", { taskId });
   }
 
-  async cancel(taskId: string): Promise<unknown> {
-    void taskId;
-    return unsupportedGatewayApi("oc.tasks.cancel");
+  async cancel(taskId: string): Promise<TasksCancelResult> {
+    return await this.call("cancel", { taskId });
+  }
+}
+
+export class TaskFlowsNamespace extends RpcNamespace {
+  constructor(client: OpenClaw) {
+    super(client, "tasks.flows");
+  }
+
+  async list(params?: TaskFlowsListParams): Promise<TaskFlowsListResult> {
+    return await this.call("list", params ?? {});
+  }
+
+  async get(flowId: string): Promise<TaskFlowsGetResult> {
+    return await this.call("get", { flowId });
+  }
+
+  async cancel(flowId: string): Promise<TaskFlowsCancelResult> {
+    return await this.call("cancel", { flowId });
   }
 }
 

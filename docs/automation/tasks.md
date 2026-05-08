@@ -67,6 +67,16 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
     ```
 
   </Tab>
+  <Tab title="Safe metadata">
+    ```bash
+    # Manage explicit safe task metadata for local handoff
+    openclaw tasks metadata start --task-id local-work --title "Local work"
+    openclaw tasks metadata block --task-id local-work --reason "Needs a decision"
+    openclaw tasks metadata complete --task-id local-work --summary "Done"
+    openclaw tasks metadata show local-work
+    openclaw tasks metadata export
+    ```
+  </Tab>
   <Tab title="Audit and maintenance">
     ```bash
     # Run a health audit
@@ -157,6 +167,16 @@ Agent run completion is authoritative for active task records. A successful deta
   back to the child session. Gateway-backed `openclaw agent` runs also finalize
   from their run result, so completed runs do not sit active until the sweeper
   marks them `lost`.
+
+## Explicit safe task metadata
+
+`openclaw tasks metadata` is separate from the official task ledger. It records a small, whitelisted handoff artifact for local control-plane flows that need to answer questions like what is safe to continue and what needs a decision.
+
+Safe metadata is intentionally narrow. It can create, block, complete, show, and export records with task id, title, workspace, source, status, risk, owner, allowed actions, handoff state, timestamps, and summaries. It does not read private app transcripts, logs, auth files, caches, or sqlite databases.
+
+`openclaw tasks decisions classify` checks local action requests against the hard-boundary policy. Low-risk local actions are returned as `allowed`; destructive deletes, external sends, push/publish/deploy/release, auth/account/payment/credential changes, remote writes/jobs, memory writes, canonical skill/rule/governance mutations, and daemon/cron/monitor creation return `needs_decision` and create a local pending decision packet.
+
+`openclaw tasks phone-probe` renders the local `openclaw-phone` control replies for `你在干啥`, `有什么要确认`, and `继续任务` without live delivery. The probe reads only explicit safe task metadata and the pending decision queue. It can show continuation candidates, but it does not execute continuation and does not cross hard-boundary decisions.
 
 ## Delivery and notifications
 

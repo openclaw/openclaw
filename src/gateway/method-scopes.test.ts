@@ -34,6 +34,15 @@ describe("method scope resolution", () => {
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["tools.invoke", ["operator.write"]],
+    ["tasks.list", ["operator.read"]],
+    ["tasks.get", ["operator.read"]],
+    ["tasks.cancel", ["operator.write"]],
+    ["tasks.flows.list", ["operator.read"]],
+    ["tasks.flows.get", ["operator.read"]],
+    ["tasks.flows.cancel", ["operator.write"]],
+    ["assistant.status", ["operator.read"]],
+    ["assistant.decisions.list", ["operator.read"]],
+    ["assistant.continueCandidates", ["operator.read"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["environments.list", ["operator.read"]],
@@ -229,6 +238,22 @@ describe("core gateway method classification", () => {
       (method) => !isGatewayMethodClassified(method),
     );
     expect(unclassified).toEqual([]);
+  });
+
+  it("registers task control handlers in the core gateway surface", () => {
+    expect(Object.keys(coreGatewayHandlers)).toEqual(
+      expect.arrayContaining([
+        "tasks.list",
+        "tasks.get",
+        "tasks.cancel",
+        "tasks.flows.list",
+        "tasks.flows.get",
+        "tasks.flows.cancel",
+        "assistant.status",
+        "assistant.decisions.list",
+        "assistant.continueCandidates",
+      ]),
+    );
   });
 
   it("classifies every listed gateway method name", () => {

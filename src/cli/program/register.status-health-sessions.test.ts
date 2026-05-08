@@ -14,6 +14,15 @@ const mocks = vi.hoisted(() => ({
   tasksAuditCommand: vi.fn(),
   tasksMaintenanceCommand: vi.fn(),
   tasksShowCommand: vi.fn(),
+  tasksDecisionsListCommand: vi.fn(),
+  tasksDecisionsClassifyCommand: vi.fn(),
+  tasksMetadataExportCommand: vi.fn(),
+  tasksMetadataShowCommand: vi.fn(),
+  tasksMetadataStartCommand: vi.fn(),
+  tasksMetadataBlockCommand: vi.fn(),
+  tasksMetadataCompleteCommand: vi.fn(),
+  tasksPhoneProbeCommand: vi.fn(),
+  tasksSupervisionCommand: vi.fn(),
   tasksNotifyCommand: vi.fn(),
   tasksCancelCommand: vi.fn(),
   flowsListCommand: vi.fn(),
@@ -38,6 +47,15 @@ const tasksListCommand = mocks.tasksListCommand;
 const tasksAuditCommand = mocks.tasksAuditCommand;
 const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
 const tasksShowCommand = mocks.tasksShowCommand;
+const tasksDecisionsListCommand = mocks.tasksDecisionsListCommand;
+const tasksDecisionsClassifyCommand = mocks.tasksDecisionsClassifyCommand;
+const tasksMetadataExportCommand = mocks.tasksMetadataExportCommand;
+const tasksMetadataShowCommand = mocks.tasksMetadataShowCommand;
+const tasksMetadataStartCommand = mocks.tasksMetadataStartCommand;
+const tasksMetadataBlockCommand = mocks.tasksMetadataBlockCommand;
+const tasksMetadataCompleteCommand = mocks.tasksMetadataCompleteCommand;
+const tasksPhoneProbeCommand = mocks.tasksPhoneProbeCommand;
+const tasksSupervisionCommand = mocks.tasksSupervisionCommand;
 const tasksNotifyCommand = mocks.tasksNotifyCommand;
 const tasksCancelCommand = mocks.tasksCancelCommand;
 const flowsListCommand = mocks.flowsListCommand;
@@ -76,6 +94,15 @@ vi.mock("../../commands/tasks.js", () => ({
   tasksAuditCommand: mocks.tasksAuditCommand,
   tasksMaintenanceCommand: mocks.tasksMaintenanceCommand,
   tasksShowCommand: mocks.tasksShowCommand,
+  tasksDecisionsListCommand: mocks.tasksDecisionsListCommand,
+  tasksDecisionsClassifyCommand: mocks.tasksDecisionsClassifyCommand,
+  tasksMetadataExportCommand: mocks.tasksMetadataExportCommand,
+  tasksMetadataShowCommand: mocks.tasksMetadataShowCommand,
+  tasksMetadataStartCommand: mocks.tasksMetadataStartCommand,
+  tasksMetadataBlockCommand: mocks.tasksMetadataBlockCommand,
+  tasksMetadataCompleteCommand: mocks.tasksMetadataCompleteCommand,
+  tasksPhoneProbeCommand: mocks.tasksPhoneProbeCommand,
+  tasksSupervisionCommand: mocks.tasksSupervisionCommand,
   tasksNotifyCommand: mocks.tasksNotifyCommand,
   tasksCancelCommand: mocks.tasksCancelCommand,
 }));
@@ -115,6 +142,15 @@ describe("registerStatusHealthSessionsCommands", () => {
     tasksAuditCommand.mockResolvedValue(undefined);
     tasksMaintenanceCommand.mockResolvedValue(undefined);
     tasksShowCommand.mockResolvedValue(undefined);
+    tasksDecisionsListCommand.mockResolvedValue(undefined);
+    tasksDecisionsClassifyCommand.mockResolvedValue(undefined);
+    tasksMetadataExportCommand.mockResolvedValue(undefined);
+    tasksMetadataShowCommand.mockResolvedValue(undefined);
+    tasksMetadataStartCommand.mockResolvedValue(undefined);
+    tasksMetadataBlockCommand.mockResolvedValue(undefined);
+    tasksMetadataCompleteCommand.mockResolvedValue(undefined);
+    tasksPhoneProbeCommand.mockResolvedValue(undefined);
+    tasksSupervisionCommand.mockResolvedValue(undefined);
     tasksNotifyCommand.mockResolvedValue(undefined);
     tasksCancelCommand.mockResolvedValue(undefined);
     flowsListCommand.mockResolvedValue(undefined);
@@ -394,6 +430,131 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(flowsCancelCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         lookup: "flow-123",
+      }),
+      runtime,
+    );
+  });
+
+  it("routes explicit safe task metadata commands", async () => {
+    await runCli(["tasks", "--json", "metadata", "export"]);
+    expect(tasksMetadataExportCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ json: true }),
+      runtime,
+    );
+
+    await runCli(["tasks", "metadata", "show", "task-123", "--json"]);
+    expect(tasksMetadataShowCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ lookup: "task-123", json: true }),
+      runtime,
+    );
+
+    await runCli([
+      "tasks",
+      "metadata",
+      "start",
+      "--task-id",
+      "task-123",
+      "--title",
+      "Local work",
+      "--workspace",
+      "/tmp/project",
+      "--risk",
+      "medium",
+      "--allowed-actions",
+      "read_status,continue_registered_local_task",
+    ]);
+    expect(tasksMetadataStartCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "task-123",
+        title: "Local work",
+        workspace: "/tmp/project",
+        risk: "medium",
+        allowedActions: "read_status,continue_registered_local_task",
+      }),
+      runtime,
+    );
+
+    await runCli([
+      "tasks",
+      "metadata",
+      "block",
+      "--task-id",
+      "task-123",
+      "--reason",
+      "Needs approval",
+      "--needs-decision",
+    ]);
+    expect(tasksMetadataBlockCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "task-123",
+        reason: "Needs approval",
+        needsDecision: true,
+      }),
+      runtime,
+    );
+
+    await runCli(["tasks", "metadata", "complete", "--task-id", "task-123", "--summary", "Done"]);
+    expect(tasksMetadataCompleteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "task-123", summary: "Done" }),
+      runtime,
+    );
+  });
+
+  it("routes task decision commands", async () => {
+    await runCli(["tasks", "--json", "decisions", "list"]);
+    expect(tasksDecisionsListCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ json: true }),
+      runtime,
+    );
+
+    await runCli([
+      "tasks",
+      "decisions",
+      "classify",
+      "--action",
+      "deploy release",
+      "--title",
+      "Ship package",
+      "--reason",
+      "External release",
+      "--task-id",
+      "task-123",
+      "--workspace",
+      "/tmp/project",
+      "--json",
+    ]);
+    expect(tasksDecisionsClassifyCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "deploy release",
+        title: "Ship package",
+        reason: "External release",
+        taskId: "task-123",
+        workspace: "/tmp/project",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("routes local phone probe without delivery", async () => {
+    await runCli(["tasks", "--json", "phone-probe", "继续任务"]);
+
+    expect(tasksPhoneProbeCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "继续任务",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("routes durable run supervision commands", async () => {
+    await runCli(["tasks", "--json", "supervision", "--run-root", "/tmp/run-harness-run"]);
+
+    expect(tasksSupervisionCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runRoot: "/tmp/run-harness-run",
+        json: true,
       }),
       runtime,
     );

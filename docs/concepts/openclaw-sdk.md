@@ -261,6 +261,16 @@ const { environments } = await oc.environments.list();
 await oc.environments.status(environments[0].id);
 ```
 
+## Task helpers
+
+Task helpers expose the Gateway task ledger:
+
+```typescript
+const { tasks } = await oc.tasks.list({ active: true });
+const { task } = await oc.tasks.get(tasks[0].id);
+await oc.tasks.cancel(task.id);
+```
+
 ## Explicitly unsupported today
 
 The SDK includes names for the product model we want, but it does not silently
@@ -268,10 +278,6 @@ pretend Gateway RPCs exist. These calls currently throw explicit unsupported
 errors:
 
 ```typescript
-await oc.tasks.list();
-await oc.tasks.get("task-id");
-await oc.tasks.cancel("task-id");
-
 await oc.environments.create({});
 await oc.environments.delete("environment-id");
 ```

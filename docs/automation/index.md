@@ -33,21 +33,22 @@ flowchart TD
     Q6 -->|Yes| COMMITMENTS[Inferred Commitments]
 ```
 
-| Use case                                | Recommended            | Why                                              |
-| --------------------------------------- | ---------------------- | ------------------------------------------------ |
-| Send daily report at 9 AM sharp         | Scheduled Tasks (Cron) | Exact timing, isolated execution                 |
-| Remind me in 20 minutes                 | Scheduled Tasks (Cron) | One-shot with precise timing (`--at`)            |
-| Run weekly deep analysis                | Scheduled Tasks (Cron) | Standalone task, can use different model         |
-| Check inbox every 30 min                | Heartbeat              | Batches with other checks, context-aware         |
-| Monitor calendar for upcoming events    | Heartbeat              | Natural fit for periodic awareness               |
-| Check in after a mentioned interview    | Inferred Commitments   | Memory-like follow-up, no exact reminder request |
-| Gentle care check-in after user context | Inferred Commitments   | Scoped to the same agent and channel             |
-| Inspect status of a subagent or ACP run | Background Tasks       | Tasks ledger tracks all detached work            |
-| Audit what ran and when                 | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
-| Multi-step research then summarize      | Task Flow              | Durable orchestration with revision tracking     |
-| Run a script on session reset           | Hooks                  | Event-driven, fires on lifecycle events          |
-| Execute code on every tool call         | Plugin hooks           | In-process hooks can intercept tool calls        |
-| Always check compliance before replying | Standing Orders        | Injected into every session automatically        |
+| Use case                                  | Recommended            | Why                                              |
+| ----------------------------------------- | ---------------------- | ------------------------------------------------ |
+| Send daily report at 9 AM sharp           | Scheduled Tasks (Cron) | Exact timing, isolated execution                 |
+| Remind me in 20 minutes                   | Scheduled Tasks (Cron) | One-shot with precise timing (`--at`)            |
+| Run weekly deep analysis                  | Scheduled Tasks (Cron) | Standalone task, can use different model         |
+| Check inbox every 30 min                  | Heartbeat              | Batches with other checks, context-aware         |
+| Monitor calendar for upcoming events      | Heartbeat              | Natural fit for periodic awareness               |
+| Check in after a mentioned interview      | Inferred Commitments   | Memory-like follow-up, no exact reminder request |
+| Gentle care check-in after user context   | Inferred Commitments   | Scoped to the same agent and channel             |
+| Review skill, memory, or rule suggestions | Governance steward     | Packet-first queue; no canonical mutation        |
+| Inspect status of a subagent or ACP run   | Background Tasks       | Tasks ledger tracks all detached work            |
+| Audit what ran and when                   | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
+| Multi-step research then summarize        | Task Flow              | Durable orchestration with revision tracking     |
+| Run a script on session reset             | Hooks                  | Event-driven, fires on lifecycle events          |
+| Execute code on every tool call           | Plugin hooks           | In-process hooks can intercept tool calls        |
+| Always check compliance before replying   | Standing Orders        | Injected into every session automatically        |
 
 ### Scheduled Tasks (Cron) vs Heartbeat
 
@@ -96,6 +97,17 @@ Standing orders grant the agent permanent operating authority for defined progra
 
 See [Standing Orders](/automation/standing-orders).
 
+### Governance steward
+
+The governance steward is a packet-first review surface for skill, memory, and
+rule suggestions. It classifies suggestions as keep, later metadata cleanup,
+packet only, or needs user decision. It may prepare repo-local packets and
+plain-language status text, but it does not write Codex memory, official
+OpenClaw memory, canonical skills, skill-governance, AGENTS files, or persistent
+rules without explicit target-level confirmation.
+
+See [Skill, memory, and governance steward](/governance/skill-memory-governance-steward).
+
 ### Hooks
 
 Internal hooks are event-driven scripts triggered by agent lifecycle events
@@ -130,5 +142,6 @@ See [Heartbeat](/gateway/heartbeat).
 - [Hooks](/automation/hooks) — event-driven lifecycle scripts
 - [Plugin hooks](/plugins/hooks) — in-process tool, prompt, message, and lifecycle hooks
 - [Standing Orders](/automation/standing-orders) — persistent agent instructions
+- [Skill, memory, and governance steward](/governance/skill-memory-governance-steward) — packet-first review queue for governance suggestions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Configuration Reference](/gateway/configuration-reference) — all config keys

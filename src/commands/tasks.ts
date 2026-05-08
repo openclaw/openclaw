@@ -1,8 +1,32 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveCronStorePath } from "../cron/store.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { classifyActionRequest } from "../tasks/decision-policy.js";
+import {
+  listWorkRoutingExplanations,
+  summarizeDurableRunFromArtifacts,
+} from "../tasks/durable-work-supervision.js";
+import {
+  loadPendingDecisionQueue,
+  projectAllowedActionRecord,
+  projectPendingDecisionRecord,
+  registerAllowedActionAudit,
+  registerPendingDecision,
+} from "../tasks/pending-decision-queue.js";
+import { buildPhoneControlReply } from "../tasks/phone-reply.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
+import {
+  blockSafeTask,
+  completeSafeTask,
+  findSafeTask,
+  loadSafeTaskIndex,
+  projectSafeTaskIndex,
+  projectSafeTaskRecord,
+  type SafeTaskRisk,
+  SAFE_TASK_RISKS,
+  upsertSafeTask,
+} from "../tasks/safe-task-index.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import {
   listTaskFlowAuditFindings,
@@ -366,6 +390,316 @@ export async function tasksShowCommand(
   for (const line of lines) {
     runtime.log(line);
   }
+}
+
+function parseAllowedActions(value: string | undefined): string[] | undefined {
+  const actions = value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return actions && actions.length > 0 ? actions : undefined;
+}
+
+function parseSafeTaskRisk(
+  value: string | undefined,
+  runtime: RuntimeEnv,
+): SafeTaskRisk | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  const risk = value.trim();
+  if (SAFE_TASK_RISKS.includes(risk as SafeTaskRisk)) {
+    return risk as SafeTaskRisk;
+  }
+  runtime.error(`Invalid safe task risk: ${risk}`);
+  runtime.exit(1);
+  return undefined;
+}
+
+function writeSafeTaskIndexJson(runtime: RuntimeEnv, value: unknown): void {
+  writeRuntimeJson(runtime, value);
+}
+
+export async function tasksMetadataExportCommand(opts: { json?: boolean }, runtime: RuntimeEnv) {
+  const loaded = loadSafeTaskIndex();
+  if (opts.json) {
+    writeSafeTaskIndexJson(runtime, {
+      ...projectSafeTaskIndex(loaded.index),
+      loadErrors: loaded.loadErrors,
+    });
+    return;
+  }
+  runtime.log(info(`Safe task metadata: ${loaded.index.tasks.length} records`));
+  if (loaded.loadErrors.length > 0) {
+    runtime.log(`Load errors: ${loaded.loadErrors.join("; ")}`);
+  }
+  if (loaded.index.tasks.length === 0) {
+    runtime.log("No safe task metadata records found.");
+    return;
+  }
+  for (const task of loaded.index.tasks) {
+    runtime.log(`${task.task_id} ${task.status} ${task.risk} ${task.title}`);
+  }
+}
+
+export async function tasksMetadataShowCommand(
+  opts: { lookup: string; json?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const loaded = loadSafeTaskIndex();
+  const task = findSafeTask(loaded.index, opts.lookup);
+  if (!task) {
+    runtime.error(`Safe task metadata not found: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  if (opts.json) {
+    writeSafeTaskIndexJson(runtime, {
+      task: projectSafeTaskRecord(task),
+      loadErrors: loaded.loadErrors,
+    });
+    return;
+  }
+  const lines = [
+    "Safe task metadata:",
+    `taskId: ${task.task_id}`,
+    `title: ${task.title}`,
+    `workspace: ${task.workspace}`,
+    `source: ${task.source}`,
+    `status: ${task.status}`,
+    `risk: ${task.risk}`,
+    `owner: ${task.owner}`,
+    `allowedActions: ${task.allowed_actions.join(", ") || "n/a"}`,
+    `handoff: ${task.handoff.state}`,
+    `createdAt: ${task.created_at}`,
+    `updatedAt: ${task.updated_at}`,
+    ...(task.started_at ? [`startedAt: ${task.started_at}`] : []),
+    ...(task.ended_at ? [`endedAt: ${task.ended_at}`] : []),
+    ...(task.blocked_reason ? [`blockedReason: ${task.blocked_reason}`] : []),
+    ...(task.completed_summary ? [`completedSummary: ${task.completed_summary}`] : []),
+  ];
+  for (const line of lines) {
+    runtime.log(line);
+  }
+}
+
+export async function tasksMetadataStartCommand(
+  opts: {
+    taskId: string;
+    title?: string;
+    workspace?: string;
+    source?: string;
+    owner?: string;
+    risk?: string;
+    allowedActions?: string;
+    json?: boolean;
+  },
+  runtime: RuntimeEnv,
+) {
+  const risk = parseSafeTaskRisk(opts.risk, runtime);
+  const index = upsertSafeTask({
+    taskId: opts.taskId,
+    title: opts.title,
+    workspace: opts.workspace,
+    source: opts.source,
+    owner: opts.owner,
+    risk,
+    allowedActions: parseAllowedActions(opts.allowedActions),
+  });
+  const task = findSafeTask(index, opts.taskId);
+  if (opts.json) {
+    writeSafeTaskIndexJson(runtime, {
+      task: task ? projectSafeTaskRecord(task) : undefined,
+      index: projectSafeTaskIndex(index),
+    });
+    return;
+  }
+  runtime.log(`Started safe task metadata ${task?.task_id ?? opts.taskId}.`);
+}
+
+export async function tasksMetadataBlockCommand(
+  opts: { taskId: string; reason: string; needsDecision?: boolean; risk?: string; json?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const risk = parseSafeTaskRisk(opts.risk, runtime);
+  const index = blockSafeTask({
+    taskId: opts.taskId,
+    reason: opts.reason,
+    needsDecision: Boolean(opts.needsDecision),
+    risk,
+  });
+  const task = findSafeTask(index, opts.taskId);
+  if (opts.json) {
+    writeSafeTaskIndexJson(runtime, {
+      task: task ? projectSafeTaskRecord(task) : undefined,
+      index: projectSafeTaskIndex(index),
+    });
+    return;
+  }
+  runtime.log(`Blocked safe task metadata ${task?.task_id ?? opts.taskId}.`);
+}
+
+export async function tasksMetadataCompleteCommand(
+  opts: { taskId: string; summary?: string; json?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const index = completeSafeTask({ taskId: opts.taskId, summary: opts.summary });
+  const task = findSafeTask(index, opts.taskId);
+  if (opts.json) {
+    writeSafeTaskIndexJson(runtime, {
+      task: task ? projectSafeTaskRecord(task) : undefined,
+      index: projectSafeTaskIndex(index),
+    });
+    return;
+  }
+  runtime.log(`Completed safe task metadata ${task?.task_id ?? opts.taskId}.`);
+}
+
+export async function tasksDecisionsListCommand(opts: { json?: boolean }, runtime: RuntimeEnv) {
+  const loaded = loadPendingDecisionQueue();
+  const decisions = loaded.queue.decisions.map(projectPendingDecisionRecord);
+  if (opts.json) {
+    writeRuntimeJson(runtime, {
+      ...loaded.queue,
+      decisions,
+      allowed_actions: loaded.queue.allowed_actions.map(projectAllowedActionRecord),
+      loadErrors: loaded.loadErrors,
+    });
+    return;
+  }
+  runtime.log(info(`Pending decisions: ${decisions.length}`));
+  if (loaded.loadErrors.length > 0) {
+    runtime.log(`Load errors: ${loaded.loadErrors.join("; ")}`);
+  }
+  if (decisions.length === 0) {
+    runtime.log("No pending decisions found.");
+    return;
+  }
+  for (const decision of decisions) {
+    runtime.log(`${decision.id} ${decision.risk} ${decision.title}`);
+  }
+}
+
+export async function tasksDecisionsClassifyCommand(
+  opts: {
+    action: string;
+    title?: string;
+    reason?: string;
+    taskId?: string;
+    workspace?: string;
+    json?: boolean;
+  },
+  runtime: RuntimeEnv,
+) {
+  const classification = classifyActionRequest({
+    action: opts.action,
+    title: opts.title,
+    reason: opts.reason,
+  });
+  const queue =
+    classification.decision === "needs_decision"
+      ? registerPendingDecision({
+          classification,
+          title: opts.title,
+          taskId: opts.taskId,
+          workspace: opts.workspace,
+        })
+      : undefined;
+  const audit =
+    classification.decision === "allowed"
+      ? registerAllowedActionAudit({
+          classification,
+          title: opts.title,
+          workspace: opts.workspace,
+        })
+      : undefined;
+  if (opts.json) {
+    writeRuntimeJson(runtime, {
+      classification,
+      ...(queue
+        ? {
+            pendingDecision: projectPendingDecisionRecord(
+              queue.decisions[queue.decisions.length - 1],
+            ),
+          }
+        : {}),
+      ...(audit
+        ? {
+            allowedAction: projectAllowedActionRecord(
+              audit.allowed_actions[audit.allowed_actions.length - 1],
+            ),
+          }
+        : {}),
+    });
+    return;
+  }
+  runtime.log(`${classification.decision}: ${classification.reason}`);
+  if (queue) {
+    const pending = queue.decisions[queue.decisions.length - 1];
+    runtime.log(`Pending decision: ${pending.id}`);
+  }
+}
+
+export async function tasksPhoneProbeCommand(
+  opts: {
+    text: string;
+    json?: boolean;
+  },
+  runtime: RuntimeEnv,
+) {
+  const reply = buildPhoneControlReply(opts.text);
+  if (opts.json) {
+    writeRuntimeJson(runtime, reply);
+    return;
+  }
+  runtime.log(reply.text);
+  runtime.log("No live phone delivery was attempted.");
+}
+
+export async function tasksSupervisionCommand(
+  opts: { json?: boolean; runRoot?: string },
+  runtime: RuntimeEnv,
+) {
+  const runRoot = opts.runRoot?.trim() || process.env.OPENCLAW_RUN_HARNESS_RUN_ROOT?.trim();
+  if (!runRoot) {
+    runtime.error("Run Harness run root is required.");
+    runtime.exit(1);
+    return;
+  }
+  const summary = summarizeDurableRunFromArtifacts({ runRoot });
+  if (opts.json) {
+    writeRuntimeJson(runtime, summary);
+    return;
+  }
+  runtime.log(info(`Durable run: ${summary.runId}`));
+  runtime.log(
+    info(
+      `Stages: ${summary.stages.length} · tasks: ${summary.tasks.length} · blockers: ${summary.blockers.length} · gates: ${summary.gates.length}`,
+    ),
+  );
+  runtime.log(
+    info(
+      `Evidence: ${summary.evidence.receipts.length} receipts · ${summary.evidence.reviews.length} reviews · ${summary.evidence.verification.length} verification`,
+    ),
+  );
+  runtime.log("Routing lanes:");
+  for (const lane of listWorkRoutingExplanations()) {
+    runtime.log(`- ${lane.label}: ${lane.useWhen}`);
+  }
+  if (summary.blockers.length === 0) {
+    runtime.log("No blockers found in allowed Run Harness artifacts.");
+  } else {
+    runtime.log("Blockers and gates:");
+    for (const blocker of summary.blockers) {
+      runtime.log(
+        `- ${blocker.kind} ${blocker.id}${blocker.status ? ` (${blocker.status})` : ""}: ${blocker.title}`,
+      );
+    }
+  }
+  if (summary.loadErrors.length > 0) {
+    runtime.log(`Load errors: ${summary.loadErrors.join("; ")}`);
+  }
+  runtime.log("Gate policy: pending gates are surfaced only; OpenClaw never auto-approves them.");
 }
 
 export async function tasksNotifyCommand(

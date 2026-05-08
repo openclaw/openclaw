@@ -49,9 +49,16 @@ oc.runs.events(runId, { after });
 oc.runs.wait(runId);
 oc.runs.cancel(runId);
 
-oc.tasks.list(); // future API: current SDK throws unsupported
-oc.tasks.get(taskId); // future API: current SDK throws unsupported
-oc.tasks.cancel(taskId); // future API: current SDK throws unsupported
+oc.assistant.status();
+oc.assistant.decisions();
+oc.assistant.continueCandidates();
+
+oc.tasks.list();
+oc.tasks.get(taskId);
+oc.tasks.cancel(taskId);
+oc.tasks.flows.list();
+oc.tasks.flows.get(flowId);
+oc.tasks.flows.cancel(flowId);
 oc.tasks.events(taskId, { after }); // future API
 
 oc.models.list();

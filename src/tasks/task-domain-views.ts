@@ -57,8 +57,11 @@ export function mapTaskRunDetail(task: TaskRecord): TaskRunDetail {
 export function mapTaskFlowView(flow: TaskFlowRecord): TaskFlowView {
   return {
     id: flow.flowId,
+    syncMode: flow.syncMode,
     ownerKey: flow.ownerKey,
     ...(flow.requesterOrigin ? { requesterOrigin: { ...flow.requesterOrigin } } : {}),
+    ...(flow.controllerId ? { controllerId: flow.controllerId } : {}),
+    revision: flow.revision,
     status: flow.status,
     notifyPolicy: flow.notifyPolicy,
     goal: flow.goal,

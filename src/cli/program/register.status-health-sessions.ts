@@ -9,10 +9,19 @@ import { statusCommand } from "../../commands/status.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
+  tasksDecisionsClassifyCommand,
+  tasksDecisionsListCommand,
   tasksListCommand,
   tasksMaintenanceCommand,
+  tasksMetadataBlockCommand,
+  tasksMetadataCompleteCommand,
+  tasksMetadataExportCommand,
+  tasksMetadataShowCommand,
+  tasksMetadataStartCommand,
   tasksNotifyCommand,
+  tasksPhoneProbeCommand,
   tasksShowCommand,
+  tasksSupervisionCommand,
 } from "../../commands/tasks.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -497,6 +506,204 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         await tasksCancelCommand(
           {
             lookup,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const tasksMetadataCmd = tasksCmd
+    .command("metadata")
+    .description("Manage explicit safe task metadata");
+
+  tasksMetadataCmd
+    .command("export")
+    .description("Export explicit safe task metadata")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksMetadataExportCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksMetadataCmd
+    .command("show")
+    .description("Show one explicit safe task metadata record")
+    .argument("<lookup>", "Safe task id")
+    .option("--json", "Output as JSON", false)
+    .action(async (lookup, opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksMetadataShowCommand(
+          {
+            lookup,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksMetadataCmd
+    .command("start")
+    .description("Create or mark one explicit safe task metadata record running")
+    .requiredOption("--task-id <id>", "Safe task id")
+    .option("--title <title>", "Display title")
+    .option("--workspace <path>", "Workspace path")
+    .option("--source <source>", "Source label")
+    .option("--owner <owner>", "Owner label")
+    .option("--risk <risk>", "Risk (low, medium, high, hard-boundary)")
+    .option("--allowed-actions <actions>", "Comma-separated allowed actions")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksMetadataStartCommand(
+          {
+            taskId: opts.taskId as string,
+            title: opts.title as string | undefined,
+            workspace: opts.workspace as string | undefined,
+            source: opts.source as string | undefined,
+            owner: opts.owner as string | undefined,
+            risk: opts.risk as string | undefined,
+            allowedActions: opts.allowedActions as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksMetadataCmd
+    .command("block")
+    .description("Mark one explicit safe task metadata record blocked")
+    .requiredOption("--task-id <id>", "Safe task id")
+    .requiredOption("--reason <text>", "Block reason")
+    .option(
+      "--needs-decision",
+      "Mark as a hard-boundary decision instead of continuable block",
+      false,
+    )
+    .option("--risk <risk>", "Risk (low, medium, high, hard-boundary)")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksMetadataBlockCommand(
+          {
+            taskId: opts.taskId as string,
+            reason: opts.reason as string,
+            needsDecision: Boolean(opts.needsDecision),
+            risk: opts.risk as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksMetadataCmd
+    .command("complete")
+    .description("Mark one explicit safe task metadata record complete")
+    .requiredOption("--task-id <id>", "Safe task id")
+    .option("--summary <text>", "Completion summary")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksMetadataCompleteCommand(
+          {
+            taskId: opts.taskId as string,
+            summary: opts.summary as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  const tasksDecisionsCmd = tasksCmd
+    .command("decisions")
+    .description("Inspect and create local pending decision packets");
+
+  tasksDecisionsCmd
+    .command("list")
+    .description("List local pending decision packets")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksDecisionsListCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksDecisionsCmd
+    .command("classify")
+    .description("Classify a local action and queue hard-boundary decisions")
+    .requiredOption("--action <action>", "Action to classify")
+    .option("--title <title>", "Decision title")
+    .option("--reason <reason>", "Reason or context")
+    .option("--task-id <id>", "Related safe task id")
+    .option("--workspace <path>", "Workspace path")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksDecisionsClassifyCommand(
+          {
+            action: opts.action as string,
+            title: opts.title as string | undefined,
+            reason: opts.reason as string | undefined,
+            taskId: opts.taskId as string | undefined,
+            workspace: opts.workspace as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("phone-probe")
+    .description("Render a local openclaw-phone reply without live delivery")
+    .argument("<text>", "Incoming phone text, for example 你在干啥")
+    .option("--json", "Output as JSON", false)
+    .action(async (text, opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksPhoneProbeCommand(
+          {
+            text,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("supervision")
+    .description("Summarize a Run Harness run from safe artifacts")
+    .requiredOption("--run-root <path>", "Run Harness run directory")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksSupervisionCommand(
+          {
+            runRoot: opts.runRoot as string,
+            json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,
         );

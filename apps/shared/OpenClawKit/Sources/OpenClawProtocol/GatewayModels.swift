@@ -358,6 +358,716 @@ public struct Snapshot: Codable, Sendable {
     }
 }
 
+public struct TaskRunAggregateSummary: Codable, Sendable {
+    public let total: Double
+    public let active: Double
+    public let terminal: Double
+    public let failures: Double
+    public let bystatus: [String: AnyCodable]
+    public let byruntime: [String: AnyCodable]
+
+    public init(
+        total: Double,
+        active: Double,
+        terminal: Double,
+        failures: Double,
+        bystatus: [String: AnyCodable],
+        byruntime: [String: AnyCodable])
+    {
+        self.total = total
+        self.active = active
+        self.terminal = terminal
+        self.failures = failures
+        self.bystatus = bystatus
+        self.byruntime = byruntime
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case total
+        case active
+        case terminal
+        case failures
+        case bystatus = "byStatus"
+        case byruntime = "byRuntime"
+    }
+}
+
+public struct TaskRunView: Codable, Sendable {
+    public let id: String
+    public let runtime: TaskRunRuntime
+    public let sourceid: String?
+    public let sessionkey: String
+    public let ownerkey: String
+    public let scope: AnyCodable
+    public let childsessionkey: String?
+    public let flowid: String?
+    public let parenttaskid: String?
+    public let agentid: String?
+    public let runid: String?
+    public let label: String?
+    public let title: String
+    public let status: TaskRunStatus
+    public let deliverystatus: TaskRunDeliveryStatus
+    public let notifypolicy: TaskRunNotifyPolicy
+    public let createdat: Double
+    public let startedat: Double?
+    public let endedat: Double?
+    public let lasteventat: Double?
+    public let cleanupafter: Double?
+    public let error: String?
+    public let progresssummary: String?
+    public let terminalsummary: String?
+    public let terminaloutcome: AnyCodable?
+
+    public init(
+        id: String,
+        runtime: TaskRunRuntime,
+        sourceid: String?,
+        sessionkey: String,
+        ownerkey: String,
+        scope: AnyCodable,
+        childsessionkey: String?,
+        flowid: String?,
+        parenttaskid: String?,
+        agentid: String?,
+        runid: String?,
+        label: String?,
+        title: String,
+        status: TaskRunStatus,
+        deliverystatus: TaskRunDeliveryStatus,
+        notifypolicy: TaskRunNotifyPolicy,
+        createdat: Double,
+        startedat: Double?,
+        endedat: Double?,
+        lasteventat: Double?,
+        cleanupafter: Double?,
+        error: String?,
+        progresssummary: String?,
+        terminalsummary: String?,
+        terminaloutcome: AnyCodable?)
+    {
+        self.id = id
+        self.runtime = runtime
+        self.sourceid = sourceid
+        self.sessionkey = sessionkey
+        self.ownerkey = ownerkey
+        self.scope = scope
+        self.childsessionkey = childsessionkey
+        self.flowid = flowid
+        self.parenttaskid = parenttaskid
+        self.agentid = agentid
+        self.runid = runid
+        self.label = label
+        self.title = title
+        self.status = status
+        self.deliverystatus = deliverystatus
+        self.notifypolicy = notifypolicy
+        self.createdat = createdat
+        self.startedat = startedat
+        self.endedat = endedat
+        self.lasteventat = lasteventat
+        self.cleanupafter = cleanupafter
+        self.error = error
+        self.progresssummary = progresssummary
+        self.terminalsummary = terminalsummary
+        self.terminaloutcome = terminaloutcome
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case runtime
+        case sourceid = "sourceId"
+        case sessionkey = "sessionKey"
+        case ownerkey = "ownerKey"
+        case scope
+        case childsessionkey = "childSessionKey"
+        case flowid = "flowId"
+        case parenttaskid = "parentTaskId"
+        case agentid = "agentId"
+        case runid = "runId"
+        case label
+        case title
+        case status
+        case deliverystatus = "deliveryStatus"
+        case notifypolicy = "notifyPolicy"
+        case createdat = "createdAt"
+        case startedat = "startedAt"
+        case endedat = "endedAt"
+        case lasteventat = "lastEventAt"
+        case cleanupafter = "cleanupAfter"
+        case error
+        case progresssummary = "progressSummary"
+        case terminalsummary = "terminalSummary"
+        case terminaloutcome = "terminalOutcome"
+    }
+}
+
+public struct TaskFlowView: Codable, Sendable {
+    public let id: String
+    public let syncmode: TaskFlowSyncMode
+    public let ownerkey: String
+    public let requesterorigin: AnyCodable?
+    public let controllerid: String?
+    public let revision: Double
+    public let status: TaskFlowStatus
+    public let notifypolicy: TaskRunNotifyPolicy
+    public let goal: String
+    public let currentstep: String?
+    public let cancelrequestedat: Double?
+    public let createdat: Double
+    public let updatedat: Double
+    public let endedat: Double?
+
+    public init(
+        id: String,
+        syncmode: TaskFlowSyncMode,
+        ownerkey: String,
+        requesterorigin: AnyCodable?,
+        controllerid: String?,
+        revision: Double,
+        status: TaskFlowStatus,
+        notifypolicy: TaskRunNotifyPolicy,
+        goal: String,
+        currentstep: String?,
+        cancelrequestedat: Double?,
+        createdat: Double,
+        updatedat: Double,
+        endedat: Double?)
+    {
+        self.id = id
+        self.syncmode = syncmode
+        self.ownerkey = ownerkey
+        self.requesterorigin = requesterorigin
+        self.controllerid = controllerid
+        self.revision = revision
+        self.status = status
+        self.notifypolicy = notifypolicy
+        self.goal = goal
+        self.currentstep = currentstep
+        self.cancelrequestedat = cancelrequestedat
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.endedat = endedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case syncmode = "syncMode"
+        case ownerkey = "ownerKey"
+        case requesterorigin = "requesterOrigin"
+        case controllerid = "controllerId"
+        case revision
+        case status
+        case notifypolicy = "notifyPolicy"
+        case goal
+        case currentstep = "currentStep"
+        case cancelrequestedat = "cancelRequestedAt"
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case endedat = "endedAt"
+    }
+}
+
+public struct TaskFlowDetail: Codable, Sendable {
+    public let id: String
+    public let syncmode: TaskFlowSyncMode
+    public let ownerkey: String
+    public let requesterorigin: AnyCodable?
+    public let controllerid: String?
+    public let revision: Double
+    public let status: TaskFlowStatus
+    public let notifypolicy: TaskRunNotifyPolicy
+    public let goal: String
+    public let currentstep: String?
+    public let cancelrequestedat: Double?
+    public let createdat: Double
+    public let updatedat: Double
+    public let endedat: Double?
+    public let state: AnyCodable?
+    public let wait: AnyCodable?
+    public let blocked: [String: AnyCodable]?
+    public let tasks: [TaskRunView]
+    public let tasksummary: TaskRunAggregateSummary
+
+    public init(
+        id: String,
+        syncmode: TaskFlowSyncMode,
+        ownerkey: String,
+        requesterorigin: AnyCodable?,
+        controllerid: String?,
+        revision: Double,
+        status: TaskFlowStatus,
+        notifypolicy: TaskRunNotifyPolicy,
+        goal: String,
+        currentstep: String?,
+        cancelrequestedat: Double?,
+        createdat: Double,
+        updatedat: Double,
+        endedat: Double?,
+        state: AnyCodable?,
+        wait: AnyCodable?,
+        blocked: [String: AnyCodable]?,
+        tasks: [TaskRunView],
+        tasksummary: TaskRunAggregateSummary)
+    {
+        self.id = id
+        self.syncmode = syncmode
+        self.ownerkey = ownerkey
+        self.requesterorigin = requesterorigin
+        self.controllerid = controllerid
+        self.revision = revision
+        self.status = status
+        self.notifypolicy = notifypolicy
+        self.goal = goal
+        self.currentstep = currentstep
+        self.cancelrequestedat = cancelrequestedat
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.endedat = endedat
+        self.state = state
+        self.wait = wait
+        self.blocked = blocked
+        self.tasks = tasks
+        self.tasksummary = tasksummary
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case syncmode = "syncMode"
+        case ownerkey = "ownerKey"
+        case requesterorigin = "requesterOrigin"
+        case controllerid = "controllerId"
+        case revision
+        case status
+        case notifypolicy = "notifyPolicy"
+        case goal
+        case currentstep = "currentStep"
+        case cancelrequestedat = "cancelRequestedAt"
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case endedat = "endedAt"
+        case state
+        case wait
+        case blocked
+        case tasks
+        case tasksummary = "taskSummary"
+    }
+}
+
+public struct TasksListParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let ownerkey: String?
+    public let agentid: String?
+    public let runid: String?
+    public let status: AnyCodable?
+    public let active: Bool?
+
+    public init(
+        sessionkey: String?,
+        ownerkey: String?,
+        agentid: String?,
+        runid: String?,
+        status: AnyCodable?,
+        active: Bool?)
+    {
+        self.sessionkey = sessionkey
+        self.ownerkey = ownerkey
+        self.agentid = agentid
+        self.runid = runid
+        self.status = status
+        self.active = active
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case ownerkey = "ownerKey"
+        case agentid = "agentId"
+        case runid = "runId"
+        case status
+        case active
+    }
+}
+
+public struct TasksListResult: Codable, Sendable {
+    public let tasks: [TaskRunView]
+
+    public init(
+        tasks: [TaskRunView])
+    {
+        self.tasks = tasks
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tasks
+    }
+}
+
+public struct TasksGetParams: Codable, Sendable {
+    public let taskid: String
+
+    public init(
+        taskid: String)
+    {
+        self.taskid = taskid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+    }
+}
+
+public struct TasksGetResult: Codable, Sendable {
+    public let task: TaskRunView
+
+    public init(
+        task: TaskRunView)
+    {
+        self.task = task
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case task
+    }
+}
+
+public struct TasksCancelParams: Codable, Sendable {
+    public let taskid: String
+
+    public init(
+        taskid: String)
+    {
+        self.taskid = taskid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+    }
+}
+
+public struct TasksCancelResult: Codable, Sendable {
+    public let found: Bool
+    public let cancelled: Bool
+    public let reason: String?
+    public let task: [String: AnyCodable]?
+
+    public init(
+        found: Bool,
+        cancelled: Bool,
+        reason: String?,
+        task: [String: AnyCodable]?)
+    {
+        self.found = found
+        self.cancelled = cancelled
+        self.reason = reason
+        self.task = task
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case found
+        case cancelled
+        case reason
+        case task
+    }
+}
+
+public struct TaskFlowsListParams: Codable, Sendable {
+    public let ownerkey: String?
+    public let status: AnyCodable?
+    public let active: Bool?
+
+    public init(
+        ownerkey: String?,
+        status: AnyCodable?,
+        active: Bool?)
+    {
+        self.ownerkey = ownerkey
+        self.status = status
+        self.active = active
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ownerkey = "ownerKey"
+        case status
+        case active
+    }
+}
+
+public struct TaskFlowsListResult: Codable, Sendable {
+    public let flows: [TaskFlowDetail]
+
+    public init(
+        flows: [TaskFlowDetail])
+    {
+        self.flows = flows
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flows
+    }
+}
+
+public struct TaskFlowsGetParams: Codable, Sendable {
+    public let flowid: String
+
+    public init(
+        flowid: String)
+    {
+        self.flowid = flowid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+    }
+}
+
+public struct TaskFlowsGetResult: Codable, Sendable {
+    public let flow: TaskFlowDetail
+
+    public init(
+        flow: TaskFlowDetail)
+    {
+        self.flow = flow
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flow
+    }
+}
+
+public struct TaskFlowsCancelParams: Codable, Sendable {
+    public let flowid: String
+
+    public init(
+        flowid: String)
+    {
+        self.flowid = flowid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+    }
+}
+
+public struct TaskFlowsCancelResult: Codable, Sendable {
+    public let found: Bool
+    public let cancelled: Bool
+    public let reason: String?
+    public let flow: [String: AnyCodable]?
+
+    public init(
+        found: Bool,
+        cancelled: Bool,
+        reason: String?,
+        flow: [String: AnyCodable]?)
+    {
+        self.found = found
+        self.cancelled = cancelled
+        self.reason = reason
+        self.flow = flow
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case found
+        case cancelled
+        case reason
+        case flow
+    }
+}
+
+public struct AssistantContinueCandidate: Codable, Sendable {
+    public let taskid: String
+    public let title: String
+    public let workspace: String
+    public let source: String
+    public let status: String
+    public let risk: String
+    public let owner: String
+    public let allowedactions: [String]
+    public let handoffstate: String
+    public let updatedat: String
+    public let reason: String
+    public let record: [String: AnyCodable]
+
+    public init(
+        taskid: String,
+        title: String,
+        workspace: String,
+        source: String,
+        status: String,
+        risk: String,
+        owner: String,
+        allowedactions: [String],
+        handoffstate: String,
+        updatedat: String,
+        reason: String,
+        record: [String: AnyCodable])
+    {
+        self.taskid = taskid
+        self.title = title
+        self.workspace = workspace
+        self.source = source
+        self.status = status
+        self.risk = risk
+        self.owner = owner
+        self.allowedactions = allowedactions
+        self.handoffstate = handoffstate
+        self.updatedat = updatedat
+        self.reason = reason
+        self.record = record
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+        case title
+        case workspace
+        case source
+        case status
+        case risk
+        case owner
+        case allowedactions = "allowedActions"
+        case handoffstate = "handoffState"
+        case updatedat = "updatedAt"
+        case reason
+        case record
+    }
+}
+
+public struct AssistantStatusParams: Codable, Sendable {}
+
+public struct AssistantStatusResult: Codable, Sendable {
+    public let generatedat: String
+    public let taskindexupdatedat: String?
+    public let taskcount: Double
+    public let activetaskcount: Double
+    public let pendingdecisioncount: Double
+    public let continuecandidatecount: Double
+    public let tasks: [[String: AnyCodable]]
+    public let decisions: [[String: AnyCodable]]
+    public let continuecandidates: [AssistantContinueCandidate]
+    public let safesources: [String]
+    public let excludedsources: [String]
+    public let loaderrors: [String]
+
+    public init(
+        generatedat: String,
+        taskindexupdatedat: String?,
+        taskcount: Double,
+        activetaskcount: Double,
+        pendingdecisioncount: Double,
+        continuecandidatecount: Double,
+        tasks: [[String: AnyCodable]],
+        decisions: [[String: AnyCodable]],
+        continuecandidates: [AssistantContinueCandidate],
+        safesources: [String],
+        excludedsources: [String],
+        loaderrors: [String])
+    {
+        self.generatedat = generatedat
+        self.taskindexupdatedat = taskindexupdatedat
+        self.taskcount = taskcount
+        self.activetaskcount = activetaskcount
+        self.pendingdecisioncount = pendingdecisioncount
+        self.continuecandidatecount = continuecandidatecount
+        self.tasks = tasks
+        self.decisions = decisions
+        self.continuecandidates = continuecandidates
+        self.safesources = safesources
+        self.excludedsources = excludedsources
+        self.loaderrors = loaderrors
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generatedat = "generatedAt"
+        case taskindexupdatedat = "taskIndexUpdatedAt"
+        case taskcount = "taskCount"
+        case activetaskcount = "activeTaskCount"
+        case pendingdecisioncount = "pendingDecisionCount"
+        case continuecandidatecount = "continueCandidateCount"
+        case tasks
+        case decisions
+        case continuecandidates = "continueCandidates"
+        case safesources = "safeSources"
+        case excludedsources = "excludedSources"
+        case loaderrors = "loadErrors"
+    }
+}
+
+public struct AssistantDecisionsListParams: Codable, Sendable {}
+
+public struct AssistantDecisionsListResult: Codable, Sendable {
+    public let generatedat: String
+    public let count: Double
+    public let decisions: [[String: AnyCodable]]
+    public let safesources: [String]
+    public let excludedsources: [String]
+    public let loaderrors: [String]
+
+    public init(
+        generatedat: String,
+        count: Double,
+        decisions: [[String: AnyCodable]],
+        safesources: [String],
+        excludedsources: [String],
+        loaderrors: [String])
+    {
+        self.generatedat = generatedat
+        self.count = count
+        self.decisions = decisions
+        self.safesources = safesources
+        self.excludedsources = excludedsources
+        self.loaderrors = loaderrors
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generatedat = "generatedAt"
+        case count
+        case decisions
+        case safesources = "safeSources"
+        case excludedsources = "excludedSources"
+        case loaderrors = "loadErrors"
+    }
+}
+
+public struct AssistantContinueCandidatesParams: Codable, Sendable {}
+
+public struct AssistantContinueCandidatesResult: Codable, Sendable {
+    public let generatedat: String
+    public let count: Double
+    public let candidates: [AssistantContinueCandidate]
+    public let policy: [String: AnyCodable]
+    public let safesources: [String]
+    public let excludedsources: [String]
+    public let loaderrors: [String]
+
+    public init(
+        generatedat: String,
+        count: Double,
+        candidates: [AssistantContinueCandidate],
+        policy: [String: AnyCodable],
+        safesources: [String],
+        excludedsources: [String],
+        loaderrors: [String])
+    {
+        self.generatedat = generatedat
+        self.count = count
+        self.candidates = candidates
+        self.policy = policy
+        self.safesources = safesources
+        self.excludedsources = excludedsources
+        self.loaderrors = loaderrors
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generatedat = "generatedAt"
+        case count
+        case candidates
+        case policy
+        case safesources = "safeSources"
+        case excludedsources = "excludedSources"
+        case loaderrors = "loadErrors"
+    }
+}
+
 public struct ErrorShape: Codable, Sendable {
     public let code: String
     public let message: String

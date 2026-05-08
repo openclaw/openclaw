@@ -322,19 +322,99 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toEqual([]);
   });
 
+  it("calls task Gateway RPCs", async () => {
+    const transport = new FakeTransport({
+      "tasks.list": { tasks: [{ id: "task_123", status: "running" }] },
+      "tasks.get": { task: { id: "task_123", status: "running" } },
+      "tasks.cancel": {
+        found: true,
+        cancelled: true,
+        task: { id: "task_123", status: "cancelled" },
+      },
+      "tasks.flows.list": { flows: [{ id: "flow_123", status: "running" }] },
+      "tasks.flows.get": { flow: { id: "flow_123", status: "running" } },
+      "tasks.flows.cancel": {
+        found: true,
+        cancelled: true,
+        flow: { id: "flow_123", status: "cancelled" },
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.tasks.list({ active: true })).resolves.toMatchObject({
+      tasks: [{ id: "task_123" }],
+    });
+    await expect(oc.tasks.get("task_123")).resolves.toMatchObject({
+      task: { id: "task_123" },
+    });
+    await expect(oc.tasks.cancel("task_123")).resolves.toMatchObject({
+      found: true,
+      cancelled: true,
+    });
+    await expect(oc.tasks.flows.list({ active: true })).resolves.toMatchObject({
+      flows: [{ id: "flow_123" }],
+    });
+    await expect(oc.tasks.flows.get("flow_123")).resolves.toMatchObject({
+      flow: { id: "flow_123" },
+    });
+    await expect(oc.tasks.flows.cancel("flow_123")).resolves.toMatchObject({
+      found: true,
+      cancelled: true,
+    });
+
+    expect(transport.calls).toEqual([
+      { method: "tasks.list", params: { active: true }, options: undefined },
+      { method: "tasks.get", params: { taskId: "task_123" }, options: undefined },
+      { method: "tasks.cancel", params: { taskId: "task_123" }, options: undefined },
+      { method: "tasks.flows.list", params: { active: true }, options: undefined },
+      { method: "tasks.flows.get", params: { flowId: "flow_123" }, options: undefined },
+      { method: "tasks.flows.cancel", params: { flowId: "flow_123" }, options: undefined },
+    ]);
+  });
+
+  it("calls assistant safe metadata Gateway RPCs", async () => {
+    const transport = new FakeTransport({
+      "assistant.status": {
+        taskCount: 1,
+        pendingDecisionCount: 1,
+        continueCandidateCount: 1,
+      },
+      "assistant.decisions.list": {
+        count: 1,
+        decisions: [{ id: "decision_123" }],
+      },
+      "assistant.continueCandidates": {
+        count: 1,
+        candidates: [{ taskId: "task_123" }],
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.assistant.status()).resolves.toMatchObject({
+      taskCount: 1,
+      pendingDecisionCount: 1,
+      continueCandidateCount: 1,
+    });
+    await expect(oc.assistant.decisions()).resolves.toMatchObject({
+      count: 1,
+      decisions: [{ id: "decision_123" }],
+    });
+    await expect(oc.assistant.continueCandidates()).resolves.toMatchObject({
+      count: 1,
+      candidates: [{ taskId: "task_123" }],
+    });
+
+    expect(transport.calls).toEqual([
+      { method: "assistant.status", params: {}, options: undefined },
+      { method: "assistant.decisions.list", params: {}, options: undefined },
+      { method: "assistant.continueCandidates", params: {}, options: undefined },
+    ]);
+  });
+
   it("throws explicit unsupported errors for SDK namespaces without Gateway RPCs", async () => {
     const transport = new FakeTransport({});
     const oc = new OpenClaw({ transport });
 
-    await expect(oc.tasks.list()).rejects.toThrow(
-      "oc.tasks.list is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.tasks.get("task_123")).rejects.toThrow(
-      "oc.tasks.get is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.tasks.cancel("task_123")).rejects.toThrow(
-      "oc.tasks.cancel is not supported by the current OpenClaw Gateway yet",
-    );
     await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
       "oc.environments.create is not supported by the current OpenClaw Gateway yet",
     );

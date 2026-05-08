@@ -24,6 +24,17 @@ openclaw tasks cancel <lookup>
 openclaw tasks audit
 openclaw tasks maintenance
 openclaw tasks maintenance --apply
+openclaw tasks metadata export
+openclaw tasks metadata start --task-id <id> --title <title>
+openclaw tasks metadata block --task-id <id> --reason <reason>
+openclaw tasks metadata complete --task-id <id> --summary <summary>
+openclaw tasks metadata show <id>
+openclaw tasks decisions list
+openclaw tasks decisions classify --action <action>
+openclaw tasks phone-probe "你在干啥"
+openclaw tasks phone-probe "有什么要确认"
+openclaw tasks phone-probe "继续任务"
+openclaw tasks supervision --run-root <path>
 openclaw tasks flow list
 openclaw tasks flow show <lookup>
 openclaw tasks flow cancel <lookup>
@@ -68,6 +79,43 @@ openclaw tasks cancel <lookup>
 ```
 
 Cancels a running background task.
+
+### `metadata`
+
+```bash
+openclaw tasks metadata export [--json]
+openclaw tasks metadata start --task-id <id> [--title <title>] [--workspace <path>] [--source <source>] [--owner <owner>] [--risk <low|medium|high|hard-boundary>] [--allowed-actions <csv>] [--json]
+openclaw tasks metadata block --task-id <id> --reason <reason> [--needs-decision] [--risk <low|medium|high|hard-boundary>] [--json]
+openclaw tasks metadata complete --task-id <id> [--summary <summary>] [--json]
+openclaw tasks metadata show <id> [--json]
+```
+
+Creates and updates explicit safe task metadata for control-plane handoff. This is a small, whitelisted status artifact for local task continuation; it does not read private app transcripts, logs, auth files, caches, or sqlite databases.
+
+### `decisions`
+
+```bash
+openclaw tasks decisions list [--json]
+openclaw tasks decisions classify --action <action> [--title <title>] [--reason <reason>] [--task-id <id>] [--workspace <path>] [--json]
+```
+
+Classifies local actions against the hard-boundary policy. Local, reversible, auditable, explicit-scope actions return `allowed` and write a local allowed-action audit record; destructive deletes, external sends, push/publish/deploy/release, auth/account/payment/credential changes, remote writes/jobs, memory writes, canonical skill/rule/governance mutations, and daemon/cron/monitor creation return `needs_decision` and create a local pending decision packet with action, reason, safe alternative, approval target, and rollback story.
+
+### `phone-probe`
+
+```bash
+openclaw tasks phone-probe <text> [--json]
+```
+
+Renders the local `openclaw-phone` control reply without sending it to any live phone channel. The supported control texts are `你在干啥`, `有什么要确认`, and `继续任务`. Replies are built only from explicit safe task metadata and the local pending decision queue. `继续任务` reports local, reversible, explicit continuation candidates but does not execute them; hard-boundary tasks stay in the decision queue.
+
+### `supervision`
+
+```bash
+openclaw tasks supervision --run-root <path> [--json]
+```
+
+Summarizes a Run Harness run from safe artifacts only: task graph, stage manifest, gates, failures, receipts, reviews, and verification. It does not read private logs, prompts, auth material, caches, sqlite files, or raw transcripts. Pending gates are surfaced as blockers with `canAutoApprove: false`.
 
 ### `audit`
 
