@@ -16,6 +16,22 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
 
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 
+function expectRequestResolver(
+  callback: ((value: { ok: boolean }) => void) | null,
+): (value: { ok: boolean }) => void {
+  if (callback === null) {
+    throw new Error("Expected first request resolver callback to be captured");
+  }
+  return callback;
+}
+
+function expectReleaseCallback(callback: (() => void) | null): () => void {
+  if (callback === null) {
+    throw new Error("Expected first request release callback to be captured");
+  }
+  return callback;
+}
+
 describe("startQaGatewayRpcClient", () => {
   beforeEach(() => {
     gatewayRpcMock.reset();
@@ -145,10 +161,7 @@ describe("startQaGatewayRpcClient", () => {
       },
     );
 
-    if (resolveFirst === null) {
-      throw new Error("Expected first gateway request resolver");
-    }
-    resolveFirst({ ok: true });
+    expectRequestResolver(resolveFirst)({ ok: true });
     await expect(firstRequest).resolves.toEqual({ ok: true });
   });
 
@@ -176,10 +189,7 @@ describe("startQaGatewayRpcClient", () => {
 
     expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
 
-    if (releaseFirst === null) {
-      throw new Error("Expected first gateway request release callback");
-    }
-    releaseFirst();
+    expectReleaseCallback(releaseFirst)();
 
     await expect(firstRequest).resolves.toEqual({ ok: true });
     await expect(secondRequest).resolves.toEqual({ ok: true });
