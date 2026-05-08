@@ -138,7 +138,8 @@ describe("pw-tools-core", () => {
     expect(typeof savedPath).toBe("string");
     expect(savedPath).not.toBe(params.targetPath);
     expect(path.basename(path.dirname(String(savedPath)))).toContain("fs-safe-output");
-    expect(path.basename(String(savedPath))).toBe(path.basename(params.targetPath));
+    expect(path.basename(String(savedPath))).toContain(path.basename(params.targetPath));
+    expect(path.basename(String(savedPath))).toMatch(/\.part$/);
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
     await expect(fs.access(String(savedPath))).rejects.toThrow();
   }
@@ -317,7 +318,8 @@ describe("pw-tools-core", () => {
     );
     const expectedDownloadsTail = `${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`;
     expect(path.dirname(outPath)).not.toBe(expectedRootedDownloadsDir);
-    expect(path.basename(outPath)).toBe(path.basename(res.path));
+    expect(path.basename(outPath)).toContain(path.basename(res.path));
+    expect(path.basename(outPath)).toMatch(/\.part$/);
     await expect(fs.readFile(res.path, "utf8")).resolves.toBe("download-content");
     expect(path.normalize(res.path)).toContain(path.normalize(expectedDownloadsTail));
     expect(tmpDirMocks.resolvePreferredOpenClawTmpDir).toHaveBeenCalled();
@@ -333,7 +335,8 @@ describe("pw-tools-core", () => {
     expect(path.dirname(outPath)).not.toBe(
       path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),
     );
-    expect(path.basename(outPath)).toBe(path.basename(res.path));
+    expect(path.basename(outPath)).toContain(path.basename(res.path));
+    expect(path.basename(outPath)).toMatch(/\.part$/);
     await expect(fs.readFile(res.path, "utf8")).resolves.toBe("download-content");
     expect(path.normalize(res.path)).toContain(
       path.normalize(`${path.join("tmp", "openclaw-preferred", "downloads")}${path.sep}`),
