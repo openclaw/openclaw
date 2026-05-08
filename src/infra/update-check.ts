@@ -7,7 +7,7 @@ import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import {
   channelToNpmTag,
-  resolveNpmPackageTargetRegistryUrl,
+  resolveNpmPackageTargetRegistryUrlAsync,
   type UpdateChannel,
 } from "./update-channels.js";
 
@@ -329,11 +329,8 @@ export async function fetchNpmPackageTargetStatus(params: {
   const timeoutMs = params.timeoutMs ?? 3500;
   const target = params.target;
   try {
-    const res = await fetchWithTimeout(
-      resolveNpmPackageTargetRegistryUrl({ target }),
-      {},
-      Math.max(250, timeoutMs),
-    );
+    const registryUrl = await resolveNpmPackageTargetRegistryUrlAsync({ target });
+    const res = await fetchWithTimeout(registryUrl, {}, Math.max(250, timeoutMs));
     if (!res.ok) {
       return { target, version: null, nodeEngine: null, error: `HTTP ${res.status}` };
     }

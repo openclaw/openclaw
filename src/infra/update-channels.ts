@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -16,11 +19,7 @@ export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
 export const DEV_BRANCH = "main";
 export const DEFAULT_NPM_REGISTRY_URL = "https://registry.npmjs.org";
 
-const NPM_REGISTRY_ENV_KEYS = [
-  "npm_config_registry",
-  "NPM_CONFIG_REGISTRY",
-  "npm_config_userconfig_registry",
-] as const;
+const NPM_REGISTRY_ENV_KEYS = ["npm_config_registry", "NPM_CONFIG_REGISTRY"] as const;
 
 function normalizeNpmRegistryBaseUrl(value: string): string | null {
   try {
@@ -34,16 +33,58 @@ function normalizeNpmRegistryBaseUrl(value: string): string | null {
   }
 }
 
+function parseNpmrcRegistry(content: string): string | null {
+  for (const line of content.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#") || trimmed.startsWith(";")) {
+      continue;
+    }
+    const match = /^registry\s*=\s*(.+)$/u.exec(trimmed);
+    if (match) {
+      return normalizeNpmRegistryBaseUrl(match[1]?.trim() ?? "");
+    }
+  }
+  return null;
+}
+
+async function readNpmrcRegistryFromFile(filePath: string): Promise<string | null> {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    return parseNpmrcRegistry(content);
+  } catch {
+    return null;
+  }
+}
+
 export function resolveNpmRegistryBaseUrl(
   env: Partial<Record<(typeof NPM_REGISTRY_ENV_KEYS)[number], string | undefined>> = process.env,
 ): string {
   const configured =
     normalizeOptionalString(env.npm_config_registry) ??
-    normalizeOptionalString(env.NPM_CONFIG_REGISTRY) ??
-    normalizeOptionalString(env.npm_config_userconfig_registry);
+    normalizeOptionalString(env.NPM_CONFIG_REGISTRY);
   return (
     normalizeNpmRegistryBaseUrl(configured ?? DEFAULT_NPM_REGISTRY_URL) ?? DEFAULT_NPM_REGISTRY_URL
   );
+}
+
+export async function resolveNpmRegistryBaseUrlAsync(
+  env: Partial<
+    Record<
+      (typeof NPM_REGISTRY_ENV_KEYS)[number] | "npm_config_userconfig" | "NPM_CONFIG_USERCONFIG",
+      string | undefined
+    >
+  > = process.env,
+): Promise<string> {
+  const fromEnv = resolveNpmRegistryBaseUrl(env);
+  if (fromEnv !== DEFAULT_NPM_REGISTRY_URL) {
+    return fromEnv;
+  }
+  const userconfig =
+    normalizeOptionalString(env.npm_config_userconfig) ??
+    normalizeOptionalString(env.NPM_CONFIG_USERCONFIG);
+  const npmrcPath = userconfig ?? path.join(os.homedir(), ".npmrc");
+  const fromFile = await readNpmrcRegistryFromFile(npmrcPath);
+  return fromFile ?? DEFAULT_NPM_REGISTRY_URL;
 }
 
 export function resolveNpmPackageTargetRegistryUrl(params: {
@@ -55,6 +96,19 @@ export function resolveNpmPackageTargetRegistryUrl(params: {
   const registryBaseUrl =
     (params.registryBaseUrl ? normalizeNpmRegistryBaseUrl(params.registryBaseUrl) : null) ??
     resolveNpmRegistryBaseUrl(params.env);
+  const packageName = params.packageName ?? "openclaw";
+  return `${registryBaseUrl}/${encodeURIComponent(packageName)}/${encodeURIComponent(params.target)}`;
+}
+
+export async function resolveNpmPackageTargetRegistryUrlAsync(params: {
+  packageName?: string;
+  target: string;
+  registryBaseUrl?: string;
+  env?: Parameters<typeof resolveNpmRegistryBaseUrlAsync>[0];
+}): Promise<string> {
+  const registryBaseUrl =
+    (params.registryBaseUrl ? normalizeNpmRegistryBaseUrl(params.registryBaseUrl) : null) ??
+    (await resolveNpmRegistryBaseUrlAsync(params.env));
   const packageName = params.packageName ?? "openclaw";
   return `${registryBaseUrl}/${encodeURIComponent(packageName)}/${encodeURIComponent(params.target)}`;
 }

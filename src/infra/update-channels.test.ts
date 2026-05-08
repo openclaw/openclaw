@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   channelToNpmTag,
   formatUpdateChannelLabel,
@@ -7,7 +10,9 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
   resolveNpmPackageTargetRegistryUrl,
+  resolveNpmPackageTargetRegistryUrlAsync,
   resolveNpmRegistryBaseUrl,
+  resolveNpmRegistryBaseUrlAsync,
   resolveRegistryUpdateChannel,
   resolveUpdateChannelDisplay,
   type UpdateChannel,
@@ -78,19 +83,13 @@ describe("npm registry url resolution", () => {
     ).toBe("https://registry.npmmirror.com/openclaw/latest");
   });
 
-  it("falls back to uppercase and userconfig registry env vars", () => {
+  it("falls back to uppercase NPM_CONFIG_REGISTRY env var", () => {
     expect(
       resolveNpmPackageTargetRegistryUrl({
         target: "beta",
         env: { NPM_CONFIG_REGISTRY: "https://mirror.example/npm/" },
       }),
     ).toBe("https://mirror.example/npm/openclaw/beta");
-    expect(
-      resolveNpmPackageTargetRegistryUrl({
-        target: "dev",
-        env: { npm_config_userconfig_registry: "http://127.0.0.1:4873/" },
-      }),
-    ).toBe("http://127.0.0.1:4873/openclaw/dev");
   });
 
   it("ignores invalid registry values", () => {
@@ -100,6 +99,68 @@ describe("npm registry url resolution", () => {
         env: { npm_config_registry: "file:///tmp/registry" },
       }),
     ).toBe("https://registry.npmjs.org/openclaw/latest");
+  });
+});
+
+describe("npm registry url resolution — async npmrc", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npmrc-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reads registry from npm_config_userconfig npmrc file", async () => {
+    const npmrcPath = path.join(tmpDir, ".npmrc");
+    await fs.writeFile(npmrcPath, "registry=https://verdaccio.example.com/\n", "utf8");
+    const result = await resolveNpmRegistryBaseUrlAsync({
+      npm_config_userconfig: npmrcPath,
+    });
+    expect(result).toBe("https://verdaccio.example.com");
+  });
+
+  it("reads registry from NPM_CONFIG_USERCONFIG npmrc file", async () => {
+    const npmrcPath = path.join(tmpDir, ".npmrc");
+    await fs.writeFile(npmrcPath, "# comment\nregistry=http://nexus.corp/npm/\n", "utf8");
+    const result = await resolveNpmRegistryBaseUrlAsync({
+      NPM_CONFIG_USERCONFIG: npmrcPath,
+    });
+    expect(result).toBe("http://nexus.corp/npm");
+  });
+
+  it("env var registry takes precedence over npmrc file", async () => {
+    const npmrcPath = path.join(tmpDir, ".npmrc");
+    await fs.writeFile(npmrcPath, "registry=https://npmrc.example.com/\n", "utf8");
+    const result = await resolveNpmRegistryBaseUrlAsync({
+      npm_config_registry: "https://envvar.example.com/",
+      npm_config_userconfig: npmrcPath,
+    });
+    expect(result).toBe("https://envvar.example.com");
+  });
+
+  it("falls back to default when npmrc missing or has no registry key", async () => {
+    const result = await resolveNpmRegistryBaseUrlAsync({
+      npm_config_userconfig: path.join(tmpDir, "nonexistent.npmrc"),
+    });
+    expect(result).toBe("https://registry.npmjs.org");
+
+    const npmrcPath = path.join(tmpDir, ".npmrc");
+    await fs.writeFile(npmrcPath, "cache=/tmp/.npm\n", "utf8");
+    const result2 = await resolveNpmRegistryBaseUrlAsync({ npm_config_userconfig: npmrcPath });
+    expect(result2).toBe("https://registry.npmjs.org");
+  });
+
+  it("resolveNpmPackageTargetRegistryUrlAsync uses npmrc registry", async () => {
+    const npmrcPath = path.join(tmpDir, ".npmrc");
+    await fs.writeFile(npmrcPath, "registry=https://artifactory.corp/npm/\n", "utf8");
+    const url = await resolveNpmPackageTargetRegistryUrlAsync({
+      target: "latest",
+      env: { npm_config_userconfig: npmrcPath },
+    });
+    expect(url).toBe("https://artifactory.corp/npm/openclaw/latest");
   });
 });
 
