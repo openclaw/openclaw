@@ -112,7 +112,7 @@ describe("Mattermost model picker", () => {
     });
 
     const ids = modelsView.buttons.flat().map((button) => button.id);
-    expect(ids.filter((id) => typeof id !== "string" || !/^[a-z0-9]+$/.test(id))).toEqual([]);
+    expect(ids.every((id) => typeof id === "string" && /^[a-z0-9]+$/.test(id))).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
   });
 

@@ -129,7 +129,7 @@ describe("nvidia provider hooks", () => {
       "minimaxai/minimax-m2.5",
       "z-ai/glm5",
     ]);
-    expect(entries?.filter((entry) => entry.provider !== "nvidia")).toEqual([]);
+    expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
   });
 
   it("opts into literal provider-prefix preservation", async () => {
