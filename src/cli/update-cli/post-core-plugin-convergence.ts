@@ -2,7 +2,6 @@ import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/sha
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import {
   runPluginPayloadSmokeCheck,
   type PluginPayloadSmokeFailure,
@@ -21,13 +20,14 @@ export type PostCoreConvergenceResult = {
   errored: boolean;
   smokeFailures: PluginPayloadSmokeFailure[];
   /**
-   * Install records as they exist on disk *after* the convergence pass has
-   * (potentially) repaired missing plugins. Callers that subsequently write
-   * back the installed-plugin index MUST seed their write from these records
-   * — otherwise the in-memory pre-convergence snapshot will overwrite the
-   * fresh repairs that convergence just persisted via
-   * `repairMissingConfiguredPluginInstalls` →
-   * `writePersistedInstalledPluginIndexInstallRecords`.
+   * Final install-record map after convergence: this is the
+   * `baselineInstallRecords` the caller passed in (their in-memory state
+   * including any sync/npm mutations that happened earlier in the
+   * post-core flow) WITH convergence's repair mutations layered on top.
+   * Convergence has already persisted this map to the installed-plugin
+   * index, so the caller's subsequent commit MUST seed its write from
+   * these records — otherwise the stale pre-convergence snapshot will
+   * overwrite both the sync/npm mutations AND the fresh repairs.
    */
   installRecords: Record<string, PluginInstallRecord>;
 };
@@ -45,6 +45,15 @@ const inspectGuidance = (pluginId: string) =>
 export async function runPostCorePluginConvergence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  /**
+   * Optional in-memory install records from earlier post-core steps (e.g.
+   * `syncPluginsForUpdateChannel`, `updateNpmInstalledPlugins`) whose
+   * mutations have not been persisted to the installed-plugin index yet.
+   * When provided, repair layers its mutations on top of these records
+   * instead of reading the stale pre-update disk snapshot, and the merged
+   * map is what gets persisted and returned via `installRecords`.
+   */
+  baselineInstallRecords?: Record<string, PluginInstallRecord>;
 }): Promise<PostCoreConvergenceResult> {
   const env: NodeJS.ProcessEnv = {
     ...params.env,
@@ -54,6 +63,7 @@ export async function runPostCorePluginConvergence(params: {
   const repair = await repairMissingConfiguredPluginInstalls({
     cfg: params.cfg,
     env,
+    ...(params.baselineInstallRecords ? { baselineRecords: params.baselineInstallRecords } : {}),
   });
 
   const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({
@@ -62,9 +72,7 @@ export async function runPostCorePluginConvergence(params: {
     guidance: [REPAIR_GUIDANCE],
   }));
 
-  const records: Record<string, PluginInstallRecord> = await loadInstalledPluginIndexInstallRecords(
-    { env },
-  );
+  const records: Record<string, PluginInstallRecord> = repair.records;
   const smoke = await runPluginPayloadSmokeCheck({ records, env });
   for (const failure of smoke.failures) {
     warnings.push({

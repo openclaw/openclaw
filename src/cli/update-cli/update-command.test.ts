@@ -7,6 +7,7 @@ import {
   resolveGatewayInstallEntrypoint,
 } from "../../daemon/gateway-entrypoint.js";
 import {
+  buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
@@ -556,5 +557,32 @@ describe("resolvePostCoreUpdateChildStdio", () => {
   it('returns "inherit" on non-Windows platforms', () => {
     expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
     expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
+  });
+});
+
+describe("buildInvalidConfigPostCoreUpdateResult", () => {
+  it("returns status:error so the existing pre-restart gate exits 1 instead of restarting on invalid config", () => {
+    const built = buildInvalidConfigPostCoreUpdateResult();
+    expect(built.result.status).toBe("error");
+    expect(built.result.reason).toBe("invalid-config");
+    expect(built.result.changed).toBe(false);
+  });
+
+  it("surfaces actionable repair guidance in both the structural warnings and the message string", () => {
+    const built = buildInvalidConfigPostCoreUpdateResult();
+    expect(built.guidance).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("openclaw doctor"),
+        expect.stringContaining("openclaw update"),
+      ]),
+    );
+    expect(built.result.warnings).toEqual([
+      {
+        reason: "invalid-config",
+        message: built.message,
+        guidance: built.guidance,
+      },
+    ]);
+    expect(built.message).toMatch(/refusing to restart/);
   });
 });

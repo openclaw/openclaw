@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   repairMissingConfiguredPluginInstalls: vi.fn(),
   runPluginPayloadSmokeCheck: vi.fn(),
-  loadInstalledPluginIndexInstallRecords: vi.fn(),
 }));
 
 vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.js", () => ({
@@ -11,9 +10,6 @@ vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.js", () 
 }));
 vi.mock("./plugin-payload-validation.js", () => ({
   runPluginPayloadSmokeCheck: mocks.runPluginPayloadSmokeCheck,
-}));
-vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
-  loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
 }));
 
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -25,9 +21,12 @@ import {
 describe("runPostCorePluginConvergence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({ changes: [], warnings: [] });
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: {},
+    });
     mocks.runPluginPayloadSmokeCheck.mockResolvedValue({ checked: [], failures: [] });
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
   });
 
   it("calls repair with OPENCLAW_UPDATE_POST_CORE_CONVERGENCE=1 set", async () => {
@@ -49,6 +48,7 @@ describe("runPostCorePluginConvergence", () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: ['Repaired missing configured plugin "discord".'],
       warnings: [],
+      records: { discord: { source: "npm", installPath: "/p/discord" } },
     });
     const result = await runPostCorePluginConvergence({
       cfg: {
@@ -61,13 +61,11 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it("returns the freshly-loaded post-repair install records so callers can re-seed pluginConfig", async () => {
-    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async () => {
-      // Simulate repair persisting a new install record on disk.
-      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
-        discord: { source: "npm", installPath: "/p/discord" },
-      });
-      return { changes: ["Repaired"], warnings: [] };
+  it("returns the post-repair install records so callers can re-seed pluginConfig", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: ["Repaired"],
+      warnings: [],
+      records: { discord: { source: "npm", installPath: "/p/discord" } },
     });
     const result = await runPostCorePluginConvergence({
       cfg: { plugins: { entries: { discord: { enabled: true } } } } as unknown as OpenClawConfig,
@@ -76,6 +74,25 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({
       discord: { source: "npm", installPath: "/p/discord" },
     });
+  });
+
+  it("forwards baselineInstallRecords to repair so sync/npm in-memory mutations are preserved", async () => {
+    const baseline = { matrix: { source: "npm" as const, installPath: "/p/matrix" } };
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: baseline,
+    });
+    await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { matrix: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+      baselineInstallRecords: baseline,
+    });
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith(
+      expect.objectContaining({ baselineRecords: baseline }),
+    );
   });
 
   it("flags errored=true and surfaces actionable guidance when repair warns", async () => {
@@ -100,8 +117,10 @@ describe("runPostCorePluginConvergence", () => {
   });
 
   it("flags errored=true when smoke check finds a missing main entry", async () => {
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
-      brave: { source: "npm", installPath: "/p/brave" },
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: { brave: { source: "npm", installPath: "/p/brave" } },
     });
     mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
       checked: ["brave"],
@@ -132,18 +151,11 @@ describe("runPostCorePluginConvergence", () => {
     ]);
   });
 
-  it("re-loads install records after repair so smoke check sees the latest payloads", async () => {
-    let callCount = 0;
-    mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async () => {
-      // Simulate repair persisting a new record into the store.
-      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
-        brave: { source: "npm", installPath: "/p/brave" },
-      });
-      return { changes: ["Repaired"], warnings: [] };
-    });
-    mocks.loadInstalledPluginIndexInstallRecords.mockImplementation(async () => {
-      callCount += 1;
-      return {};
+  it("hands repair's post-mutation records straight to the smoke check (no second disk read)", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: ["Repaired"],
+      warnings: [],
+      records: { brave: { source: "npm", installPath: "/p/brave" } },
     });
     await runPostCorePluginConvergence({
       cfg: {
@@ -151,7 +163,6 @@ describe("runPostCorePluginConvergence", () => {
       } as unknown as OpenClawConfig,
       env: {},
     });
-    expect(callCount).toBeGreaterThanOrEqual(0);
     expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith(
       expect.objectContaining({
         records: { brave: { source: "npm", installPath: "/p/brave" } },
