@@ -114,7 +114,7 @@ describe("tlon channel message adapter", () => {
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "tlonMessageAdapter",
-      adapter: adapter,
+      adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
