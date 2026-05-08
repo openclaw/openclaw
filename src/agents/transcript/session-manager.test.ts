@@ -153,6 +153,40 @@ describe("TranscriptSessionManager", () => {
     });
   });
 
+  it("preserves non-main agent scope for virtual sqlite branches and forks", async () => {
+    await makeTempSessionFile();
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "qa",
+      sessionId: "qa-source-session",
+    });
+    const sessionManager = openTranscriptSessionManager({
+      sessionFile,
+      sessionId: "qa-source-session",
+      cwd: "/tmp/qa-workspace",
+    });
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "qa source",
+      timestamp: 4,
+    });
+
+    const branchFile = sessionManager.createBranchedSession(userId);
+    expect(branchFile).toMatch(/^sqlite-transcript:\/\/qa\//);
+    expect(
+      resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: branchFile! }),
+    ).toMatchObject({
+      agentId: "qa",
+    });
+
+    const forked = SessionManager.forkFrom(sessionFile, "/tmp/qa-fork");
+    expect(forked.getSessionFile()).toMatch(/^sqlite-transcript:\/\/qa\//);
+    expect(
+      resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: forked.getSessionFile()! }),
+    ).toMatchObject({
+      agentId: "qa",
+    });
+  });
+
   it("persists initial user messages synchronously before the first assistant message", async () => {
     const sessionFile = await makeTempSessionFile();
     const sessionManager = openTranscriptSessionManager({
