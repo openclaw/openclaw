@@ -76,8 +76,8 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "Be accurate, brief, and speakable.",
 ].join(" ");
 
-/** Default timeout for background consult runs (email-first and timeout-exceeded paths). */
-const BACKGROUND_CONSULT_TIMEOUT_MS = 120_000;
+/** Background consult runs are not time-critical — use 0 to disable the agent timeout. */
+const BACKGROUND_CONSULT_TIMEOUT_MS = 0;
 
 let telnyxProviderPromise: Promise<TelnyxProviderModule> | undefined;
 let twilioProviderPromise: Promise<TwilioProviderModule> | undefined;
