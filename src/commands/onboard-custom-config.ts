@@ -1,5 +1,5 @@
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,7 +13,13 @@ import {
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeAlias } from "./models/alias-name.js";
 
-const DEFAULT_CONTEXT_WINDOW = CONTEXT_WINDOW_HARD_MIN_TOKENS;
+// Default newly-onboarded custom-provider models to a generous context window.
+// The previous default (CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000) was smaller than
+// the runtime's compaction reserveTokensFloor (20_000), which made every fresh
+// custom-provider session immediately overflow and trigger an infinite
+// compaction loop (issue #79428).  Use the same default as other providers
+// (DEEPINFRA_DEFAULT_CONTEXT_WINDOW, microsoft-foundry, etc. ~ 128 k).
+const DEFAULT_CONTEXT_WINDOW = Math.min(DEFAULT_CONTEXT_TOKENS, 128_000);
 const DEFAULT_MAX_TOKENS = 4096;
 // Azure OpenAI uses the Responses API which supports larger defaults
 const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;

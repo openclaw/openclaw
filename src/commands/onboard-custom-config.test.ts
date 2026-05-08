@@ -106,9 +106,9 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
 describe("applyCustomApiConfig", () => {
   it.each([
     {
-      name: "uses hard-min context window for newly added custom models",
+      name: "uses generous default context window for newly added custom models",
       existingContextWindow: undefined,
-      expectedContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      expectedContextWindow: 128_000,
     },
     {
       name: "upgrades existing custom model context window when below hard minimum",
