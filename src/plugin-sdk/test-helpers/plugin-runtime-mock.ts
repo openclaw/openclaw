@@ -358,9 +358,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         upsertSessionEntry: vi.fn(
           () => undefined,
         ) as unknown as PluginRuntime["agent"]["session"]["upsertSessionEntry"],
-        resolveSessionFilePath: vi.fn(
-          (sessionId: string) => `/tmp/${sessionId}.json`,
-        ) as unknown as PluginRuntime["agent"]["session"]["resolveSessionFilePath"],
       },
     },
     system: {
