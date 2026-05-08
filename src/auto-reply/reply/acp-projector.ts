@@ -416,10 +416,15 @@ export function createAcpReplyProjector(params: {
   const onEvent = async (event: AcpRuntimeEvent): Promise<void> => {
     params.onProgress?.();
     if (event.type === "text_delta") {
-      if (event.stream && event.stream !== "output") {
+      // Visibility is authoritative: check it first so the operator-tunable
+      // tagVisibility flag is never bypassed by a stream discriminator.
+      if (!isAcpTagVisible(settings, event.tag)) {
         return;
       }
-      if (!isAcpTagVisible(settings, event.tag)) {
+      // Only "output" and "thought" streams are routed to delivery. Any future
+      // unknown stream requires an explicit opt-in via a new stream case below
+      // rather than accidentally leaking through.
+      if (event.stream && event.stream !== "output" && event.stream !== "thought") {
         return;
       }
       let text = event.text;
