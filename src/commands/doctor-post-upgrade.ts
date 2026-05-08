@@ -36,7 +36,15 @@ export async function runPostUpgradeProbes(params: {
   for (const record of installs.plugins) {
     if (!record.enabled) continue;
     const pkgRelPath = record.packageJson?.path ?? "package.json";
-    const pkg = await readInstalledPackageJson(record.rootDir, pkgRelPath);
+    let pkg: { openclaw?: { extensions?: string[] } };
+    try {
+      pkg = await readInstalledPackageJson(record.rootDir, pkgRelPath);
+    } catch (err) {
+      process.stderr.write(
+        `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      continue;
+    }
     const entries = pkg.openclaw?.extensions ?? [];
     for (const entry of entries) {
       const absEntry = path.resolve(record.rootDir, entry);
