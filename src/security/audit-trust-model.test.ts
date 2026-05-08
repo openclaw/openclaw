@@ -13,7 +13,6 @@ function requireMultiUserHeuristicFinding(findings: ReturnType<typeof audit>) {
   const finding = findings.find(
     (entry) => entry.checkId === "security.trust_model.multi_user_heuristic",
   );
-  expect(finding).toBeDefined();
   if (!finding) {
     throw new Error("Expected multi-user heuristic finding");
   }
