@@ -211,7 +211,9 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   >;
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
   const filesAfterResetAttempt = await fs.readdir(dir);
-  expect(filesAfterResetAttempt.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(false);
+  expect(filesAfterResetAttempt).not.toContainEqual(
+    expect.stringMatching(/^sess-main\.jsonl\.reset\./),
+  );
 });
 
 test("sessions.reset emits before_reset for the entry actually reset in the writer slot", async () => {
