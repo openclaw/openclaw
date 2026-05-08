@@ -62,7 +62,10 @@ type TelegramReasoningSplit = {
   answerText?: string;
 };
 
-export function splitTelegramReasoningText(text?: string, isReasoning?: boolean): TelegramReasoningSplit {
+export function splitTelegramReasoningText(
+  text?: string,
+  isReasoning?: boolean,
+): TelegramReasoningSplit {
   if (typeof text !== "string") {
     return {};
   }

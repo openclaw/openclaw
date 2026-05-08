@@ -574,7 +574,10 @@ export const dispatchTelegramMessage = async ({
     segments: SplitLaneSegment[];
     suppressedReasoningOnly: boolean;
   };
-  const splitTextIntoLaneSegments = (text?: string, isReasoning?: boolean): SplitLaneSegmentsResult => {
+  const splitTextIntoLaneSegments = (
+    text?: string,
+    isReasoning?: boolean,
+  ): SplitLaneSegmentsResult => {
     const split = splitTelegramReasoningText(text, isReasoning);
     const segments: SplitLaneSegment[] = [];
     const suppressReasoning = resolvedReasoningLevel === "off";

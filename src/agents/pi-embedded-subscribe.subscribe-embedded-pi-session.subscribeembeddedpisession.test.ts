@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import * as agentEvents from "../infra/agent-events.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
@@ -11,7 +12,6 @@ import {
   findLifecycleErrorAgentEvent,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
-import * as agentEvents from "../infra/agent-events.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedPiSession", () => {

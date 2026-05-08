@@ -1725,8 +1725,8 @@ describe("processDiscordMessage draft streaming", () => {
         kind: "analysis",
         title: "Reasoning",
       });
-      await params?.replyOptions?.onReasoningStream?.({ text: "Reading " });
-      await params?.replyOptions?.onReasoningStream?.({ text: "the event projector" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Reading" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Reading the event projector" });
       return createNoQueuedDispatchResult();
     });
 
