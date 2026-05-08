@@ -38,6 +38,17 @@ const hoisted = vi.hoisted(() => ({
   })),
 }));
 
+function splitSetupEntriesForMock(raw: string): string[] {
+  const entries: string[] = [];
+  for (const entry of raw.split(",")) {
+    const normalized = entry.trim();
+    if (normalized.length > 0) {
+      entries.push(normalized);
+    }
+  }
+  return entries;
+}
+
 vi.mock("./login.js", () => ({
   loginWeb: hoisted.loginWeb,
 }));
@@ -70,11 +81,7 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
     },
     normalizeE164,
     pathExists: hoisted.pathExists,
-    splitSetupEntries: (raw: string) =>
-      raw
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean),
+    splitSetupEntries: splitSetupEntriesForMock,
     setSetupChannelEnabled: (cfg: OpenClawConfig, channel: string, enabled: boolean) => ({
       ...cfg,
       channels: {

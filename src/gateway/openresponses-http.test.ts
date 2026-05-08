@@ -1214,11 +1214,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "delayed hello",
     });
 
-    for (let i = 0; i < 20 && agentCommand.mock.calls.length === 0; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-
-    expect(agentCommand.mock.calls).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(agentCommand.mock.calls).toHaveLength(1);
+    });
     expect(openResponsesTesting.getResponseSessionIds()).toEqual([]);
 
     release?.({ payloads: [{ text: "hello" }] });
