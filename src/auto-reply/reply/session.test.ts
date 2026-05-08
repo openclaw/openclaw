@@ -2178,6 +2178,69 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("preserves usage family metadata across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-usage-family-");
+    const sessionKey = "agent:main:telegram:dm:user-usage-family";
+    const existingSessionId = "existing-session-usage-family";
+    const cases = [
+      {
+        name: "new preserves usage family metadata",
+        body: "/new",
+      },
+      {
+        name: "reset preserves usage family metadata",
+        body: "/reset",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: {
+          usageFamilyKey: "family:user-usage-family",
+          usageFamilySessionIds: ["ancestor-session", existingSessionId],
+        },
+      });
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-usage-family",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg: {
+          session: { store: storePath, idleMinutes: 999 },
+        } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry.usageFamilyKey, testCase.name).toBe("family:user-usage-family");
+      expect(result.sessionEntry.usageFamilySessionIds, testCase.name).toEqual([
+        "ancestor-session",
+        existingSessionId,
+        result.sessionId,
+      ]);
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].usageFamilyKey, testCase.name).toBe("family:user-usage-family");
+      expect(stored[sessionKey].usageFamilySessionIds, testCase.name).toEqual([
+        "ancestor-session",
+        existingSessionId,
+        result.sessionId,
+      ]);
+    }
+  });
+
   it("preserves selected auth profile overrides across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-model-auth-");
     const sessionKey = "agent:main:telegram:dm:user-model-auth";
