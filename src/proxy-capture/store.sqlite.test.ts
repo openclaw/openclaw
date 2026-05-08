@@ -32,6 +32,12 @@ function makeStore() {
   return new DebugProxyCaptureStore(path.join(root, "capture.sqlite"), path.join(root, "blobs"));
 }
 
+function readPragmaNumber(db: import("node:sqlite").DatabaseSync, pragma: string): number {
+  const row = db.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown> | undefined;
+  const value = row?.[pragma] ?? row?.timeout;
+  return typeof value === "bigint" ? Number(value) : Number(value);
+}
+
 describe("DebugProxyCaptureStore", () => {
   it("keeps the cached store open until the last lease releases", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-lease-"));
@@ -68,6 +74,14 @@ describe("DebugProxyCaptureStore", () => {
     expect(collectSqliteSchemaShape(store.db)).toEqual(
       createSqliteSchemaShapeFromSql(new URL("./schema.sql", import.meta.url)),
     );
+  });
+
+  it("uses the shared SQLite durability pragmas", () => {
+    const store = makeStore();
+
+    expect(readPragmaNumber(store.db, "busy_timeout")).toBe(30_000);
+    expect(readPragmaNumber(store.db, "foreign_keys")).toBe(1);
+    expect(readPragmaNumber(store.db, "synchronous")).toBe(1);
   });
 
   it("stores sessions, blobs, and duplicate-send query results", () => {

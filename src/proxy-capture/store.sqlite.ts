@@ -11,6 +11,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { decodeCaptureBlobText, encodeCaptureBlob } from "./blob-store.js";
 import type { DB as ProxyCaptureKyselyDatabase } from "./db.generated.js";
 import { PROXY_CAPTURE_SCHEMA_SQL } from "./schema.generated.js";
@@ -42,7 +43,9 @@ function openDatabase(dbPath: string): OpenedDatabase {
     databaseLabel: "proxy-capture",
     databasePath: dbPath,
   });
-  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA synchronous = NORMAL;");
+  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  db.exec("PRAGMA foreign_keys = ON;");
   db.exec(PROXY_CAPTURE_SCHEMA_SQL);
   return { db, walMaintenance };
 }

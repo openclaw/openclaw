@@ -32,6 +32,52 @@ export interface BackupRuns {
   status: string;
 }
 
+export interface CaptureBlobs {
+  blob_id: string;
+  content_type: string | null;
+  created_at: number;
+  data: Buffer;
+  encoding: string;
+  sha256: string;
+  size_bytes: number;
+}
+
+export interface CaptureEvents {
+  close_code: number | null;
+  content_type: string | null;
+  data_blob_id: string | null;
+  data_sha256: string | null;
+  data_text: string | null;
+  direction: string;
+  error_text: string | null;
+  flow_id: string;
+  headers_json: string | null;
+  host: string | null;
+  id: Generated<number>;
+  kind: string;
+  meta_json: string | null;
+  method: string | null;
+  path: string | null;
+  protocol: string;
+  session_id: string;
+  source_process: string;
+  source_scope: string;
+  status: number | null;
+  ts: number;
+}
+
+export interface CaptureSessions {
+  blob_dir: string;
+  db_path: string;
+  ended_at: number | null;
+  id: string;
+  mode: string;
+  proxy_url: string | null;
+  source_process: string;
+  source_scope: string;
+  started_at: number;
+}
+
 export interface Commitments {
   agent_id: string;
   channel: string;
@@ -213,6 +259,9 @@ export interface DB {
   agent_databases: AgentDatabases;
   agents: Agents;
   backup_runs: BackupRuns;
+  capture_blobs: CaptureBlobs;
+  capture_events: CaptureEvents;
+  capture_sessions: CaptureSessions;
   commitments: Commitments;
   cron_jobs: CronJobs;
   cron_run_logs: CronRunLogs;
