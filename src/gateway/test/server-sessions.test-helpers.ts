@@ -16,7 +16,7 @@ import {
   piSdkMock,
   rpcReq,
   testState,
-  writeSessionStore,
+  seedGatewaySessionEntries,
 } from "../test-helpers.js";
 
 let sessionManagerModulePromise:
@@ -245,17 +245,17 @@ export function setupGatewaySessionsTestHarness() {
   installGatewayTestHooks({ scope: "suite" });
 
   let harness: GatewayServerHarness;
-  let sharedSessionStoreDir: string;
-  let sessionStoreCaseSeq = 0;
+  let sharedSessionFixtureDir: string;
+  let sessionFixtureCaseSeq = 0;
 
   beforeAll(async () => {
     harness = await startGatewayServerHarness();
-    sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    sharedSessionFixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
   });
 
   afterAll(async () => {
     await harness.close();
-    await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+    await fs.rm(sharedSessionFixtureDir, { recursive: true, force: true });
   });
 
   beforeEach(async () => {
@@ -297,27 +297,26 @@ export function setupGatewaySessionsTestHarness() {
   const openClient = async (opts?: Parameters<typeof connectOk>[1]) =>
     await harness.openClient(opts);
 
-  async function createSessionStoreDir() {
-    const dir = path.join(sharedSessionStoreDir, `case-${sessionStoreCaseSeq++}`);
+  async function createSessionFixtureDir() {
+    const dir = path.join(sharedSessionFixtureDir, `case-${sessionFixtureCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-    return { dir, storePath };
+    return { dir };
   }
 
   async function seedActiveMainSession() {
-    const { dir, storePath } = await createSessionStoreDir();
+    const { dir } = await createSessionFixtureDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
-    await writeSessionStore({
+    await seedGatewaySessionEntries({
       entries: {
         main: sessionStoreEntry("sess-main"),
       },
     });
-    return { dir, storePath };
+    return { dir };
   }
 
   return {
-    createSessionStoreDir,
+    createSessionStoreDir: createSessionFixtureDir,
+    createSessionFixtureDir,
     getHarness: () => harness,
     openClient,
     seedActiveMainSession,
