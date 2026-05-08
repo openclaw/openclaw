@@ -381,7 +381,11 @@ describe('union segments — yaml', () => {
 
   it('hasWildcard detects unions (single-match guard rejects them)', () => {
     expect(hasWildcard(parseOcPath('oc://X/{a,b}'))).toBe(true);
-    expect(resolveOcPath(parseYaml('a: 1\nb: 2\n').ast, parseOcPath('oc://X/{a,b}'))).toBeNull();
+    // F16 — wildcard guard now throws OC_PATH_WILDCARD_IN_RESOLVE
+    // instead of returning silent null.
+    expect(() =>
+      resolveOcPath(parseYaml('a: 1\nb: 2\n').ast, parseOcPath('oc://X/{a,b}')),
+    ).toThrow(/findOcPaths/);
   });
 });
 
@@ -416,7 +420,11 @@ describe('value predicates — yaml', () => {
   });
 
   it('predicate rejects single-match verbs (treated as wildcard)', () => {
-    expect(resolveOcPath(yaml, parseOcPath('oc://wf/steps/[id=build]'))).toBeNull();
+    // F16 — wildcard guard throws on predicate too (predicate is a
+    // multi-match shape; resolveOcPath is single-match only).
+    expect(() =>
+      resolveOcPath(yaml, parseOcPath('oc://wf/steps/[id=build]')),
+    ).toThrow(/findOcPaths/);
   });
 });
 
@@ -635,12 +643,18 @@ describe('findOcPaths — Markdown kind', () => {
     expect(out[0].path.item).toBe('send-email');
   });
 
-  it('** at section slot matches blocks at every depth (F14 — cross-kind symmetry)', () => {
+  it('** at section slot matches items at every depth (F14 — cross-kind symmetry)', () => {
     // Without the retain-i branch on `**`, walkMd only descended one
     // level (i + 1, consumed `**`) — yaml/jsonc walkers also retain
-    // `**` to keep matching deeper. A lint rule like "find every
-    // `risk:` field across all sections" would silently get 0 md
-    // matches on a multi-block file that worked on yaml/jsonc.
+    // `**` to keep matching deeper. Lint rules expecting universal
+    // `**` behavior across kinds (sweep all sections for `risk:`)
+    // would silently get 0 md matches on a multi-block file.
+    //
+    // Pattern `**/send-email` — `**` matches the `tools` block, then
+    // `send-email` (kebab slug) matches the item under it. Without the
+    // retain-i branch, the walker descends with `**` consumed at the
+    // section layer and then can't satisfy the item slot since the
+    // walker is now inside the wrong block looking for an item slug.
     const multiBlock = parseMd(
       '## Boundaries\n\n' +
         '- never: rm -rf\n\n' +
@@ -648,9 +662,9 @@ describe('findOcPaths — Markdown kind', () => {
         '- send_email: enabled\n' +
         '- search: enabled\n',
     ).ast;
-    const out = findOcPaths(multiBlock, parseOcPath('oc://SOUL.md/**/send_email'));
-    // The `send_email` item is under the `tools` block; `**` must
-    // expand to that section before consuming the trailing field.
+    const out = findOcPaths(multiBlock, parseOcPath('oc://SOUL.md/**/send-email'));
+    // The `send-email` item is under the `tools` block. Pin that we
+    // get at least one match (the substrate's md `**` should reach it).
     expect(out.length).toBeGreaterThanOrEqual(1);
     const items = out.map((m) => m.path.item).filter((v): v is string => v !== undefined);
     expect(items).toContain('send-email');
