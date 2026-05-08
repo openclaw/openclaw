@@ -134,21 +134,32 @@ export class DiscordVoiceManager {
     }
     this.autoJoinTask = (async () => {
       const entries = this.params.discordConfig.voice?.autoJoin ?? [];
-      logVoiceVerbose(`autoJoin: ${entries.length} entries`);
-      const seenGuilds = new Set<string>();
+      const entriesByGuild = new Map<string, { guildId: string; channelId: string }>();
+      const duplicateGuilds = new Set<string>();
       for (const entry of entries) {
         const guildId = entry.guildId.trim();
-        if (!guildId) {
+        const channelId = entry.channelId.trim();
+        if (!guildId || !channelId) {
           continue;
         }
-        if (seenGuilds.has(guildId)) {
+        if (entriesByGuild.has(guildId)) {
+          duplicateGuilds.add(guildId);
+        }
+        entriesByGuild.set(guildId, { guildId, channelId });
+      }
+
+      logVoiceVerbose(`autoJoin: ${entries.length} entries, ${entriesByGuild.size} guilds`);
+      for (const guildId of duplicateGuilds) {
+        const selected = entriesByGuild.get(guildId);
+        if (selected) {
           logger.warn(
-            `discord voice: autoJoin has multiple entries for guild ${guildId}; skipping`,
+            `discord voice: autoJoin has multiple entries for guild ${guildId}; using channel ${selected.channelId}`,
           );
-          continue;
         }
-        seenGuilds.add(guildId);
-        logVoiceVerbose(`autoJoin: joining guild ${guildId} channel ${entry.channelId}`);
+      }
+
+      for (const entry of entriesByGuild.values()) {
+        logVoiceVerbose(`autoJoin: joining guild ${entry.guildId} channel ${entry.channelId}`);
         await this.join({
           guildId: entry.guildId,
           channelId: entry.channelId,
@@ -462,13 +473,17 @@ export class DiscordVoiceManager {
   }
 
   private scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, reason: string) {
+    const graceMs = resolveVoiceTimeoutMs(
+      this.params.discordConfig.voice?.captureSilenceGraceMs,
+      CAPTURE_FINALIZE_GRACE_MS,
+    );
     scheduleVoiceCaptureFinalize({
       state: entry.capture,
       userId,
-      delayMs: CAPTURE_FINALIZE_GRACE_MS,
+      delayMs: graceMs,
       onFinalize: () => {
         logVoiceVerbose(
-          `capture finalize: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${CAPTURE_FINALIZE_GRACE_MS}ms`,
+          `capture finalize: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${graceMs}ms`,
         );
       },
     });
@@ -496,15 +511,17 @@ export class DiscordVoiceManager {
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
+    if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing) {
+      logVoiceVerbose(
+        `capture ignored during playback: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+      return;
+    }
     this.enableDaveReceivePassthrough(
       entry,
       `speaker ${userId} start`,
       DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
     );
-    if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing) {
-      entry.player.stop(true);
-    }
-
     const stream = entry.connection.receiver.subscribe(userId, {
       end: {
         behavior: voiceSdk.EndBehaviorType.Manual,
@@ -575,6 +592,10 @@ export class DiscordVoiceManager {
 
   private handleReceiveError(entry: VoiceSessionEntry, err: unknown) {
     const analysis = analyzeVoiceReceiveError(err);
+    if (analysis.isAbortLike && !analysis.countsAsDecryptFailure) {
+      logVoiceVerbose(`receive stream ended: ${analysis.message}`);
+      return;
+    }
     logger.warn(`discord voice: receive error: ${analysis.message}`);
     if (analysis.shouldAttemptPassthrough) {
       this.enableDaveReceivePassthrough(

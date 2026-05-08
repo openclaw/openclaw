@@ -81,7 +81,6 @@
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
-    "canvas",
     "nodes",
     "cron",
     "message",
@@ -214,8 +213,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 158
   },
   "dynamicToolsJson": {
-    "chars": 50870,
-    "roughTokens": 12718
+    "chars": 49958,
+    "roughTokens": 12490
   },
   "openClawDeveloperInstructions": {
     "chars": 6023,
@@ -226,8 +225,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7294
   },
   "totalWithDynamicToolsJson": {
-    "chars": 80047,
-    "roughTokens": 20012
+    "chars": 79135,
+    "roughTokens": 19784
   },
   "userInputText": {
     "chars": 870,
@@ -575,7 +574,6 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
 
 ```json
 [
-  "canvas",
   "nodes",
   "cron",
   "message",

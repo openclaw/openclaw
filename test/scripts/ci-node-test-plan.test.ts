@@ -189,20 +189,15 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-media-ui",
       },
       {
-        configs: ["test/vitest/vitest.cron.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-4vcpu-ubuntu-2404",
-        shardName: "core-runtime-cron",
-      },
-      {
         configs: [
           "test/vitest/vitest.acp.config.ts",
+          "test/vitest/vitest.cron.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,
-        runner: "blacksmith-4vcpu-ubuntu-2404",
+        runner: undefined,
         shardName: "core-runtime-shared",
       },
     ]);
@@ -356,11 +351,16 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
   it("keeps expensive plugin shards release-only when normal CI asks for the cheaper plan", () => {
     const shards = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const shardNames = shards.map((shard) => shard.shardName);
 
-    expect(shards.some((shard) => shard.shardName === "agentic-plugins")).toBe(false);
-    expect(shards.some((shard) => shard.shardName === "agentic-gateway-core")).toBe(true);
-    expect(shards.some((shard) => shard.shardName === "agentic-gateway-methods")).toBe(true);
-    expect(shards.some((shard) => shard.shardName === "agentic-plugin-sdk")).toBe(true);
+    expect(shardNames).not.toContain("agentic-plugins");
+    expect(shardNames).toEqual(
+      expect.arrayContaining([
+        "agentic-gateway-core",
+        "agentic-gateway-methods",
+        "agentic-plugin-sdk",
+      ]),
+    );
   });
 
   it("splits auto-reply into balanced core/top-level and reply subtree shards", () => {

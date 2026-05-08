@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
   active: boolean;
@@ -97,6 +97,18 @@ import {
   clearFeishuStreamingStartBackoffForTests,
   createFeishuReplyDispatcher,
 } from "./reply-dispatcher.js";
+
+afterAll(() => {
+  vi.doUnmock("./accounts.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./media.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./targets.js");
+  vi.doUnmock("./typing.js");
+  vi.doUnmock("./streaming-card.js");
+  vi.resetModules();
+});
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
@@ -286,7 +298,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("disables block streaming by default to prevent silent reply drops", async () => {
+  it("disables block streaming by default to prevent silent reply drops", () => {
     const result = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
@@ -322,7 +334,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("keeps core block streaming disabled when Feishu blockStreaming is explicitly false", async () => {
+  it("keeps core block streaming disabled when Feishu blockStreaming is explicitly false", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -898,7 +910,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(reasoningUpdate).not.toMatch(/> _.*_/);
 
     const combinedUpdate = updateCalls.find((c) => c.includes("Thinking") && c.includes("---"));
-    expect(combinedUpdate).toBeDefined();
+    if (!combinedUpdate) {
+      throw new Error("expected combined reasoning and final-answer streaming update");
+    }
 
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;

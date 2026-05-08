@@ -3,7 +3,7 @@ import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   googlechatDirectoryAdapter,
@@ -171,6 +171,12 @@ afterEach(() => {
   resolveGoogleChatAccountMock.mockImplementation(resolveGoogleChatAccountImpl);
   mockGoogleChatOutboundSpaceResolution();
   mockGoogleChatMediaLoaders();
+});
+
+afterAll(() => {
+  vi.doUnmock("./channel.runtime.js");
+  vi.doUnmock("./channel.deps.runtime.js");
+  vi.resetModules();
 });
 
 function createGoogleChatCfg(): OpenClawConfig {
@@ -449,7 +455,9 @@ describe("googlechatPlugin outbound resolveTarget", () => {
     if (result.ok) {
       throw new Error("Expected invalid target to fail");
     }
-    expect(result.error).toBeDefined();
+    expect(result.error.message).toBe(
+      "Google Chat target is required (<spaces/{space}|users/{user}>)",
+    );
   });
 
   it("errors when no target is provided", () => {
@@ -461,7 +469,9 @@ describe("googlechatPlugin outbound resolveTarget", () => {
     if (result.ok) {
       throw new Error("Expected missing target to fail");
     }
-    expect(result.error).toBeDefined();
+    expect(result.error.message).toBe(
+      "Google Chat target is required (<spaces/{space}|users/{user}>)",
+    );
   });
 });
 

@@ -403,9 +403,10 @@ describe("launchd bootstrap repair", () => {
     expect(state.launchctlCalls.some((call) => call[0] === "kickstart")).toBe(false);
   });
 
-  it("treats bootstrap exit 130 as success and nudges the already-loaded service", async () => {
+  it("treats bootstrap exit 130 as success and nudges the already-loaded service when stopped", async () => {
     state.bootstrapError = "Service already loaded";
     state.bootstrapCode = 130;
+    state.serviceRunning = false;
     const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
@@ -417,9 +418,21 @@ describe("launchd bootstrap repair", () => {
     ]);
   });
 
-  it("treats 'already exists in domain' bootstrap failures as success and nudges the service", async () => {
+  it("skips kickstart when already-loaded service is actively running", async () => {
+    state.bootstrapError = "Service already loaded";
+    state.bootstrapCode = 130;
+    const env = createDefaultLaunchdEnv();
+
+    const repair = await repairLaunchAgentBootstrap({ env });
+
+    expect(repair).toEqual({ ok: true, status: "already-loaded" });
+    expect(state.launchctlCalls.some((call) => call[0] === "kickstart")).toBe(false);
+  });
+
+  it("treats 'already exists in domain' bootstrap failures as success and nudges the service when stopped", async () => {
     state.bootstrapError =
       "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+    state.serviceRunning = false;
     const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
@@ -448,6 +461,7 @@ describe("launchd bootstrap repair", () => {
   it("returns a typed kickstart failure when already-loaded recovery cannot nudge the service", async () => {
     state.bootstrapError = "Service already loaded";
     state.bootstrapCode = 130;
+    state.serviceRunning = false;
     state.kickstartError = "launchctl kickstart failed: permission denied";
     state.kickstartFailuresRemaining = 1;
     const env = createDefaultLaunchdEnv();
@@ -610,7 +624,7 @@ describe("launchd install", () => {
     expect(state.fileModes.get(plistPath)).toBe(0o600);
   });
 
-  it("stops LaunchAgent by disabling relaunch before stopping the process", async () => {
+  it("stops LaunchAgent via bootout by default, preserving KeepAlive for future crashes", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
     let output = "";
@@ -622,13 +636,31 @@ describe("launchd install", () => {
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toContainEqual(["bootout", serviceId]);
+    expect(state.launchctlCalls.some((call) => call[0] === "disable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "stop")).toBe(false);
+    expect(output).toContain("Stopped LaunchAgent");
+  });
+
+  it("stops LaunchAgent with disable+stop when --disable is passed", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout, disable: true });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
     expect(state.launchctlCalls).toContainEqual(["disable", serviceId]);
     expect(state.launchctlCalls).toContainEqual(["stop", "ai.openclaw.gateway"]);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
     expect(output).toContain("Stopped LaunchAgent");
   });
 
-  it("treats already-unloaded services as successfully stopped without bootout fallback", async () => {
+  it("treats already-unloaded services as successfully stopped without bootout fallback (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
     let output = "";
@@ -640,7 +672,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await stopLaunchAgent({ env, stdout, disable: true });
 
     expect(state.launchctlCalls).toContainEqual([
       "disable",
@@ -651,7 +683,24 @@ describe("launchd install", () => {
     expect(output).not.toContain("degraded");
   });
 
-  it("falls back to bootout when disable fails so stop remains authoritative", async () => {
+  it("treats already-unloaded services as successfully stopped in default bootout path", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout });
+
+    expect(state.launchctlCalls.some((call) => call[0] === "disable")).toBe(false);
+    expect(output).toContain("Stopped LaunchAgent");
+    expect(output).not.toContain("degraded");
+  });
+
+  it("falls back to bootout when disable fails so stop remains authoritative (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
     let output = "";
@@ -660,7 +709,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await stopLaunchAgent({ env, stdout, disable: true });
 
     expect(state.launchctlCalls.some((call) => call[0] === "stop")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
@@ -668,7 +717,7 @@ describe("launchd install", () => {
     expect(output).toContain("used bootout fallback");
   });
 
-  it("falls back to bootout when stop does not fully stop the service", async () => {
+  it("falls back to bootout when stop does not fully stop the service (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
     let output = "";
@@ -677,7 +726,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await runStopLaunchAgentWithFakeTimers({ env, stdout });
+    await runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true });
 
     expect(state.launchctlCalls.some((call) => call[0] === "stop")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
@@ -685,7 +734,7 @@ describe("launchd install", () => {
     expect(output).toContain("did not fully stop the service");
   });
 
-  it("treats launchctl print state=running as running even when pid is missing", async () => {
+  it("treats launchctl print state=running as running even when pid is missing (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
     let output = "";
@@ -695,14 +744,14 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await runStopLaunchAgentWithFakeTimers({ env, stdout });
+    await runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true });
 
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
     expect(output).toContain("Stopped LaunchAgent (degraded)");
     expect(output).toContain("did not fully stop the service");
   });
 
-  it("falls back to bootout when launchctl stop itself errors", async () => {
+  it("falls back to bootout when launchctl stop itself errors (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
     let output = "";
@@ -711,14 +760,14 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await stopLaunchAgent({ env, stdout, disable: true });
 
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
     expect(output).toContain("Stopped LaunchAgent (degraded)");
     expect(output).toContain("launchctl stop failed; used bootout fallback");
   });
 
-  it("falls back to bootout when launchctl print cannot confirm the stop state", async () => {
+  it("falls back to bootout when launchctl print cannot confirm the stop state (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
     let output = "";
@@ -728,27 +777,39 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await runStopLaunchAgentWithFakeTimers({ env, stdout });
+    await runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true });
 
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
     expect(output).toContain("Stopped LaunchAgent (degraded)");
     expect(output).toContain("could not confirm stop");
   });
 
-  it("throws when launchctl print cannot confirm stop and bootout also fails", async () => {
+  it("throws when launchctl print cannot confirm stop and bootout also fails (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     state.printError = "launchctl print permission denied";
     state.printFailuresRemaining = 10;
     state.bootoutError = "launchctl bootout permission denied";
 
     await expect(
-      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() }),
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough(), disable: true }),
     ).rejects.toThrow(
       "launchctl print could not confirm stop; used bootout fallback and left service unloaded: launchctl print permission denied; launchctl bootout failed: launchctl bootout permission denied",
     );
   });
 
-  it("sanitizes launchctl details before writing warnings", async () => {
+  it("throws when default bootout fails", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootoutError = "launchctl bootout permission denied";
+    state.bootoutCode = 1;
+
+    await expect(stopLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+      "launchctl bootout failed: launchctl bootout permission denied",
+    );
+    expect(state.launchctlCalls.some((call) => call[0] === "disable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "stop")).toBe(false);
+  });
+
+  it("sanitizes launchctl details before writing warnings (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
     let output = "";
@@ -757,7 +818,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await stopLaunchAgent({ env, stdout, disable: true });
 
     expect(output).not.toContain("\u001b[31m");
     expect(output).not.toContain("\nred\n");

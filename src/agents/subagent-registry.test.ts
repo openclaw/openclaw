@@ -493,7 +493,7 @@ describe("subagent registry seam flow", () => {
       mod
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-delete-give-up"),
-    ).toBeDefined();
+    ).toMatchObject({ runId: "run-delete-give-up", cleanup: "delete" });
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
@@ -893,14 +893,6 @@ describe("subagent registry seam flow", () => {
 
   it("passes stored agentDir through swept context-engine cleanup paths", async () => {
     const now = Date.parse("2026-03-24T12:00:00Z");
-    // Session-mode reaping now honors agents.defaults.subagents.archiveAfterMinutes
-    // (same knob run-mode uses for archiveAtMs). The default-config mock above sets
-    // archiveAfterMinutes: 0, which disables session-mode reaping; opt this test
-    // into a real retention window so the swept-cleanup path still fires.
-    mocks.getRuntimeConfig.mockReturnValueOnce({
-      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
-      session: { mainKey: "main", scope: "per-sender" as const },
-    });
     mod.addSubagentRunForTests({
       runId: "run-session-swept-context-engine",
       childSessionKey: "agent:alt:session:child-session",

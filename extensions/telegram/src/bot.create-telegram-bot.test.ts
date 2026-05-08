@@ -153,12 +153,23 @@ async function flushTelegramTestMicrotasks() {
   await Promise.resolve();
 }
 
+function requireValue<T>(value: T | null | undefined, label: string): T {
+  if (value == null) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
   });
   afterAll(() => {
-    process.env.TZ = ORIGINAL_TZ;
+    if (ORIGINAL_TZ === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = ORIGINAL_TZ;
+    }
   });
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
@@ -351,13 +362,10 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const sequentializer = sequentializeSpy.mock.results[0]?.value as
-      | TelegramMiddleware
-      | undefined;
-    expect(sequentializer).toBeDefined();
-    if (!sequentializer) {
-      return;
-    }
+    const sequentializer = requireValue(
+      sequentializeSpy.mock.results[0]?.value as TelegramMiddleware | undefined,
+      "telegram sequentializer",
+    );
 
     const busyMessage = makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }).message;
     const statusMessage = makeForumGroupMessageCtx({ threadId: 99, text: "/status" }).message;
@@ -630,10 +638,12 @@ describe("createTelegramBot", () => {
 
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-    expect(callbackHandler).toBeDefined();
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
 
     await callbackHandler({
       callbackQuery: {
@@ -1581,20 +1591,18 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     },
     {
-      name: "allows group messages from senders in accessGroup allowFrom when groupPolicy is 'allowlist'",
+      name: "allows group messages from sender access groups in groupAllowFrom",
       config: {
         accessGroups: {
-          owners: {
+          operators: {
             type: "message.senders",
-            members: {
-              telegram: ["123456789"],
-            },
+            members: { telegram: ["123456789"] },
           },
         },
         channels: {
           telegram: {
             groupPolicy: "allowlist",
-            allowFrom: ["accessGroup:owners"],
+            groupAllowFrom: ["accessGroup:operators"],
             groups: { "*": { requireMention: false } },
           },
         },
@@ -1608,31 +1616,58 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     },
     {
-      name: "blocks group messages from senders outside accessGroup allowFrom when groupPolicy is 'allowlist'",
+      name: "blocks explicitly configured group when groupAllowFrom access group does not match sender",
       config: {
         accessGroups: {
-          owners: {
+          operators: {
             type: "message.senders",
-            members: {
-              telegram: ["123456789"],
-            },
+            members: { telegram: ["111111111"] },
           },
         },
         channels: {
           telegram: {
             groupPolicy: "allowlist",
-            allowFrom: ["accessGroup:owners"],
-            groups: { "*": { requireMention: false } },
+            groupAllowFrom: ["accessGroup:operators"],
+            groups: { "-100123456789": { requireMention: false } },
           },
         },
       },
       message: {
         chat: { id: -100123456789, type: "group", title: "Test Group" },
-        from: { id: 999999, username: "notallowed" },
+        from: { id: 123456789, username: "testuser" },
         text: "hello",
         date: 1736380800,
       },
       expectedReplyCount: 0,
+    },
+    {
+      name: "allows group messages from sender access groups in per-group allowFrom",
+      config: {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { telegram: ["123456789"] },
+          },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: {
+              "-100123456789": {
+                allowFrom: ["accessGroup:operators"],
+                requireMention: false,
+              },
+            },
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
     },
     {
       name: "blocks group messages when allowFrom is configured with @username entries (numeric IDs required)",
@@ -2538,11 +2573,7 @@ describe("createTelegramBot", () => {
       const handler = getMessageHandler();
       await handler(makeForumGroupMessageCtx({ threadId: testCase.threadId }));
 
-      const payload = dispatchCall?.ctx;
-      expect(payload).toBeDefined();
-      if (!payload) {
-        continue;
-      }
+      const payload = requireValue(dispatchCall?.ctx, "forum dispatch context");
       if (testCase.assertTopicMetadata) {
         expect(payload.SessionKey).toContain("telegram:group:-1001234567890:topic:99");
         expect(payload.From).toBe("telegram:group:-1001234567890:topic:99");
@@ -2687,16 +2718,23 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     },
     {
-      name: "matches direct message allowFrom against sender user id when chat id differs",
+      name: "allows direct messages from sender access groups in allowFrom",
       config: {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { telegram: ["123456789"] },
+          },
+        },
         channels: {
           telegram: {
-            allowFrom: ["123456789"],
+            dmPolicy: "allowlist",
+            allowFrom: ["accessGroup:operators"],
           },
         },
       },
       message: {
-        chat: { id: 777777777, type: "private" },
+        chat: { id: 123456789, type: "private" },
         from: { id: 123456789, username: "testuser" },
         text: "hello",
         date: 1736380800,
@@ -2704,19 +2742,11 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     },
     {
-      name: "allows direct messages with accessGroup allowFrom entries",
+      name: "matches direct message allowFrom against sender user id when chat id differs",
       config: {
-        accessGroups: {
-          owners: {
-            type: "message.senders",
-            members: {
-              telegram: ["123456789"],
-            },
-          },
-        },
         channels: {
           telegram: {
-            allowFrom: ["accessGroup:owners"],
+            allowFrom: ["123456789"],
           },
         },
       },
@@ -3011,11 +3041,7 @@ describe("createTelegramBot", () => {
 
     await handler(makeForumGroupMessageCtx({ threadId: 99 }));
 
-    const payload = dispatchCall?.ctx;
-    expect(payload).toBeDefined();
-    if (!payload) {
-      return;
-    }
+    const payload = requireValue(dispatchCall?.ctx, "topic dispatch context");
     expect(payload.GroupSystemPrompt).toBe("Group prompt\n\nTopic prompt");
     expect(dispatchCall?.replyOptions?.skillFilter).toEqual([]);
   });
