@@ -111,8 +111,8 @@ vi.mock("./subagent-depth.js", () => ({
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromDisk: registryStoreMocks.loadRegistryMock,
-  saveSubagentRegistryToDisk: registryStoreMocks.saveRegistryMock,
+  loadSubagentRegistryFromState: registryStoreMocks.loadRegistryMock,
+  saveSubagentRegistryToState: registryStoreMocks.saveRegistryMock,
 }));
 
 describe("subagent registry lifecycle error grace", () => {

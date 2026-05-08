@@ -19,8 +19,8 @@ const mocks = vi.hoisted(() => ({
   onAgentEvent: vi.fn(),
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue(false),
   captureSubagentCompletionReply: vi.fn(),
-  loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
-  saveSubagentRegistryToDisk: vi.fn(),
+  loadSubagentRegistryFromState: vi.fn(() => new Map()),
+  saveSubagentRegistryToState: vi.fn(),
   resetAnnounceQueuesForTests: vi.fn(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
   scheduleOrphanRecovery: vi.fn(),
@@ -59,8 +59,8 @@ vi.mock("../infra/agent-events.js", () => ({
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromDisk: mocks.loadSubagentRegistryFromDisk,
-  saveSubagentRegistryToDisk: mocks.saveSubagentRegistryToDisk,
+  loadSubagentRegistryFromState: mocks.loadSubagentRegistryFromState,
+  saveSubagentRegistryToState: mocks.saveSubagentRegistryToState,
 }));
 
 vi.mock("./subagent-announce-queue.js", () => ({
@@ -96,8 +96,8 @@ describe("announce loop guard (#18264)", () => {
     mocks.callGateway.mockClear();
     mocks.captureSubagentCompletionReply.mockClear();
     mocks.getRuntimeConfig.mockClear();
-    mocks.loadSubagentRegistryFromDisk.mockReset();
-    mocks.loadSubagentRegistryFromDisk.mockReturnValue(new Map());
+    mocks.loadSubagentRegistryFromState.mockReset();
+    mocks.loadSubagentRegistryFromState.mockReturnValue(new Map());
     mocks.onAgentEventStop.mockClear();
     mocks.onAgentEvent.mockReset();
     mocks.onAgentEvent.mockReturnValue(mocks.onAgentEventStop);
@@ -106,7 +106,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     mocks.scheduleOrphanRecovery.mockClear();
-    mocks.saveSubagentRegistryToDisk.mockClear();
+    mocks.saveSubagentRegistryToState.mockClear();
     registry.resetSubagentRegistryForTests({ persist: false });
     registry.__testing.setDepsForTest({
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
@@ -188,7 +188,7 @@ describe("announce loop guard (#18264)", () => {
     registry.resetSubagentRegistryForTests();
 
     const entry = createEntry(Date.now());
-    mocks.loadSubagentRegistryFromDisk.mockReturnValue(new Map([[entry.runId, entry]]));
+    mocks.loadSubagentRegistryFromState.mockReturnValue(new Map([[entry.runId, entry]]));
 
     // Initialization attempts resume once, then gives up for exhausted entries.
     const beforeInit = Date.now();
@@ -207,7 +207,7 @@ describe("announce loop guard (#18264)", () => {
 
     const now = Date.now();
     const runId = "test-expired-completion-message";
-    mocks.loadSubagentRegistryFromDisk.mockReturnValue(
+    mocks.loadSubagentRegistryFromState.mockReturnValue(
       new Map([
         [
           runId,
@@ -242,7 +242,7 @@ describe("announce loop guard (#18264)", () => {
 
     const now = Date.now();
     const runId = "test-announce-rejection";
-    mocks.loadSubagentRegistryFromDisk.mockReturnValue(
+    mocks.loadSubagentRegistryFromState.mockReturnValue(
       new Map([
         [
           runId,
