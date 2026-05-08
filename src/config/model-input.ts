@@ -1,6 +1,8 @@
-import { modelKey, normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "../shared/string-coerce.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
@@ -10,6 +12,35 @@ type AgentModelListLike = {
 };
 
 const GOOGLE_CONFIG_MODEL_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
+const GOOGLE_CONFIG_MODEL_ALIASES = new Map([
+  ["gemini-3-pro", "gemini-3.1-pro-preview"],
+  ["gemini-3-pro-preview", "gemini-3.1-pro-preview"],
+  ["gemini-3.1-pro", "gemini-3.1-pro-preview"],
+  ["gemini-3-flash", "gemini-3-flash-preview"],
+  ["gemini-3.1-flash", "gemini-3-flash-preview"],
+  ["gemini-3.1-flash-preview", "gemini-3-flash-preview"],
+  ["gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview"],
+]);
+
+function modelKeyForConfig(provider: string, model: string): string {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
+function normalizeGoogleConfigModelId(model: string): string {
+  return GOOGLE_CONFIG_MODEL_ALIASES.get(normalizeLowercaseStringOrEmpty(model)) ?? model;
+}
 
 export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string | undefined {
   return resolvePrimaryStringValue(model);
@@ -51,11 +82,11 @@ export function normalizeAgentModelRefForConfig(model: string): string {
     return trimmed;
   }
 
-  const provider = normalizeProviderId(trimmed.slice(0, slash));
+  const provider = normalizeLowercaseStringOrEmpty(trimmed.slice(0, slash));
   if (!GOOGLE_CONFIG_MODEL_PROVIDERS.has(provider)) {
     return trimmed;
   }
 
-  const normalizedModel = normalizeStaticProviderModelId(provider, trimmed.slice(slash + 1));
-  return modelKey(provider, normalizedModel);
+  const normalizedModel = normalizeGoogleConfigModelId(trimmed.slice(slash + 1));
+  return modelKeyForConfig(provider, normalizedModel);
 }
