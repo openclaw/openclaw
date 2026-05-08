@@ -408,8 +408,8 @@ describe("tryDispatchAcpReply", () => {
       shouldRouteToOriginating: true,
     });
 
-    expect(result?.counts.block).toBe(0);
-    expect(result?.counts.final).toBe(1);
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
     expect(routeMocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "telegram",
@@ -1194,18 +1194,18 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("does not add a fallback when routed ACP text was already delivered as final", async () => {
+  it("does not add a fallback when routed ACP text was already delivered as a block", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
     const { result } = await runRoutedAcpTextTurn("CODEX_OK");
 
-    expect(result?.counts.block).toBe(0);
-    expect(result?.counts.final).toBe(1);
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
   });
 
-  it("routes default ACP text as one final reply to Discord", async () => {
+  it("routes default ACP text as one block reply to Discord", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1223,8 +1223,8 @@ describe("tryDispatchAcpReply", () => {
       originatingTo: "channel:1478836151241412759",
     });
 
-    expect(result?.counts.block).toBe(0);
-    expect(result?.counts.final).toBe(1);
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
     expect(routeMocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1235,7 +1235,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("routes default ACP text as one final reply to Slack", async () => {
+  it("routes default ACP text as one block reply to Slack", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1253,8 +1253,8 @@ describe("tryDispatchAcpReply", () => {
       originatingTo: "channel:C123",
     });
 
-    expect(result?.counts.block).toBe(0);
-    expect(result?.counts.final).toBe(1);
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
     expect(routeMocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1265,7 +1265,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("delivers default Telegram ACP text directly as a final reply", async () => {
+  it("delivers default Telegram ACP text directly as a block reply", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
@@ -1286,13 +1286,13 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.block).toBe(0);
     expect(counts.final).toBe(0);
     expect(result?.queuedFinal).toBe(true);
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "CODEX_OK" }),
     );
   });
 
-  it("delivers default Discord ACP text directly as a final reply", async () => {
+  it("delivers default Discord ACP text directly as a block reply", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1316,13 +1316,13 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.block).toBe(0);
     expect(counts.final).toBe(0);
     expect(result?.queuedFinal).toBe(true);
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Received." }),
     );
   });
 
-  it("delivers default Slack ACP text directly as a final reply", async () => {
+  it("delivers default Slack ACP text directly as a block reply", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1346,13 +1346,13 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.block).toBe(0);
     expect(counts.final).toBe(0);
     expect(result?.queuedFinal).toBe(true);
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Slack says hi." }),
     );
   });
 
-  it("treats Telegram ACP final delivery as a successful final response", async () => {
+  it("treats Telegram ACP block delivery as a successful final response", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
@@ -1369,13 +1369,13 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(result?.queuedFinal).toBe(true);
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "CODEX_OK" }),
     );
   });
 
-  it("delivers default ACP text as final for channels without a visibility override", async () => {
+  it("delivers default ACP text as block then final for channels without a visibility override", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
@@ -1396,7 +1396,12 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.block).toBe(0);
     expect(counts.final).toBe(0);
     expect(result?.queuedFinal).toBe(true);
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    // Block delivery fires for the accumulated text in final_only mode.
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "CODEX_OK" }),
+    );
+    // Fallback final delivery fires because block delivery is not treated as
+    // visible on channels without a plugin visibility override (e.g. whatsapp).
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "CODEX_OK" }),
     );
@@ -1504,7 +1509,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("does not add a second routed payload when routed final text was already visible", async () => {
+  it("does not add a second routed payload when routed block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "Task completed" }, {
@@ -1513,21 +1518,21 @@ describe("tryDispatchAcpReply", () => {
     } as MockTtsReply);
     const { result } = await runRoutedAcpTextTurn("Task completed");
 
-    expect(result?.counts.block).toBe(0);
-    expect(result?.counts.final).toBe(1);
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
     expectRoutedPayload(1, {
       text: "Task completed",
     });
   });
 
-  it("skips fallback when TTS mode is all and final delivery already succeeded", async () => {
+  it("skips fallback when TTS mode is all and block delivery already succeeded", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "all" });
     const { result } = await runRoutedAcpTextTurn("Response");
 
-    expect(result?.counts.block).toBe(0);
-    expect(result?.counts.final).toBe(1);
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
   });
 

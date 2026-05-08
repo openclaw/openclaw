@@ -25,6 +25,7 @@ const channelPluginRuntimeLoader = createLazyImportLoader(
 const messageActionRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/message-action-runner.js"),
 );
+const bindAwareDispatchLoader = createLazyImportLoader(() => import("./bind-aware-dispatch.js"));
 
 function loadRouteReplyRuntime() {
   return routeReplyRuntimeLoader.load();
@@ -40,6 +41,10 @@ function loadChannelPluginRuntime() {
 
 function loadMessageActionRuntime() {
   return messageActionRuntimeLoader.load();
+}
+
+function loadBindAwareDispatch() {
+  return bindAwareDispatchLoader.load();
 }
 
 export type AcpDispatchDeliveryMeta = {
@@ -430,12 +435,34 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       text: ttsPayload.text,
       routed: false,
     });
-    const delivered =
+    let delivered =
       kind === "tool"
         ? params.dispatcher.sendToolResult(ttsPayload)
         : kind === "block"
           ? params.dispatcher.sendBlockReply(ttsPayload)
           : params.dispatcher.sendFinalReply(ttsPayload);
+
+    // Bind-aware fallback: when the parent dispatcher is torn down (returns
+    // false), route the payload to any active bound conversations via
+    // routeReply. This handles the spawn-child case where the parent's run
+    // ends while the child is still emitting events (catalog #1 / #15).
+    if (!delivered && deliverySessionKey) {
+      try {
+        const { deliverViaSessionBindings } = await loadBindAwareDispatch();
+        const bindDelivered = await deliverViaSessionBindings({
+          sessionKey: deliverySessionKey,
+          kind,
+          payload: ttsPayload,
+          cfg: params.cfg,
+        });
+        if (bindDelivered) {
+          delivered = true;
+        }
+      } catch (err) {
+        logVerbose(`dispatch-acp-delivery: bind-aware fallback failed: ${formatErrorMessage(err)}`);
+      }
+    }
+
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;
     }

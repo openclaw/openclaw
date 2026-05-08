@@ -297,7 +297,10 @@ export function createAcpReplyProjector(params: {
       if (force && finalOnlyOutputText.trim().length > 0) {
         const text = finalOnlyOutputText;
         finalOnlyOutputText = "";
-        await params.deliver("final", { text });
+        // Deliver accumulated output as a block (not final) so it flows
+        // through the block accumulation path in the delivery coordinator
+        // and inherits the bind-aware fallback when needed.
+        await params.deliver("block", { text });
       }
     } else {
       drainChunker(force);
