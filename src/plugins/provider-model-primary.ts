@@ -53,7 +53,9 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
   const existingModels = defaults?.models;
   const fallbacks =
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
+      ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>
+          normalizeAgentModelRefForConfig(fallback),
+        )
       : undefined;
   return {
     ...cfg,

@@ -140,8 +140,8 @@ describe("resolveMatrixTargets (users)", () => {
       kind: "group",
     });
 
-    expect(userResults.every((entry) => entry.resolved)).toBe(true);
-    expect(groupResults.every((entry) => entry.resolved)).toBe(true);
+    expect(userResults.filter((entry) => !entry.resolved)).toEqual([]);
+    expect(groupResults.filter((entry) => !entry.resolved)).toEqual([]);
     expect(listMatrixDirectoryPeersLive).toHaveBeenCalledTimes(1);
     expect(listMatrixDirectoryGroupsLive).toHaveBeenCalledTimes(1);
   });

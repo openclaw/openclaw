@@ -586,7 +586,7 @@ describe("modelsStatusCommand auth overview", () => {
       const aliasPayload = JSON.parse(String((aliasRuntime.log as Mock).mock.calls[0]?.[0]));
       const providers = aliasPayload.auth.providers as Array<{ provider: string }>;
       expect(providers.filter((provider) => provider.provider === "zai")).toHaveLength(1);
-      expect(providers.some((provider) => provider.provider === "z.ai")).toBe(false);
+      expect(providers.map((provider) => provider.provider)).not.toContain("z.ai");
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);
@@ -657,7 +657,7 @@ describe("modelsStatusCommand auth overview", () => {
           }),
         ]),
       );
-      expect(providers.some((entry) => entry.provider === "unused-synthetic")).toBe(false);
+      expect(providers.map((entry) => entry.provider)).not.toContain("unused-synthetic");
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);

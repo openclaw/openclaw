@@ -719,7 +719,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(eventTypes).toContain("response.output_text.done");
       expect(eventTypes).toContain("response.content_part.done");
       expect(eventTypes).toContain("response.completed");
-      expect(deltaEvents.some((e) => e.data === "[DONE]")).toBe(true);
+      expect(deltaEvents.map((event) => event.data)).toContain("[DONE]");
 
       const deltas = deltaEvents
         .filter((e) => e.event === "response.output_text.delta")
@@ -831,7 +831,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       | undefined;
     expect(streamingOpts?.senderIsOwner).toBe(true);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
-    expect(streamingEvents.some((event) => event.event === "response.completed")).toBe(true);
+    expect(streamingEvents.map((event) => event.event)).toContain("response.completed");
   });
 
   it("treats shared-secret bearer callers as owner operators", async () => {
@@ -950,7 +950,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ?.text as string | undefined) ?? "",
     ).toBe("Let me check that.");
     expect(response?.output?.[1]?.name).toBe("get_weather");
-    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+    expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 
   it("returns every client tool call when an agent invokes multiple tools in one turn (#52288)", async () => {
@@ -1095,7 +1095,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       "activate_graph",
       "get_status",
     ]);
-    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+    expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 
   it("reuses the prior session when previous_response_id is provided", async () => {

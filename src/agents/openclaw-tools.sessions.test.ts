@@ -1316,17 +1316,16 @@ describe("sessions tools", () => {
       delivery: { status: "skipped", mode: "announce" },
     });
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-    expect(
-      calls.some(
-        (call) =>
-          call.method === "agent" &&
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
-            "Agent-to-agent reply step",
-          ),
-      ),
-    ).toBe(false);
-    expect(calls.some((call) => call.method === "send")).toBe(false);
+    const replyPromptAgentCalls = calls.filter(
+      (call) =>
+        call.method === "agent" &&
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+          "Agent-to-agent reply step",
+        ),
+    );
+    expect(replyPromptAgentCalls).toEqual([]);
+    expect(calls.filter((call) => call.method === "send")).toEqual([]);
   });
 
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {

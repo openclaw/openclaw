@@ -94,6 +94,16 @@ import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 
+type GlobalHookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
+
+function expectGlobalHookRunner(runner: ReturnType<typeof getGlobalHookRunner>): GlobalHookRunner {
+  expect(runner).toEqual(expect.objectContaining({ hasHooks: expect.any(Function) }));
+  if (runner === null) {
+    throw new Error("Expected global hook runner");
+  }
+  return runner;
+}
+
 function createDetachedTaskRuntimeStub(id: string): DetachedTaskLifecycleRuntime {
   const fail = (name: string): never => {
     throw new Error(`detached runtime ${id} should not execute ${name} in this test`);
@@ -283,7 +293,7 @@ function setupBundledTelegramPlugin() {
 function expectTelegramLoaded(registry: ReturnType<typeof loadOpenClawPlugins>) {
   const telegram = registry.plugins.find((entry) => entry.id === "telegram");
   expect(telegram?.status).toBe("loaded");
-  expect(registry.channels.some((entry) => entry.plugin.id === "telegram")).toBe(true);
+  expect(registry.channels.map((entry) => entry.plugin.id)).toContain("telegram");
 }
 
 function loadRegistryFromSinglePlugin(params: {
@@ -3274,14 +3284,14 @@ module.exports = { id: "throws-after-import", register() {} };`,
     };
 
     const first = loadOpenClawPlugins(options);
-    expect(getGlobalHookRunner()).not.toBeNull();
+    expectGlobalHookRunner(getGlobalHookRunner());
 
     resetGlobalHookRunner();
     expect(getGlobalHookRunner()).toBeNull();
 
     const second = loadOpenClawPlugins(options);
     expect(second).toBe(first);
-    expect(getGlobalHookRunner()).not.toBeNull();
+    expectGlobalHookRunner(getGlobalHookRunner());
 
     resetGlobalHookRunner();
   });
@@ -3322,7 +3332,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
     expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
-    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
+    expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
 
     const defaultRegistry = loadOpenClawPlugins({
       workspaceDir: defaultPlugin.dir,
@@ -3342,8 +3352,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(getActivePluginRegistry()).toBe(defaultRegistry);
     expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
-    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
-    expect(getGlobalHookRunner()?.hasHooks("message_sent")).toBe(false);
+    const globalHookRunner = expectGlobalHookRunner(getGlobalHookRunner());
+    expect(globalHookRunner.hasHooks("subagent_ended")).toBe(true);
+    expect(globalHookRunner.hasHooks("message_sent")).toBe(false);
   });
 
   it.each([
@@ -4326,8 +4337,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
       registry,
       message: "api.registerHttpHandler(...) was removed",
     });
-    expect(errors.some((entry) => entry.includes("api.registerHttpHandler(...) was removed"))).toBe(
-      true,
+    expect(errors).toEqual(
+      expect.arrayContaining([expect.stringContaining("api.registerHttpHandler(...) was removed")]),
     );
   });
 
@@ -4588,9 +4599,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.plugins.find((entry) => entry.id === "nested-default-channel")?.status).toBe(
       "loaded",
     );
-    expect(registry.channels.some((entry) => entry.plugin.id === "nested-default-channel")).toBe(
-      true,
-    );
+    expect(registry.channels.map((entry) => entry.plugin.id)).toContain("nested-default-channel");
   });
 
   it("does not treat manifest channel ids as scoped plugin id matches", () => {
@@ -6609,7 +6618,9 @@ module.exports = {
         status: "disabled",
         error: "not in allowlist",
       });
-      expect(warnings.some((message) => message.includes("plugins.allow is empty"))).toBe(false);
+      expect(warnings).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("plugins.allow is empty")]),
+      );
       expect(
         warnings.some(
           (message) =>

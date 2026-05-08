@@ -74,9 +74,7 @@ describe("auditGatewayServiceConfig", () => {
         environment: { PATH: "/usr/bin:/bin" },
       },
     });
-    expect(audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(
-      true,
-    );
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
   });
 
   it("flags version-managed node paths", async () => {
@@ -126,7 +124,8 @@ describe("auditGatewayServiceConfig", () => {
   it("accepts canonical macOS gateway service PATH without user-bin defaults", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
     try {
-      const servicePath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+      const servicePath =
+        "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
       const audit = await auditGatewayServiceConfig({
         env: { HOME: home },
@@ -474,9 +473,10 @@ describe("checkTokenDrift", () => {
 
   it("detects drift when config has token but service has different token", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
-    expect(result).not.toBeNull();
-    expect(result?.code).toBe(SERVICE_AUDIT_CODES.gatewayTokenDrift);
-    expect(result?.message).toContain("differs from service token");
+    expect(result).toMatchObject({
+      code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
+      message: expect.stringContaining("differs from service token"),
+    });
   });
 
   it("returns null when config has token but service has no token", () => {

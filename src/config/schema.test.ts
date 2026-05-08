@@ -475,7 +475,7 @@ describe("config schema", () => {
     const lookup = lookupConfigSchema(baseSchema, "gateway.auth");
     expect(lookup?.path).toBe("gateway.auth");
     expect(lookup?.hintPath).toBe("gateway.auth");
-    expect(lookup?.children.some((child) => child.key === "token")).toBe(true);
+    expect(lookup?.children.map((child) => child.key)).toContain("token");
     const tokenChild = lookup?.children.find((child) => child.key === "token");
     expect(tokenChild?.path).toBe("gateway.auth.token");
     expect(tokenChild?.hint?.sensitive).toBe(true);

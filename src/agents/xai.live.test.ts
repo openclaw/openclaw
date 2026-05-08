@@ -119,7 +119,7 @@ describeLive("xai live", () => {
       const doneMessage = await collectDoneMessage(
         stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
       );
-      expect(doneMessage.content).toEqual(expect.any(Array));
+      expect(Array.isArray(doneMessage.content)).toBe(true);
       const payload = requireLiveValue(capturedPayload, "captured xAI payload");
       if ("tool_stream" in payload) {
         expect(payload.tool_stream).toBe(true);
@@ -130,7 +130,7 @@ describeLive("xai live", () => {
         : [];
       expect(payloadTools.length).toBeGreaterThan(0);
       const firstFunction = payloadTools[0]?.function;
-      expect(firstFunction && typeof firstFunction === "object").toBe(true);
+      expect(firstFunction).toEqual(expect.any(Object));
       expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
     });
   }, 90_000);

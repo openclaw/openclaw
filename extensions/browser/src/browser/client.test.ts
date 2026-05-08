@@ -316,9 +316,13 @@ describe("browser client", () => {
       browserScreenshotAction("http://127.0.0.1:18791", { targetId: "t-default" }),
     ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
 
-    expect(calls.some((c) => c.url.endsWith("/tabs"))).toBe(true);
-    expect(calls.some((c) => c.url.endsWith("/doctor"))).toBe(true);
-    expect(calls.some((c) => c.url.endsWith("/doctor?profile=openclaw&deep=true"))).toBe(true);
+    expect(calls.map((call) => call.url)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/\/tabs$/),
+        expect.stringMatching(/\/doctor$/),
+        expect.stringMatching(/\/doctor\?profile=openclaw&deep=true$/),
+      ]),
+    );
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
 

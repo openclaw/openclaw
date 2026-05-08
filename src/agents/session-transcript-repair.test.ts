@@ -209,7 +209,7 @@ describe("sanitizeToolUseResultPairing", () => {
     ]);
 
     const out = sanitizeToolUseResultPairing(input);
-    expect(out.some((m) => m.role === "toolResult")).toBe(false);
+    expect(out.filter((m) => m.role === "toolResult")).toEqual([]);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 

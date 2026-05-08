@@ -429,6 +429,17 @@ describe("model-selection", () => {
       });
     });
 
+    it("normalizes retired Gemini ids while migrating legacy Gemini CLI refs", () => {
+      expect(migrateLegacyRuntimeModelRef("google-gemini-cli/gemini-3-pro-preview")).toEqual({
+        ref: "google/gemini-3.1-pro-preview",
+        legacyProvider: "google-gemini-cli",
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        runtime: "google-gemini-cli",
+        cli: true,
+      });
+    });
+
     it("round-trips normalized refs through modelKey", () => {
       const parsed = parseModelRef(" opus-4.6 ", "anthropic", {
         allowPluginNormalization: false,

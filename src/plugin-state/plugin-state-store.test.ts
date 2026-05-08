@@ -465,7 +465,8 @@ describe("plugin state keyed store", () => {
     await withOpenClawTestState({ label: "plugin-state-probe" }, async () => {
       const result = probePluginStateStore();
       expect(result.ok).toBe(true);
-      expect(result.steps.every((step) => step.ok)).toBe(true);
+      const failedSteps = result.steps.filter((step) => !step.ok);
+      expect(failedSteps).toEqual([]);
       expect(JSON.stringify(result)).not.toContain("probe-value");
     });
   });

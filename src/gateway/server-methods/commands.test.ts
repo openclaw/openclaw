@@ -278,7 +278,8 @@ describe("commands.list handler", () => {
     for (const scope of ["native", "text", "both"] as const) {
       const { payload } = callHandler({ scope });
       const { commands } = payload as { commands: Array<{ name: string; source: string }> };
-      expect(commands.some((c) => c.source === "plugin")).toBe(true);
+      const sources = commands.map((command) => command.source);
+      expect(sources).toContain("plugin");
     }
   });
 
@@ -470,6 +471,9 @@ describe("buildCommandsListResult", () => {
   it("is callable independently from handler", () => {
     const result = buildCommandsListResult({ cfg: {} as never, agentId: "main" });
     expect(result.commands.length).toBeGreaterThan(0);
-    expect(result.commands.every((c) => typeof c.scope === "string")).toBe(true);
+    const invalidScopes = result.commands
+      .map((command) => command.scope)
+      .filter((scope) => typeof scope !== "string");
+    expect(invalidScopes).toEqual([]);
   });
 });

@@ -74,7 +74,7 @@ function getDispatcherClassName(value: unknown): string | null {
 }
 
 function expectDispatcherAttached(value: unknown): void {
-  expect(value).toEqual(expect.any(Object));
+  expect(getDispatcherClassName(value)).toMatch(/^(Agent|Mock)$/u);
 }
 
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {

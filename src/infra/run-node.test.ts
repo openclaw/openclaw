@@ -1656,8 +1656,8 @@ describe("run-node script", () => {
         fakeProcess.emit("SIGINT");
         expect(fsSync.existsSync(lockDir)).toBe(false);
 
-        // Normal release after signal must be a no-op, not throw.
-        expect(() => release()).not.toThrow();
+        // Normal release after signal must be a no-op.
+        expect(release()).toBeUndefined();
         expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
         expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
         expect(fakeProcess.listenerCount("exit")).toBe(0);
@@ -1674,7 +1674,7 @@ describe("run-node script", () => {
 
         fakeProcess.emit("SIGTERM");
         expect(fsSync.existsSync(lockDir)).toBe(false);
-        expect(() => release()).not.toThrow();
+        expect(release()).toBeUndefined();
       });
     });
 
@@ -1688,7 +1688,7 @@ describe("run-node script", () => {
 
         fakeProcess.emit("exit");
         expect(fsSync.existsSync(lockDir)).toBe(false);
-        expect(() => release()).not.toThrow();
+        expect(release()).toBeUndefined();
       });
     });
 
