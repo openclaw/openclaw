@@ -328,11 +328,11 @@ describe("TUI shutdown safety", () => {
   });
 
   it("swallows only ignorable stop errors", () => {
-    expect(() => {
+    expect(
       stopTuiSafely(() => {
         throw new Error("setRawMode EBADF");
-      });
-    }).not.toThrow();
+      }),
+    ).toBeUndefined();
   });
 
   it("rethrows non-ignorable stop errors", () => {

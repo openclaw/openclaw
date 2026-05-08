@@ -538,7 +538,7 @@ describe("OpenAIWebSocketManager", () => {
 
     it("is safe to call before connect()", () => {
       const manager = buildManager();
-      expect(() => manager.close()).not.toThrow();
+      expect(manager.close()).toBeUndefined();
       expect(manager.connectionState).toBe("closed");
     });
   });
