@@ -92,6 +92,8 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(tool.displaySummary).toBe("Spawn sub-agent sessions.");
+    expect(tool.description).toContain("tracked as an OpenClaw task");
+    expect(tool.description).toContain("report completion back to the requester");
     expect(tool.description).not.toContain("ACP");
     expect(tool.description).not.toContain('runtime="acp"');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent"]);

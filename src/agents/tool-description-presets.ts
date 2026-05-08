@@ -42,6 +42,7 @@ export function describeSessionsSpawnTool(options?: {
     options?.threadAvailable
       ? '`mode="run"` is one-shot and `mode="session"` is persistent and thread-bound.'
       : '`mode="run"` is one-shot background work.',
+    "Use this for delegated/background work that should be tracked as an OpenClaw task and report completion back to the requester.",
     "Subagents inherit the parent workspace directory automatically.",
     'For native subagents only, set `context="fork"` when the child needs the current transcript context; otherwise omit it or use `context="isolated"`.',
     "Use this when the work should happen in a fresh child session instead of the current one.",

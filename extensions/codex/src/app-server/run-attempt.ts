@@ -111,7 +111,7 @@ import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import {
   areCodexDynamicToolFingerprintsCompatible,
-  buildDeveloperInstructions,
+  buildDeveloperInstructionsWithDynamicTools,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
   startOrResumeThread,
@@ -565,7 +565,9 @@ export async function runCodexAppServerAttempt(
     historyMessages =
       (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
   }
-  const baseDeveloperInstructions = buildDeveloperInstructions(params);
+  const baseDeveloperInstructions = buildDeveloperInstructionsWithDynamicTools(params, {
+    availableDynamicToolNames: new Set(toolBridge.specs.map((tool) => tool.name)),
+  });
   // Build the workspace bootstrap block before finalizing developer
   // instructions so persona files (SOUL.md, IDENTITY.md, ...) reach Codex
   // through the explicit `developerInstructions` field.

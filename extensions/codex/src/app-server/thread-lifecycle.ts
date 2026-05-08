@@ -461,10 +461,26 @@ function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
 }
 
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
+  return buildDeveloperInstructionsWithDynamicTools(params);
+}
+
+export function buildDeveloperInstructionsWithDynamicTools(
+  params: EmbeddedRunAttemptParams,
+  options: { availableDynamicToolNames?: ReadonlySet<string> } = {},
+): string {
   const promptOverlay = renderCodexRuntimePromptOverlay(params);
+  const delegationGuidance = options.availableDynamicToolNames?.has("sessions_spawn")
+    ? [
+        "## OpenClaw Delegation",
+        "If the user asks you to spawn, delegate, run background work, or continue work and let them know when it is done, prefer the OpenClaw `sessions_spawn` dynamic tool when available.",
+        "`sessions_spawn` creates OpenClaw Task Registry records and handles completion delivery back to the requester.",
+        "Use Codex native `spawnAgent` only when the user explicitly asks for Codex-native collaboration or when `sessions_spawn` is unavailable or unsuitable.",
+      ].join("\n")
+    : undefined;
   const sections = [
     "You are running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-specific integrations such as messaging, cron, sessions, media, gateway, and nodes when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
+    delegationGuidance,
     promptOverlay,
     params.extraSystemPrompt,
     params.skillsSnapshot?.prompt,

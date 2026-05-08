@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  buildDeveloperInstructionsWithDynamicTools,
   buildThreadResumeParams,
   buildThreadStartParams,
   resolveReasoningEffort,
@@ -46,6 +47,34 @@ function createAppServerOptions() {
     sandbox: "workspace-write",
   } as const;
 }
+
+describe("Codex app-server developer instructions", () => {
+  it("nudges delegated work through sessions_spawn when the OpenClaw dynamic tool is available", () => {
+    const prompt = buildDeveloperInstructionsWithDynamicTools(
+      createAttemptParams({ provider: "codex" }),
+      {
+        availableDynamicToolNames: new Set(["sessions_spawn", "message"]),
+      },
+    );
+
+    expect(prompt).toContain("## OpenClaw Delegation");
+    expect(prompt).toContain("prefer the OpenClaw `sessions_spawn` dynamic tool");
+    expect(prompt).toContain("Task Registry records");
+    expect(prompt).toContain("Use Codex native `spawnAgent` only");
+  });
+
+  it("omits the sessions_spawn nudge when the OpenClaw dynamic tool is unavailable", () => {
+    const prompt = buildDeveloperInstructionsWithDynamicTools(
+      createAttemptParams({ provider: "codex" }),
+      {
+        availableDynamicToolNames: new Set(["message"]),
+      },
+    );
+
+    expect(prompt).not.toContain("## OpenClaw Delegation");
+    expect(prompt).not.toContain("spawnAgent");
+  });
+});
 
 describe("Codex app-server model provider selection", () => {
   it.each(["openai", "openai-codex"])(
