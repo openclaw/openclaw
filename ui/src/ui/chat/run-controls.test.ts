@@ -59,10 +59,9 @@ describe("chat run controls", () => {
 
     const queueButton = container.querySelector<HTMLButtonElement>('button[title="Queue"]');
     const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
-    expect(queueButton).not.toBeNull();
     expect(queueButton?.disabled).toBe(true);
-    expect(stopButton).not.toBeNull();
-    stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(stopButton?.title).toBe("Stop");
+    stopButton?.click();
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("New session");
 
@@ -85,13 +84,13 @@ describe("chat run controls", () => {
     const newSessionButton = container.querySelector<HTMLButtonElement>(
       'button[title="New session"]',
     );
-    expect(newSessionButton).not.toBeNull();
-    newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(newSessionButton?.title).toBe("New session");
+    newSessionButton?.click();
     expect(onNewSession).toHaveBeenCalledTimes(1);
 
     const sendButton = container.querySelector<HTMLButtonElement>('button[title="Send"]');
-    expect(sendButton).not.toBeNull();
-    sendButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(sendButton?.title).toBe("Send");
+    sendButton?.click();
     expect(onStoreDraft).toHaveBeenCalledWith(" run this ");
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
@@ -114,9 +113,8 @@ describe("chat run controls", () => {
     );
 
     const queueButton = container.querySelector<HTMLButtonElement>('button[title="Queue"]');
-    expect(queueButton).not.toBeNull();
     expect(queueButton?.disabled).toBe(false);
-    queueButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    queueButton?.click();
     expect(onStoreDraft).toHaveBeenCalledWith(" follow up ");
     expect(onSend).toHaveBeenCalledTimes(1);
   });
@@ -176,10 +174,8 @@ describe("chat status indicators", () => {
       );
 
       let indicator = container.querySelector(".compaction-indicator--active");
-      expect(indicator).not.toBeNull();
       expect(indicator?.textContent).toContain("Compacting context...");
       indicator = container.querySelector(".compaction-indicator--fallback");
-      expect(indicator).not.toBeNull();
       expect(indicator?.textContent).toContain("Fallback active: deepinfra/moonshotai/Kimi-K2.5");
 
       renderIndicators(
@@ -199,10 +195,8 @@ describe("chat status indicators", () => {
         },
       );
       indicator = container.querySelector(".compaction-indicator--complete");
-      expect(indicator).not.toBeNull();
       expect(indicator?.textContent).toContain("Context compacted");
       indicator = container.querySelector(".compaction-indicator--fallback-cleared");
-      expect(indicator).not.toBeNull();
       expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
 
       nowSpy.mockReturnValue(20_000);
@@ -260,8 +254,8 @@ describe("context notice", () => {
     render(renderContextNotice(lowUsageSession, 200_000), container);
     expect(container.textContent).toContain("23% context used");
     expect(container.textContent).toContain("46k / 200k");
-    expect(container.querySelector(".context-notice--usage")).not.toBeNull();
-    expect(container.querySelector(".context-notice__meter")).not.toBeNull();
+    expect(container.querySelectorAll(".context-notice--usage")).toHaveLength(1);
+    expect(container.querySelectorAll(".context-notice__meter")).toHaveLength(1);
     expect(container.querySelector(".context-notice__icon")).toBeNull();
     expect(container.textContent).not.toContain("757.3k / 200k");
 
@@ -280,7 +274,6 @@ describe("context notice", () => {
     expect(getContextNoticeViewModel(session, 200_000)?.compactRecommended).toBe(true);
     expect(container.textContent).not.toContain("757.3k / 200k");
     const notice = container.querySelector<HTMLElement>(".context-notice");
-    expect(notice).not.toBeNull();
     expect(notice?.classList.contains("context-notice--warning")).toBe(true);
     expect(notice?.getAttribute("title")).toBe("Session context usage: 190k / 200k (95%)");
     expect(notice?.style.getPropertyValue("--ctx-color")).toContain("rgb(");
@@ -289,7 +282,6 @@ describe("context notice", () => {
     expect(notice?.style.getPropertyValue("--ctx-bg")).not.toContain("NaN");
 
     const icon = container.querySelector<SVGElement>(".context-notice__icon");
-    expect(icon).not.toBeNull();
     expect(icon?.tagName.toLowerCase()).toBe("svg");
     expect(icon?.classList.contains("context-notice__icon")).toBe(true);
     expect(icon?.getAttribute("width")).toBe("16");
@@ -351,7 +343,6 @@ describe("side result render", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-side-result")).not.toBeNull();
     expect(container.textContent).toContain("BTW");
     expect(container.textContent).toContain("what changed?");
     expect(container.textContent).toContain("Not saved to chat history");
