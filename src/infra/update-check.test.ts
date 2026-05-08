@@ -67,6 +67,7 @@ describe("resolveNpmChannelTag", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("falls back to latest when beta is older", async () => {
@@ -140,6 +141,22 @@ describe("resolveNpmChannelTag", () => {
       version: null,
       error: "HTTP 404",
     });
+  });
+
+  it("uses npm registry config when fetching package target metadata", async () => {
+    vi.stubEnv("npm_config_registry", "https://registry.npmmirror.com/");
+    versionByTag.latest = "1.0.6";
+
+    await expect(
+      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
+    ).resolves.toMatchObject({
+      target: "latest",
+      version: "1.0.6",
+    });
+
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      "https://registry.npmmirror.com/openclaw/latest",
+    );
   });
 });
 

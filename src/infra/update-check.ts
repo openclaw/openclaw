@@ -5,7 +5,11 @@ import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
-import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
+import {
+  channelToNpmTag,
+  resolveNpmPackageTargetRegistryUrl,
+  type UpdateChannel,
+} from "./update-channels.js";
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
@@ -326,7 +330,7 @@ export async function fetchNpmPackageTargetStatus(params: {
   const target = params.target;
   try {
     const res = await fetchWithTimeout(
-      `https://registry.npmjs.org/openclaw/${encodeURIComponent(target)}`,
+      resolveNpmPackageTargetRegistryUrl({ target }),
       {},
       Math.max(250, timeoutMs),
     );
