@@ -10,6 +10,7 @@ import {
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 import {
   extractShellWrapperCommand,
+  extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
   POSIX_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
@@ -876,14 +877,11 @@ function shellWrapperPayloadForParsing(
   dynamicArguments: DynamicArgument[],
 ): { command: string; spanBase: SpanBase } | null {
   const shellWrapper = extractShellWrapperCommand(argv);
-  if (
-    !shellWrapper.isWrapper ||
-    !shellWrapper.command ||
-    isDynamicPayload(shellWrapper.command, dynamicArguments)
-  ) {
+  const payload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
+  if (!shellWrapper.isWrapper || !payload || isDynamicPayload(payload, dynamicArguments)) {
     return null;
   }
-  const spanBase = payloadBaseFromArguments(shellWrapper.command, argumentsList);
+  const spanBase = payloadBaseFromArguments(payload, argumentsList);
   if (!spanBase) {
     return null;
   }
@@ -892,7 +890,7 @@ function shellWrapperPayloadForParsing(
   if (!canParseShellWrapperPayload(transportArgv, commandFlag?.flag ?? null)) {
     return null;
   }
-  return { command: shellWrapper.command, spanBase };
+  return { command: payload, spanBase };
 }
 
 type InlineEvalHit = InterpreterInlineEvalHit;
@@ -947,7 +945,8 @@ function recordCommandRisks(
   }
 
   const shellWrapper = extractShellWrapperCommand(argv);
-  if (shellWrapper.isWrapper && shellWrapper.command) {
+  const shellWrapperPayload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
+  if (shellWrapper.isWrapper && shellWrapperPayload) {
     const transportArgv = resolveShellWrapperTransportArgv(argv) ?? argv;
     const shellExecutable = transportArgv[0] ?? executable;
     const commandFlag = shellCommandFlag(transportArgv, 1) ?? shellCommandFlag(argv, 1);
@@ -956,7 +955,7 @@ function recordCommandRisks(
         kind: "shell-wrapper",
         executable: shellExecutable,
         flag: commandFlag?.flag ?? "-c",
-        payload: shellWrapper.command,
+        payload: shellWrapperPayload,
         text,
         span,
       });

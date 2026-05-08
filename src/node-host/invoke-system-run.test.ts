@@ -1528,7 +1528,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
     const tempDir = createFixtureDir("openclaw-shell-wrapper-allow-");
     const prepared = buildSystemRunApprovalPlan({
-      command: ["/bin/sh", "-lc", "cd ."],
+      command: ["/bin/sh", "-c", "cd ."],
       cwd: tempDir,
     });
     expect(prepared.ok).toBe(true);
