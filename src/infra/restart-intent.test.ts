@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   consumeGatewayRestartIntentPayloadSync,
   consumeGatewayRestartIntentSync,
@@ -25,6 +26,7 @@ function intentPath(env: NodeJS.ProcessEnv): string {
 
 describe("gateway restart intent", () => {
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
@@ -53,15 +55,16 @@ describe("gateway restart intent", () => {
     fs.writeFileSync(intentPath(env), "x".repeat(2048), { encoding: "utf8", mode: 0o600 });
 
     expect(consumeGatewayRestartIntentSync(env)).toBe(false);
-    expect(fs.existsSync(intentPath(env))).toBe(false);
+    expect(fs.existsSync(intentPath(env))).toBe(true);
   });
 
-  it("writes intent files with owner-only permissions", () => {
+  it("stores intents in SQLite instead of a legacy JSON file", () => {
     const env = createIntentEnv();
 
     expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
 
-    expect(fs.statSync(intentPath(env)).mode & 0o777).toBe(0o600);
+    expect(fs.existsSync(intentPath(env))).toBe(false);
+    expect(consumeGatewayRestartIntentSync(env)).toBe(true);
   });
 
   it("round-trips restart force and wait options", () => {
@@ -82,7 +85,7 @@ describe("gateway restart intent", () => {
     expect(fs.existsSync(intentPath(env))).toBe(false);
   });
 
-  it("does not follow an existing intent-path symlink when writing", () => {
+  it("does not touch an existing legacy intent-path symlink when writing", () => {
     const env = createIntentEnv();
     const targetPath = path.join(env.OPENCLAW_STATE_DIR ?? "", "attacker-target.txt");
     fs.writeFileSync(targetPath, "keep", "utf8");
@@ -95,7 +98,7 @@ describe("gateway restart intent", () => {
     expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
 
     expect(fs.readFileSync(targetPath, "utf8")).toBe("keep");
-    expect(fs.lstatSync(intentPath(env)).isSymbolicLink()).toBe(false);
+    expect(fs.lstatSync(intentPath(env)).isSymbolicLink()).toBe(true);
     expect(consumeGatewayRestartIntentSync(env)).toBe(true);
   });
 });

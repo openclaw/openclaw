@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  deleteOpenClawStateKvJson,
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 
-export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME =
-  "gateway-supervisor-restart-handoff.json";
 export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-handoff";
 const GATEWAY_RESTART_HANDOFF_TTL_MS = 60_000;
-const GATEWAY_RESTART_HANDOFF_MAX_BYTES = 4096;
+const GATEWAY_RESTART_HANDOFF_KV_SCOPE = "gateway.restart-handoff";
+const GATEWAY_RESTART_HANDOFF_KV_KEY = "current";
 const MAX_INTENT_ID_LENGTH = 120;
 const MAX_PROCESS_INSTANCE_ID_LENGTH = 120;
 const MAX_REASON_LENGTH = 200;
@@ -87,25 +89,10 @@ export function formatGatewayRestartHandoffDiagnostic(
   return `Recent restart handoff: ${detail.join("; ")}`;
 }
 
-function resolveGatewayRestartHandoffPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME);
-}
-
-function unlinkRegularFileSync(filePath: string): boolean {
-  try {
-    const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.nlink > 1) {
-      return false;
-    }
-    fs.unlinkSync(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function clearGatewayRestartHandoffSync(env: NodeJS.ProcessEnv = process.env): void {
-  unlinkRegularFileSync(resolveGatewayRestartHandoffPath(env));
+  deleteOpenClawStateKvJson(GATEWAY_RESTART_HANDOFF_KV_SCOPE, GATEWAY_RESTART_HANDOFF_KV_KEY, {
+    env,
+  });
 }
 
 function normalizePid(pid: number | undefined): number | null {
@@ -182,13 +169,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseGatewayRestartHandoff(raw: string): GatewayRestartHandoff | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
+function parseGatewayRestartHandoff(parsed: unknown): GatewayRestartHandoff | null {
   if (!isRecord(parsed)) {
     return null;
   }
@@ -236,19 +217,6 @@ function parseGatewayRestartHandoff(raw: string): GatewayRestartHandoff | null {
   };
 }
 
-function readGatewayRestartHandoffRawSync(env: NodeJS.ProcessEnv): string | null {
-  const handoffPath = resolveGatewayRestartHandoffPath(env);
-  try {
-    const stat = fs.lstatSync(handoffPath);
-    if (!stat.isFile() || stat.nlink > 1 || stat.size > GATEWAY_RESTART_HANDOFF_MAX_BYTES) {
-      return null;
-    }
-    return fs.readFileSync(handoffPath, "utf8");
-  } catch {
-    return null;
-  }
-}
-
 export function writeGatewayRestartHandoffSync(opts: {
   env?: NodeJS.ProcessEnv;
   pid?: number;
@@ -291,29 +259,15 @@ export function writeGatewayRestartHandoffSync(opts: {
     supervisorMode,
   };
 
-  let tmpPath: string | undefined;
   try {
-    const handoffPath = resolveGatewayRestartHandoffPath(env);
-    fs.mkdirSync(path.dirname(handoffPath), { recursive: true });
-    tmpPath = path.join(
-      path.dirname(handoffPath),
-      `.${path.basename(handoffPath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
+    writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+      GATEWAY_RESTART_HANDOFF_KV_SCOPE,
+      GATEWAY_RESTART_HANDOFF_KV_KEY,
+      payload as unknown as OpenClawStateJsonValue,
+      { env },
     );
-    let fd: number | undefined;
-    try {
-      fd = fs.openSync(tmpPath, "wx", 0o600);
-      fs.writeFileSync(fd, `${JSON.stringify(payload)}\n`, "utf8");
-    } finally {
-      if (fd !== undefined) {
-        fs.closeSync(fd);
-      }
-    }
-    fs.renameSync(tmpPath, handoffPath);
     return payload;
   } catch (err) {
-    if (tmpPath) {
-      unlinkRegularFileSync(tmpPath);
-    }
     handoffLog.warn(`failed to write gateway restart handoff: ${String(err)}`);
     return null;
   }
@@ -323,10 +277,13 @@ export function readGatewayRestartHandoffSync(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
 ): GatewayRestartHandoff | null {
-  const raw = readGatewayRestartHandoffRawSync(env);
-  if (!raw) {
-    return null;
-  }
+  const raw = readOpenClawStateKvJson(
+    GATEWAY_RESTART_HANDOFF_KV_SCOPE,
+    GATEWAY_RESTART_HANDOFF_KV_KEY,
+    {
+      env,
+    },
+  );
   const payload = parseGatewayRestartHandoff(raw);
   if (!payload || now < payload.createdAt || now > payload.expiresAt) {
     return null;
@@ -341,21 +298,18 @@ export function consumeGatewayRestartHandoffForExitedProcessSync(opts: {
   now?: number;
 }): GatewayRestartHandoff | null {
   const env = opts.env ?? process.env;
-  const handoffPath = resolveGatewayRestartHandoffPath(env);
-  let raw: string | null = null;
+  const raw = readOpenClawStateKvJson(
+    GATEWAY_RESTART_HANDOFF_KV_SCOPE,
+    GATEWAY_RESTART_HANDOFF_KV_KEY,
+    { env },
+  );
   try {
-    const stat = fs.lstatSync(handoffPath);
-    if (!stat.isFile() || stat.nlink > 1 || stat.size > GATEWAY_RESTART_HANDOFF_MAX_BYTES) {
-      return null;
-    }
-    raw = fs.readFileSync(handoffPath, "utf8");
-  } catch {
-    return null;
-  } finally {
     clearGatewayRestartHandoffSync(env);
+  } catch {
+    // best-effort cleanup
   }
 
-  const payload = raw ? parseGatewayRestartHandoff(raw) : null;
+  const payload = parseGatewayRestartHandoff(raw);
   const exitedPid = normalizePid(opts.exitedPid);
   if (!payload || exitedPid === null || payload.pid !== exitedPid) {
     return null;

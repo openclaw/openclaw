@@ -376,6 +376,9 @@ The remaining cleanup is mostly consolidation and deletion:
 - Gateway restart sentinel state now uses shared SQLite KV instead of
   `restart-sentinel.json`; the old path resolver remains only for legacy
   cleanup/status compatibility.
+- Gateway restart intent and supervisor handoff state now use shared SQLite KV
+  instead of `gateway-restart-intent.json` and
+  `gateway-supervisor-restart-handoff.json` sidecars.
 - Gateway singleton coordination now uses SQLite KV rows under
   `gateway_locks` instead of writing `gateway.<hash>.lock` files. The lock
   still records pid, config path, process start time, and stale-owner metadata,
