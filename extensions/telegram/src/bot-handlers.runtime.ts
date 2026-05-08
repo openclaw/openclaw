@@ -554,39 +554,37 @@ export const registerTelegramHandlers = ({
     const replyMedia: TelegramMediaRef[] = [];
     const replyChain: TelegramReplyChainEntry[] = [];
     for (const node of chain) {
+      let mediaRef: TelegramMediaRef | undefined;
       const replyFileId = resolveInboundMediaFileId(node.sourceMessage);
-      if (!replyFileId || !hasInboundMedia(node.sourceMessage)) {
-        replyChain.push(toReplyChainEntry(node));
-        continue;
-      }
-      try {
-        const media = await resolveMedia({
-          ctx: {
-            message: node.sourceMessage,
-            me: ctx.me,
-            getFile: async () => await bot.api.getFile(replyFileId),
-          },
-          maxBytes: mediaMaxBytes,
-          ...mediaRuntimeOptions,
-        });
-        if (!media) {
-          replyChain.push(toReplyChainEntry(node));
-          continue;
+      if (replyFileId && hasInboundMedia(node.sourceMessage)) {
+        try {
+          const media = await resolveMedia({
+            ctx: {
+              message: node.sourceMessage,
+              me: ctx.me,
+              getFile: async () => await bot.api.getFile(replyFileId),
+            },
+            maxBytes: mediaMaxBytes,
+            ...mediaRuntimeOptions,
+          });
+          mediaRef = media
+            ? {
+                path: media.path,
+                ...(media.contentType ? { contentType: media.contentType } : {}),
+                ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
+              }
+            : undefined;
+        } catch (err) {
+          logger.warn(
+            { chatId: ctx.message.chat.id, error: String(err) },
+            "reply media fetch failed",
+          );
         }
-        const mediaRef: TelegramMediaRef = {
-          path: media.path,
-          ...(media.contentType ? { contentType: media.contentType } : {}),
-          ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
-        };
-        replyMedia.push(mediaRef);
-        replyChain.push(toReplyChainEntry(node, mediaRef));
-      } catch (err) {
-        logger.warn(
-          { chatId: ctx.message.chat.id, error: String(err) },
-          "reply media fetch failed",
-        );
-        replyChain.push(toReplyChainEntry(node));
       }
+      if (mediaRef) {
+        replyMedia.push(mediaRef);
+      }
+      replyChain.push(toReplyChainEntry(node, mediaRef));
     }
     return { replyMedia, replyChain };
   };

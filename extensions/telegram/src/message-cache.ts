@@ -33,9 +33,6 @@ export type TelegramMessageCache = {
 };
 
 type MessageWithExternalReply = Message & { external_reply?: Message };
-type PersistedTelegramMessageNode = TelegramReplyChainEntry & {
-  sourceMessage: Message;
-};
 
 type TelegramMessageCacheBucket = {
   messages: Map<string, TelegramCachedMessageNode>;
@@ -116,85 +113,29 @@ function isString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function isNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
 function readOptionalString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return isString(value) ? value : undefined;
 }
 
-function readOptionalNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return isNumber(value) ? value : undefined;
-}
-
 function isTelegramSourceMessage(value: unknown): value is Message {
-  if (!isRecord(value) || !isNumber(value.message_id) || !isNumber(value.date)) {
-    return false;
-  }
-  const chat = value.chat;
-  if (!isRecord(chat) || !isNumber(chat.id)) {
-    return false;
-  }
-  if (chat.type === "private") {
-    return isString(chat.first_name);
-  }
   return (
-    (chat.type === "group" || chat.type === "supergroup" || chat.type === "channel") &&
-    isString(chat.title)
+    isRecord(value) &&
+    typeof value.message_id === "number" &&
+    Number.isFinite(value.message_id) &&
+    typeof value.date === "number" &&
+    Number.isFinite(value.date)
   );
 }
 
-function parseSourceMessage(value: unknown): Message | null {
-  return isTelegramSourceMessage(value) ? value : null;
-}
-
 function parsePersistedNode(value: unknown): TelegramCachedMessageNode | null {
-  if (!isRecord(value) || !isString(value.messageId)) {
+  if (!isRecord(value) || !isTelegramSourceMessage(value.sourceMessage)) {
     return null;
   }
-  const sourceMessage = parseSourceMessage(value.sourceMessage);
-  if (!sourceMessage) {
-    return null;
-  }
-  const node: TelegramCachedMessageNode = {
-    sourceMessage,
-    messageId: value.messageId,
-  };
-  const stringKeys = [
-    "threadId",
-    "sender",
-    "senderId",
-    "senderUsername",
-    "body",
-    "mediaType",
-    "mediaPath",
-    "mediaRef",
-    "replyToId",
-    "forwardedFrom",
-    "forwardedFromId",
-    "forwardedFromUsername",
-  ] as const satisfies readonly (keyof TelegramCachedMessageNode)[];
-  for (const key of stringKeys) {
-    const field = readOptionalString(value, key);
-    if (field) {
-      node[key] = field;
-    }
-  }
-  if (value.isQuote === true) {
-    node.isQuote = true;
-  }
-  const timestamp = readOptionalNumber(value, "timestamp");
-  if (timestamp !== undefined) {
-    node.timestamp = timestamp;
-  }
-  const forwardedDate = readOptionalNumber(value, "forwardedDate");
-  if (forwardedDate !== undefined) {
-    node.forwardedDate = forwardedDate;
-  }
-  return node;
+  const threadId = Number(readOptionalString(value, "threadId"));
+  return normalizeMessageNode(value.sourceMessage, {
+    ...(Number.isFinite(threadId) ? { threadId } : {}),
+  });
 }
 
 function readPersistedMessages(filePath: string, maxMessages: number) {
@@ -237,9 +178,9 @@ function persistMessages(params: {
   const serialized = Array.from(messages, ([key, node]) => ({
     key,
     node: {
-      ...node,
       sourceMessage: node.sourceMessage,
-    } satisfies PersistedTelegramMessageNode,
+      ...(node.threadId ? { threadId: node.threadId } : {}),
+    },
   }));
   replaceFileAtomicSync({
     filePath: persistedPath,

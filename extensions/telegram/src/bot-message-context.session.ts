@@ -88,6 +88,59 @@ export async function resolveTelegramMessageContextStorePath(params: {
   });
 }
 
+function replyTargetToChainEntry(replyTarget: TelegramReplyTarget): TelegramReplyChainEntry {
+  return {
+    ...(replyTarget.id ? { messageId: replyTarget.id } : {}),
+    sender: replyTarget.sender,
+    ...(replyTarget.senderId ? { senderId: replyTarget.senderId } : {}),
+    ...(replyTarget.senderUsername ? { senderUsername: replyTarget.senderUsername } : {}),
+    ...(replyTarget.body ? { body: replyTarget.body } : {}),
+    ...(replyTarget.kind === "quote" ? { isQuote: true } : {}),
+    ...(replyTarget.forwardedFrom?.from ? { forwardedFrom: replyTarget.forwardedFrom.from } : {}),
+    ...(replyTarget.forwardedFrom?.fromId
+      ? { forwardedFromId: replyTarget.forwardedFrom.fromId }
+      : {}),
+    ...(replyTarget.forwardedFrom?.fromUsername
+      ? { forwardedFromUsername: replyTarget.forwardedFrom.fromUsername }
+      : {}),
+    ...(replyTarget.forwardedFrom?.date
+      ? { forwardedDate: replyTarget.forwardedFrom.date * 1000 }
+      : {}),
+  };
+}
+
+function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReplyChainEntry {
+  const {
+    forwardedFrom: _forwardedFrom,
+    forwardedFromId: _forwardedFromId,
+    forwardedFromUsername: _forwardedFromUsername,
+    forwardedDate: _forwardedDate,
+    ...withoutForwarded
+  } = entry;
+  return withoutForwarded;
+}
+
+function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): string {
+  const labels = [
+    `${index + 1}. ${entry.sender ?? "unknown sender"}`,
+    entry.messageId ? `id:${entry.messageId}` : undefined,
+    entry.replyToId ? `reply_to:${entry.replyToId}` : undefined,
+    entry.timestamp ? new Date(entry.timestamp).toISOString() : undefined,
+  ].filter(Boolean);
+  const bodyLines = [
+    entry.forwardedFrom
+      ? `[Forwarded from ${entry.forwardedFrom}${
+          entry.forwardedDate ? ` at ${new Date(entry.forwardedDate).toISOString()}` : ""
+        }]`
+      : undefined,
+    entry.isQuote && entry.body ? `"${entry.body}"` : entry.body,
+    entry.mediaType ? `<media:${entry.mediaType}>` : undefined,
+    entry.mediaPath ? `[media_path:${entry.mediaPath}]` : undefined,
+    entry.mediaRef ? `[media_ref:${entry.mediaRef}]` : undefined,
+  ].filter(Boolean);
+  return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
+}
+
 export async function buildTelegramInboundContextPayload(params: {
   cfg: OpenClawConfig;
   primaryCtx: TelegramContext;
@@ -228,105 +281,40 @@ export async function buildTelegramInboundContextPayload(params: {
           forwardedFrom: visibleReplyForwardedFrom,
         }
       : null;
-  const fallbackReplyChain: TelegramReplyChainEntry[] = visibleReplyTarget
-    ? [
-        {
-          ...(visibleReplyTarget.id ? { messageId: visibleReplyTarget.id } : {}),
-          sender: visibleReplyTarget.sender,
-          ...(visibleReplyTarget.senderId ? { senderId: visibleReplyTarget.senderId } : {}),
-          ...(visibleReplyTarget.senderUsername
-            ? { senderUsername: visibleReplyTarget.senderUsername }
-            : {}),
-          ...(visibleReplyTarget.body ? { body: visibleReplyTarget.body } : {}),
-          ...(visibleReplyTarget.kind === "quote" ? { isQuote: true } : {}),
-          ...(visibleReplyTarget.forwardedFrom?.from
-            ? { forwardedFrom: visibleReplyTarget.forwardedFrom.from }
-            : {}),
-          ...(visibleReplyTarget.forwardedFrom?.fromId
-            ? { forwardedFromId: visibleReplyTarget.forwardedFrom.fromId }
-            : {}),
-          ...(visibleReplyTarget.forwardedFrom?.fromUsername
-            ? { forwardedFromUsername: visibleReplyTarget.forwardedFrom.fromUsername }
-            : {}),
-          ...(visibleReplyTarget.forwardedFrom?.date
-            ? { forwardedDate: visibleReplyTarget.forwardedFrom.date * 1000 }
-            : {}),
-        },
-      ]
-    : [];
-  const rawReplyChain = replyChain.length > 0 ? replyChain : fallbackReplyChain;
-  const replyChainWithVisibleTarget =
-    visibleReplyTarget && rawReplyChain[0]?.messageId === visibleReplyTarget.id
-      ? [
-          {
-            ...rawReplyChain[0],
-            ...(visibleReplyTarget.body ? { body: visibleReplyTarget.body } : {}),
-            ...(visibleReplyTarget.kind === "quote" ? { isQuote: true } : {}),
-            ...(visibleReplyTarget.forwardedFrom?.from
-              ? { forwardedFrom: visibleReplyTarget.forwardedFrom.from }
-              : {}),
-            ...(visibleReplyTarget.forwardedFrom?.fromId
-              ? { forwardedFromId: visibleReplyTarget.forwardedFrom.fromId }
-              : {}),
-            ...(visibleReplyTarget.forwardedFrom?.fromUsername
-              ? { forwardedFromUsername: visibleReplyTarget.forwardedFrom.fromUsername }
-              : {}),
-            ...(visibleReplyTarget.forwardedFrom?.date
-              ? { forwardedDate: visibleReplyTarget.forwardedFrom.date * 1000 }
-              : {}),
-          },
-          ...rawReplyChain.slice(1),
-        ]
-      : rawReplyChain;
-  const visibleReplyChain = replyChainWithVisibleTarget
-    .filter((entry) =>
-      shouldIncludeGroupSupplementalContext({
+  const visibleReplyTargetEntry = visibleReplyTarget
+    ? replyTargetToChainEntry(visibleReplyTarget)
+    : undefined;
+  const visibleReplyTargetById = new Map<string, TelegramReplyChainEntry>(
+    visibleReplyTargetEntry?.messageId
+      ? [[visibleReplyTargetEntry.messageId, visibleReplyTargetEntry]]
+      : [],
+  );
+  const rawReplyChain =
+    replyChain.length > 0 ? replyChain : visibleReplyTargetEntry ? [visibleReplyTargetEntry] : [];
+  const visibleReplyChain = rawReplyChain.flatMap((entry) => {
+    const visibleEntry = {
+      ...entry,
+      ...(entry.messageId ? visibleReplyTargetById.get(entry.messageId) : undefined),
+    };
+    if (
+      !shouldIncludeGroupSupplementalContext({
         kind: "quote",
-        senderId: entry.senderId,
-        senderUsername: entry.senderUsername,
-      }),
-    )
-    .map((entry) => {
-      const includeForwarded =
-        entry.forwardedFrom &&
-        shouldIncludeGroupSupplementalContext({
-          kind: "forwarded",
-          senderId: entry.forwardedFromId,
-          senderUsername: entry.forwardedFromUsername,
-        });
-      if (includeForwarded) {
-        return entry;
-      }
-      const {
-        forwardedFrom: _forwardedFrom,
-        forwardedFromId: _forwardedFromId,
-        forwardedFromUsername: _forwardedFromUsername,
-        forwardedDate: _forwardedDate,
-        ...withoutForwarded
-      } = entry;
-      return withoutForwarded;
-    });
+        senderId: visibleEntry.senderId,
+        senderUsername: visibleEntry.senderUsername,
+      })
+    ) {
+      return [];
+    }
+    const includeForwarded =
+      visibleEntry.forwardedFrom &&
+      shouldIncludeGroupSupplementalContext({
+        kind: "forwarded",
+        senderId: visibleEntry.forwardedFromId,
+        senderUsername: visibleEntry.forwardedFromUsername,
+      });
+    return [includeForwarded ? visibleEntry : stripReplyChainForwarded(visibleEntry)];
+  });
   const visibleForwardOrigin = includeForwardOrigin ? forwardOrigin : null;
-  const formatReplyChainEntry = (entry: TelegramReplyChainEntry, index: number) => {
-    const labels = [
-      `${index + 1}. ${entry.sender ?? "unknown sender"}`,
-      entry.messageId ? `id:${entry.messageId}` : undefined,
-      entry.replyToId ? `reply_to:${entry.replyToId}` : undefined,
-      entry.timestamp ? new Date(entry.timestamp).toISOString() : undefined,
-    ].filter(Boolean);
-    const bodyLines = [
-      entry.forwardedFrom
-        ? `[Forwarded from ${entry.forwardedFrom}${
-            entry.forwardedDate ? ` at ${new Date(entry.forwardedDate).toISOString()}` : ""
-          }]`
-        : undefined,
-      entry.isQuote && entry.body ? `"${entry.body}"` : entry.body,
-      entry.mediaType ? `<media:${entry.mediaType}>` : undefined,
-      entry.mediaPath ? `[media_path:${entry.mediaPath}]` : undefined,
-      entry.mediaRef ? `[media_ref:${entry.mediaRef}]` : undefined,
-    ].filter(Boolean);
-    return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
-  };
   const replySuffix =
     visibleReplyChain.length > 0
       ? `\n\n[Reply chain - nearest first]\n${visibleReplyChain
