@@ -19,7 +19,7 @@ describe("device-pair notify persistence", () => {
     let state = initialState;
     const store = {
       register: vi.fn(async (_key: string, value: unknown) => {
-        state = JSON.parse(JSON.stringify(value)) as unknown;
+        state = value;
       }),
       registerIfAbsent: vi.fn(async () => false),
       lookup: vi.fn(async () => state),

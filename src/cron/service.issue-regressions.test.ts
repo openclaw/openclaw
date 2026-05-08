@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  noopLogger,
   setupCronIssueRegressionFixtures,
   startCronForStore,
   topOfHourOffsetMs,
   writeCronStoreSnapshot,
 } from "./service.issue-regressions.test-helpers.js";
+import { CronService } from "./service.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob, CronJobState } from "./types.js";
 
@@ -53,6 +55,47 @@ describe("Cron issue regressions", () => {
       expect(patched.payload.allowUnsafeExternalContent).toBe(true);
       expect(patched.payload.message).toBe("hi");
     }
+
+    cron.stop();
+  });
+
+  it("repairs isolated every jobs missing createdAtMs and sets nextWakeAtMs", async () => {
+    const store = cronIssueRegressionFixtures.makeStoreKey();
+    await writeCronStoreSnapshot(store.storeKey, [
+      {
+        id: "legacy-isolated",
+        agentId: "feature-dev_planner",
+        sessionKey: "agent:main:main",
+        name: "legacy isolated",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 300_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "poll workflow queue" },
+        state: {},
+      },
+    ]);
+
+    const cron = new CronService({
+      storeKey: store.storeKey,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+    });
+    await cron.start();
+
+    const status = await cron.status();
+    const jobs = await cron.list({ includeDisabled: true });
+    const isolated = jobs.find((job) => job.id === "legacy-isolated");
+    expect(Number.isFinite(isolated?.state.nextRunAtMs)).toBe(true);
+    expect(Number.isFinite(status.nextWakeAtMs)).toBe(true);
+
+    const persisted = await loadCronStore(store.storeKey);
+    const persistedIsolated = persisted.jobs.find((job) => job.id === "legacy-isolated");
+    expect(typeof persistedIsolated?.state?.nextRunAtMs).toBe("number");
+    expect(Number.isFinite(persistedIsolated?.state?.nextRunAtMs)).toBe(true);
 
     cron.stop();
   });

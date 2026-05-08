@@ -21,27 +21,10 @@ function isProfileForProvider(params: {
   if (!entry?.provider) {
     return false;
   }
-  return params.providers.some((provider) =>
-    isConfiguredAwsSdkAuthProfileForProvider({
-      cfg: params.cfg,
-      provider,
-      profileId: params.profileId,
-    }),
+  const entryProviderKey = resolveProviderIdForAuth(entry.provider, { config: params.cfg });
+  return params.providers.some(
+    (provider) => resolveProviderIdForAuth(provider, { config: params.cfg }) === entryProviderKey,
   );
-}
-
-function uniqueProviders(provider: string, acceptedProviderIds?: readonly string[]): string[] {
-  const providers = new Set<string>();
-  const push = (value: string | undefined) => {
-    const normalized = value?.trim();
-    if (normalized) {
-      providers.add(normalized);
-    }
-  };
-  const candidates =
-    acceptedProviderIds && acceptedProviderIds.length > 0 ? acceptedProviderIds : [provider];
-  candidates.forEach(push);
-  return [...providers];
 }
 
 export async function clearSessionAuthProfileOverride(params: {
@@ -89,11 +72,14 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const providers = uniqueProviders(provider, params.acceptedProviderIds);
+  const acceptedProviders =
+    params.acceptedProviderIds && params.acceptedProviderIds.length > 0
+      ? [...new Set(params.acceptedProviderIds)]
+      : [provider];
   const order = [
     ...new Set(
-      providers.flatMap((candidateProvider) =>
-        resolveAuthProfileOrder({ cfg, store, provider: candidateProvider }),
+      acceptedProviders.flatMap((acceptedProvider) =>
+        resolveAuthProfileOrder({ cfg, store, provider: acceptedProvider }),
       ),
     ),
   ];
@@ -106,23 +92,15 @@ export async function resolveSessionAuthProfileOverride(params: {
         ? "user"
         : undefined);
 
-  const currentProfileId = current;
-  if (
-    currentProfileId &&
-    !store.profiles[currentProfileId] &&
-    !providers.some((candidateProvider) =>
-      isConfiguredAwsSdkAuthProfileForProvider({
-        cfg,
-        provider: candidateProvider,
-        profileId: currentProfileId,
-      }),
-    )
-  ) {
+  if (current && !store.profiles[current]) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey });
     current = undefined;
   }
 
-  if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
+  if (
+    current &&
+    !isProfileForProvider({ cfg, providers: acceptedProviders, profileId: current, store })
+  ) {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey });
     current = undefined;
   }

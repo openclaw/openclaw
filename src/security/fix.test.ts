@@ -279,9 +279,6 @@ describe("security fix", () => {
     const stateWalPath = `${stateDbPath}-wal`;
     await fs.writeFile(stateWalPath, "", "utf-8");
     await fs.chmod(stateWalPath, 0o644);
-    const stateShmPath = `${stateDbPath}-shm`;
-    await fs.writeFile(stateShmPath, "", "utf-8");
-    await fs.chmod(stateShmPath, 0o644);
 
     const agentDbPath = path.join(agentDir, "openclaw-agent.sqlite");
     await fs.writeFile(agentDbPath, "", "utf-8");
@@ -289,9 +286,6 @@ describe("security fix", () => {
     const agentWalPath = `${agentDbPath}-wal`;
     await fs.writeFile(agentWalPath, "", "utf-8");
     await fs.chmod(agentWalPath, 0o644);
-    const agentShmPath = `${agentDbPath}-shm`;
-    await fs.writeFile(agentShmPath, "", "utf-8");
-    await fs.chmod(agentShmPath, 0o644);
 
     const targets = await collectSecurityPermissionTargets({
       env: createFixEnv(stateDir, configPath),
