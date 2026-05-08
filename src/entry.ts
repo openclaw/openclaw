@@ -2,9 +2,10 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
-import { assertNotRoot } from "./cli/root-guard.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
+import { formatCliFailureLines } from "./cli/failure-output.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
+import { assertNotRoot } from "./cli/root-guard.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
   enableOpenClawCompileCache,
@@ -214,10 +215,13 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
     );
     await runCli(argv);
   } catch (error) {
-    console.error(
-      "[openclaw] Failed to start CLI:",
-      error instanceof Error ? (error.stack ?? error.message) : error,
-    );
+    for (const line of formatCliFailureLines({
+      title: "Could not start the CLI.",
+      error,
+      argv,
+    })) {
+      console.error(line);
+    }
     process.exit(1);
   }
 }
