@@ -14,7 +14,6 @@ import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
   parseUsageCountedSessionIdFromFileName,
-  resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
@@ -26,6 +25,7 @@ const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
+const SQLITE_TRANSCRIPT_REF_PREFIX = "sqlite-transcript://";
 
 export type SessionTranscriptEntry = {
   path: string;
@@ -193,11 +193,42 @@ export function loadSessionTranscriptClassificationForAgent(
   };
 }
 
+function createSqliteSessionTranscriptRef(params: { agentId: string; sessionId: string }): string {
+  return `${SQLITE_TRANSCRIPT_REF_PREFIX}${encodeURIComponent(params.agentId)}/${encodeURIComponent(
+    params.sessionId,
+  )}.jsonl`;
+}
+
 export async function listSessionTranscriptsForAgent(agentId: string): Promise<string[]> {
-  const dir = resolveSessionTranscriptsDirForAgent(agentId);
   return listSqliteSessionTranscripts({ agentId }).map(
-    (transcript) => transcript.path ?? path.join(dir, `${transcript.sessionId}.jsonl`),
+    (transcript) =>
+      transcript.path ??
+      createSqliteSessionTranscriptRef({
+        agentId: transcript.agentId,
+        sessionId: transcript.sessionId,
+      }),
   );
+}
+
+function parseSqliteSessionTranscriptRef(locator: string): {
+  agentId: string;
+  sessionId: string;
+} | null {
+  if (!locator.startsWith(SQLITE_TRANSCRIPT_REF_PREFIX)) {
+    return null;
+  }
+  try {
+    const url = new URL(locator);
+    const agentId = decodeURIComponent(url.hostname).trim();
+    const fileName = decodeURIComponent(url.pathname.replace(/^\/+/u, "")).trim();
+    const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
+    if (!agentId || !sessionId) {
+      return null;
+    }
+    return { agentId, sessionId };
+  } catch {
+    return null;
+  }
 }
 
 function extractAgentIdFromSessionPath(absPath: string): string | null {
@@ -214,25 +245,47 @@ function resolveSessionIdFromTranscriptPath(absPath: string): string | null {
 }
 
 export function sessionPathForTranscript(absPath: string): string {
+  const sqliteRef = parseSqliteSessionTranscriptRef(absPath);
+  if (sqliteRef) {
+    return path
+      .join("sessions", sqliteRef.agentId, `${sqliteRef.sessionId}.jsonl`)
+      .replace(/\\/g, "/");
+  }
   const agentId = extractAgentIdFromSessionPath(absPath);
   return path
     .join("sessions", ...(agentId ? [agentId] : []), path.basename(absPath))
     .replace(/\\/g, "/");
 }
 
+export function resolveSessionTranscriptScope(locator: string): {
+  agentId: string;
+  sessionId: string;
+  transcriptPath?: string;
+} | null {
+  const sqliteRef = parseSqliteSessionTranscriptRef(locator);
+  if (sqliteRef) {
+    return sqliteRef;
+  }
+  const transcriptPath = path.resolve(locator);
+  const rememberedScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+  const agentId = rememberedScope?.agentId ?? extractAgentIdFromSessionPath(transcriptPath);
+  const sessionId =
+    rememberedScope?.sessionId ?? resolveSessionIdFromTranscriptPath(transcriptPath);
+  if (!agentId || !sessionId) {
+    return null;
+  }
+  return { agentId, sessionId, transcriptPath };
+}
+
 export function readSessionTranscriptDeltaStats(
   absPath: string,
 ): SessionTranscriptDeltaStats | null {
   try {
-    const transcriptPath = path.resolve(absPath);
-    const rememberedScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
-    const agentId = rememberedScope?.agentId ?? extractAgentIdFromSessionPath(transcriptPath);
-    const sessionId =
-      rememberedScope?.sessionId ?? resolveSessionIdFromTranscriptPath(transcriptPath);
-    if (!agentId || !sessionId) {
+    const scope = resolveSessionTranscriptScope(absPath);
+    if (!scope) {
       return null;
     }
-    const transcriptEvents = loadSqliteSessionTranscriptEvents({ agentId, sessionId });
+    const transcriptEvents = loadSqliteSessionTranscriptEvents(scope);
     if (transcriptEvents.length === 0) {
       return null;
     }
@@ -453,15 +506,11 @@ export async function buildSessionTranscriptEntry(
   opts: BuildSessionTranscriptEntryOptions = {},
 ): Promise<SessionTranscriptEntry | null> {
   try {
-    const transcriptPath = path.resolve(absPath);
-    const rememberedScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
-    const agentId = rememberedScope?.agentId ?? extractAgentIdFromSessionPath(transcriptPath);
-    const sessionId =
-      rememberedScope?.sessionId ?? resolveSessionIdFromTranscriptPath(transcriptPath);
-    if (!agentId || !sessionId) {
+    const scope = resolveSessionTranscriptScope(absPath);
+    if (!scope) {
       return null;
     }
-    const transcriptEvents = loadSqliteSessionTranscriptEvents({ agentId, sessionId });
+    const transcriptEvents = loadSqliteSessionTranscriptEvents(scope);
     if (transcriptEvents.length === 0) {
       return null;
     }

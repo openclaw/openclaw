@@ -109,16 +109,20 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     const existingScope = resolveSqliteSessionTranscriptScopeForPath({
       transcriptPath: params.transcriptPath,
     });
+    const agentId = params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID;
+    const sessionId = params.sessionId ?? existingScope?.sessionId;
     const { messageId } = await appendSessionTranscriptMessage({
       transcriptPath: params.transcriptPath,
-      agentId: params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID,
-      sessionId: params.sessionId ?? existingScope?.sessionId,
+      agentId,
+      sessionId,
       message: messageBody,
       now,
       useRawWhenLinear: true,
       config: params.config,
     });
     emitSessionTranscriptUpdate({
+      agentId,
+      ...(sessionId ? { sessionId } : {}),
       sessionFile: params.transcriptPath,
       message: messageBody,
       messageId,

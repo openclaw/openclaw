@@ -299,10 +299,22 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 
   switch (params.updateMode ?? "inline") {
     case "inline":
-      emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
+      emitSessionTranscriptUpdate({
+        agentId,
+        sessionId: entry.sessionId,
+        sessionFile,
+        sessionKey,
+        message,
+        messageId,
+      });
       break;
     case "file-only":
-      emitSessionTranscriptUpdate({ sessionFile, sessionKey });
+      emitSessionTranscriptUpdate({
+        agentId,
+        sessionId: entry.sessionId,
+        sessionFile,
+        sessionKey,
+      });
       break;
     case "none":
       break;

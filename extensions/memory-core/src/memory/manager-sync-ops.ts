@@ -18,6 +18,7 @@ import {
   buildSessionTranscriptEntry,
   listSessionTranscriptsForAgent,
   readSessionTranscriptDeltaStats,
+  resolveSessionTranscriptScope,
   sessionPathForTranscript,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
@@ -463,7 +464,11 @@ export abstract class MemoryManagerSyncOps {
         return;
       }
       const sessionTranscript = update.sessionFile;
-      if (!this.isSessionTranscriptForAgent(sessionTranscript)) {
+      const updateAgentId = update.agentId?.trim();
+      if (updateAgentId && updateAgentId !== this.agentId) {
+        return;
+      }
+      if (!updateAgentId && !this.isSessionTranscriptForAgent(sessionTranscript)) {
         return;
       }
       this.scheduleSessionDirty(sessionTranscript);
@@ -584,6 +589,10 @@ export abstract class MemoryManagerSyncOps {
   private isSessionTranscriptForAgent(sessionTranscript: string): boolean {
     if (!sessionTranscript) {
       return false;
+    }
+    const scope = resolveSessionTranscriptScope(sessionTranscript);
+    if (scope) {
+      return scope.agentId === this.agentId;
     }
     const sessionsDir = resolveSessionTranscriptsDirForAgent(this.agentId);
     const resolvedFile = path.resolve(sessionTranscript);

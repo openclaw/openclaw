@@ -772,6 +772,8 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect(result.ok).toBe(true);
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
+        agentId: "main",
+        sessionId: "rotated-session",
         sessionFile: TEST_ROTATED_SESSION_FILE,
         sessionKey: TEST_SESSION_KEY,
       });
@@ -1252,6 +1254,8 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       expect(result.ok).toBe(true);
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
+        agentId: "main",
+        sessionId: "session-1",
         sessionFile: TEST_SESSION_FILE,
         sessionKey: TEST_SESSION_KEY,
       });

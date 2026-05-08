@@ -2269,6 +2269,8 @@ export const chatHandlers: GatewayRequestHandlers = {
               }
               const persistedImages = await persistedImagesPromise;
               emitSessionTranscriptUpdate({
+                agentId,
+                sessionId: resolvedSessionId,
                 sessionFile: transcriptPath,
                 sessionKey,
                 message: buildChatSendTranscriptMessage({

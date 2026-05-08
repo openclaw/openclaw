@@ -124,8 +124,17 @@ export async function mirrorCodexAppServerTranscript(params: {
   }
 
   if (params.sessionKey) {
-    emitSessionTranscriptUpdate({ sessionFile: params.sessionFile, sessionKey: params.sessionKey });
+    emitSessionTranscriptUpdate({
+      agentId,
+      sessionId,
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+    });
   } else {
-    emitSessionTranscriptUpdate(params.sessionFile);
+    emitSessionTranscriptUpdate({
+      agentId,
+      sessionId,
+      sessionFile: params.sessionFile,
+    });
   }
 }

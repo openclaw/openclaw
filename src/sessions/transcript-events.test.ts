@@ -25,15 +25,21 @@ describe("transcript events", () => {
     cleanup.push(onSessionTranscriptUpdate(listener));
 
     emitSessionTranscriptUpdate({
+      agentId: "  main  ",
+      sessionId: "  sess-1  ",
       sessionFile: "  /tmp/session.jsonl  ",
       sessionKey: "  agent:main:main  ",
       message: { role: "assistant", content: "hi" },
+      messageId: "  msg-1  ",
     });
 
     expect(listener).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: "sess-1",
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:main",
       message: { role: "assistant", content: "hi" },
+      messageId: "msg-1",
     });
   });
 
