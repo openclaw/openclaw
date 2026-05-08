@@ -248,6 +248,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       } as OpenClawConfig,
       opts: {
         message: "NO_REPLY",
+        directDelivery: true,
         directDeliveryText: "NO_REPLY",
       } as AgentCommandOpts,
       outboundSession: undefined,
@@ -364,6 +365,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       opts: {
         message: "NO_REPLY",
         deliver: true,
+        directDelivery: true,
         directDeliveryText: "NO_REPLY",
         replyChannel: "slack",
         replyTo: "#general",

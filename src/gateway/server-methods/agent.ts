@@ -575,6 +575,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       sessionKey?: string;
       thinking?: string;
       deliver?: boolean;
+      directDelivery?: boolean;
       attachments?: Array<{
         type?: string;
         mimeType?: string;
@@ -1312,7 +1313,11 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
     const directDeliveryText =
-      deliver && !isRawModelRun && !request.internalEvents?.length && images.length === 0
+      request.directDelivery === true &&
+      deliver &&
+      !isRawModelRun &&
+      !request.internalEvents?.length &&
+      images.length === 0
         ? originalDirectDeliveryMessage
         : undefined;
 
@@ -1463,6 +1468,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             sessionKey: resolvedSessionKey,
             thinking: request.thinking,
             deliver,
+            directDelivery: request.directDelivery === true,
             directDeliveryText,
             deliveryTargetMode,
             channel: resolvedChannel,

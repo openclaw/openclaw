@@ -580,6 +580,7 @@ describe("agentCommand", () => {
           channel: "telegram",
           messageChannel: "telegram",
           deliver: true,
+          directDelivery: true,
           senderIsOwner: false,
           allowModelOverride: false,
         },

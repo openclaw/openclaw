@@ -131,6 +131,11 @@ describe("exec approval followup", () => {
       threadId: target.threadId,
       idempotencyKey: `exec-approval-followup:req-${target.channel}`,
     });
+    const followupArgs = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+      | { directDelivery?: boolean; directDeliveryText?: string }
+      | undefined;
+    expect(followupArgs?.directDelivery).not.toBe(true);
+    expect(followupArgs?.directDeliveryText).toBeUndefined();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

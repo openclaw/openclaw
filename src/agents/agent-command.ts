@@ -205,7 +205,11 @@ function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
 
 function shouldDirectDeliverOriginalMessage(opts: AgentCommandOpts, isRawModelRun: boolean) {
   return (
-    opts.deliver === true && !isRawModelRun && !opts.internalEvents?.length && !opts.images?.length
+    opts.directDelivery === true &&
+    opts.deliver === true &&
+    !isRawModelRun &&
+    !opts.internalEvents?.length &&
+    !opts.images?.length
   );
 }
 

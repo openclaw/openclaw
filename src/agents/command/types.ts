@@ -62,7 +62,9 @@ export type AgentCommandOpts = {
   json?: boolean;
   timeout?: string;
   deliver?: boolean;
-  /** Internal: direct notification text for `agent --deliver` paths that bypass an agent turn. */
+  /** Internal: bypass the agent turn for trusted CLI/RPC notification sends. */
+  directDelivery?: boolean;
+  /** Internal: direct notification text for explicit direct-delivery paths. */
   directDeliveryText?: string;
   /** Override delivery target (separate from session routing). */
   replyTo?: string;

@@ -202,6 +202,7 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
           sessionKey,
           thinking: opts.thinking,
           deliver: Boolean(opts.deliver),
+          directDelivery: Boolean(opts.deliver),
           channel,
           replyChannel: opts.replyChannel,
           replyAccountId: opts.replyAccount,
@@ -252,6 +253,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    directDelivery: Boolean(opts.deliver),
     cleanupBundleMcpOnRunEnd: true,
     cleanupCliLiveSessionOnRunEnd: true,
   };

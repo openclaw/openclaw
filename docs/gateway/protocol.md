@@ -622,6 +622,7 @@ terminal summary, and sanitized error text.
 ## Agent delivery fallback
 
 - `agent` requests can include `deliver=true` to request outbound delivery.
+- `directDelivery=true` is reserved for trusted CLI/direct-notification clients that want `message` delivered as-is without running an agent turn. Plain `deliver=true` still runs the agent and delivers the composed reply.
 - `bestEffortDeliver=false` keeps strict behavior: unresolved or internal-only delivery targets return `INVALID_REQUEST`.
 - `bestEffortDeliver=true` allows fallback to session-only execution when no external deliverable route can be resolved (for example internal/webchat sessions or ambiguous multi-channel configs).
 - Final `agent` results may include `result.deliveryStatus` when delivery was

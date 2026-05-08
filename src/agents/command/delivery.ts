@@ -275,7 +275,10 @@ export function normalizeAgentCommandReplyPayloads(params: {
   if (payloads.length === 0) {
     return [];
   }
-  if (normalizeOptionalString(params.opts.directDeliveryText)) {
+  if (
+    params.opts.directDelivery === true &&
+    normalizeOptionalString(params.opts.directDeliveryText) !== undefined
+  ) {
     return payloads as ReplyPayload[];
   }
   const channel =
@@ -346,7 +349,8 @@ export async function deliverAgentCommandResult(params: {
   payloads: RunResult["payloads"];
 }): Promise<AgentCommandDeliveryResult> {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
-  const directDelivery = normalizeOptionalString(opts.directDeliveryText) !== undefined;
+  const directDelivery =
+    opts.directDelivery === true && normalizeOptionalString(opts.directDeliveryText) !== undefined;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;

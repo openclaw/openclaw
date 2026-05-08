@@ -1299,6 +1299,7 @@ describe("gateway agent handler", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         deliver: true,
+        directDelivery: true,
         replyChannel: "telegram",
         to: "123",
         bestEffortDeliver: false,
@@ -1309,7 +1310,32 @@ describe("gateway agent handler", () => {
 
     const callArgs = await waitForAgentCommandCall();
     expect(callArgs.bestEffortDeliver).toBe(false);
+    expect(callArgs.directDelivery).toBe(true);
     expect(callArgs.directDeliveryText).toBe("strict delivery");
+  });
+
+  it("keeps composed delivery on the agent path without directDelivery", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "compose this before delivery",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        replyChannel: "telegram",
+        to: "123",
+        bestEffortDeliver: true,
+        idempotencyKey: "test-composed-delivery",
+      },
+      { reqId: "composed-delivery" },
+    );
+
+    const callArgs = await waitForAgentCommandCall();
+    expect(callArgs.deliver).toBe(true);
+    expect(callArgs.directDelivery).toBe(false);
+    expect(callArgs.directDeliveryText).toBeUndefined();
   });
 
   it("keeps internal-event delivery on the agent-composed path", async () => {
