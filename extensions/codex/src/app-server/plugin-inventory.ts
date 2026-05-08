@@ -320,8 +320,21 @@ function findPluginSummary(
     (plugin) =>
       plugin.name === pluginName ||
       plugin.id === pluginName ||
-      plugin.id === `${pluginName}@${marketplace.name}`,
+      plugin.id === `${pluginName}@${marketplace.name}` ||
+      pluginNameFromPluginId(plugin.id, marketplace.name) === pluginName,
   );
+}
+
+function pluginNameFromPluginId(pluginId: string, marketplaceName: string): string | undefined {
+  const trimmed = pluginId.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const marketplaceSuffix = `@${marketplaceName}`;
+  const withoutMarketplaceSuffix = trimmed.endsWith(marketplaceSuffix)
+    ? trimmed.slice(0, -marketplaceSuffix.length)
+    : trimmed;
+  return withoutMarketplaceSuffix.split("/").at(-1)?.trim() || undefined;
 }
 
 function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMarketplaceRef {

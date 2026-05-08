@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
-import { readCodexPluginInventory } from "./plugin-inventory.js";
+import { findOpenAiCuratedPluginSummary, readCodexPluginInventory } from "./plugin-inventory.js";
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin inventory", () => {
@@ -64,6 +64,70 @@ describe("Codex plugin inventory", () => {
       apps: [{ id: "google-calendar-app", accessible: true, enabled: true }],
     });
     expect(calls).toEqual(["plugin/list", "plugin/read"]);
+  });
+
+  it("matches namespaced curated plugin ids by normalized path segment", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("github-app", true)],
+        nextCursor: null,
+      }),
+    });
+
+    const listed = pluginList([
+      pluginSummary("openai-curated/github", {
+        name: "GitHub",
+        installed: true,
+        enabled: true,
+      }),
+    ]);
+    expect(findOpenAiCuratedPluginSummary(listed, "github")?.summary.id).toBe(
+      "openai-curated/github",
+    );
+
+    const inventory = await readCodexPluginInventory({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            github: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "github",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method, params) => {
+        if (method === "plugin/list") {
+          return listed;
+        }
+        if (method === "plugin/read") {
+          expect(params).toMatchObject({
+            marketplacePath: "/marketplaces/openai-curated",
+            pluginName: "github",
+          });
+          return pluginDetail("github", [appSummary("github-app")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(inventory.records).toHaveLength(1);
+    expect(inventory.records[0]).toMatchObject({
+      policy: { pluginName: "github" },
+      summary: { id: "openai-curated/github", installed: true, enabled: true },
+      appOwnership: "proven",
+      ownedAppIds: ["github-app"],
+    });
+    expect(inventory.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: "plugin_missing" }),
+    );
   });
 
   it("fails closed when plugin detail apps are absent from app inventory", async () => {
