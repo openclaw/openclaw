@@ -34,7 +34,14 @@ function renderMetaRow(label: string, value?: string | null, opts?: { path?: boo
 
 function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
   const commandSpans = [...(request.commandSpans ?? [])]
-    .filter((span) => span.startIndex >= 0 && span.endIndex <= request.command.length)
+    .filter(
+      (span) =>
+        Number.isSafeInteger(span.startIndex) &&
+        Number.isSafeInteger(span.endIndex) &&
+        span.startIndex >= 0 &&
+        span.endIndex > span.startIndex &&
+        span.endIndex <= request.command.length,
+    )
     .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
   const accepted: typeof commandSpans = [];
   let cursor = 0;

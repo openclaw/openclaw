@@ -137,8 +137,15 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
       Type.Array(
         Type.Object(
           {
-            startIndex: Type.Integer({ minimum: 0 }),
-            endIndex: Type.Integer({ minimum: 0 }),
+            startIndex: Type.Integer({
+              minimum: 0,
+              description: "Inclusive UTF-16 code unit offset into command.",
+            }),
+            endIndex: Type.Integer({
+              minimum: 1,
+              description:
+                "Exclusive UTF-16 code unit offset into command; must be greater than startIndex and no greater than command.length.",
+            }),
           },
           { additionalProperties: false },
         ),

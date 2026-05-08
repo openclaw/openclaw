@@ -146,7 +146,10 @@ describe("approval and confirmation modals", () => {
     request.request.command = 'ls | grep "stuff" | python -c \'print("hi")\'';
     request.request.commandSpans = [
       { startIndex: 0, endIndex: 2 },
+      { startIndex: 5, endIndex: 5 },
+      { startIndex: 8.5, endIndex: 10 },
       { startIndex: 20, endIndex: 29 },
+      { startIndex: 30, endIndex: 200 },
     ];
 
     render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
