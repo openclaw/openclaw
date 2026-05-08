@@ -142,7 +142,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
               "error",
               error instanceof Error ? error.message : String(error),
             );
-            this.stopLocal();
+            this.stop();
           }
         });
     };

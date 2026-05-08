@@ -243,10 +243,11 @@ export function buildRealtimeVoiceLaunchOptions(params: {
   requested: RealtimeVoiceLaunchOptionInput;
   defaults: RealtimeVoiceLaunchOptions;
 }): RealtimeVoiceLaunchOptions {
-  return withRealtimeBrowserOverrides(
-    params.defaults,
-    params.requested,
-  ) as RealtimeVoiceLaunchOptions;
+  const options = pickRealtimeVoiceLaunchOptions(params.defaults);
+  return {
+    ...options,
+    ...pickRealtimeVoiceLaunchOptions(params.requested),
+  };
 }
 
 export function withRealtimeBrowserOverrides(
@@ -276,6 +277,34 @@ export function withRealtimeBrowserOverrides(
     overrides.reasoningEffort = reasoningEffort;
   }
   return Object.keys(overrides).length > 0 ? { ...providerConfig, ...overrides } : providerConfig;
+}
+
+function pickRealtimeVoiceLaunchOptions(
+  params: RealtimeVoiceLaunchOptionInput,
+): RealtimeVoiceLaunchOptions {
+  const options: RealtimeVoiceLaunchOptions = {};
+  const model = normalizeOptionalString(params.model);
+  const voice = normalizeOptionalString(params.voice);
+  const reasoningEffort = normalizeOptionalString(params.reasoningEffort);
+  if (model) {
+    options.model = model;
+  }
+  if (voice) {
+    options.voice = voice;
+  }
+  if (typeof params.vadThreshold === "number" && Number.isFinite(params.vadThreshold)) {
+    options.vadThreshold = params.vadThreshold;
+  }
+  if (typeof params.silenceDurationMs === "number" && Number.isFinite(params.silenceDurationMs)) {
+    options.silenceDurationMs = params.silenceDurationMs;
+  }
+  if (typeof params.prefixPaddingMs === "number" && Number.isFinite(params.prefixPaddingMs)) {
+    options.prefixPaddingMs = params.prefixPaddingMs;
+  }
+  if (reasoningEffort) {
+    options.reasoningEffort = reasoningEffort;
+  }
+  return options;
 }
 
 export function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserSession): boolean {

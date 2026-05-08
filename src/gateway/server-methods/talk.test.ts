@@ -1199,7 +1199,7 @@ describe("talk.client.create handler", () => {
   });
 
   it("uses talk.realtime provider, model, voice, and instructions without reading speech provider config", async () => {
-    const createBrowserSession = vi.fn(async () => ({
+    const createBrowserSession = vi.fn(async (_input: unknown) => ({
       provider: "openai",
       transport: "webrtc" as const,
       clientSecret: "secret",
@@ -1264,6 +1264,10 @@ describe("talk.client.create handler", () => {
         reasoningEffort: "low",
       }),
     );
+    const createInput = createBrowserSession.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(createInput).not.toHaveProperty("provider");
+    expect(createInput).not.toHaveProperty("providers");
+    expect(createInput).not.toHaveProperty("transport");
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ provider: "openai", transport: "webrtc" }),

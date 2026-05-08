@@ -247,7 +247,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       .mocked(client.request)
       .mock.calls.filter(([method]) => method === "talk.session.close");
     expect(appendCalls).toHaveLength(1);
-    expect(closeCalls).toHaveLength(0);
+    expect(closeCalls).toHaveLength(1);
+    expect(closeCalls[0]?.[1]).toEqual({ sessionId: "relay-1" });
   });
 
   it("treats relay close events as local shutdown", async () => {
