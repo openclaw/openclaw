@@ -35,14 +35,10 @@ describe("session cost usage", () => {
       "",
     ].join("\n");
   const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (await predicate()) {
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    throw new Error("Timed out waiting for condition");
+    await vi.waitFor(async () => expect(await predicate()).toBe(true), {
+      interval: 1,
+      timeout: timeoutMs,
+    });
   };
   const requireValue = <T>(value: T | null | undefined, message: string): T => {
     if (value == null) {
