@@ -17,6 +17,9 @@ const {
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
+  resolveConfiguredRealtimeVoiceProviderMock,
+  createRealtimeVoiceBridgeSessionMock,
+  realtimeSessionMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -90,6 +93,19 @@ const {
 
   const getVoiceConnectionMock = vi.fn((): MockConnection | undefined => undefined);
 
+  const realtimeSessionMock = {
+    bridge: { supportsToolResultContinuation: true },
+    acknowledgeMark: vi.fn(),
+    close: vi.fn(),
+    connect: vi.fn(async () => undefined),
+    sendAudio: vi.fn(),
+    sendUserMessage: vi.fn(),
+    handleBargeIn: vi.fn(),
+    setMediaTimestamp: vi.fn(),
+    submitToolResult: vi.fn(),
+    triggerGreeting: vi.fn(),
+  };
+
   return {
     createConnectionMock,
     getVoiceConnectionMock,
@@ -106,13 +122,24 @@ const {
       state: { status: "idle" },
     })),
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
-    agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
+    agentCommandMock: vi.fn(
+      async (
+        _opts?: unknown,
+        _runtime?: unknown,
+      ): Promise<{ payloads?: Array<{ text?: string }> }> => ({ payloads: [] }),
+    ),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
     textToSpeechStreamMock: vi.fn(
       async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
     ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn(),
+    resolveConfiguredRealtimeVoiceProviderMock: vi.fn(() => ({
+      provider: { id: "openai" },
+      providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
+    })),
+    createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMock),
+    realtimeSessionMock,
   };
 });
 
@@ -121,6 +148,7 @@ vi.mock("./sdk-runtime.js", () => ({
     AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
     EndBehaviorType: { AfterSilence: "AfterSilence", Manual: "Manual" },
     NetworkingStatusCode: { Ready: "networking-ready", Resuming: "networking-resuming" },
+    StreamType: { Raw: "raw" },
     VoiceConnectionStatus: {
       Ready: "ready",
       Disconnected: "disconnected",
@@ -163,6 +191,17 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   return {
     ...actual,
     logVerbose: logVerboseMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/realtime-voice")>(
+    "openclaw/plugin-sdk/realtime-voice",
+  );
+  return {
+    ...actual,
+    createRealtimeVoiceBridgeSession: createRealtimeVoiceBridgeSessionMock,
+    resolveConfiguredRealtimeVoiceProvider: resolveConfiguredRealtimeVoiceProviderMock,
   };
 });
 
@@ -232,6 +271,19 @@ describe("DiscordVoiceManager", () => {
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
     logVerboseMock.mockClear();
     createAudioResourceMock.mockClear();
+    realtimeSessionMock.close.mockClear();
+    realtimeSessionMock.connect.mockClear();
+    realtimeSessionMock.sendAudio.mockClear();
+    realtimeSessionMock.sendUserMessage.mockClear();
+    realtimeSessionMock.handleBargeIn.mockClear();
+    realtimeSessionMock.submitToolResult.mockClear();
+    createRealtimeVoiceBridgeSessionMock.mockClear();
+    createRealtimeVoiceBridgeSessionMock.mockReturnValue(realtimeSessionMock);
+    resolveConfiguredRealtimeVoiceProviderMock.mockClear();
+    resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
+      provider: { id: "openai" },
+      providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
+    });
   });
 
   const createManager = (
@@ -556,6 +608,122 @@ describe("DiscordVoiceManager", () => {
     expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 15_000);
     expect(connection.destroy).toHaveBeenCalledTimes(1);
     expect(manager.status()).toEqual([]);
+  });
+
+  it("starts Discord realtime voice in talk-buffer mode", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "buffered brain answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "talk-buffer",
+        model: "openai-codex/gpt-5.5",
+        realtime: {
+          provider: "openai",
+          model: "gpt-realtime-2",
+          voice: "cedar",
+          debounceMs: 1,
+        },
+      },
+    });
+
+    const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(result.ok).toBe(true);
+    expect(resolveConfiguredRealtimeVoiceProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configuredProviderId: "openai",
+        defaultModel: "gpt-realtime-2",
+        providerConfigs: expect.objectContaining({
+          openai: expect.objectContaining({ model: "gpt-realtime-2", voice: "cedar" }),
+        }),
+      }),
+    );
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          autoRespondToAudio?: boolean;
+          tools?: unknown[];
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    expect(bridgeParams?.autoRespondToAudio).toBe(false);
+    expect(bridgeParams?.tools).toEqual([]);
+
+    bridgeParams?.onTranscript?.("user", "what did I ask?", true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "openai-codex/gpt-5.5",
+        messageProvider: "discord-voice",
+      }),
+      expect.anything(),
+    );
+    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("buffered brain answer"),
+    );
+  });
+
+  it("starts Discord realtime voice in bidi mode with the consult tool", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "consult answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "bidi",
+        model: "openai-codex/gpt-5.5",
+        realtime: {
+          provider: "openai",
+          model: "gpt-realtime-2",
+          voice: "cedar",
+          toolPolicy: "safe-read-only",
+          consultPolicy: "always",
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          autoRespondToAudio?: boolean;
+          instructions?: string;
+          tools?: Array<{ name: string }>;
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => void;
+        }
+      | undefined;
+    expect(bridgeParams?.autoRespondToAudio).toBe(true);
+    expect(bridgeParams?.instructions).toContain("Call openclaw_agent_consult");
+    expect(bridgeParams?.tools?.map((tool) => tool.name)).toContain("openclaw_agent_consult");
+
+    bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-1",
+        callId: "call-1",
+        name: "openclaw_agent_consult",
+        args: { question: "check my Discord" },
+      },
+      realtimeSessionMock,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
+      "call-1",
+      expect.objectContaining({ status: "working" }),
+      { willContinue: true },
+    );
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
+      text: "consult answer",
+    });
   });
 
   it("stores guild metadata on joined voice sessions", async () => {

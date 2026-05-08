@@ -2,6 +2,7 @@ import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { ChannelType } from "../internal/discord.js";
 import type { VoiceCaptureState } from "./capture-state.js";
+import type { DiscordRealtimeVoiceSession } from "./realtime.js";
 import type { VoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 export const MIN_SEGMENT_SECONDS = 0.35;
@@ -37,6 +38,7 @@ export type VoiceSessionEntry = {
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
+  realtime?: DiscordRealtimeVoiceSession;
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: () => void;
 };

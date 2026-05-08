@@ -8,7 +8,7 @@ import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import { type Client, ReadyListener, ResumedListener } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
-import { decodeOpusStream, writeVoiceWavFile } from "./audio.js";
+import { decodeOpusStream, decodeOpusStreamChunks, writeVoiceWavFile } from "./audio.js";
 import {
   beginVoiceCapture,
   clearVoiceCaptureFinalizeTimer,
@@ -20,6 +20,12 @@ import {
   stopVoiceCaptureState,
 } from "./capture-state.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
+import { resolveDiscordVoiceIngressContext } from "./ingress.js";
+import {
+  DiscordRealtimeVoiceSession,
+  isDiscordRealtimeVoiceMode,
+  resolveDiscordVoiceMode,
+} from "./realtime.js";
 import {
   analyzeVoiceReceiveError,
   createVoiceReceiveRecoveryState,
@@ -224,6 +230,7 @@ export class DiscordVoiceManager {
     }
 
     const voiceConfig = this.params.discordConfig.voice;
+    const voiceMode = resolveDiscordVoiceMode(voiceConfig);
     const adapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
     const daveEncryption = voiceConfig?.daveEncryption;
     const decryptionFailureTolerance = voiceConfig?.decryptionFailureTolerance;
@@ -353,6 +360,7 @@ export class DiscordVoiceManager {
         if (playerErrorHandler) {
           player.off("error", playerErrorHandler);
         }
+        entry.realtime?.close();
         player.stop();
         destroyVoiceConnectionSafely({
           connection,
@@ -361,6 +369,32 @@ export class DiscordVoiceManager {
         });
       },
     };
+
+    if (voiceMode !== "stt-tts") {
+      entry.realtime = new DiscordRealtimeVoiceSession({
+        cfg: this.params.cfg,
+        discordConfig: this.params.discordConfig,
+        entry,
+        mode: voiceMode,
+        runtime: this.params.runtime,
+      });
+      try {
+        await entry.realtime.connect();
+      } catch (err) {
+        entry.realtime.close();
+        destroyVoiceConnectionSafely({
+          connection,
+          voiceSdk,
+          reason: `realtime setup failed guild ${guildId} channel ${channelId}`,
+        });
+        return {
+          ok: false,
+          message: `Failed to start Discord realtime voice: ${formatErrorMessage(err)}`,
+          guildId,
+          channelId,
+        };
+      }
+    }
 
     speakingHandler = (userId: string) => {
       void this.handleSpeakingStart(entry, userId).catch((err) => {
@@ -511,11 +545,18 @@ export class DiscordVoiceManager {
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
-    if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing) {
+    const voiceMode = resolveDiscordVoiceMode(this.params.discordConfig.voice);
+    if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing && !entry.realtime) {
       logVoiceVerbose(
         `capture ignored during playback: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       return;
+    }
+    if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing && entry.realtime) {
+      logVoiceVerbose(
+        `realtime barge-in: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+      entry.realtime.handleBargeIn();
     }
     this.enableDaveReceivePassthrough(
       entry,
@@ -535,6 +576,10 @@ export class DiscordVoiceManager {
     });
 
     try {
+      if (entry.realtime && isDiscordRealtimeVoiceMode(voiceMode)) {
+        await this.processRealtimeAudioCapture({ entry, stream, userId });
+        return;
+      }
       const pcm = await decodeOpusStream(stream, {
         onVerbose: logVoiceVerbose,
         onWarn: (message) => logger.warn(message),
@@ -563,6 +608,44 @@ export class DiscordVoiceManager {
     } finally {
       finishVoiceCapture(entry.capture, userId, generation);
     }
+  }
+
+  private async processRealtimeAudioCapture(params: {
+    entry: VoiceSessionEntry;
+    stream: import("node:stream").Readable;
+    userId: string;
+  }): Promise<void> {
+    const { entry, stream, userId } = params;
+    const realtime = entry.realtime;
+    if (!realtime) {
+      return;
+    }
+    const ingress = await resolveDiscordVoiceIngressContext({
+      entry,
+      userId,
+      cfg: this.params.cfg,
+      discordConfig: this.params.discordConfig,
+      ownerAllowFrom: this.ownerAllowFrom,
+      fetchGuildName: async (guildId) => {
+        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
+        return guild && typeof guild.name === "string" && guild.name.trim()
+          ? guild.name
+          : undefined;
+      },
+      speakerContext: this.speakerContext,
+    });
+    if (!ingress) {
+      logVoiceVerbose(
+        `realtime capture unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+      return;
+    }
+    realtime.setSpeakerContext(ingress);
+    await decodeOpusStreamChunks(stream, {
+      onChunk: (pcm) => realtime.sendInputAudio(pcm),
+      onVerbose: logVoiceVerbose,
+      onWarn: (message) => logger.warn(message),
+    });
   }
 
   private async processSegment(params: {
