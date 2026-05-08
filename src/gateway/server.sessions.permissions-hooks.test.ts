@@ -39,7 +39,7 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
             summary: "checkpoint summary",
             firstKeptEntryId: fixture.preCompactionLeafId,
             preCompaction: {
-              sessionId: fixture.preCompactionSession.getSessionId(),
+              sessionId: fixture.preCompactionSessionId,
               sessionFile: fixture.preCompactionSessionFile,
               leafId: fixture.preCompactionLeafId,
             },
