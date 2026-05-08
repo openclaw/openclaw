@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -35,6 +36,23 @@ type AcpxRuntimeLike = AcpRuntime & {
 
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const ACPX_BACKEND_ID = "acpx";
+export const ACPX_GATEWAY_INSTANCE_PLUGIN_ID = "acpx";
+export const ACPX_GATEWAY_INSTANCE_NAMESPACE = "gateway-instance";
+export const ACPX_GATEWAY_INSTANCE_KEY = "current";
+
+type AcpxGatewayInstanceRecord = {
+  version: 1;
+  id: string;
+  createdAt: number;
+};
+
+const gatewayInstanceStore = createPluginStateKeyedStore<AcpxGatewayInstanceRecord>(
+  ACPX_GATEWAY_INSTANCE_PLUGIN_ID,
+  {
+    namespace: ACPX_GATEWAY_INSTANCE_NAMESPACE,
+    maxEntries: 1,
+  },
+);
 
 type AcpxRuntimeModule = typeof import("./runtime.js");
 let runtimeModulePromise: Promise<AcpxRuntimeModule> | null = null;
@@ -72,9 +90,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         openclawGatewayInstanceId: params.gatewayInstanceId,
         openclawProcessLeaseStore: params.processLeaseStore,
         openclawWrapperRoot: params.wrapperRoot,
-        sessionStore: module.createFileSessionStore({
-          stateDir: params.pluginConfig.stateDir,
-        }),
+        sessionStore: module.createSqliteSessionStore(),
         agentRegistry: module.createAgentRegistry({
           overrides: params.pluginConfig.agents,
         }),
@@ -204,20 +220,17 @@ function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 async function resolveGatewayInstanceId(stateDir: string): Promise<string> {
-  const filePath = path.join(stateDir, "gateway-instance-id");
-  try {
-    const existing = (await fs.readFile(filePath, "utf8")).trim();
-    if (existing) {
-      return existing;
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+  void stateDir;
+  const existing = await gatewayInstanceStore.lookup(ACPX_GATEWAY_INSTANCE_KEY);
+  if (existing?.version === 1 && existing.id.trim()) {
+    return existing.id;
   }
   const next = randomUUID();
-  await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(filePath, `${next}\n`, { mode: 0o600 });
+  await gatewayInstanceStore.register(ACPX_GATEWAY_INSTANCE_KEY, {
+    version: 1,
+    id: next,
+    createdAt: Date.now(),
+  });
   return next;
 }
 
@@ -301,7 +314,7 @@ export function createAcpxRuntimeService(
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
       await fs.mkdir(wrapperRoot, { recursive: true });
       const gatewayInstanceId = await resolveGatewayInstanceId(ctx.stateDir);
-      const processLeaseStore = createAcpxProcessLeaseStore({ stateDir: wrapperRoot });
+      const processLeaseStore = createAcpxProcessLeaseStore({ stateDir: ctx.stateDir });
       const startupReap = await reapOpenAcpxProcessLeases({
         gatewayInstanceId,
         leaseStore: processLeaseStore,

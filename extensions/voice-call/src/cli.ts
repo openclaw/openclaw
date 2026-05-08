@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -9,7 +6,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runti
 import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
-import { resolveUserPath } from "./utils.js";
+import type { CallRecord } from "./types.js";
 import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
 import {
   cleanupTailscaleExposureRoute,
@@ -208,21 +205,6 @@ function resolveMode(input: string): "off" | "serve" | "funnel" {
   return "funnel";
 }
 
-function resolveDefaultStorePath(config: VoiceCallConfig): string {
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
-  const resolvedPreferred = resolveUserPath(preferred);
-  const existing =
-    [resolvedPreferred].find((dir) => {
-      try {
-        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
-      } catch {
-        return false;
-      }
-    }) ?? resolvedPreferred;
-  const base = config.store?.trim() ? resolveUserPath(config.store) : existing;
-  return path.join(base, "calls.jsonl");
-}
-
 function percentile(values: number[], p: number): number {
   if (values.length === 0) {
     return 0;
@@ -230,6 +212,45 @@ function percentile(values: number[], p: number): number {
   const sorted = [...values].toSorted((a, b) => a - b);
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
   return sorted[idx] ?? 0;
+}
+
+function summarizeCallLatency(calls: CallRecord[]): {
+  recordsScanned: number;
+  turnLatency: ReturnType<typeof summarizeSeries>;
+  listenWait: ReturnType<typeof summarizeSeries>;
+} {
+  const turnLatencyMs: number[] = [];
+  const listenWaitMs: number[] = [];
+
+  for (const call of calls) {
+    const latency = call.metadata?.lastTurnLatencyMs;
+    const listenWait = call.metadata?.lastTurnListenWaitMs;
+    if (typeof latency === "number" && Number.isFinite(latency)) {
+      turnLatencyMs.push(latency);
+    }
+    if (typeof listenWait === "number" && Number.isFinite(listenWait)) {
+      listenWaitMs.push(listenWait);
+    }
+  }
+
+  return {
+    recordsScanned: calls.length,
+    turnLatency: summarizeSeries(turnLatencyMs),
+    listenWait: summarizeSeries(listenWaitMs),
+  };
+}
+
+function callRecordTailKey(call: CallRecord): string {
+  return [
+    call.callId,
+    call.state,
+    call.endedAt ?? "",
+    call.transcript.length,
+    call.metadata?.lastTurnLatencyMs ?? "",
+    call.metadata?.lastTurnListenWaitMs ?? "",
+  ]
+    .map(String)
+    .join(":");
 }
 
 function summarizeSeries(values: number[]): {
@@ -394,7 +415,7 @@ export function registerVoiceCallCli(params: {
   ensureRuntime: () => Promise<VoiceCallRuntime>;
   logger: Logger;
 }) {
-  const { program, config, ensureRuntime, logger } = params;
+  const { program, config, ensureRuntime } = params;
   const root = program
     .command("voicecall")
     .description("Voice call utilities")
@@ -702,50 +723,28 @@ export function registerVoiceCallCli(params: {
 
   root
     .command("tail")
-    .description("Tail voice-call JSONL logs (prints new lines; useful during provider tests)")
-    .option("--file <path>", "Path to calls.jsonl", resolveDefaultStorePath(config))
+    .description("Tail voice-call call records from SQLite-backed plugin state")
     .option("--since <n>", "Print last N lines first", "25")
     .option("--poll <ms>", "Poll interval in ms", "250")
-    .action(async (options: { file: string; since?: string; poll?: string }) => {
-      const file = options.file;
+    .action(async (options: { since?: string; poll?: string }) => {
       const since = Math.max(0, Number(options.since ?? 0));
       const pollMs = Math.max(50, Number(options.poll ?? 250));
+      const rt = await ensureRuntime();
+      const seen = new Set<string>();
 
-      if (!fs.existsSync(file)) {
-        logger.error(`No log file at ${file}`);
-        process.exit(1);
+      const initial = await rt.manager.getCallHistory(since);
+      for (const call of initial) {
+        seen.add(callRecordTailKey(call));
+        writeStdoutLine(JSON.stringify(call));
       }
-
-      const initial = fs.readFileSync(file, "utf8");
-      const lines = initial.split("\n").filter(Boolean);
-      for (const line of lines.slice(Math.max(0, lines.length - since))) {
-        writeStdoutLine(line);
-      }
-
-      let offset = Buffer.byteLength(initial, "utf8");
 
       for (;;) {
-        try {
-          const stat = fs.statSync(file);
-          if (stat.size < offset) {
-            offset = 0;
+        for (const call of await rt.manager.getCallHistory(200)) {
+          const key = callRecordTailKey(call);
+          if (!seen.has(key)) {
+            seen.add(key);
+            writeStdoutLine(JSON.stringify(call));
           }
-          if (stat.size > offset) {
-            const fd = fs.openSync(file, "r");
-            try {
-              const buf = Buffer.alloc(stat.size - offset);
-              fs.readSync(fd, buf, 0, buf.length, offset);
-              offset = stat.size;
-              const text = buf.toString("utf8");
-              for (const line of text.split("\n").filter(Boolean)) {
-                writeStdoutLine(line);
-              }
-            } finally {
-              fs.closeSync(fd);
-            }
-          }
-        } catch {
-          // ignore and retry
         }
         await sleep(pollMs);
       }
@@ -753,46 +752,12 @@ export function registerVoiceCallCli(params: {
 
   root
     .command("latency")
-    .description("Summarize turn latency metrics from voice-call JSONL logs")
-    .option("--file <path>", "Path to calls.jsonl", resolveDefaultStorePath(config))
+    .description("Summarize turn latency metrics from SQLite-backed voice-call records")
     .option("--last <n>", "Analyze last N records", "200")
-    .action(async (options: { file: string; last?: string }) => {
-      const file = options.file;
+    .action(async (options: { last?: string }) => {
       const last = Math.max(1, Number(options.last ?? 200));
-
-      if (!fs.existsSync(file)) {
-        throw new Error("No log file at " + file);
-      }
-
-      const content = fs.readFileSync(file, "utf8");
-      const lines = content.split("\n").filter(Boolean).slice(-last);
-
-      const turnLatencyMs: number[] = [];
-      const listenWaitMs: number[] = [];
-
-      for (const line of lines) {
-        try {
-          const parsed = JSON.parse(line) as {
-            metadata?: { lastTurnLatencyMs?: unknown; lastTurnListenWaitMs?: unknown };
-          };
-          const latency = parsed.metadata?.lastTurnLatencyMs;
-          const listenWait = parsed.metadata?.lastTurnListenWaitMs;
-          if (typeof latency === "number" && Number.isFinite(latency)) {
-            turnLatencyMs.push(latency);
-          }
-          if (typeof listenWait === "number" && Number.isFinite(listenWait)) {
-            listenWaitMs.push(listenWait);
-          }
-        } catch {
-          // ignore malformed JSON lines
-        }
-      }
-
-      writeStdoutJson({
-        recordsScanned: lines.length,
-        turnLatency: summarizeSeries(turnLatencyMs),
-        listenWait: summarizeSeries(listenWaitMs),
-      });
+      const rt = await ensureRuntime();
+      writeStdoutJson(summarizeCallLatency(await rt.manager.getCallHistory(last)));
     });
 
   root

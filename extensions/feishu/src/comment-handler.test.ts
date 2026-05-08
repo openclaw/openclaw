@@ -105,7 +105,6 @@ function createTestRuntime(overrides?: {
   const runPrepared = vi.fn(
     async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
       await turn.recordInboundSession({
-        storePath: turn.storePath,
         sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
         ctx: turn.ctxPayload,
         groupResolution: turn.record?.groupResolution,
@@ -146,7 +145,6 @@ function createTestRuntime(overrides?: {
         withReplyDispatcher,
       },
       session: {
-        resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
         recordInboundSession,
       },
       turn: {

@@ -14,11 +14,13 @@ import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  getSessionEntry,
+  mergeSessionEntry,
   type SessionEntry,
-  updateSessionStore,
+  upsertSessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
+import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-paths.js";
 import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -28,14 +30,13 @@ import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./sess
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 
 // nextEntry.skillsSnapshot may carry resolvedSkills (full Skill[] with
-// SKILL.md bodies) for in-turn use. The persistence layer in
-// src/config/sessions/store-load.ts strips resolvedSkills before serializing,
-// so the on-disk sessions.json stays small. The in-memory params.sessionStore
-// reference still carries the runtime cache for the rest of this turn.
+// SKILL.md bodies) for in-turn use. The SQLite session row store strips
+// resolvedSkills before serializing, so the persisted row stays small. The
+// in-memory params.sessionStore reference still carries the runtime cache for
+// the rest of this turn.
 async function persistSessionEntryUpdate(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
-  storePath?: string;
   nextEntry: SessionEntry;
 }) {
   if (!params.sessionStore || !params.sessionKey) {
@@ -45,18 +46,22 @@ async function persistSessionEntryUpdate(params: {
     ...params.sessionStore[params.sessionKey],
     ...params.nextEntry,
   };
-  if (!params.storePath) {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  if (!agentId) {
     return;
   }
-  await updateSessionStore(params.storePath, (store) => {
-    store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
+  upsertSessionEntry({
+    agentId,
+    sessionKey: params.sessionKey,
+    entry: mergeSessionEntry(getSessionEntry({ agentId, sessionKey: params.sessionKey }), {
+      ...params.nextEntry,
+    }),
   });
 }
 
 function emitCompactionSessionLifecycleHooks(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  storePath?: string;
   previousEntry: SessionEntry;
   nextEntry: SessionEntry;
 }) {
@@ -68,7 +73,6 @@ function emitCompactionSessionLifecycleHooks(params: {
   if (hookRunner.hasHooks("session_end")) {
     const transcript = resolveStableSessionEndTranscript({
       sessionId: params.previousEntry.sessionId,
-      storePath: params.storePath,
       sessionFile: params.previousEntry.sessionFile,
       agentId: resolveAgentIdFromSessionKey(params.sessionKey),
     });
@@ -108,7 +112,6 @@ export async function ensureSkillSnapshot(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
-  storePath?: string;
   sessionId?: string;
   isFirstTurnInSession: boolean;
   workspaceDir: string;
@@ -121,7 +124,7 @@ export async function ensureSkillSnapshot(params: {
   systemSent: boolean;
 }> {
   if (process.env.OPENCLAW_TEST_FAST === "1") {
-    // In fast unit-test runs we skip filesystem scanning, watchers, and session-store writes.
+    // In fast unit-test runs we skip filesystem scanning, watchers, and SQLite session-row writes.
     // Dedicated skills tests cover snapshot generation behavior.
     return {
       sessionEntry: params.sessionEntry,
@@ -134,7 +137,6 @@ export async function ensureSkillSnapshot(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
-    storePath,
     sessionId,
     isFirstTurnInSession,
     workspaceDir,
@@ -185,7 +187,7 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, nextEntry });
     systemSent = true;
   }
 
@@ -215,7 +217,7 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
+    await persistSessionEntryUpdate({ sessionStore, sessionKey, nextEntry });
   }
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
@@ -225,7 +227,6 @@ export async function incrementCompactionCount(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
-  storePath?: string;
   cfg?: OpenClawConfig;
   now?: number;
   amount?: number;
@@ -240,7 +241,6 @@ export async function incrementCompactionCount(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
-    storePath,
     cfg,
     now = Date.now(),
     amount = 1,
@@ -274,7 +274,7 @@ export async function incrementCompactionCount(params: {
       resolveCompactionSessionFile({
         entry,
         sessionKey,
-        storePath,
+        cfg,
         newSessionId,
       });
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
@@ -299,19 +299,22 @@ export async function incrementCompactionCount(params: {
     ...entry,
     ...updates,
   };
-  if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = {
-        ...store[sessionKey],
+  const agentId =
+    resolveAgentIdFromSessionKey(sessionKey) ??
+    (cfg ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+  if (agentId) {
+    upsertSessionEntry({
+      agentId,
+      sessionKey,
+      entry: mergeSessionEntry(getSessionEntry({ agentId, sessionKey }), {
         ...updates,
-      };
+      }),
     });
   }
   if ((sessionIdChanged || sessionFileChanged) && cfg) {
     emitCompactionSessionLifecycleHooks({
       cfg,
       sessionKey,
-      storePath,
       previousEntry: entry,
       nextEntry: sessionStore[sessionKey],
     });
@@ -322,13 +325,16 @@ export async function incrementCompactionCount(params: {
 function resolveCompactionSessionFile(params: {
   entry: SessionEntry;
   sessionKey: string;
-  storePath?: string;
+  cfg?: OpenClawConfig;
   newSessionId: string;
 }): string {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId =
+    resolveAgentIdFromSessionKey(params.sessionKey) ??
+    (params.cfg
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+      : undefined);
   const pathOpts = resolveSessionFilePathOptions({
     agentId,
-    storePath: params.storePath,
   });
   const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
     sessionFile: params.entry.sessionFile,

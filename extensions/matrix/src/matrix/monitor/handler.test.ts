@@ -5,7 +5,8 @@ import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { createMatrixRoomMessageHandler, MatrixRetryableInboundError } from "./handler.js";
@@ -48,13 +49,14 @@ vi.mock("../send.js", () => ({
 }));
 
 const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => true));
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 
 vi.mock("./replies.js", () => ({
   deliverMatrixReplies: deliverMatrixRepliesMock,
 }));
 
 function writeMatrixSessionMeta(
-  storePath: string,
+  stateDir: string,
   sessionKey: string,
   origin: {
     chatType: "direct" | "group";
@@ -64,29 +66,45 @@ function writeMatrixSessionMeta(
     nativeDirectUserId?: string;
   },
 ): void {
-  const store = fs.existsSync(storePath)
-    ? (JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, Record<string, unknown>>)
-    : {};
-  const existing = store[sessionKey] ?? {
-    sessionId: `sess-${Object.keys(store).length + 1}`,
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  const existing = (getSessionEntry({ agentId: "ops", sessionKey }) as
+    | Record<string, unknown>
+    | undefined) ?? {
+    sessionId: `sess-${Date.now()}`,
     updatedAt: Date.now(),
   };
   const existingOrigin =
     typeof existing.origin === "object" && existing.origin !== null
       ? (existing.origin as Record<string, unknown>)
       : {};
-  store[sessionKey] = {
-    ...existing,
-    origin: {
-      ...existingOrigin,
-      provider: "matrix",
-      surface: "matrix",
-      accountId: "ops",
-      ...origin,
-    },
-  };
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf8");
+  upsertSessionEntry({
+    agentId: "ops",
+    sessionKey,
+    entry: {
+      ...existing,
+      origin: {
+        ...existingOrigin,
+        provider: "matrix",
+        surface: "matrix",
+        accountId: "ops",
+        ...origin,
+      },
+    } as never,
+  });
+}
+
+function writeMatrixSessionEntry(
+  stateDir: string,
+  agentId: string,
+  sessionKey: string,
+  entry: Parameters<typeof upsertSessionEntry>[0]["entry"],
+): void {
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  upsertSessionEntry({
+    agentId,
+    sessionKey,
+    entry,
+  });
 }
 
 beforeEach(() => {
@@ -101,6 +119,10 @@ beforeEach(() => {
       fitsInSingleEvent: true,
     };
   });
+});
+
+afterEach(() => {
+  process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
 });
 
 function createReactionHarness(params?: {
@@ -960,11 +982,10 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("posts a one-time notice when another Matrix DM room already owns the shared DM session", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-shared-notice-"));
-    const storePath = path.join(tempDir, "sessions.json");
     const sendNotice = vi.fn(async () => "$notice");
 
     try {
-      writeMatrixSessionMeta(storePath, "agent:ops:main", {
+      writeMatrixSessionMeta(tempDir, "agent:ops:main", {
         chatType: "direct",
         from: "matrix:@user:example.org",
         to: "room:!other:example.org",
@@ -973,7 +994,6 @@ describe("matrix monitor handler pairing account scope", () => {
 
       const { handler } = createMatrixHandlerTestHarness({
         isDirectMessage: true,
-        resolveStorePath: () => storePath,
         client: {
           sendMessage: sendNotice,
         },
@@ -1011,11 +1031,10 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("checks flat DM collision notices against the current DM session key", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-flat-notice-"));
-    const storePath = path.join(tempDir, "sessions.json");
     const sendNotice = vi.fn(async () => "$notice");
 
     try {
-      writeMatrixSessionMeta(storePath, "agent:ops:matrix:direct:@user:example.org", {
+      writeMatrixSessionMeta(tempDir, "agent:ops:matrix:direct:@user:example.org", {
         chatType: "direct",
         from: "matrix:@user:example.org",
         to: "room:!other:example.org",
@@ -1024,7 +1043,6 @@ describe("matrix monitor handler pairing account scope", () => {
 
       const { handler } = createMatrixHandlerTestHarness({
         isDirectMessage: true,
-        resolveStorePath: () => storePath,
         resolveAgentRoute: () => ({
           agentId: "ops",
           channel: "matrix",
@@ -1060,11 +1078,10 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("checks threaded DM collision notices against the parent DM session", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-thread-notice-"));
-    const storePath = path.join(tempDir, "sessions.json");
     const sendNotice = vi.fn(async () => "$notice");
 
     try {
-      writeMatrixSessionMeta(storePath, "agent:ops:main", {
+      writeMatrixSessionMeta(tempDir, "agent:ops:main", {
         chatType: "direct",
         from: "matrix:@user:example.org",
         to: "room:!other:example.org",
@@ -1074,7 +1091,6 @@ describe("matrix monitor handler pairing account scope", () => {
       const { handler } = createMatrixHandlerTestHarness({
         isDirectMessage: true,
         threadReplies: "always",
-        resolveStorePath: () => storePath,
         client: {
           sendMessage: sendNotice,
           getEvent: async (_roomId, eventId) =>
@@ -1117,17 +1133,16 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("keeps the shared-session notice after user-target outbound metadata overwrites latest room fields", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-shared-notice-stable-"));
-    const storePath = path.join(tempDir, "sessions.json");
     const sendNotice = vi.fn(async () => "$notice");
 
     try {
-      writeMatrixSessionMeta(storePath, "agent:ops:main", {
+      writeMatrixSessionMeta(tempDir, "agent:ops:main", {
         chatType: "direct",
         from: "matrix:@user:example.org",
         to: "room:!other:example.org",
         nativeChannelId: "!other:example.org",
       });
-      writeMatrixSessionMeta(storePath, "agent:ops:main", {
+      writeMatrixSessionMeta(tempDir, "agent:ops:main", {
         chatType: "direct",
         from: "matrix:@other:example.org",
         to: "room:@other:example.org",
@@ -1136,7 +1151,6 @@ describe("matrix monitor handler pairing account scope", () => {
 
       const { handler } = createMatrixHandlerTestHarness({
         isDirectMessage: true,
-        resolveStorePath: () => storePath,
         client: {
           sendMessage: sendNotice,
         },
@@ -1164,11 +1178,10 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("skips the shared-session notice when the prior Matrix session metadata is not a DM", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-shared-notice-room-"));
-    const storePath = path.join(tempDir, "sessions.json");
     const sendNotice = vi.fn(async () => "$notice");
 
     try {
-      writeMatrixSessionMeta(storePath, "agent:ops:main", {
+      writeMatrixSessionMeta(tempDir, "agent:ops:main", {
         chatType: "group",
         from: "matrix:channel:!group:example.org",
         to: "room:!group:example.org",
@@ -1177,7 +1190,6 @@ describe("matrix monitor handler pairing account scope", () => {
 
       const { handler } = createMatrixHandlerTestHarness({
         isDirectMessage: true,
-        resolveStorePath: () => storePath,
         client: {
           sendMessage: sendNotice,
         },
@@ -1199,29 +1211,21 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("skips the shared-session notice when Matrix DMs are isolated per room", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-room-scope-"));
-    const storePath = path.join(tempDir, "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:ops:main": {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "matrix",
-            to: "room:!other:example.org",
-            accountId: "ops",
-          },
-        },
-      }),
-      "utf8",
-    );
+    writeMatrixSessionEntry(tempDir, "ops", "agent:ops:main", {
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!other:example.org",
+        accountId: "ops",
+      },
+    });
     const sendNotice = vi.fn(async () => "$notice");
 
     try {
       const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
         isDirectMessage: true,
         dmSessionScope: "per-room",
-        resolveStorePath: () => storePath,
         client: {
           sendMessage: sendNotice,
         },
@@ -1248,22 +1252,15 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("skips the shared-session notice when a Matrix DM is explicitly bound", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-bound-notice-"));
-    const storePath = path.join(tempDir, "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:bound:session-1": {
-          sessionId: "sess-bound",
-          updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "matrix",
-            to: "room:!other:example.org",
-            accountId: "ops",
-          },
-        },
-      }),
-      "utf8",
-    );
+    writeMatrixSessionEntry(tempDir, "bound", "agent:bound:session-1", {
+      sessionId: "sess-bound",
+      updatedAt: Date.now(),
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!other:example.org",
+        accountId: "ops",
+      },
+    });
     const sendNotice = vi.fn(async () => "$notice");
     const touch = vi.fn();
     registerSessionBindingAdapter({
@@ -1294,7 +1291,6 @@ describe("matrix monitor handler pairing account scope", () => {
     try {
       const { handler } = createMatrixHandlerTestHarness({
         isDirectMessage: true,
-        resolveStorePath: () => storePath,
         client: {
           sendMessage: sendNotice,
         },
@@ -1504,7 +1500,6 @@ describe("matrix monitor handler pairing account scope", () => {
             buildMentionRegexes: () => [],
           },
           session: {
-            resolveStorePath: () => "/tmp/session-store",
             readSessionUpdatedAt: () => undefined,
             recordInboundSession: vi.fn(async () => {}),
           },

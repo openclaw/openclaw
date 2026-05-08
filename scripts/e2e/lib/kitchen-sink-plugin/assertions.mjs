@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readInstalledPluginRecords } from "../installed-plugin-index.mjs";
 
 const command = process.argv[2];
 
@@ -253,9 +254,7 @@ function assertCutoverPreinstalled() {
     throw new Error(`invalid kitchen-sink cutover preinstall spec: ${preinstallSpec}`);
   }
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = readJson(indexPath);
-  const record = (index.installRecords ?? index.records ?? {})[pluginId];
+  const record = readInstalledPluginRecords({ allowLegacyFile: true })[pluginId];
   if (!record) {
     throw new Error(`missing kitchen-sink cutover preinstall record for ${pluginId}`);
   }
@@ -377,9 +376,7 @@ function assertInstalled() {
   }
   assertExpectedDiagnostics(surfaceMode, errorMessages);
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = readJson(indexPath);
-  const record = (index.installRecords ?? index.records ?? {})[pluginId];
+  const record = readInstalledPluginRecords({ allowLegacyFile: true })[pluginId];
   if (!record) {
     throw new Error(`missing kitchen-sink install record for ${pluginId}`);
   }
@@ -434,9 +431,7 @@ function assertRemoved() {
     throw new Error(`kitchen-sink plugin still listed after uninstall: ${pluginId}`);
   }
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
-  const records = index.installRecords ?? index.records ?? {};
+  const records = readInstalledPluginRecords({ allowLegacyFile: true });
   if (records[pluginId]) {
     throw new Error(`kitchen-sink install record still present after uninstall: ${pluginId}`);
   }

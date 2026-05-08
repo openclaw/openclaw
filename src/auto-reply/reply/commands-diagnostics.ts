@@ -425,7 +425,7 @@ function isCodexDiagnosticsUnavailableText(text: string | undefined): boolean {
   return (
     text?.startsWith("No Codex thread is attached to this OpenClaw session yet.") === true ||
     text?.startsWith(
-      "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.",
+      "Cannot send Codex diagnostics because this command did not include an OpenClaw session identity.",
     ) === true
   );
 }

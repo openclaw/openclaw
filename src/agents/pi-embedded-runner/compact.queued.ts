@@ -186,6 +186,7 @@ export async function compactEmbeddedPiSession(
           if (shouldRotateCompactionTranscript(params.config) && !delegatedRotatedTranscript) {
             try {
               const rotation = await rotateTranscriptFileAfterCompaction({
+                agentId: agentIds.sessionAgentId,
                 sessionFile: params.sessionFile,
               });
               if (rotation.rotated) {

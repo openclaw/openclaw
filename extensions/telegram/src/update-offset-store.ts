@@ -1,12 +1,12 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 const STORE_VERSION = 2;
+const UPDATE_OFFSET_STORE = createPluginStateKeyedStore<TelegramUpdateOffsetState>("telegram", {
+  namespace: "update-offsets",
+  maxEntries: 1_000,
+});
 
-type TelegramUpdateOffsetState = {
+export type TelegramUpdateOffsetState = {
   version: number;
   lastUpdateId: number | null;
   botId: string | null;
@@ -16,21 +16,12 @@ function isValidUpdateId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function normalizeAccountId(accountId?: string) {
+export function normalizeTelegramUpdateOffsetAccountId(accountId?: string) {
   const trimmed = accountId?.trim();
   if (!trimmed) {
     return "default";
   }
   return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
-}
-
-function resolveTelegramUpdateOffsetPath(
-  accountId?: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  const stateDir = resolveStateDir(env, os.homedir);
-  const normalized = normalizeAccountId(accountId);
-  return path.join(stateDir, "telegram", `update-offset-${normalized}.json`);
 }
 
 function extractBotIdFromToken(token?: string): string | null {
@@ -80,8 +71,9 @@ export async function readTelegramUpdateOffset(params: {
   botToken?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<number | null> {
-  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
-  const { value } = await readJsonFileWithFallback<unknown>(filePath, null);
+  const value = await UPDATE_OFFSET_STORE.lookup(
+    normalizeTelegramUpdateOffsetAccountId(params.accountId),
+  );
   const parsed = safeParseState(value);
   const expectedBotId = extractBotIdFromToken(params.botToken);
   if (expectedBotId && parsed?.botId && parsed.botId !== expectedBotId) {
@@ -102,27 +94,24 @@ export async function writeTelegramUpdateOffset(params: {
   if (!isValidUpdateId(params.updateId)) {
     throw new Error("Telegram update offset must be a non-negative safe integer.");
   }
-  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
   const payload: TelegramUpdateOffsetState = {
     version: STORE_VERSION,
     lastUpdateId: params.updateId,
     botId: extractBotIdFromToken(params.botToken),
   };
-  await writeJsonFileAtomically(filePath, payload);
+  await UPDATE_OFFSET_STORE.register(
+    normalizeTelegramUpdateOffsetAccountId(params.accountId),
+    payload,
+  );
 }
 
 export async function deleteTelegramUpdateOffset(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
-  try {
-    await fs.unlink(filePath);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return;
-    }
-    throw err;
-  }
+  await UPDATE_OFFSET_STORE.delete(normalizeTelegramUpdateOffsetAccountId(params.accountId));
+}
+
+export async function resetTelegramUpdateOffsetsForTests(): Promise<void> {
+  await UPDATE_OFFSET_STORE.clear();
 }

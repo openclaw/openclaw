@@ -1,13 +1,10 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/core";
 import { listDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
-const NOTIFY_STATE_FILE = "device-pair-notify.json";
+const NOTIFY_STATE_KEY = "default";
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
 const NOTIFY_MAX_SEEN_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -78,10 +75,6 @@ export function formatPendingRequests(pending: PendingPairingRequest[]): string 
   return lines.join("\n");
 }
 
-function resolveNotifyStatePath(stateDir: string): string {
-  return path.join(stateDir, NOTIFY_STATE_FILE);
-}
-
 function normalizeNotifyState(raw: unknown): NotifyStateFile {
   const root = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
   const subscribersRaw = Array.isArray(root.subscribers) ? root.subscribers : [];
@@ -136,22 +129,19 @@ function normalizeNotifyState(raw: unknown): NotifyStateFile {
   return { subscribers, notifiedRequestIds };
 }
 
-async function readNotifyState(filePath: string): Promise<NotifyStateFile> {
-  try {
-    const content = await fs.readFile(filePath, "utf8");
-    return normalizeNotifyState(JSON.parse(content));
-  } catch {
-    return { subscribers: [], notifiedRequestIds: {} };
-  }
+function openNotifyStateStore(api: OpenClawPluginApi) {
+  return api.runtime.state.openKeyedStore<NotifyStateFile>({
+    namespace: "device-pair-notify",
+    maxEntries: 1,
+  });
 }
 
-async function writeNotifyState(filePath: string, state: NotifyStateFile): Promise<void> {
-  const content = JSON.stringify(state, null, 2);
-  await replaceFileAtomic({
-    filePath,
-    content: `${content}\n`,
-    tempPrefix: ".device-pair-notify",
-  });
+async function readNotifyState(api: OpenClawPluginApi): Promise<NotifyStateFile> {
+  return normalizeNotifyState(await openNotifyStateStore(api).lookup(NOTIFY_STATE_KEY));
+}
+
+async function writeNotifyState(api: OpenClawPluginApi, state: NotifyStateFile): Promise<void> {
+  await openNotifyStateStore(api).register(NOTIFY_STATE_KEY, normalizeNotifyState(state));
 }
 
 function notifySubscriberKey(subscriber: {
@@ -316,11 +306,8 @@ async function notifySubscriber(params: {
   }
 }
 
-async function notifyPendingPairingRequests(params: {
-  api: OpenClawPluginApi;
-  statePath: string;
-}): Promise<void> {
-  const state = await readNotifyState(params.statePath);
+async function notifyPendingPairingRequests(params: { api: OpenClawPluginApi }): Promise<void> {
+  const state = await readNotifyState(params.api);
   const pairing = await listDevicePairing();
   const pending = pairing.pending as PendingPairingRequest[];
   const now = Date.now();
@@ -375,7 +362,7 @@ async function notifyPendingPairingRequests(params: {
   }
 
   if (changed) {
-    await writeNotifyState(params.statePath, state);
+    await writeNotifyState(params.api, state);
   }
 }
 
@@ -398,9 +385,7 @@ export async function armPairNotifyOnce(params: {
     return false;
   }
 
-  const stateDir = params.api.runtime.state.resolveStateDir();
-  const statePath = resolveNotifyStatePath(stateDir);
-  const state = await readNotifyState(statePath);
+  const state = await readNotifyState(params.api);
   let changed = false;
 
   if (upsertNotifySubscriber(state.subscribers, target, "once")) {
@@ -408,7 +393,7 @@ export async function armPairNotifyOnce(params: {
   }
 
   if (changed) {
-    await writeNotifyState(statePath, state);
+    await writeNotifyState(params.api, state);
   }
   return true;
 }
@@ -434,15 +419,13 @@ export async function handleNotifyCommand(params: {
     return { text: "Could not resolve Telegram target for this chat." };
   }
 
-  const stateDir = params.api.runtime.state.resolveStateDir();
-  const statePath = resolveNotifyStatePath(stateDir);
-  const state = await readNotifyState(statePath);
+  const state = await readNotifyState(params.api);
   const targetKey = notifySubscriberKey(target);
   const current = state.subscribers.find((entry) => notifySubscriberKey(entry) === targetKey);
 
   if (params.action === "on" || params.action === "enable") {
     if (upsertNotifySubscriber(state.subscribers, target, "persistent")) {
-      await writeNotifyState(statePath, state);
+      await writeNotifyState(params.api, state);
     }
     return {
       text:
@@ -457,7 +440,7 @@ export async function handleNotifyCommand(params: {
     );
     if (currentIndex !== -1) {
       state.subscribers.splice(currentIndex, 1);
-      await writeNotifyState(statePath, state);
+      await writeNotifyState(params.api, state);
     }
     return { text: "✅ Pair request notifications disabled for this Telegram chat." };
   }
@@ -498,10 +481,9 @@ export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPl
 
   return {
     id: "device-pair-notifier",
-    start: async (ctx) => {
-      const statePath = resolveNotifyStatePath(ctx.stateDir);
+    start: async () => {
       const tick = async () => {
-        await notifyPendingPairingRequests({ api, statePath });
+        await notifyPendingPairingRequests({ api });
       };
 
       await tick().catch((err) => {

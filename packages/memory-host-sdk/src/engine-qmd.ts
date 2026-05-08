@@ -2,16 +2,18 @@
 
 export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
 export {
-  buildSessionEntry,
-  listSessionFilesForAgent,
+  buildSessionTranscriptEntry,
+  listSessionTranscriptsForAgent,
   loadDreamingNarrativeTranscriptPathSetForAgent,
   loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
-  sessionPathForFile,
-  type BuildSessionEntryOptions,
-  type SessionFileEntry,
+  readSessionTranscriptDeltaStats,
+  sessionPathForTranscript,
+  type BuildSessionTranscriptEntryOptions,
+  type SessionTranscriptEntry,
+  type SessionTranscriptDeltaStats,
   type SessionTranscriptClassification,
-} from "./host/session-files.js";
+} from "./host/session-transcripts.js";
 export {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,

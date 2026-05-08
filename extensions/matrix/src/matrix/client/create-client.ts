@@ -7,11 +7,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "../sdk.js";
 import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
-import {
-  maybeMigrateLegacyStorage,
-  resolveMatrixStoragePaths,
-  writeStorageMeta,
-} from "./storage.js";
+import { resolveMatrixStoragePaths, writeStorageMeta } from "./storage.js";
 
 type MatrixCreateClientRuntimeDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;
@@ -68,10 +64,6 @@ export async function createMatrixClient(params: {
     : null;
 
   if (storagePaths) {
-    await maybeMigrateLegacyStorage({
-      storagePaths,
-      env: process.env,
-    });
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     writeStorageMeta({
       storagePaths,

@@ -1030,7 +1030,10 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   return cloneTaskRecord(next);
 }
 
-function upsertTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
+function upsertTaskDeliveryState(
+  state: TaskDeliveryState,
+  options: { persist?: boolean } = {},
+): TaskDeliveryState {
   const current = taskDeliveryStates.get(state.taskId);
   const next: TaskDeliveryState = {
     taskId: state.taskId,
@@ -1045,7 +1048,9 @@ function upsertTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
     return cloneTaskDeliveryState({ taskId: state.taskId });
   }
   taskDeliveryStates.set(state.taskId, next);
-  persistTaskDeliveryStateUpsert(next);
+  if (options.persist !== false) {
+    persistTaskDeliveryStateUpsert(next);
+  }
   return cloneTaskDeliveryState(next);
 }
 
@@ -1588,10 +1593,13 @@ export function createTaskRecord(params: {
       (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
   }
   tasks.set(taskId, record);
-  upsertTaskDeliveryState({
-    taskId,
-    requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
-  });
+  upsertTaskDeliveryState(
+    {
+      taskId,
+      requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
+    },
+    { persist: false },
+  );
   addRunIdIndex(taskId, record.runId);
   addOwnerKeyIndex(taskId, record);
   addParentFlowIdIndex(taskId, record);

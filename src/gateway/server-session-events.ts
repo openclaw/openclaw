@@ -119,10 +119,10 @@ async function handleTranscriptUpdateBroadcast(
   if (connIds.size === 0) {
     return;
   }
-  const { entry, storePath } = loadSessionEntry(sessionKey);
+  const { entry } = loadSessionEntry(sessionKey);
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const messageSeq = entry?.sessionId
-    ? await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile, agentId)
+    ? await readSessionMessageCountAsync(entry.sessionId, entry.sessionFile, agentId)
     : undefined;
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),

@@ -7,6 +7,8 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -134,11 +136,15 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-auth-contract-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
   });
 
   afterEach(async () => {
     abortAgentHarnessRun(AUTH_PROFILE_RUNTIME_CONTRACT.sessionId);
     __testing.resetCodexAppServerClientFactoryForTests();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -212,7 +218,9 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await harness.completeTurn();
     await run;
 
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+    await expect(
+      readCodexAppServerBinding({ sessionKey: params.sessionKey, sessionFile }),
+    ).resolves.toMatchObject({
       authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
   });

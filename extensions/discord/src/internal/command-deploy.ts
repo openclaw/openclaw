@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
-import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createApplicationCommand,
   deleteApplicationCommand,
@@ -19,6 +18,15 @@ export type DeployCommandOptions = {
 };
 
 type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
+type CommandDeployHashEntry = {
+  hash: string;
+  updatedAt: string;
+};
+
+const commandDeployHashStore = createPluginStateKeyedStore<CommandDeployHashEntry>("discord", {
+  namespace: "command-deploy-hashes",
+  maxEntries: 10_000,
+});
 
 export class DiscordCommandDeployer {
   private readonly hashes = new Map<string, string>();
@@ -29,7 +37,6 @@ export class DiscordCommandDeployer {
       clientId: string;
       commands: BaseCommand[];
       devGuilds?: string[];
-      hashStorePath?: string;
       rest: () => RequestClient;
     },
   ) {}
@@ -142,43 +149,32 @@ export class DiscordCommandDeployer {
       return;
     }
     this.hashesLoaded = true;
-    const storePath = this.params.hashStorePath;
-    if (!storePath) {
-      return;
-    }
     try {
-      const parsed = await privateFileStore(path.dirname(storePath)).readJsonIfExists<{
-        hashes?: unknown;
-      }>(path.basename(storePath));
-      if (!parsed?.hashes || typeof parsed.hashes !== "object") {
-        return;
-      }
-      for (const [key, value] of Object.entries(parsed.hashes)) {
-        if (typeof value === "string" && key.trim() && value.trim()) {
-          this.hashes.set(key, value);
+      const prefix = `${this.params.clientId}:`;
+      for (const entry of await commandDeployHashStore.entries()) {
+        if (!entry.key.startsWith(prefix)) {
+          continue;
+        }
+        const key = entry.key.slice(prefix.length);
+        if (key && typeof entry.value.hash === "string" && entry.value.hash.trim()) {
+          this.hashes.set(key, entry.value.hash);
         }
       }
     } catch {
-      // Best-effort cache only. A corrupt or missing file should never block startup.
+      // Best-effort cache only. Corrupt or unavailable state should never block startup.
     }
   }
 
   private async persistHashes(): Promise<void> {
-    const storePath = this.params.hashStorePath;
-    if (!storePath) {
-      return;
-    }
     try {
-      await privateFileStore(path.dirname(storePath)).writeJson(
-        path.basename(storePath),
-        {
-          version: 1,
-          updatedAt: new Date().toISOString(),
-          hashes: Object.fromEntries(
-            [...this.hashes.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
-          ),
-        },
-        { trailingNewline: true },
+      const updatedAt = new Date().toISOString();
+      await Promise.all(
+        [...this.hashes.entries()].map(([key, hash]) =>
+          commandDeployHashStore.register(`${this.params.clientId}:${key}`, {
+            hash,
+            updatedAt,
+          }),
+        ),
       );
     } catch {
       // The cache is only an optimization to avoid redundant Discord writes.

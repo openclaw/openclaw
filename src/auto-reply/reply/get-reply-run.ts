@@ -2,8 +2,6 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
@@ -11,16 +9,12 @@ import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
-import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
+import { resolveSessionFilePath } from "../../config/sessions/paths.js";
+import { resolveSessionRowEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -270,7 +264,7 @@ function loadSessionUpdatesRuntime() {
   return sessionUpdatesRuntimeLoader.load();
 }
 
-function loadSessionStoreRuntime() {
+function loadSessionRowRuntime() {
   return sessionStoreRuntimeLoader.load();
 }
 
@@ -343,7 +337,6 @@ type RunPreparedReplyParams = {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   sessionId?: string;
-  storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
 };
@@ -383,7 +376,6 @@ export async function runPreparedReply(
     systemSent,
     sessionKey,
     sessionId,
-    storePath,
     workspaceDir,
     sessionStore,
   } = params;
@@ -402,18 +394,6 @@ export async function runPreparedReply(
     abortedLastRun,
   } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
-  const traceAttributes = {
-    provider,
-    hasSessionKey: Boolean(sessionKey),
-    isHeartbeat,
-    queueMode: perMessageQueueMode ?? "configured",
-  };
-  const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
-    measureDiagnosticsTimelineSpan(name, run, {
-      phase: "agent-turn",
-      config: cfg,
-      attributes: traceAttributes,
-    });
   const promptSessionCtx = resolvePromptSessionContextForSystemEvent({
     sessionCtx,
     sessionEntry,
@@ -664,7 +644,6 @@ export async function runPreparedReply(
     sessionEntry,
     sessionStore,
     sessionKey,
-    storePath,
     abortKey: command.abortKey,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
@@ -730,20 +709,19 @@ export async function runPreparedReply(
           skillsSnapshot: sessionEntry?.skillsSnapshot,
           systemSent: currentSystemSent,
         }
-      : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
+      : await (async () => {
           const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
-          return await ensureSkillSnapshot({
+          return ensureSkillSnapshot({
             sessionEntry,
             sessionStore,
             sessionKey,
-            storePath,
             sessionId,
             isFirstTurnInSession,
             workspaceDir,
             cfg,
             skillFilter: opts?.skillFilter,
           });
-        });
+        })();
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
@@ -790,17 +768,19 @@ export async function runPreparedReply(
         sessionEntry.thinkingLevel = fallbackThinkLevel;
         sessionEntry.updatedAt = Date.now();
         sessionStore[sessionKey] = sessionEntry;
-        if (storePath) {
-          const { updateSessionStore } = await loadSessionStoreRuntime();
-          await updateSessionStore(storePath, (store) => {
-            store[sessionKey] = sessionEntry;
-          });
-        }
+        const { getSessionEntry, mergeSessionEntry, upsertSessionEntry } =
+          await loadSessionRowRuntime();
+        upsertSessionEntry({
+          agentId,
+          sessionKey,
+          entry: mergeSessionEntry(getSessionEntry({ agentId, sessionKey }), {
+            ...sessionEntry,
+          }),
+        });
       }
     }
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFilePathOptions = resolveSessionFilePathOptions({ agentId, storePath });
   const resolvePreparedSessionState = (): {
     sessionEntry: SessionEntry | undefined;
     sessionId: string;
@@ -808,8 +788,8 @@ export async function runPreparedReply(
   } => {
     const latestSessionEntry =
       sessionStore && sessionKey
-        ? (resolveSessionStoreEntry({
-            store: sessionStore,
+        ? (resolveSessionRowEntry({
+            entries: sessionStore,
             sessionKey,
           }).existing ?? sessionEntry)
         : sessionEntry;
@@ -817,11 +797,7 @@ export async function runPreparedReply(
     return {
       sessionEntry: latestSessionEntry,
       sessionId: latestSessionId,
-      sessionFile: resolveSessionFilePath(
-        latestSessionId,
-        latestSessionEntry,
-        sessionFilePathOptions,
-      ),
+      sessionFile: resolveSessionFilePath(latestSessionId, latestSessionEntry, { agentId }),
     };
   };
   let preparedSessionState = resolvePreparedSessionState();
@@ -839,9 +815,7 @@ export async function runPreparedReply(
         inlineMode: perMessageQueueMode,
         inlineOptions: perMessageQueueOptions,
       });
-  const piRuntime = useFastReplyRuntime
-    ? null
-    : await traceRunPhase("reply.load_pi_runtime", () => loadPiEmbeddedRuntime());
+  const piRuntime = useFastReplyRuntime ? null : await loadPiEmbeddedRuntime();
   const sessionLaneKey = piRuntime
     ? piRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
     : undefined;
@@ -868,11 +842,13 @@ export async function runPreparedReply(
         agentId,
         sessionKey: runtimePolicySessionKey,
       });
-  const resolveAcceptedAuthProfileProviders = () =>
+  const resolveAcceptedAuthProfileProviders = (entry: SessionEntry | undefined) =>
     agentHarnessPolicy
       ? listOpenAIAuthProfileProvidersForAgentRuntime({
           provider,
           harnessRuntime: agentHarnessPolicy.runtime,
+          sessionAgentHarnessId: entry?.agentHarnessId,
+          sessionAgentRuntimeOverride: entry?.agentRuntimeOverride,
         })
       : [provider];
   let authProfileId = useFastReplyRuntime
@@ -881,12 +857,13 @@ export async function runPreparedReply(
         resolveSessionAuthProfileOverride({
           cfg,
           provider,
-          acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+          acceptedProviderIds: resolveAcceptedAuthProfileProviders(
+            preparedSessionState.sessionEntry,
+          ),
           agentDir,
           sessionEntry: preparedSessionState.sessionEntry,
           sessionStore,
           sessionKey,
-          storePath,
           isNewSession,
         }),
       );
@@ -940,19 +917,17 @@ export async function runPreparedReply(
           : await resolveSessionAuthProfileOverride({
               cfg,
               provider,
-              acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+              acceptedProviderIds: resolveAcceptedAuthProfileProviders(
+                preparedSessionState.sessionEntry,
+              ),
               agentDir,
               sessionEntry: preparedSessionState.sessionEntry,
               sessionStore,
               sessionKey,
-              storePath,
               isNewSession,
             });
         preparedSessionState = resolvePreparedSessionState();
-        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await traceRunPhase(
-          "reply.build_prompt_bodies",
-          () => rebuildPromptBodies(),
-        ));
+        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies());
       },
       resolveBusyState: resolveQueueBusyState,
     });
@@ -1095,7 +1070,6 @@ export async function runPreparedReply(
     sessionStore,
     sessionKey,
     runtimePolicySessionKey,
-    storePath,
     defaultModel,
     agentCfgContextTokens: agentCfg?.contextTokens,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",

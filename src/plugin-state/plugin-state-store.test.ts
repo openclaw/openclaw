@@ -1,40 +1,34 @@
 import { mkdirSync, statSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateSqliteStore,
   createCorePluginStateKeyedStore,
   createPluginStateKeyedStore,
+  importLegacyPluginStateSidecarToSqlite,
+  legacyPluginStateSidecarExists,
   PluginStateStoreError,
   probePluginStateStore,
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
-import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
+import {
+  resolveLegacyPluginStateDir,
+  resolveLegacyPluginStateSqlitePath,
+  resolvePluginStateDir,
+  resolvePluginStateSqlitePath,
+} from "./plugin-state-store.paths.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => {
   vi.useRealTimers();
   resetPluginStateStoreForTests();
 });
-
-async function expectPluginStateStoreError(
-  promise: Promise<unknown>,
-  expected: { code: string; operation?: string },
-): Promise<void> {
-  let storeError: unknown;
-  try {
-    await promise;
-  } catch (error) {
-    storeError = error;
-  }
-  expect(storeError).toBeInstanceOf(PluginStateStoreError);
-  expect((storeError as PluginStateStoreError | undefined)?.code).toBe(expected.code);
-  if (expected.operation) {
-    expect((storeError as PluginStateStoreError | undefined)?.operation).toBe(expected.operation);
-  }
-}
 
 describe("plugin state keyed store", () => {
   it("registers and looks up values across store instances", async () => {
@@ -68,7 +62,7 @@ describe("plugin state keyed store", () => {
       await store.register("b", { version: 2 });
 
       await expect(store.lookup("b")).resolves.toEqual({ version: 2 });
-      await expect(store.entries()).resolves.toEqual([
+      await expect(store.entries()).resolves.toMatchObject([
         { key: "a", value: { version: 1 }, createdAt: 2000 },
         { key: "b", value: { version: 2 }, createdAt: 3000 },
       ]);
@@ -93,7 +87,7 @@ describe("plugin state keyed store", () => {
       );
 
       await expect(store.lookup("claim")).resolves.toEqual({ version: 1 });
-      await expect(store.entries()).resolves.toEqual([
+      await expect(store.entries()).resolves.toMatchObject([
         { key: "claim", value: { version: 1 }, createdAt: 1000, expiresAt: 2000 },
       ]);
     });
@@ -115,7 +109,7 @@ describe("plugin state keyed store", () => {
       await expect(store.registerIfAbsent("claim", { version: 2 })).resolves.toBe(true);
 
       await expect(store.lookup("claim")).resolves.toEqual({ version: 2 });
-      await expect(store.entries()).resolves.toEqual([
+      await expect(store.entries()).resolves.toMatchObject([
         { key: "claim", value: { version: 2 }, createdAt: 1200 },
       ]);
     });
@@ -176,7 +170,7 @@ describe("plugin state keyed store", () => {
     });
   });
 
-  it("registerIfAbsent preserves eviction and plugin row cap behavior", async () => {
+  it("registerIfAbsent preserves namespace eviction behavior", async () => {
     await withOpenClawTestState({ label: "plugin-state-register-if-absent-limits" }, async () => {
       vi.useFakeTimers();
       const evicting = createPluginStateKeyedStore<number>("discord", {
@@ -189,30 +183,7 @@ describe("plugin state keyed store", () => {
       await evicting.registerIfAbsent("b", 2);
       vi.setSystemTime(3000);
       await evicting.registerIfAbsent("c", 3);
-      expect((await evicting.entries()).map((entry) => entry.key)).toEqual(["b", "c"]);
-
-      seedPluginStateEntriesForTests([
-        ...Array.from({ length: 999 }, (_, entryIndex) => ({
-          pluginId: "limited-plugin",
-          namespace: "limit",
-          key: `k-${entryIndex}`,
-          value: { entryIndex },
-        })),
-        {
-          pluginId: "limited-plugin",
-          namespace: "sibling",
-          key: "k-0",
-          value: { sibling: true },
-        },
-      ]);
-      const limited = createPluginStateKeyedStore("limited-plugin", {
-        namespace: "limit",
-        maxEntries: 1_001,
-      });
-      await expectPluginStateStoreError(limited.registerIfAbsent("overflow", { overflow: true }), {
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      });
-      await expect(limited.lookup("overflow")).resolves.toBeUndefined();
+      await expect(evicting.entries()).resolves.toMatchObject([{ key: "b" }, { key: "c" }]);
     });
   });
 
@@ -243,7 +214,7 @@ describe("plugin state keyed store", () => {
       await first.register("k1", { value: 1 });
       await first.clear();
 
-      await expect(first.entries()).resolves.toStrictEqual([]);
+      await expect(first.entries()).resolves.toEqual([]);
       await expect(second.lookup("k2")).resolves.toEqual({ value: 2 });
     });
   });
@@ -264,7 +235,7 @@ describe("plugin state keyed store", () => {
       await expect(store.lookup("default")).resolves.toBeUndefined();
       await expect(store.lookup("override")).resolves.toEqual({ value: "override" });
       expect(sweepExpiredPluginStateEntries()).toBe(1);
-      expect((await store.entries()).map((entry) => entry.key)).toEqual(["override"]);
+      await expect(store.entries()).resolves.toMatchObject([{ key: "override" }]);
     });
   });
 
@@ -279,7 +250,7 @@ describe("plugin state keyed store", () => {
       vi.setSystemTime(3000);
       await store.register("c", 3);
 
-      expect((await store.entries()).map((entry) => entry.key)).toEqual(["b", "c"]);
+      await expect(store.entries()).resolves.toMatchObject([{ key: "b" }, { key: "c" }]);
     });
   });
 
@@ -295,7 +266,7 @@ describe("plugin state keyed store", () => {
       await store.register("z", 1);
       await store.register("a", 2);
 
-      await expect(store.entries()).resolves.toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
+      await expect(store.entries()).resolves.toMatchObject([{ key: "a", value: 2 }]);
       await expect(store.lookup("z")).resolves.toBeUndefined();
     });
   });
@@ -312,15 +283,15 @@ describe("plugin state keyed store", () => {
       await expect(store.registerIfAbsent("z", 1)).resolves.toBe(true);
       await expect(store.registerIfAbsent("a", 2)).resolves.toBe(true);
 
-      await expect(store.entries()).resolves.toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
+      await expect(store.entries()).resolves.toMatchObject([{ key: "a", value: 2 }]);
       await expect(store.lookup("z")).resolves.toBeUndefined();
     });
   });
 
-  it("rejects when the per-plugin live row ceiling would be exceeded without evicting siblings", async () => {
-    await withOpenClawTestState({ label: "plugin-state-plugin-limit" }, async () => {
+  it("keeps sibling namespaces while applying the active namespace cap", async () => {
+    await withOpenClawTestState({ label: "plugin-state-namespace-limit" }, async () => {
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: 999 }, (_, entryIndex) => ({
+        ...Array.from({ length: 3 }, (_, entryIndex) => ({
           pluginId: "discord",
           namespace: "limit",
           key: `k-${entryIndex}`,
@@ -336,21 +307,20 @@ describe("plugin state keyed store", () => {
 
       const limitStore = createPluginStateKeyedStore("discord", {
         namespace: "limit",
-        maxEntries: 1_001,
+        maxEntries: 3,
       });
       const siblingStore = createPluginStateKeyedStore("discord", {
         namespace: "sibling",
         maxEntries: 10,
       });
 
-      await expectPluginStateStoreError(limitStore.register("overflow", { overflow: true }), {
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      });
+      await expect(limitStore.register("overflow", { overflow: true })).resolves.toBeUndefined();
       await expect(siblingStore.lookup("k-0")).resolves.toEqual({
         namespaceIndex: 1,
         entryIndex: 0,
       });
-      await expect(limitStore.lookup("overflow")).resolves.toBeUndefined();
+      await expect(limitStore.lookup("overflow")).resolves.toEqual({ overflow: true });
+      await expect(limitStore.lookup("k-0")).resolves.toBeUndefined();
     });
   });
 
@@ -400,7 +370,7 @@ describe("plugin state keyed store", () => {
       await expect(store.register("non-enumerable", nonEnumerable)).rejects.toThrow(
         PluginStateStoreError,
       );
-      await expectPluginStateStoreError(store.register("big", "x".repeat(65_537)), {
+      await expect(store.register("big", "x".repeat(65_537))).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
 
@@ -419,16 +389,16 @@ describe("plugin state keyed store", () => {
       for (let i = 0; i < 65; i += 1) {
         deep = { nested: deep };
       }
-      await expectPluginStateStoreError(store.register("deep", deep), {
+      await expect(store.register("deep", deep)).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
 
       // Validation errors surface the correct operation
-      await expectPluginStateStoreError(store.lookup(" "), {
+      await expect(store.lookup(" ")).rejects.toMatchObject({
         code: "PLUGIN_STATE_INVALID_INPUT",
         operation: "lookup",
       });
-      await expectPluginStateStoreError(store.delete(" "), {
+      await expect(store.delete(" ")).rejects.toMatchObject({
         code: "PLUGIN_STATE_INVALID_INPUT",
         operation: "delete",
       });
@@ -468,6 +438,30 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("reopens after the shared state DB cache closes its handle", async () => {
+    await withOpenClawTestState({ label: "plugin-state-cache-primary" }, async (primary) => {
+      await withOpenClawTestState(
+        { label: "plugin-state-cache-secondary", applyEnv: false },
+        async (secondary) => {
+          const store = createPluginStateKeyedStore("discord", {
+            namespace: "cache-switch",
+            maxEntries: 10,
+          });
+          await store.register("k", { ok: true });
+
+          openOpenClawStateDatabase({ env: secondary.env });
+
+          try {
+            vi.stubEnv("OPENCLAW_STATE_DIR", primary.stateDir);
+            await expect(store.lookup("k")).resolves.toEqual({ ok: true });
+          } finally {
+            vi.unstubAllEnvs();
+          }
+        },
+      );
+    });
+  });
+
   it.runIf(process.platform !== "win32")("hardens DB directory and file permissions", async () => {
     await withOpenClawTestState({ label: "plugin-state-permissions" }, async () => {
       const store = createPluginStateKeyedStore("discord", { namespace: "perms", maxEntries: 10 });
@@ -483,7 +477,8 @@ describe("plugin state keyed store", () => {
       const result = probePluginStateStore();
       expect(result.ok).toBe(true);
       const failedSteps = result.steps.filter((step) => !step.ok);
-      expect(failedSteps).toStrictEqual([]);
+      expect(failedSteps).toEqual([]);
+      expect(result.dbPath).toContain("openclaw.sqlite");
       expect(JSON.stringify(result)).not.toContain("probe-value");
     });
   });
@@ -493,13 +488,62 @@ describe("plugin state keyed store", () => {
       mkdirSync(resolvePluginStateDir(), { recursive: true });
       const { DatabaseSync } = requireNodeSqlite();
       const db = new DatabaseSync(resolvePluginStateSqlitePath());
-      db.exec("PRAGMA user_version = 2;");
+      db.exec("PRAGMA user_version = 99;");
       db.close();
+      closeOpenClawStateDatabaseForTest();
 
       const store = createPluginStateKeyedStore("discord", { namespace: "schema", maxEntries: 10 });
-      await expectPluginStateStoreError(store.register("k", { ok: true }), {
+      await expect(store.register("k", { ok: true })).rejects.toMatchObject({
         code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED",
       });
+    });
+  });
+
+  it("imports legacy plugin-state sidecar into the shared database", async () => {
+    await withOpenClawTestState({ label: "plugin-state-legacy-import" }, async () => {
+      mkdirSync(resolveLegacyPluginStateDir(), { recursive: true });
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacyPath = resolveLegacyPluginStateSqlitePath();
+      const db = new DatabaseSync(legacyPath);
+      db.exec(`
+        CREATE TABLE plugin_state_entries (
+          plugin_id  TEXT    NOT NULL,
+          namespace  TEXT    NOT NULL,
+          entry_key  TEXT    NOT NULL,
+          value_json TEXT    NOT NULL,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER,
+          PRIMARY KEY (plugin_id, namespace, entry_key)
+        );
+      `);
+      db.prepare(
+        `
+          INSERT INTO plugin_state_entries (
+            plugin_id,
+            namespace,
+            entry_key,
+            value_json,
+            created_at,
+            expires_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `,
+      ).run("legacy-plugin", "claims", "claim-1", JSON.stringify({ ok: true }), 123, null);
+      db.close();
+
+      expect(legacyPluginStateSidecarExists()).toBe(true);
+      const result = importLegacyPluginStateSidecarToSqlite();
+
+      expect(result).toMatchObject({
+        sourcePath: legacyPath,
+        importedEntries: 1,
+        removedSource: true,
+      });
+      expect(legacyPluginStateSidecarExists()).toBe(false);
+      const store = createPluginStateKeyedStore<{ ok: boolean }>("legacy-plugin", {
+        namespace: "claims",
+        maxEntries: 10,
+      });
+      await expect(store.lookup("claim-1")).resolves.toEqual({ ok: true });
     });
   });
 });

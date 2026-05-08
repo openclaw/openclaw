@@ -1,23 +1,26 @@
+import { createHash } from "node:crypto";
 import { createDedupeCache } from "../infra/dedupe.js";
-import type { FileLockOptions } from "./file-lock.js";
-import { withFileLock } from "./file-lock.js";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
+import { createPluginStateSyncKeyedStore } from "./plugin-state-runtime.js";
 
-type PersistentDedupeData = Record<string, number>;
+type PersistentDedupeRow = {
+  scopeKey: string;
+  namespace: string;
+  key: string;
+  seenAt: number;
+};
 
 export type PersistentDedupeOptions = {
   ttlMs: number;
   memoryMaxSize: number;
-  fileMaxEntries: number;
-  resolveFilePath: (namespace: string) => string;
-  lockOptions?: Partial<FileLockOptions>;
-  onDiskError?: (error: unknown) => void;
+  maxEntries: number;
+  resolveScopeKey: (namespace: string) => string;
+  onStorageError?: (error: unknown) => void;
 };
 
 export type PersistentDedupeCheckOptions = {
   namespace?: string;
   now?: number;
-  onDiskError?: (error: unknown) => void;
+  onStorageError?: (error: unknown) => void;
 };
 
 export type PersistentDedupe = {
@@ -37,18 +40,16 @@ export type ClaimableDedupeOptions =
   | {
       ttlMs: number;
       memoryMaxSize: number;
-      resolveFilePath: (namespace: string) => string;
-      fileMaxEntries: number;
-      lockOptions?: Partial<FileLockOptions>;
-      onDiskError?: (error: unknown) => void;
+      resolveScopeKey: (namespace: string) => string;
+      maxEntries: number;
+      onStorageError?: (error: unknown) => void;
     }
   | {
       ttlMs: number;
       memoryMaxSize: number;
-      resolveFilePath?: undefined;
-      fileMaxEntries?: undefined;
-      lockOptions?: undefined;
-      onDiskError?: undefined;
+      resolveScopeKey?: undefined;
+      maxEntries?: undefined;
+      onStorageError?: undefined;
     };
 
 export type ClaimableDedupe = {
@@ -70,69 +71,13 @@ export type ClaimableDedupe = {
   memorySize: () => number;
 };
 
-const DEFAULT_LOCK_OPTIONS: FileLockOptions = {
-  retries: {
-    retries: 6,
-    factor: 1.35,
-    minTimeout: 8,
-    maxTimeout: 180,
-    randomize: true,
+const PERSISTENT_DEDUPE_STORE = createPluginStateSyncKeyedStore<PersistentDedupeRow>(
+  "persistent-dedupe",
+  {
+    namespace: "entries",
+    maxEntries: 200_000,
   },
-  stale: 60_000,
-};
-
-function mergeLockOptions(overrides?: Partial<FileLockOptions>): FileLockOptions {
-  return {
-    stale: overrides?.stale ?? DEFAULT_LOCK_OPTIONS.stale,
-    retries: {
-      retries: overrides?.retries?.retries ?? DEFAULT_LOCK_OPTIONS.retries.retries,
-      factor: overrides?.retries?.factor ?? DEFAULT_LOCK_OPTIONS.retries.factor,
-      minTimeout: overrides?.retries?.minTimeout ?? DEFAULT_LOCK_OPTIONS.retries.minTimeout,
-      maxTimeout: overrides?.retries?.maxTimeout ?? DEFAULT_LOCK_OPTIONS.retries.maxTimeout,
-      randomize: overrides?.retries?.randomize ?? DEFAULT_LOCK_OPTIONS.retries.randomize,
-    },
-  };
-}
-
-function sanitizeData(value: unknown): PersistentDedupeData {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-  const out: PersistentDedupeData = {};
-  for (const [key, ts] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof ts === "number" && Number.isFinite(ts) && ts > 0) {
-      out[key] = ts;
-    }
-  }
-  return out;
-}
-
-function pruneData(
-  data: PersistentDedupeData,
-  now: number,
-  ttlMs: number,
-  maxEntries: number,
-): void {
-  if (ttlMs > 0) {
-    for (const [key, ts] of Object.entries(data)) {
-      if (now - ts >= ttlMs) {
-        delete data[key];
-      }
-    }
-  }
-
-  const keys = Object.keys(data);
-  if (keys.length <= maxEntries) {
-    return;
-  }
-
-  keys
-    .toSorted((a, b) => data[a] - data[b])
-    .slice(0, keys.length - maxEntries)
-    .forEach((key) => {
-      delete data[key];
-    });
-}
+);
 
 function resolveNamespace(namespace?: string): string {
   return namespace?.trim() || "global";
@@ -142,79 +87,80 @@ function resolveScopedKey(namespace: string, key: string): string {
   return `${namespace}:${key}`;
 }
 
+function resolveStoreKey(scopeKey: string, namespace: string, key: string): string {
+  return createHash("sha256")
+    .update(`${scopeKey}\0${namespace}\0${key}`, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+}
+
+function prunePersistentRows(
+  scopeKey: string,
+  now: number,
+  ttlMs: number,
+  maxEntries: number,
+): void {
+  const scopedEntries = PERSISTENT_DEDUPE_STORE.entries()
+    .filter((entry) => entry.value.scopeKey === scopeKey)
+    .toSorted((left, right) => left.value.seenAt - right.value.seenAt);
+  for (const entry of scopedEntries) {
+    if (ttlMs > 0 && now - entry.value.seenAt >= ttlMs) {
+      PERSISTENT_DEDUPE_STORE.delete(entry.key);
+    }
+  }
+  const retained = PERSISTENT_DEDUPE_STORE.entries()
+    .filter((entry) => entry.value.scopeKey === scopeKey)
+    .toSorted((left, right) => left.value.seenAt - right.value.seenAt);
+  if (retained.length <= maxEntries) {
+    return;
+  }
+  for (const entry of retained.slice(0, retained.length - maxEntries)) {
+    PERSISTENT_DEDUPE_STORE.delete(entry.key);
+  }
+}
+
 function isRecentTimestamp(seenAt: number | undefined, ttlMs: number, now: number): boolean {
   return seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
 }
 
-/** Create a dedupe helper that combines in-memory fast checks with a lock-protected disk store. */
+/** Create a dedupe helper that combines in-memory fast checks with SQLite-backed storage. */
 export function createPersistentDedupe(options: PersistentDedupeOptions): PersistentDedupe {
   const ttlMs = Math.max(0, Math.floor(options.ttlMs));
   const memoryMaxSize = Math.max(0, Math.floor(options.memoryMaxSize));
-  const fileMaxEntries = Math.max(1, Math.floor(options.fileMaxEntries));
-  const lockOptions = mergeLockOptions(options.lockOptions);
+  const maxEntries = Math.max(1, Math.floor(options.maxEntries));
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
   const inflight = new Map<string, Promise<boolean>>();
-  // In-process write queue per file path. `withFileLock` is re-entrant
-  // within the same process (a second caller for the same path gets
-  // immediate access instead of waiting), so two concurrent
-  // checkAndRecordInner calls for different keys but the same file can
-  // race: both read the same stale data, and the last writer's
-  // writeJsonFileAtomically silently overwrites the first writer's
-  // additions. This queue serializes all read-modify-write cycles
-  // targeting the same file within this process, preventing the lost
-  // update while still allowing cross-process file-lock contention to
-  // be handled by the file lock itself.
-  const fileWriteQueues = new Map<string, Promise<unknown>>();
-
-  function enqueueFileWrite<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-    const prev = fileWriteQueues.get(filePath) ?? Promise.resolve();
-    const next = prev.then(fn, fn);
-    fileWriteQueues.set(filePath, next);
-    // Cleanup: remove the queue entry once this link settles, but only if
-    // no newer work was chained after us. The `.catch(() => {})` prevents
-    // an unhandled rejection when `next` rejects — callers still observe
-    // the rejection through the returned `next` promise directly.
-    next
-      .finally(() => {
-        if (fileWriteQueues.get(filePath) === next) {
-          fileWriteQueues.delete(filePath);
-        }
-      })
-      .catch(() => {});
-    return next;
-  }
 
   async function checkAndRecordInner(
     key: string,
     namespace: string,
     scopedKey: string,
     now: number,
-    onDiskError?: (error: unknown) => void,
+    onStorageError?: (error: unknown) => void,
   ): Promise<boolean> {
     if (memory.check(scopedKey, now)) {
       return false;
     }
 
-    const path = options.resolveFilePath(namespace);
     try {
-      const duplicate = await enqueueFileWrite(path, () =>
-        withFileLock(path, lockOptions, async () => {
-          const { value } = await readJsonFileWithFallback<PersistentDedupeData>(path, {});
-          const data = sanitizeData(value);
-          const seenAt = data[key];
-          const isRecent = seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
-          if (isRecent) {
-            return true;
-          }
-          data[key] = now;
-          pruneData(data, now, ttlMs, fileMaxEntries);
-          await writeJsonFileAtomically(path, data);
-          return false;
-        }),
+      const scopeKey = options.resolveScopeKey(namespace);
+      const storeKey = resolveStoreKey(scopeKey, namespace, key);
+      const existing = PERSISTENT_DEDUPE_STORE.lookup(storeKey);
+      const existingSeenAt = existing?.seenAt;
+      if (isRecentTimestamp(existingSeenAt, ttlMs, now)) {
+        memory.check(scopedKey, existingSeenAt);
+        return false;
+      }
+      PERSISTENT_DEDUPE_STORE.register(
+        storeKey,
+        { scopeKey, namespace, key, seenAt: now },
+        ttlMs > 0 ? { ttlMs } : undefined,
       );
-      return !duplicate;
+      prunePersistentRows(scopeKey, now, ttlMs, maxEntries);
+      memory.check(scopedKey, now);
+      return true;
     } catch (error) {
-      onDiskError?.(error);
+      onStorageError?.(error);
       memory.check(scopedKey, now);
       return true;
     }
@@ -225,41 +171,43 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     namespace: string,
     scopedKey: string,
     now: number,
-    onDiskError?: (error: unknown) => void,
+    onStorageError?: (error: unknown) => void,
   ): Promise<boolean> {
     if (memory.peek(scopedKey, now)) {
       return true;
     }
 
-    const path = options.resolveFilePath(namespace);
     try {
-      const { value } = await readJsonFileWithFallback<PersistentDedupeData>(path, {});
-      const data = sanitizeData(value);
-      const seenAt = data[key];
+      const scopeKey = options.resolveScopeKey(namespace);
+      const storeKey = resolveStoreKey(scopeKey, namespace, key);
+      const entry = PERSISTENT_DEDUPE_STORE.lookup(storeKey);
+      const seenAt = entry?.seenAt;
       if (!isRecentTimestamp(seenAt, ttlMs, now)) {
         return false;
       }
       memory.check(scopedKey, seenAt);
       return true;
     } catch (error) {
-      onDiskError?.(error);
+      onStorageError?.(error);
       return memory.peek(scopedKey, now);
     }
   }
 
   async function warmup(namespace = "global", onError?: (error: unknown) => void): Promise<number> {
-    const filePath = options.resolveFilePath(namespace);
     const now = Date.now();
     try {
-      const { value } = await readJsonFileWithFallback<PersistentDedupeData>(filePath, {});
-      const data = sanitizeData(value);
+      const scopeKey = options.resolveScopeKey(namespace);
       let loaded = 0;
-      for (const [key, ts] of Object.entries(data)) {
-        if (ttlMs > 0 && now - ts >= ttlMs) {
+      for (const entry of PERSISTENT_DEDUPE_STORE.entries()) {
+        if (entry.value.scopeKey !== scopeKey || entry.value.namespace !== namespace) {
           continue;
         }
-        const scopedKey = `${namespace}:${key}`;
-        memory.check(scopedKey, ts);
+        if (ttlMs > 0 && now - entry.value.seenAt >= ttlMs) {
+          PERSISTENT_DEDUPE_STORE.delete(entry.key);
+          continue;
+        }
+        const scopedKey = `${namespace}:${entry.value.key}`;
+        memory.check(scopedKey, entry.value.seenAt);
         loaded++;
       }
       return loaded;
@@ -283,9 +231,9 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
       return false;
     }
 
-    const onDiskError = dedupeOptions?.onDiskError ?? options.onDiskError;
+    const onStorageError = dedupeOptions?.onStorageError ?? options.onStorageError;
     const now = dedupeOptions?.now ?? Date.now();
-    const work = checkAndRecordInner(trimmed, namespace, scopedKey, now, onDiskError);
+    const work = checkAndRecordInner(trimmed, namespace, scopedKey, now, onStorageError);
     inflight.set(scopedKey, work);
     try {
       return await work;
@@ -304,9 +252,9 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     }
     const namespace = resolveNamespace(dedupeOptions?.namespace);
     const scopedKey = resolveScopedKey(namespace, trimmed);
-    const onDiskError = dedupeOptions?.onDiskError ?? options.onDiskError;
+    const onStorageError = dedupeOptions?.onStorageError ?? options.onStorageError;
     const now = dedupeOptions?.now ?? Date.now();
-    return hasRecentInner(trimmed, namespace, scopedKey, now, onDiskError);
+    return hasRecentInner(trimmed, namespace, scopedKey, now, onStorageError);
   }
 
   return {
@@ -328,14 +276,13 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
   const memoryMaxSize = Math.max(0, Math.floor(options.memoryMaxSize));
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
   const persistent =
-    options.resolveFilePath != null
+    options.resolveScopeKey != null
       ? createPersistentDedupe({
           ttlMs,
           memoryMaxSize,
-          fileMaxEntries: Math.max(1, Math.floor(options.fileMaxEntries)),
-          resolveFilePath: options.resolveFilePath,
-          lockOptions: options.lockOptions,
-          onDiskError: options.onDiskError,
+          maxEntries: Math.max(1, Math.floor(options.maxEntries)),
+          resolveScopeKey: options.resolveScopeKey,
+          onStorageError: options.onStorageError,
         })
       : null;
 

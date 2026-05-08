@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
     plan: vi.fn(),
     apply: vi.fn(),
   },
+  detectLegacyStateMigrations: vi.fn(),
+  runLegacyStateMigrations: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -51,12 +53,22 @@ vi.mock("./backup.js", () => ({
   backupCreateCommand: mocks.backupCreateCommand,
 }));
 
+vi.mock("./doctor-state-migrations.js", () => ({
+  detectLegacyStateMigrations: mocks.detectLegacyStateMigrations,
+  runLegacyStateMigrations: mocks.runLegacyStateMigrations,
+}));
+
 const {
   MIGRATION_SKILL_SELECTION_SKIP,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
 } = await import("./migrate/selection.js");
-const { migrateApplyCommand, migrateDefaultCommand } = await import("./migrate.js");
+const {
+  migrateApplyCommand,
+  migrateDefaultCommand,
+  migrateStateApplyCommand,
+  migrateStatePlanCommand,
+} = await import("./migrate.js");
 
 function plan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
   return {
@@ -205,6 +217,43 @@ const runtime: RuntimeEnv = {
   },
 };
 
+function stateDetection(overrides: Record<string, unknown> = {}) {
+  return {
+    targetAgentId: "main",
+    targetMainKey: "main",
+    cfg: {},
+    env: process.env,
+    stateDir: "/tmp/openclaw-migrate-command-test",
+    oauthDir: "/tmp/openclaw-migrate-command-test/credentials",
+    sessions: {
+      legacyDir: "/tmp/openclaw-migrate-command-test/sessions",
+      legacyStorePath: "/tmp/openclaw-migrate-command-test/sessions/sessions.json",
+      targetDir: "/tmp/openclaw-migrate-command-test/agents/main/sessions",
+      targetStorePath: "/tmp/openclaw-migrate-command-test/agents/main/sessions/sessions.json",
+      hasLegacy: true,
+      legacyKeys: [],
+    },
+    agentDir: {
+      legacyDir: "/tmp/openclaw-migrate-command-test/agent",
+      targetDir: "/tmp/openclaw-migrate-command-test/agents/main/agent",
+      hasLegacy: false,
+    },
+    channelPlans: {
+      hasLegacy: false,
+      plans: [],
+    },
+    sqlite: {
+      hasLegacy: true,
+      legacyTables: ["session_entries"],
+    },
+    preview: [
+      "- Sessions: /tmp/openclaw-migrate-command-test/sessions -> /tmp/openclaw-migrate-command-test/agents/main/sessions",
+      "- SQLite: move global agent-owned table(s) into per-agent databases: session_entries",
+    ],
+    ...overrides,
+  };
+}
+
 describe("migrateApplyCommand", () => {
   const originalIsTty = process.stdin.isTTY;
 
@@ -223,6 +272,13 @@ describe("migrateApplyCommand", () => {
     mocks.promptYesNo.mockReset();
     mocks.backupCreateCommand.mockReset();
     mocks.backupCreateCommand.mockResolvedValue({ archivePath: "/tmp/openclaw-backup.tgz" });
+    mocks.detectLegacyStateMigrations.mockReset();
+    mocks.detectLegacyStateMigrations.mockResolvedValue(stateDetection());
+    mocks.runLegacyStateMigrations.mockReset();
+    mocks.runLegacyStateMigrations.mockResolvedValue({
+      changes: ["Imported legacy state"],
+      warnings: [],
+    });
   });
 
   afterEach(async () => {
@@ -239,6 +295,49 @@ describe("migrateApplyCommand", () => {
       migrateApplyCommand(runtime, { provider: "hermes", yes: true, noBackup: true }),
     ).rejects.toThrow("--no-backup requires --force");
     expect(mocks.provider.plan).not.toHaveBeenCalled();
+  });
+
+  it("prints the legacy state migration plan", async () => {
+    const logs: string[] = [];
+    const jsonRuntime: RuntimeEnv = {
+      ...runtime,
+      log(message) {
+        logs.push(String(message));
+      },
+    };
+
+    const result = await migrateStatePlanCommand(jsonRuntime);
+
+    expect(result.summary).toMatchObject({ total: 2, sessions: true, sqliteTables: 1 });
+    expect(logs.join("\n")).toContain("Legacy OpenClaw state migration plan for agent main");
+    expect(logs.join("\n")).toContain("session_entries");
+  });
+
+  it("applies legacy state migration after a verified backup", async () => {
+    const result = await migrateStateApplyCommand(runtime, { yes: true });
+
+    expect(mocks.backupCreateCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ log: expect.any(Function) }),
+      { output: undefined, verify: true },
+    );
+    expect(mocks.runLegacyStateMigrations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detected: expect.objectContaining({ targetAgentId: "main" }),
+        backupPath: "/tmp/openclaw-backup.tgz",
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "legacy-state",
+      backupPath: "/tmp/openclaw-backup.tgz",
+      changes: ["Imported legacy state"],
+    });
+  });
+
+  it("requires force before applying legacy state migration without backup", async () => {
+    await expect(migrateStateApplyCommand(runtime, { yes: true, noBackup: true })).rejects.toThrow(
+      "--no-backup requires --force",
+    );
+    expect(mocks.runLegacyStateMigrations).not.toHaveBeenCalled();
   });
 
   it("requires --yes in non-interactive apply mode", async () => {

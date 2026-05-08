@@ -43,7 +43,6 @@ export async function incrementRunCompactionCount(
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
-    storePath: params.storePath,
     cfg: params.cfg,
     amount: params.amount,
     tokensAfter: tokensAfterCompaction,

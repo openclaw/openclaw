@@ -143,11 +143,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<
     string,
-    { lastSize: number; pendingBytes: number; pendingMessages: number }
+    { lastSize: number; lastMessages: number; pendingBytes: number; pendingMessages: number }
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
-  private queuedSessionFiles = new Set<string>();
+  private queuedSessionTranscripts = new Set<string>();
   private queuedSessionSync: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
@@ -618,7 +618,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   async sync(params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (this.closed) {
@@ -626,8 +626,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     await this.ensureProviderInitialized();
     if (this.syncing) {
-      if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-        return this.enqueueTargetedSessionSync(params.sessionFiles);
+      if (
+        params?.sessionTranscripts?.some((sessionTranscript) => sessionTranscript.trim().length > 0)
+      ) {
+        return this.enqueueTargetedSessionSync(params.sessionTranscripts);
       }
       return this.syncing;
     }
@@ -637,19 +639,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return this.syncing ?? Promise.resolve();
   }
 
-  private enqueueTargetedSessionSync(sessionFiles?: string[]): Promise<void> {
+  private enqueueTargetedSessionSync(sessionTranscripts?: string[]): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
         isClosed: () => this.closed,
         getSyncing: () => this.syncing,
-        getQueuedSessionFiles: () => this.queuedSessionFiles,
+        getQueuedSessionTranscripts: () => this.queuedSessionTranscripts,
         getQueuedSessionSync: () => this.queuedSessionSync,
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
         sync: async (params) => await this.sync(params),
       },
-      sessionFiles,
+      sessionTranscripts,
     );
   }
 
@@ -664,7 +666,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async runSyncWithReadonlyRecovery(params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     const getClosed = () => this.closed;

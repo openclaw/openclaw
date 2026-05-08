@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import {
-  clearSessionStoreCacheForTest,
-  drainSessionStoreWriterQueuesForTest,
-} from "../config/sessions/store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -85,8 +82,7 @@ describe("subagent registry persistence resume", () => {
     announceSpy.mockClear();
     mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
-    await drainSessionStoreWriterQueuesForTest();
-    clearSessionStoreCacheForTest();
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });

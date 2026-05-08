@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { App } from "@slack/bolt";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
@@ -10,7 +9,12 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  deleteSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
   clearSlackThreadParticipationCache,
@@ -22,11 +26,7 @@ import type { SlackMonitorContext } from "../context.js";
 import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { prepareSlackMessage } from "./prepare.js";
-import {
-  createInboundSlackTestContext,
-  createSlackSessionStoreFixture,
-  createSlackTestAccount,
-} from "./prepare.test-helpers.js";
+import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
 import { clearSlackSubteamMentionCacheForTest } from "./subteam-mentions.js";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -40,22 +40,13 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
 });
 
 describe("slack prepareSlackMessage inbound contract", () => {
-  const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-");
-
-  beforeAll(() => {
-    storeFixture.setup();
-  });
-
   beforeEach(() => {
     resetSlackThreadStarterCacheForTest();
     clearSlackThreadParticipationCache();
     clearSlackAllowFromCacheForTest();
     clearSlackSubteamMentionCacheForTest();
     enqueueSystemEventMock.mockClear();
-  });
-
-  afterAll(() => {
-    storeFixture.cleanup();
+    clearTestSessionRows(["main", "review", "plugin"]);
   });
 
   const createInboundSlackCtx = createInboundSlackTestContext;
@@ -78,6 +69,26 @@ describe("slack prepareSlackMessage inbound contract", () => {
     userTokenSource: "none",
     config: {},
   };
+
+  function clearTestSessionRows(agentIds: string[]) {
+    for (const agentId of agentIds) {
+      for (const { sessionKey } of listSessionEntries({ agentId })) {
+        deleteSessionEntry({ agentId, sessionKey });
+      }
+    }
+  }
+
+  function seedExistingSession(sessionKey: string, agentId = "main") {
+    upsertSessionEntry({
+      agentId,
+      sessionKey,
+      entry: {
+        sessionId: `seed-${sessionKey}`,
+        updatedAt: Date.now(),
+        sessionStartedAt: Date.now(),
+      },
+    });
+  }
 
   async function prepareWithDefaultCtx(message: SlackMessageEvent) {
     return prepareSlackMessage({
@@ -229,7 +240,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   };
 
   async function prepareThreadContextAllowlistCase(params: ThreadContextAllowlistCaseParams) {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi
       .fn()
       .mockResolvedValueOnce({
@@ -246,7 +256,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       });
     const ctx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
         channels: {
           slack: {
             enabled: true,
@@ -840,7 +849,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("marks first thread turn and injects thread history for a new thread session", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi
       .fn()
       .mockResolvedValueOnce({
@@ -857,7 +865,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       });
     const slackCtx = createThreadSlackCtx({
       cfg: {
-        session: { store: storePath },
         channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
       } as OpenClawConfig,
       replies,
@@ -881,7 +888,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("injects Slack DM history for new top-level DM sessions", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const history = vi.fn().mockResolvedValue({
       messages: [
         { text: "current answer", user: "U1", ts: "300.000" },
@@ -891,7 +897,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
         channels: { slack: { enabled: true, dmHistoryLimit: 2 } },
       } as OpenClawConfig,
       appClient: { conversations: { history } } as unknown as App["client"],
@@ -935,9 +940,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("uses per-DM Slack history limits and skips existing DM sessions", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const cfg = {
-      session: { store: storePath },
       channels: {
         slack: {
           enabled: true,
@@ -977,10 +980,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     history.mockClear();
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({ [prepared.ctxPayload.SessionKey!]: { updatedAt: Date.now() } }, null, 2),
-    );
+    seedExistingSession(prepared!.ctxPayload.SessionKey!);
     const existing = await prepareMessageWith(
       slackCtx,
       account,
@@ -1090,9 +1090,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const cfg = {
-      session: { store: storePath },
       channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
     } as OpenClawConfig;
     const route = resolveAgentRoute({
@@ -1106,10 +1104,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       baseSessionKey: route.sessionKey,
       threadId: "200.000",
     });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({ [threadKeys.sessionKey]: { updatedAt: Date.now() } }, null, 2),
-    );
+    seedExistingSession(threadKeys.sessionKey);
 
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [{ text: "starter", user: "U2", ts: "200.000" }],
@@ -1178,10 +1173,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("keeps top-level DM session stable when replyToMode=all", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath, dmScope: "per-channel-peer" },
+        session: { dmScope: "per-channel-peer" },
         channels: { slack: { enabled: true, replyToMode: "all" } },
       } as OpenClawConfig,
       replyToMode: "all",
@@ -1271,7 +1265,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("keeps a root app mention and URL-only Slack thread follow-up on one parent session", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";
     const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
     const replies = vi.fn().mockResolvedValue({
@@ -1286,7 +1279,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
         channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
       } as OpenClawConfig,
       appClient: { conversations: { replies } } as unknown as App["client"],
@@ -1335,7 +1327,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("keeps a message-first root mention and URL-only Slack thread follow-up on one parent session", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";
     const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
     const replies = vi.fn().mockResolvedValue({
@@ -1350,7 +1341,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
         channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
       } as OpenClawConfig,
       appClient: { conversations: { replies } } as unknown as App["client"],
@@ -1563,7 +1553,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("keeps a regex-mentioned Slack thread root and URL-only follow-up on one parent session", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";
     const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
     const replies = vi.fn().mockResolvedValue({
@@ -1578,7 +1567,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
         messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
         channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
       } as OpenClawConfig,
@@ -1628,7 +1616,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("keeps runtime-bound regex mentions on the bound parent session", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";
     const expectedSessionKey = "agent:review:slack:channel:c0ahzfcas1k";
     const binding: SessionBindingRecord = {
@@ -1656,7 +1643,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     try {
       const slackCtx = createInboundSlackCtx({
         cfg: {
-          session: { store: storePath },
           agents: {
             list: [
               { id: "main", default: true },
@@ -1717,7 +1703,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("still seeds regex mentions when plugin-owned bindings do not rewrite the route", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";
     const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244692.409919";
     const binding: SessionBindingRecord = {
@@ -1750,7 +1735,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     try {
       const slackCtx = createInboundSlackCtx({
         cfg: {
-          session: { store: storePath },
           messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
           channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
         } as OpenClawConfig,
@@ -1802,7 +1786,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("prepares bare-ping Slack thread replies with the parent thread timestamp", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244748.777299";
     const childTs = "1777245202.803289";
     const expectedSessionKey = "agent:main:slack:channel:c0ahzfcas1k:thread:1777244748.777299";
@@ -1819,7 +1802,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
         channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
       } as OpenClawConfig,
       appClient: { conversations: { replies } } as unknown as App["client"],
@@ -1855,13 +1837,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   it("preserves single-use reply mode metadata on seeded top-level roots", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const rootTs = "1777244692.409919";
 
     for (const replyToMode of ["first", "batched"] as const) {
       const slackCtx = createInboundSlackCtx({
         cfg: {
-          session: { store: storePath },
           channels: { slack: { enabled: true, replyToMode, groupPolicy: "open" } },
         } as OpenClawConfig,
         defaultRequireMention: true,
@@ -2114,16 +2094,6 @@ describe("prepareSlackMessage sender prefix", () => {
 });
 
 describe("slack thread.requireExplicitMention", () => {
-  const storeFixture = createSlackSessionStoreFixture("openclaw-slack-explicit-mention-");
-
-  beforeAll(() => {
-    storeFixture.setup();
-  });
-
-  afterAll(() => {
-    storeFixture.cleanup();
-  });
-
   function createCtxWithExplicitMention(requireExplicitMention: boolean) {
     const ctx = createInboundSlackTestContext({
       cfg: {
@@ -2138,11 +2108,6 @@ describe("slack thread.requireExplicitMention", () => {
 
   it("drops thread reply without explicit mention when requireExplicitMention is true", async () => {
     const ctx = createCtxWithExplicitMention(true);
-    const { storePath } = storeFixture.makeTmpStorePath();
-    vi.spyOn(
-      await import("openclaw/plugin-sdk/session-store-runtime"),
-      "resolveStorePath",
-    ).mockReturnValue(storePath);
     const account = createSlackTestAccount();
     const message: SlackMessageEvent = {
       type: "message",
@@ -2165,11 +2130,6 @@ describe("slack thread.requireExplicitMention", () => {
 
   it("allows thread reply with explicit @mention when requireExplicitMention is true", async () => {
     const ctx = createCtxWithExplicitMention(true);
-    const { storePath } = storeFixture.makeTmpStorePath();
-    vi.spyOn(
-      await import("openclaw/plugin-sdk/session-store-runtime"),
-      "resolveStorePath",
-    ).mockReturnValue(storePath);
     const account = createSlackTestAccount();
     const message: SlackMessageEvent = {
       type: "message",
@@ -2194,11 +2154,6 @@ describe("slack thread.requireExplicitMention", () => {
 
   it("allows thread reply without explicit mention when requireExplicitMention is false (default)", async () => {
     const ctx = createCtxWithExplicitMention(false);
-    const { storePath } = storeFixture.makeTmpStorePath();
-    vi.spyOn(
-      await import("openclaw/plugin-sdk/session-store-runtime"),
-      "resolveStorePath",
-    ).mockReturnValue(storePath);
     const account = createSlackTestAccount();
     const message: SlackMessageEvent = {
       type: "message",

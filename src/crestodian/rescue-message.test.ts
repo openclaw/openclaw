@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { listCrestodianAuditEntriesForTests } from "./audit.js";
 import { extractCrestodianRescueMessage, runCrestodianRescueMessage } from "./rescue-message.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -104,6 +106,12 @@ vi.mock("../config/model-input.js", () => ({
     typeof model === "string" ? model : model?.primary,
 }));
 
+async function readLatestCrestodianAuditEntryForTests() {
+  const entries = await listCrestodianAuditEntriesForTests();
+  expect(entries.length).toBeGreaterThan(0);
+  return entries.at(-1)!.value;
+}
+
 async function makeStateDir(prefix: string): Promise<string> {
   const dir = path.join(tempRoot, `${prefix}${tempDirId++}`);
   await fs.mkdir(dir, { recursive: true });
@@ -152,6 +160,7 @@ describe("Crestodian rescue message", () => {
   });
 
   afterEach(() => {
+    resetPluginStateStoreForTests();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -247,8 +256,7 @@ describe("Crestodian rescue message", () => {
     expect(mockConfig.currentConfig()).toMatchObject({
       agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
     });
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
+    const audit = await readLatestCrestodianAuditEntryForTests();
     expect(audit.details).toMatchObject({
       rescue: true,
       channel: "whatsapp",
@@ -270,8 +278,7 @@ describe("Crestodian rescue message", () => {
     );
 
     expect(deps.runGatewayRestart).toHaveBeenCalledTimes(1);
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
+    const audit = await readLatestCrestodianAuditEntryForTests();
     expect(audit).toMatchObject({
       operation: "gateway.restart",
       details: {
@@ -307,8 +314,7 @@ describe("Crestodian rescue message", () => {
       expect.any(Object),
       { hasFlags: true },
     );
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
+    const audit = await readLatestCrestodianAuditEntryForTests();
     expect(audit).toMatchObject({
       operation: "agents.create",
       details: {

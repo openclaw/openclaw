@@ -19,7 +19,7 @@ type EventContext = Pick<
   | "rejectedProviderCallIds"
   | "provider"
   | "config"
-  | "storePath"
+  | "callStore"
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "onCallAnswered"
@@ -98,7 +98,7 @@ function createWebhookCall(params: {
 
   params.ctx.activeCalls.set(callId, callRecord);
   params.ctx.providerCallIdMap.set(params.providerCallId, callId);
-  persistCallRecord(params.ctx.storePath, callRecord);
+  persistCallRecord(params.ctx.callStore, callRecord);
 
   console.log(
     `[voice-call] Created ${params.direction} call record: ${callId} from ${params.from}`,
@@ -284,5 +284,5 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       break;
   }
 
-  persistCallRecord(ctx.storePath, call);
+  persistCallRecord(ctx.callStore, call);
 }

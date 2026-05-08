@@ -721,7 +721,7 @@ export type HealthSummary = {
   defaultAgentId: string;
   agents: Array<{ id: string; name?: string }>;
   sessions: {
-    path: string;
+    databasePath: string;
     count: number;
     recent: Array<{
       key: string;

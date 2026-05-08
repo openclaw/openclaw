@@ -10,6 +10,11 @@ title: "Migrate"
 
 Import state from another agent system through a plugin-owned migration provider. Bundled providers cover Codex CLI state, [Claude](/install/migrating-claude), and [Hermes](/install/migrating-hermes); third-party plugins can register additional providers.
 
+`openclaw migrate state` is the built-in OpenClaw state migration path. It uses
+the same doctor migration implementation to import legacy session files,
+transcripts, per-agent files, channel auth sidecars, and old global
+agent-owned SQLite tables into the database-first layout.
+
 <Tip>
 For user-facing walkthroughs, see [Migrating from Claude](/install/migrating-claude) and [Migrating from Hermes](/install/migrating-hermes). The [migration hub](/install/migrating) lists all paths.
 </Tip>
@@ -18,6 +23,8 @@ For user-facing walkthroughs, see [Migrating from Claude](/install/migrating-cla
 
 ```bash
 openclaw migrate list
+openclaw migrate state plan
+openclaw migrate state apply --yes
 openclaw migrate claude --dry-run
 openclaw migrate codex --dry-run
 openclaw migrate codex --skill gog-vault77-google-workspace
@@ -68,6 +75,22 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 <ParamField path="--json" type="boolean">
   Print the plan or apply result as JSON. With `--json` and no `--yes`, apply prints the plan and does not mutate state.
 </ParamField>
+
+## State migration
+
+Use this after upgrading an older OpenClaw state directory, or run
+`openclaw doctor --fix` and let doctor invoke the same migration implementation.
+
+```bash
+openclaw migrate state plan
+openclaw migrate state apply --yes
+```
+
+The plan is read-only and reports legacy state files, channel-owned sidecars,
+and old global agent-owned SQLite tables. Apply creates and verifies an
+OpenClaw backup first, unless `--no-backup --force` is passed, then imports into
+the global database plus per-agent databases and records the execution in
+`migration_runs`.
 
 ## Safety model
 

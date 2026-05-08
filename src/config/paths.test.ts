@@ -123,6 +123,23 @@ describe("state + config path candidates", () => {
     expect(resolveStateDir(env, () => "/home/test")).toBe(path.resolve("/new/state"));
   });
 
+  it("treats literal undefined path overrides as unset", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: "undefined",
+      OPENCLAW_CONFIG_PATH: "null",
+      OPENCLAW_OAUTH_DIR: "undefined",
+    } as NodeJS.ProcessEnv;
+    const home = "/home/test";
+
+    expect(resolveStateDir(env, () => home)).toBe(path.join(path.resolve(home), ".openclaw"));
+    expect(resolveConfigPathCandidate(env, () => home)).toBe(
+      path.join(path.resolve(home), ".openclaw", "openclaw.json"),
+    );
+    expect(resolveOAuthDir(env, path.join(path.resolve(home), ".openclaw"))).toBe(
+      path.join(path.resolve(home), ".openclaw", "credentials"),
+    );
+  });
+
   it("uses OPENCLAW_HOME for default state/config locations", () => {
     const env = {
       OPENCLAW_HOME: "/srv/openclaw-home",

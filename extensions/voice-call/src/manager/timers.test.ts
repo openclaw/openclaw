@@ -29,11 +29,12 @@ describe("voice-call manager timers", () => {
 
   it("starts and clears max duration timers, persisting timeout metadata before delegation", async () => {
     const call = { id: "call-1", state: "active" };
+    const callStore = { register: vi.fn(), entries: vi.fn() };
     const ctx = {
       activeCalls: new Map([["call-1", call]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call",
+      callStore,
     };
     const onTimeout = vi.fn(async () => {});
 
@@ -48,7 +49,7 @@ describe("voice-call manager timers", () => {
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(call).toEqual({ id: "call-1", state: "active", endReason: "timeout" });
-    expect(persistCallRecordMock).toHaveBeenCalledWith("/tmp/voice-call", call);
+    expect(persistCallRecordMock).toHaveBeenCalledWith(callStore, call);
     expect(onTimeout).toHaveBeenCalledWith("call-1");
     expect(ctx.maxDurationTimers.has("call-1")).toBe(false);
 
@@ -66,7 +67,7 @@ describe("voice-call manager timers", () => {
       activeCalls: new Map([["call-1", { id: "call-1", state: "completed" }]]),
       maxDurationTimers: new Map(),
       config: { maxDurationSeconds: 5 },
-      storePath: "/tmp/voice-call",
+      callStore: { register: vi.fn(), entries: vi.fn() },
     };
     const onTimeout = vi.fn(async () => {});
 

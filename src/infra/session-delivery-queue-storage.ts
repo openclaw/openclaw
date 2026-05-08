@@ -1,24 +1,22 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import {
-  ackJsonDurableQueueEntry,
-  ensureJsonDurableQueueDirs,
-  jsonDurableQueueEntryExists,
-  loadJsonDurableQueueEntry,
-  loadPendingJsonDurableQueueEntries,
-  moveJsonDurableQueueEntryToFailed,
-  readJsonDurableQueueEntry,
-  resolveJsonDurableQueueEntryPaths,
-  writeJsonDurableQueueEntry,
-} from "@openclaw/fs-safe/store";
 import type { ChatType } from "../channels/chat-type.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { generateSecureUuid } from "./secure-random.js";
 
 const QUEUE_DIRNAME = "session-delivery-queue";
-const FAILED_DIRNAME = "failed";
-const TMP_SWEEP_MAX_AGE_MS = 5_000;
-const QUEUE_TEMP_PREFIX = ".session-delivery-queue";
+const QUEUE_NAME = "session-delivery";
 
 type SessionDeliveryContext = {
   channel?: string;
@@ -66,6 +64,12 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   lastError?: string;
 };
 
+type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
+
+type DeliveryQueueEntryRow = {
+  entry_json: string;
+};
+
 function buildEntryId(idempotencyKey?: string): string {
   if (!idempotencyKey) {
     return generateSecureUuid();
@@ -73,16 +77,20 @@ function buildEntryId(idempotencyKey?: string): string {
   return createHash("sha256").update(idempotencyKey).digest("hex");
 }
 
-async function writeQueueEntry(filePath: string, entry: QueuedSessionDelivery): Promise<void> {
-  await writeJsonDurableQueueEntry({
-    filePath,
-    entry,
-    tempPrefix: QUEUE_TEMP_PREFIX,
-  });
+function databaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
+  return stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {};
 }
 
-async function readQueueEntry(filePath: string): Promise<QueuedSessionDelivery> {
-  return await readJsonDurableQueueEntry<QueuedSessionDelivery>(filePath);
+function parseQueueEntry(row: DeliveryQueueEntryRow | undefined): QueuedSessionDelivery | null {
+  if (!row) {
+    return null;
+  }
+  const parsed = JSON.parse(row.entry_json) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const entry = parsed as QueuedSessionDelivery;
+  return typeof entry.id === "string" ? entry : null;
 }
 
 export function resolveSessionDeliveryQueueDir(stateDir?: string): string {
@@ -90,54 +98,70 @@ export function resolveSessionDeliveryQueueDir(stateDir?: string): string {
   return path.join(base, QUEUE_DIRNAME);
 }
 
-function resolveFailedDir(stateDir?: string): string {
-  return path.join(resolveSessionDeliveryQueueDir(stateDir), FAILED_DIRNAME);
-}
-
-function resolveQueueEntryPaths(
-  id: string,
-  stateDir?: string,
-): {
-  jsonPath: string;
-  deliveredPath: string;
-} {
-  return resolveJsonDurableQueueEntryPaths(resolveSessionDeliveryQueueDir(stateDir), id);
-}
-
 async function ensureSessionDeliveryQueueDir(stateDir?: string): Promise<string> {
-  const queueDir = resolveSessionDeliveryQueueDir(stateDir);
-  await ensureJsonDurableQueueDirs({
-    queueDir,
-    failedDir: resolveFailedDir(stateDir),
-  });
-  return queueDir;
+  openOpenClawStateDatabase(databaseOptions(stateDir));
+  return resolveSessionDeliveryQueueDir(stateDir);
 }
 
 export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
 ): Promise<string> {
-  const queueDir = await ensureSessionDeliveryQueueDir(stateDir);
+  await ensureSessionDeliveryQueueDir(stateDir);
   const id = buildEntryId(params.idempotencyKey);
-  const filePath = path.join(queueDir, `${id}.json`);
 
   if (params.idempotencyKey) {
-    if (await jsonDurableQueueEntryExists(filePath)) {
+    if (await loadPendingSessionDelivery(id, stateDir)) {
       return id;
     }
   }
 
-  await writeQueueEntry(filePath, {
+  const entry: QueuedSessionDelivery = {
     ...params,
     id,
     enqueuedAt: Date.now(),
     retryCount: 0,
-  });
+  };
+  runOpenClawStateWriteTransaction((stateDatabase) => {
+    const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+    executeSqliteQuerySync(
+      stateDatabase.db,
+      db
+        .insertInto("delivery_queue_entries")
+        .values({
+          queue_name: QUEUE_NAME,
+          id,
+          status: "pending",
+          entry_json: JSON.stringify(entry),
+          enqueued_at: entry.enqueuedAt,
+          updated_at: Date.now(),
+          failed_at: null,
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["queue_name", "id"]).doUpdateSet({
+            status: "pending",
+            entry_json: JSON.stringify(entry),
+            enqueued_at: entry.enqueuedAt,
+            updated_at: Date.now(),
+            failed_at: null,
+          }),
+        ),
+    );
+  }, databaseOptions(stateDir));
   return id;
 }
 
 export async function ackSessionDelivery(id: string, stateDir?: string): Promise<void> {
-  await ackJsonDurableQueueEntry(resolveQueueEntryPaths(id, stateDir));
+  runOpenClawStateWriteTransaction((stateDatabase) => {
+    const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+    executeSqliteQuerySync(
+      stateDatabase.db,
+      db
+        .deleteFrom("delivery_queue_entries")
+        .where("queue_name", "=", QUEUE_NAME)
+        .where("id", "=", id),
+    );
+  }, databaseOptions(stateDir));
 }
 
 export async function failSessionDelivery(
@@ -145,38 +169,89 @@ export async function failSessionDelivery(
   error: string,
   stateDir?: string,
 ): Promise<void> {
-  const filePath = path.join(resolveSessionDeliveryQueueDir(stateDir), `${id}.json`);
-  const entry = await readQueueEntry(filePath);
+  const entry = await loadPendingSessionDelivery(id, stateDir);
+  if (!entry) {
+    const missing = new Error(
+      `session delivery queue entry not found: ${id}`,
+    ) as NodeJS.ErrnoException;
+    missing.code = "ENOENT";
+    throw missing;
+  }
   entry.retryCount += 1;
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
-  await writeQueueEntry(filePath, entry);
+  runOpenClawStateWriteTransaction((stateDatabase) => {
+    const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+    executeSqliteQuerySync(
+      stateDatabase.db,
+      db
+        .updateTable("delivery_queue_entries")
+        .set({
+          entry_json: JSON.stringify(entry),
+          updated_at: Date.now(),
+        })
+        .where("queue_name", "=", QUEUE_NAME)
+        .where("id", "=", id)
+        .where("status", "=", "pending"),
+    );
+  }, databaseOptions(stateDir));
 }
 
 export async function loadPendingSessionDelivery(
   id: string,
   stateDir?: string,
 ): Promise<QueuedSessionDelivery | null> {
-  return await loadJsonDurableQueueEntry({
-    paths: resolveQueueEntryPaths(id, stateDir),
-    tempPrefix: QUEUE_TEMP_PREFIX,
-  });
+  const stateDatabase = openOpenClawStateDatabase(databaseOptions(stateDir));
+  const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+  const row = executeSqliteQueryTakeFirstSync<DeliveryQueueEntryRow>(
+    stateDatabase.db,
+    db
+      .selectFrom("delivery_queue_entries")
+      .select(["entry_json"])
+      .where("queue_name", "=", QUEUE_NAME)
+      .where("id", "=", id)
+      .where("status", "=", "pending"),
+  );
+  return parseQueueEntry(row);
 }
 
 export async function loadPendingSessionDeliveries(
   stateDir?: string,
 ): Promise<QueuedSessionDelivery[]> {
-  return await loadPendingJsonDurableQueueEntries({
-    queueDir: resolveSessionDeliveryQueueDir(stateDir),
-    tempPrefix: QUEUE_TEMP_PREFIX,
-    cleanupTmpMaxAgeMs: TMP_SWEEP_MAX_AGE_MS,
-  });
+  const stateDatabase = openOpenClawStateDatabase(databaseOptions(stateDir));
+  const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+  const rows = executeSqliteQuerySync<DeliveryQueueEntryRow>(
+    stateDatabase.db,
+    db
+      .selectFrom("delivery_queue_entries")
+      .select(["entry_json"])
+      .where("queue_name", "=", QUEUE_NAME)
+      .where("status", "=", "pending")
+      .orderBy("enqueued_at", "asc")
+      .orderBy("id", "asc"),
+  ).rows;
+  return rows
+    .map(parseQueueEntry)
+    .filter((entry): entry is QueuedSessionDelivery => entry !== null);
 }
 
 export async function moveSessionDeliveryToFailed(id: string, stateDir?: string): Promise<void> {
-  await moveJsonDurableQueueEntryToFailed({
-    queueDir: resolveSessionDeliveryQueueDir(stateDir),
-    failedDir: resolveFailedDir(stateDir),
-    id,
-  });
+  const entry = await loadPendingSessionDelivery(id, stateDir);
+  const now = Date.now();
+  runOpenClawStateWriteTransaction((stateDatabase) => {
+    const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+    executeSqliteQuerySync(
+      stateDatabase.db,
+      db
+        .updateTable("delivery_queue_entries")
+        .set({
+          status: "failed",
+          updated_at: now,
+          failed_at: now,
+          ...(entry ? { entry_json: JSON.stringify(entry) } : {}),
+        })
+        .where("queue_name", "=", QUEUE_NAME)
+        .where("id", "=", id),
+    );
+  }, databaseOptions(stateDir));
 }

@@ -101,7 +101,6 @@ describe("channel turn kernel", () => {
       accountId: "acct",
       agentId: "main",
       routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({
         To: "123",
         OriginatingTo: "123",
@@ -169,7 +168,6 @@ describe("channel turn kernel", () => {
       accountId: "acct",
       agentId: "main",
       routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -198,7 +196,6 @@ describe("channel turn kernel", () => {
       accountId: "acct",
       agentId: "main",
       routeSessionKey: "agent:main:tlon:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ To: "chat/~nec/general", OriginatingTo: "chat/~nec/general" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -261,7 +258,6 @@ describe("channel turn kernel", () => {
       accountId: "acct",
       agentId: "main",
       routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -299,7 +295,6 @@ describe("channel turn kernel", () => {
         accountId: "acct",
         agentId: "main",
         routeSessionKey: "agent:main:telegram:peer",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
         recordInboundSession: createRecordInboundSession(),
         dispatchReplyWithBufferedBlockDispatcher,
@@ -331,7 +326,6 @@ describe("channel turn kernel", () => {
       channel: "test",
       agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -359,7 +353,6 @@ describe("channel turn kernel", () => {
       accountId: "acct",
       agentId: "main",
       routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -380,7 +373,6 @@ describe("channel turn kernel", () => {
       channel: "test",
       agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -423,7 +415,6 @@ describe("channel turn kernel", () => {
       channel: "test",
       agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
@@ -448,7 +439,6 @@ describe("channel turn kernel", () => {
       channel: "test",
       agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession,
       dispatchReplyWithBufferedBlockDispatcher,
@@ -463,8 +453,8 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "dispatch", "deliver"]);
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: "main",
         sessionKey: "agent:main:test:peer",
-        storePath: "/tmp/sessions.json",
       }),
     );
     expect(deliver).toHaveBeenCalledWith({ text: "reply" }, { kind: "final" });
@@ -485,7 +475,6 @@ describe("channel turn kernel", () => {
     const result = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession,
       runDispatch,
@@ -530,7 +519,6 @@ describe("channel turn kernel", () => {
     const result = await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:observer:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
       recordInboundSession,
       runDispatch,
@@ -552,7 +540,6 @@ describe("channel turn kernel", () => {
     await runPreparedChannelTurn({
       channel: "test",
       routeSessionKey: "agent:main:test:group:room-1",
-      storePath: "/tmp/sessions.json",
       ctxPayload: createCtx(),
       recordInboundSession: createRecordInboundSession(),
       runDispatch: vi.fn(async () => ({
@@ -587,7 +574,6 @@ describe("channel turn kernel", () => {
       runPreparedChannelTurn({
         channel: "test",
         routeSessionKey: "agent:main:test:peer",
-        storePath: "/tmp/sessions.json",
         ctxPayload: createCtx(),
         recordInboundSession,
         onPreDispatchFailure,
@@ -700,7 +686,6 @@ describe("channel turn kernel", () => {
           channel: "test",
           agentId: "observer",
           routeSessionKey: "agent:observer:test:peer",
-          storePath: "/tmp/sessions.json",
           ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
           recordInboundSession: createRecordInboundSession(events),
           dispatchReplyWithBufferedBlockDispatcher: createDispatch(events),
@@ -739,7 +724,6 @@ describe("channel turn kernel", () => {
         resolveTurn: () => ({
           channel: "test",
           routeSessionKey: "agent:main:test:peer",
-          storePath: "/tmp/sessions.json",
           ctxPayload: createCtx(),
           recordInboundSession: createRecordInboundSession(events),
           runDispatch: async () => {
@@ -780,7 +764,6 @@ describe("channel turn kernel", () => {
         resolveTurn: () => ({
           channel: "test",
           routeSessionKey: "agent:observer:test:peer",
-          storePath: "/tmp/sessions.json",
           ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
           recordInboundSession: createRecordInboundSession(events),
           runDispatch,
@@ -823,7 +806,6 @@ describe("channel turn kernel", () => {
             channel: "test",
             agentId: "main",
             routeSessionKey: "agent:main:test:peer",
-            storePath: "/tmp/sessions.json",
             ctxPayload: createCtx(),
             recordInboundSession: createRecordInboundSession(),
             dispatchReplyWithBufferedBlockDispatcher,

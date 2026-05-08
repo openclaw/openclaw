@@ -175,7 +175,6 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       },
       session: {
         readSessionUpdatedAt: readSessionUpdatedAtMock,
-        resolveStorePath: resolveStorePathMock,
         recordInboundSession: vi.fn(async () => undefined),
       },
       reply: {
@@ -225,8 +224,6 @@ const resolveAgentRouteMock: PluginRuntime["channel"]["routing"]["resolveAgentRo
 const readSessionUpdatedAtMock: PluginRuntime["channel"]["session"]["readSessionUpdatedAt"] = (
   params,
 ) => mockReadSessionUpdatedAt(params);
-const resolveStorePathMock: PluginRuntime["channel"]["session"]["resolveStorePath"] = (params) =>
-  mockResolveStorePath(params);
 const resolveEnvelopeFormatOptionsMock = () => ({});
 const finalizeInboundContextMock = (ctx: Record<string, unknown>) => ctx;
 const withReplyDispatcherMock = async ({
@@ -242,7 +239,6 @@ const {
   mockCreateFeishuClient,
   mockResolveAgentRoute,
   mockReadSessionUpdatedAt,
-  mockResolveStorePath,
   mockResolveConfiguredBindingRoute,
   mockEnsureConfiguredBindingRouteReady,
   mockResolveBoundConversation,
@@ -267,7 +263,6 @@ const {
   mockCreateFeishuClient: vi.fn(),
   mockResolveAgentRoute: vi.fn((_params?: unknown) => buildDefaultResolveRoute()),
   mockReadSessionUpdatedAt: vi.fn((_params?: unknown): number | undefined => undefined),
-  mockResolveStorePath: vi.fn((_params?: unknown) => "/tmp/feishu-sessions.json"),
   mockResolveConfiguredBindingRoute: vi.fn(
     ({
       route,
@@ -597,7 +592,6 @@ describe("handleFeishuMessage command authorization", () => {
     mockGetMessageFeishu.mockReset().mockResolvedValue(null);
     mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
     mockReadSessionUpdatedAt.mockReturnValue(undefined);
-    mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
     mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
       ({
         route,
@@ -2891,7 +2885,7 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     expect(mockReadSessionUpdatedAt).toHaveBeenCalledWith({
-      storePath: "/tmp/feishu-sessions.json",
+      agentId: "main",
       sessionKey: "agent:main:feishu:dm:ou-attacker",
     });
     expect(mockListFeishuThreadMessages).toHaveBeenCalledWith(

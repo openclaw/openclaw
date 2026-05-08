@@ -7,7 +7,7 @@ import {
   type FileEntry as PiSessionFileEntry,
   type SessionHeader,
 } from "../agents/transcript/session-transcript-contract.js";
-import { updateSessionStore } from "../config/sessions.js";
+import { patchSessionEntry } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,
   SessionCompactionCheckpointReason,
@@ -15,14 +15,16 @@ import type {
 } from "../config/sessions.js";
 import {
   deleteSqliteSessionTranscript,
+  deleteSqliteSessionTranscriptSnapshot,
   loadSqliteSessionTranscriptEvents,
+  recordSqliteSessionTranscriptSnapshot,
   replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { resolveGatewaySessionDatabaseTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
@@ -256,6 +258,8 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     sourceFile: sessionFile,
     checkpointId: snapshotSessionId,
   });
+  const sourceScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: sessionFile });
+  const snapshotAgentId = params.agentId?.trim() || sourceScope?.agentId || DEFAULT_AGENT_ID;
   const snapshotHeader: SessionHeader = {
     ...sourceHeader,
     id: snapshotSessionId,
@@ -263,13 +267,25 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     parentSession: sessionFile,
   };
   replaceSqliteSessionTranscriptEvents({
-    agentId: params.agentId?.trim() || DEFAULT_AGENT_ID,
+    agentId: snapshotAgentId,
     sessionId: snapshotSessionId,
     transcriptPath: snapshotFile,
     events: [
       snapshotHeader,
       ...entries.filter((entry) => (entry as { type?: unknown }).type !== "session"),
     ],
+  });
+  recordSqliteSessionTranscriptSnapshot({
+    agentId: snapshotAgentId,
+    sessionId: sourceHeader.id,
+    snapshotId: snapshotSessionId,
+    reason: "pre-compaction",
+    eventCount: entries.length,
+    metadata: {
+      leafId,
+      sourceTranscriptPath: sessionFile,
+      ...(snapshotFile ? { snapshotTranscriptPath: snapshotFile } : {}),
+    },
   });
   return {
     sessionId: snapshotSessionId,
@@ -299,7 +315,7 @@ export async function persistSessionCompactionCheckpoint(params: {
   postEntryId?: string;
   createdAt?: number;
 }): Promise<SessionCompactionCheckpoint | null> {
-  const target = resolveGatewaySessionStoreTarget({
+  const target = resolveGatewaySessionDatabaseTarget({
     cfg: params.cfg,
     key: params.sessionKey,
   });
@@ -338,20 +354,22 @@ export async function persistSessionCompactionCheckpoint(params: {
         removed: SessionCompactionCheckpoint[];
       }
     | undefined;
-  await updateSessionStore(target.storePath, (store) => {
-    const existing = store[target.canonicalKey];
-    if (!existing?.sessionId) {
-      return;
-    }
-    const checkpoints = sessionStoreCheckpoints(existing);
-    checkpoints.push(checkpoint);
-    trimmedCheckpoints = trimSessionCheckpoints(checkpoints);
-    store[target.canonicalKey] = {
-      ...existing,
-      updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
-      compactionCheckpoints: trimmedCheckpoints.kept,
-    };
-    stored = true;
+  await patchSessionEntry({
+    agentId: target.agentId,
+    sessionKey: target.canonicalKey,
+    update: (existing) => {
+      if (!existing.sessionId) {
+        return null;
+      }
+      const checkpoints = sessionStoreCheckpoints(existing);
+      checkpoints.push(checkpoint);
+      trimmedCheckpoints = trimSessionCheckpoints(checkpoints);
+      stored = true;
+      return {
+        updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
+        compactionCheckpoints: trimmedCheckpoints.kept,
+      };
+    },
   });
 
   if (!stored) {
@@ -361,6 +379,11 @@ export async function persistSessionCompactionCheckpoint(params: {
     return null;
   }
   for (const removed of trimmedCheckpoints?.removed ?? []) {
+    deleteSqliteSessionTranscriptSnapshot({
+      agentId: target.agentId,
+      sessionId: removed.sessionId,
+      snapshotId: removed.preCompaction.sessionId,
+    });
     deleteSqliteSessionTranscript({
       agentId: target.agentId,
       sessionId: removed.preCompaction.sessionId,

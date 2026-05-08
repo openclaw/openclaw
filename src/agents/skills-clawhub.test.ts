@@ -1,7 +1,12 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createCorePluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+} from "../plugin-state/plugin-state-store.js";
 
 const fetchClawHubSkillDetailMock = vi.fn();
 const downloadClawHubSkillArchiveMock = vi.fn();
@@ -12,6 +17,8 @@ const archiveCleanupMock = vi.fn();
 const withExtractedArchiveRootMock = vi.fn();
 const installPackageDirMock = vi.fn();
 const pathExistsMock = vi.fn();
+const tempStateDirs: string[] = [];
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 
 vi.mock("../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
@@ -37,7 +44,7 @@ const { installSkillFromClawHub, searchSkillsFromClawHub, updateSkillsFromClawHu
   await import("./skills-clawhub.js");
 
 describe("skills-clawhub", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     fetchClawHubSkillDetailMock.mockReset();
     downloadClawHubSkillArchiveMock.mockReset();
     listClawHubSkillsMock.mockReset();
@@ -47,6 +54,10 @@ describe("skills-clawhub", () => {
     withExtractedArchiveRootMock.mockReset();
     installPackageDirMock.mockReset();
     pathExistsMock.mockReset();
+    resetPluginStateStoreForTests();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-clawhub-state-"));
+    tempStateDirs.push(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
 
     resolveClawHubBaseUrlMock.mockReturnValue("https://clawhub.ai");
     pathExistsMock.mockImplementation(async (input: string) => input.endsWith("SKILL.md"));
@@ -79,9 +90,27 @@ describe("skills-clawhub", () => {
     });
   });
 
+  afterEach(async () => {
+    resetPluginStateStoreForTests();
+    if (originalOpenClawStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+    }
+    await Promise.all(
+      tempStateDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
   it("installs ClawHub skills from flat-root archives", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-clawhub-"));
+    tempStateDirs.push(workspaceDir);
+    installPackageDirMock.mockResolvedValueOnce({
+      ok: true,
+      targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
+    });
     const result = await installSkillFromClawHub({
-      workspaceDir: "/tmp/workspace",
+      workspaceDir,
       slug: "agentreceipt",
     });
 
@@ -99,49 +128,55 @@ describe("skills-clawhub", () => {
       ok: true,
       slug: "agentreceipt",
       version: "1.0.0",
-      targetDir: "/tmp/workspace/skills/agentreceipt",
+      targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
+    });
+    await expect(fs.access(path.join(workspaceDir, ".clawhub", "lock.json"))).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
     });
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
-  describe("legacy tracked slugs remain updatable", () => {
-    async function createLegacyTrackedSkillFixture(slug: string) {
+  describe("SQLite tracked slugs remain updatable", () => {
+    async function createTrackedSkillFixture(slug: string) {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-clawhub-"));
       const skillDir = path.join(workspaceDir, "skills", slug);
-      await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
-      await fs.mkdir(path.join(workspaceDir, ".clawhub"), { recursive: true });
-      await fs.writeFile(
-        path.join(skillDir, ".clawhub", "origin.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            registry: "https://legacy.clawhub.ai",
-            slug,
-            installedVersion: "0.9.0",
-            installedAt: 123,
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(workspaceDir, ".clawhub", "lock.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            skills: {
-              [slug]: {
-                version: "0.9.0",
-                installedAt: 123,
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
+      await fs.mkdir(skillDir, { recursive: true });
+      const workspaceKey = crypto
+        .createHash("sha256")
+        .update(path.resolve(workspaceDir))
+        .digest("hex")
+        .slice(0, 24);
+      const store = createCorePluginStateKeyedStore<{
+        version: 1;
+        registry: string;
+        slug: string;
+        installedVersion: string;
+        installedAt: number;
+        workspaceDir: string;
+        targetDir: string;
+        updatedAt: number;
+      }>({
+        ownerId: "core:clawhub-skills",
+        namespace: "skill-installs",
+        maxEntries: 10_000,
+      });
+      await store.register(`${workspaceKey}:${slug}`, {
+        version: 1,
+        registry: "https://legacy.clawhub.ai",
+        slug,
+        installedVersion: "0.9.0",
+        installedAt: 123,
+        workspaceDir: path.resolve(workspaceDir),
+        targetDir: skillDir,
+        updatedAt: 123,
+      });
       return { workspaceDir, skillDir };
     }
 
@@ -157,9 +192,9 @@ describe("skills-clawhub", () => {
       ]);
     }
 
-    it("updates all tracked legacy Unicode slugs in place", async () => {
+    it("updates all SQLite-tracked Unicode slugs in place", async () => {
       const slug = "re\u0430ct";
-      const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
+      const { workspaceDir } = await createTrackedSkillFixture(slug);
       installPackageDirMock.mockResolvedValueOnce({
         ok: true,
         targetDir: path.join(workspaceDir, "skills", slug),
@@ -185,9 +220,9 @@ describe("skills-clawhub", () => {
       }
     });
 
-    it("updates a legacy Unicode slug when requested explicitly", async () => {
+    it("updates a SQLite-tracked Unicode slug when requested explicitly", async () => {
       const slug = "re\u0430ct";
-      const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
+      const { workspaceDir } = await createTrackedSkillFixture(slug);
       installPackageDirMock.mockResolvedValueOnce({
         ok: true,
         targetDir: path.join(workspaceDir, "skills", slug),

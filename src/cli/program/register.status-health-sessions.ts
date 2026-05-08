@@ -3,7 +3,6 @@ import { commitmentsDismissCommand, commitmentsListCommand } from "../../command
 import { exportTrajectoryCommand } from "../../commands/export-trajectory.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "../../commands/flows.js";
 import { healthCommand } from "../../commands/health.js";
-import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import {
@@ -128,7 +127,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .description("List stored conversation sessions")
     .option("--json", "Output as JSON", false)
     .option("--verbose", "Verbose logging", false)
-    .option("--store <path>", "Path to session store (default: resolved from config)")
     .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
     .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
@@ -143,7 +141,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions --active 120", "Only last 2 hours."],
           ["openclaw sessions --limit 25", "Show the newest 25 sessions."],
           ["openclaw sessions --json", "Machine-readable output."],
-          ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
+          ["openclaw sessions --agent main --limit all", "Inspect all rows for one agent."],
         ])}\n\n${theme.muted(
           "Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to cap the window and show %.",
         )}`,
@@ -158,7 +156,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       await sessionsCommand(
         {
           json: Boolean(opts.json),
-          store: opts.store as string | undefined,
           agent: opts.agent as string | undefined,
           allAgents: Boolean(opts.allAgents),
           active: opts.active as string | undefined,
@@ -170,83 +167,17 @@ export function registerStatusHealthSessionsCommands(program: Command) {
   sessionsCmd.enablePositionalOptions();
 
   sessionsCmd
-    .command("cleanup")
-    .description("Run SQLite session-row maintenance now")
-    .option("--store <path>", "Legacy/custom session store override (default: config)")
-    .option("--agent <id>", "Agent id to maintain (default: configured default agent)")
-    .option("--all-agents", "Run maintenance across all configured agents", false)
-    .option("--dry-run", "Preview maintenance actions without writing", false)
-    .option("--enforce", "Apply maintenance even when configured mode is warn", false)
-    .option(
-      "--fix-missing",
-      "Remove store entries whose SQLite transcript events are missing (bypasses age/count retention)",
-      false,
-    )
-    .option("--active-key <key>", "Protect this session key from enforce-mode retention")
-    .option("--json", "Output JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw sessions cleanup --dry-run", "Preview stale/cap cleanup."],
-          [
-            "openclaw sessions cleanup --dry-run --fix-missing",
-            "Also preview pruning entries with missing SQLite transcript events.",
-          ],
-          [
-            "openclaw sessions cleanup --dry-run --fix-dm-scope",
-            "Preview stale direct-DM rows after returning dmScope to main.",
-          ],
-          ["openclaw sessions cleanup --enforce", "Apply maintenance now."],
-          ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
-          ["openclaw sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
-          [
-            "openclaw sessions cleanup --enforce --store ./tmp/sessions.json",
-            "Use a legacy/custom store override.",
-          ],
-        ])}`,
-    )
-    .action(async (opts, command) => {
-      const parentOpts = command.parent?.opts() as
-        | {
-            store?: string;
-            agent?: string;
-            allAgents?: boolean;
-            json?: boolean;
-          }
-        | undefined;
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        await sessionsCleanupCommand(
-          {
-            store: (opts.store as string | undefined) ?? parentOpts?.store,
-            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
-            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
-            dryRun: Boolean(opts.dryRun),
-            enforce: Boolean(opts.enforce),
-            fixMissing: Boolean(opts.fixMissing),
-            fixDmScope: Boolean(opts.fixDmScope),
-            activeKey: opts.activeKey as string | undefined,
-            json: Boolean(opts.json || parentOpts?.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
-
-  sessionsCmd
     .command("export-trajectory")
     .description("Export a redacted trajectory bundle for a stored session")
     .option("--session-key <key>", "Session key to export")
     .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
     .option("--workspace <path>", "Workspace root for the export (default: current directory)")
-    .option("--store <path>", "Path to session store (default: resolved from session key)")
-    .option("--agent <id>", "Agent id for resolving the default session store")
+    .option("--agent <id>", "Agent id for resolving the session database")
     .option("--request-json-base64 <payload>", "Base64url-encoded export request")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as
         | {
-            store?: string;
             agent?: string;
             json?: boolean;
           }
@@ -257,7 +188,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             sessionKey: opts.sessionKey as string | undefined,
             output: opts.output as string | undefined,
             workspace: opts.workspace as string | undefined,
-            store: (opts.store as string | undefined) ?? parentOpts?.store,
             agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
             requestJsonBase64: opts.requestJsonBase64 as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),

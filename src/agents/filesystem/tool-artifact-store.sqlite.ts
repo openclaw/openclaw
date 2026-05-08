@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import type { Selectable } from "kysely";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabaseOptions,
+} from "../../state/openclaw-agent-db.js";
 import type {
   AgentToolArtifact,
   AgentToolArtifactExport,
@@ -15,7 +22,7 @@ import type {
 export type SqliteToolArtifact = AgentToolArtifact;
 export type SqliteToolArtifactExport = AgentToolArtifactExport;
 
-export type SqliteToolArtifactStoreOptions = OpenClawStateDatabaseOptions & {
+export type SqliteToolArtifactStoreOptions = OpenClawAgentDatabaseOptions & {
   agentId: string;
   runId: string;
 };
@@ -28,15 +35,10 @@ export type WriteSqliteToolArtifactOptions = SqliteToolArtifactStoreOptions & {
   now?: () => number;
 };
 
-type ToolArtifactRow = {
-  agent_id: string;
-  run_id: string;
-  artifact_id: string;
-  kind: string;
-  metadata_json: string;
-  blob: Buffer | null;
-  created_at: number | bigint;
-};
+type ToolArtifactsTable = OpenClawAgentKyselyDatabase["tool_artifacts"];
+type ToolArtifactDatabase = Pick<OpenClawAgentKyselyDatabase, "tool_artifacts">;
+
+type ToolArtifactRow = Selectable<ToolArtifactsTable>;
 
 function normalizeRunId(value: string): string {
   const runId = value.trim();
@@ -83,10 +85,13 @@ function parseMetadata(raw: string): Record<string, unknown> {
   }
 }
 
-function rowToArtifact(row: ToolArtifactRow): SqliteToolArtifact {
+function rowToArtifact(
+  row: ToolArtifactRow,
+  scope: { agentId: string; runId: string },
+): SqliteToolArtifact {
   return {
-    agentId: row.agent_id,
-    runId: row.run_id,
+    agentId: scope.agentId,
+    runId: scope.runId,
     artifactId: row.artifact_id,
     kind: row.kind,
     metadata: parseMetadata(row.metadata_json),
@@ -95,9 +100,12 @@ function rowToArtifact(row: ToolArtifactRow): SqliteToolArtifact {
   };
 }
 
-function rowToExport(row: ToolArtifactRow): SqliteToolArtifactExport {
+function rowToExport(
+  row: ToolArtifactRow,
+  scope: { agentId: string; runId: string },
+): SqliteToolArtifactExport {
   return {
-    ...rowToArtifact(row),
+    ...rowToArtifact(row, scope),
     ...(row.blob ? { blobBase64: Buffer.from(row.blob).toString("base64") } : {}),
   };
 }
@@ -115,35 +123,29 @@ export function writeSqliteToolArtifact(
       : Buffer.isBuffer(options.blob)
         ? options.blob
         : Buffer.from(options.blob);
-  runOpenClawStateWriteTransaction((database) => {
-    database.db
-      .prepare(
-        `
-          INSERT INTO tool_artifacts (
-            agent_id,
-            run_id,
-            artifact_id,
+  runOpenClawAgentWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<ToolArtifactDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("tool_artifacts")
+        .values({
+          run_id: runId,
+          artifact_id: artifactId,
+          kind,
+          metadata_json: JSON.stringify(options.metadata ?? {}),
+          blob,
+          created_at: createdAt,
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["run_id", "artifact_id"]).doUpdateSet({
             kind,
-            metadata_json,
+            metadata_json: JSON.stringify(options.metadata ?? {}),
             blob,
-            created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(agent_id, run_id, artifact_id) DO UPDATE SET
-            kind = excluded.kind,
-            metadata_json = excluded.metadata_json,
-            blob = excluded.blob,
-            created_at = excluded.created_at
-        `,
-      )
-      .run(
-        agentId,
-        runId,
-        artifactId,
-        kind,
-        JSON.stringify(options.metadata ?? {}),
-        blob,
-        createdAt,
-      );
+            created_at: createdAt,
+          }),
+        ),
+    );
   }, options);
   return {
     agentId,
@@ -160,19 +162,17 @@ export function listSqliteToolArtifacts(
   options: SqliteToolArtifactStoreOptions,
 ): SqliteToolArtifact[] {
   const { agentId, runId } = normalizeScope(options);
-  const database = openOpenClawStateDatabase(options);
-  return (
-    database.db
-      .prepare(
-        `
-        SELECT agent_id, run_id, artifact_id, kind, metadata_json, blob, created_at
-        FROM tool_artifacts
-        WHERE agent_id = ? AND run_id = ?
-        ORDER BY created_at ASC, artifact_id ASC
-      `,
-      )
-      .all(agentId, runId) as ToolArtifactRow[]
-  ).map(rowToArtifact);
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<ToolArtifactDatabase>(database.db);
+  return executeSqliteQuerySync<ToolArtifactRow>(
+    database.db,
+    db
+      .selectFrom("tool_artifacts")
+      .select(["run_id", "artifact_id", "kind", "metadata_json", "blob", "created_at"])
+      .where("run_id", "=", runId)
+      .orderBy("created_at", "asc")
+      .orderBy("artifact_id", "asc"),
+  ).rows.map((row) => rowToArtifact(row, { agentId, runId }));
 }
 
 export function readSqliteToolArtifact(
@@ -180,46 +180,46 @@ export function readSqliteToolArtifact(
 ): SqliteToolArtifactExport | null {
   const { agentId, runId } = normalizeScope(options);
   const artifactId = normalizeArtifactId(options.artifactId);
-  const database = openOpenClawStateDatabase(options);
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<ToolArtifactDatabase>(database.db);
   const row =
-    (database.db
-      .prepare(
-        `
-          SELECT agent_id, run_id, artifact_id, kind, metadata_json, blob, created_at
-          FROM tool_artifacts
-          WHERE agent_id = ? AND run_id = ? AND artifact_id = ?
-        `,
-      )
-      .get(agentId, runId, artifactId) as ToolArtifactRow | undefined) ?? null;
-  return row ? rowToExport(row) : null;
+    executeSqliteQueryTakeFirstSync<ToolArtifactRow>(
+      database.db,
+      db
+        .selectFrom("tool_artifacts")
+        .select(["run_id", "artifact_id", "kind", "metadata_json", "blob", "created_at"])
+        .where("run_id", "=", runId)
+        .where("artifact_id", "=", artifactId),
+    ) ?? null;
+  return row ? rowToExport(row, { agentId, runId }) : null;
 }
 
 export function exportSqliteToolArtifacts(
   options: SqliteToolArtifactStoreOptions,
 ): SqliteToolArtifactExport[] {
   const { agentId, runId } = normalizeScope(options);
-  const database = openOpenClawStateDatabase(options);
-  return (
-    database.db
-      .prepare(
-        `
-        SELECT agent_id, run_id, artifact_id, kind, metadata_json, blob, created_at
-        FROM tool_artifacts
-        WHERE agent_id = ? AND run_id = ?
-        ORDER BY created_at ASC, artifact_id ASC
-      `,
-      )
-      .all(agentId, runId) as ToolArtifactRow[]
-  ).map(rowToExport);
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<ToolArtifactDatabase>(database.db);
+  return executeSqliteQuerySync<ToolArtifactRow>(
+    database.db,
+    db
+      .selectFrom("tool_artifacts")
+      .select(["run_id", "artifact_id", "kind", "metadata_json", "blob", "created_at"])
+      .where("run_id", "=", runId)
+      .orderBy("created_at", "asc")
+      .orderBy("artifact_id", "asc"),
+  ).rows.map((row) => rowToExport(row, { agentId, runId }));
 }
 
 export function deleteSqliteToolArtifacts(options: SqliteToolArtifactStoreOptions): number {
-  const { agentId, runId } = normalizeScope(options);
-  return runOpenClawStateWriteTransaction((database) => {
-    const result = database.db
-      .prepare("DELETE FROM tool_artifacts WHERE agent_id = ? AND run_id = ?")
-      .run(agentId, runId);
-    return Number(result.changes ?? 0);
+  const { runId } = normalizeScope(options);
+  return runOpenClawAgentWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<ToolArtifactDatabase>(database.db);
+    const result = executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("tool_artifacts").where("run_id", "=", runId),
+    );
+    return Number(result.numAffectedRows ?? 0);
   }, options);
 }
 

@@ -2,6 +2,9 @@ import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entr
 
 export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
+  features: {
+    legacyStateMigrations: true,
+  },
   plugin: {
     specifier: "./setup-plugin-api.js",
     exportName: "matrixSetupPlugin",
@@ -13,5 +16,9 @@ export default defineBundledChannelSetupEntry({
   runtime: {
     specifier: "./runtime-setter-api.js",
     exportName: "setMatrixRuntime",
+  },
+  legacyStateMigrations: {
+    specifier: "./legacy-state-migrations-api.js",
+    exportName: "detectMatrixLegacyStateMigrations",
   },
 });

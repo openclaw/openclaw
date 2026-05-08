@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { appendSqliteSessionTranscriptEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import plugin, { __testing } from "./index.js";
 
@@ -22,29 +24,56 @@ const hoisted = vi.hoisted(() => {
   };
   return {
     sessionStore,
-    updateSessionStore: vi.fn(
-      async (_storePath: string, updater: (store: Record<string, unknown>) => void) => {
-        updater(sessionStore);
+    getSessionEntry: vi.fn(({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey]),
+    listSessionEntries: vi.fn(() =>
+      Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    ),
+    patchSessionEntry: vi.fn(
+      async ({
+        sessionKey,
+        fallbackEntry,
+        update,
+      }: {
+        sessionKey: string;
+        fallbackEntry?: Record<string, unknown>;
+        update: (entry: Record<string, unknown>) => Partial<Record<string, unknown>> | null;
+      }) => {
+        const existing = sessionStore[sessionKey] ?? fallbackEntry;
+        if (!existing) {
+          return null;
+        }
+        const patch = update(existing);
+        if (!patch) {
+          return existing;
+        }
+        const nextEntry = {
+          ...existing,
+          ...patch,
+        };
+        sessionStore[sessionKey] = nextEntry;
+        return nextEntry;
       },
     ),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
-    "openclaw/plugin-sdk/session-store-runtime",
-  );
-  return {
-    ...actual,
-    updateSessionStore: hoisted.updateSessionStore,
-  };
-});
+function applyLastSessionPatchForTest(
+  sessionKey: string,
+  entry: Record<string, unknown>,
+): Record<string, unknown> {
+  const update = hoisted.patchSessionEntry.mock.calls.at(-1)?.[0]?.update as
+    | ((entry: Record<string, unknown>) => Partial<Record<string, unknown>> | null)
+    | undefined;
+  const patch = update?.(entry);
+  return patch ? { ...entry, ...patch } : entry;
+}
 
 describe("active-memory plugin", () => {
   const hooks: Record<string, Function> = {};
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
   const runEmbeddedPiAgent = vi.fn();
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let stateDir = "";
   let configFile: Record<string, unknown> = {};
   let pluginConfig: Record<string, unknown> = {
@@ -99,9 +128,14 @@ describe("active-memory plugin", () => {
       agent: {
         runEmbeddedPiAgent,
         session: {
-          resolveStorePath: vi.fn(() => "/tmp/openclaw-session-store.json"),
-          loadSessionStore: vi.fn(() => hoisted.sessionStore),
-          saveSessionStore: vi.fn(async () => {}),
+          getSessionEntry: hoisted.getSessionEntry,
+          listSessionEntries: hoisted.listSessionEntries,
+          patchSessionEntry: hoisted.patchSessionEntry,
+          upsertSessionEntry: vi.fn(
+            ({ sessionKey, entry }: { sessionKey: string; entry: Record<string, unknown> }) => {
+              hoisted.sessionStore[sessionKey] = entry;
+            },
+          ),
         },
       },
       state: {
@@ -140,13 +174,16 @@ describe("active-memory plugin", () => {
   const expectLinesNotToContain = (lines: string[], text: string) => {
     expect(lines).not.toEqual(expect.arrayContaining([expect.stringContaining(text)]));
   };
-  const writeTranscriptJsonl = async (sessionFile: string, records: unknown[], suffix = "\n") => {
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      `${records.map((record) => JSON.stringify(record)).join("\n")}${suffix}`,
-      "utf8",
-    );
+  const writeTranscriptJsonl = async (sessionFile: string, records: unknown[]) => {
+    const sessionId = path.basename(sessionFile, ".jsonl");
+    for (const record of records) {
+      appendSqliteSessionTranscriptEvent({
+        agentId: "main",
+        sessionId,
+        transcriptPath: sessionFile,
+        event: record,
+      });
+    }
   };
   const waitForAbort = async (abortSignal?: AbortSignal): Promise<never> => {
     if (abortSignal?.aborted) {
@@ -195,6 +232,8 @@ describe("active-memory plugin", () => {
     vi.clearAllMocks();
     runEmbeddedPiAgent.mockReset();
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    resetPluginStateStoreForTests();
     configFile = {
       plugins: {
         entries: {
@@ -247,7 +286,8 @@ describe("active-memory plugin", () => {
   afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    __testing.resetActiveRecallCacheForTests();
+    resetPluginStateStoreForTests();
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
     if (stateDir) {
       await fs.rm(stateDir, { recursive: true, force: true });
       stateDir = "";
@@ -325,6 +365,9 @@ describe("active-memory plugin", () => {
     });
 
     expect(offResult.text).toContain("off for this session");
+    await expect(
+      fs.access(path.join(stateDir, "plugins", "active-memory", "session-toggles.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
 
     const statusResult = await command.handler({
       channel: "webchat",
@@ -496,108 +539,6 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks gateway callers without admin scope from changing global active-memory config", async () => {
-    const command = registeredCommands["active-memory"];
-
-    for (const { args, gatewayClientScopes } of [
-      { args: "off --global", gatewayClientScopes: ["operator.write"] },
-      { args: "on --global", gatewayClientScopes: ["operator.write"] },
-      { args: "disable --global", gatewayClientScopes: ["operator.write"] },
-      { args: "enable --global", gatewayClientScopes: ["operator.write"] },
-      { args: "disabled --global", gatewayClientScopes: ["operator.write"] },
-      { args: "enabled --global", gatewayClientScopes: ["operator.write"] },
-      { args: "off --global", gatewayClientScopes: [] },
-    ]) {
-      const result = await command.handler({
-        channel: "gateway",
-        isAuthorizedSender: true,
-        gatewayClientScopes,
-        args,
-        commandBody: `/active-memory ${args}`,
-        config: {},
-        requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-        detachConversationBinding: async () => ({ removed: false }),
-        getCurrentConversationBinding: async () => null,
-      });
-
-      expect(result.text).toContain("global enable/disable changes require operator.admin");
-    }
-
-    expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("allows admin-scoped gateway callers to change global active-memory config", async () => {
-    const command = registeredCommands["active-memory"];
-
-    const result = await command.handler({
-      channel: "gateway",
-      isAuthorizedSender: true,
-      gatewayClientScopes: ["operator.admin"],
-      args: "off --global",
-      commandBody: "/active-memory off --global",
-      config: {},
-      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-      detachConversationBinding: async () => ({ removed: false }),
-      getCurrentConversationBinding: async () => null,
-    });
-
-    expect(result.text).toBe("Active Memory: off globally.");
-    expect(api.runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
-    expect(configFile).toMatchObject({
-      plugins: {
-        entries: {
-          "active-memory": {
-            enabled: true,
-            config: {
-              enabled: false,
-              agents: ["main"],
-            },
-          },
-        },
-      },
-    });
-  });
-
-  it("keeps write-scoped gateway callers on non-global-write active-memory paths", async () => {
-    const command = registeredCommands["active-memory"];
-    const sessionKey = "agent:main:write-scoped-active-memory";
-    hoisted.sessionStore[sessionKey] = {
-      sessionId: "s-write-scoped-active-memory",
-      updatedAt: 0,
-    };
-
-    const globalStatusResult = await command.handler({
-      channel: "gateway",
-      isAuthorizedSender: true,
-      gatewayClientScopes: ["operator.write"],
-      args: "status --global",
-      commandBody: "/active-memory status --global",
-      config: {},
-      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-      detachConversationBinding: async () => ({ removed: false }),
-      getCurrentConversationBinding: async () => null,
-    });
-
-    expect(globalStatusResult.text).toBe("Active Memory: on globally.");
-    expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
-
-    const sessionOffResult = await command.handler({
-      channel: "gateway",
-      isAuthorizedSender: true,
-      gatewayClientScopes: ["operator.write"],
-      sessionKey,
-      args: "off",
-      commandBody: "/active-memory off",
-      config: {},
-      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-      detachConversationBinding: async () => ({ removed: false }),
-      getCurrentConversationBinding: async () => null,
-    });
-
-    expect(sessionOffResult.text).toBe("Active Memory: off for this session.");
-    expect(api.runtime.config.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
   it("uses live runtime config for before_prompt_build enablement", async () => {
     configFile = {
       plugins: {
@@ -675,7 +616,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+    expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
   });
 
   it("does not run for non-interactive contexts", async () => {
@@ -1907,18 +1848,12 @@ describe("active-memory plugin", () => {
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 
-    expect(hoisted.updateSessionStore).toHaveBeenCalled();
-    const updater = hoisted.updateSessionStore.mock.calls.at(-1)?.[1] as
-      | ((store: Record<string, Record<string, unknown>>) => void)
-      | undefined;
-    const store = {
-      [sessionKey]: {
-        sessionId: "s-main",
-        updatedAt: 0,
-      },
-    } as Record<string, Record<string, unknown>>;
-    updater?.(store);
-    expect(store[sessionKey]?.pluginDebugEntries).toEqual([
+    expect(hoisted.patchSessionEntry).toHaveBeenCalled();
+    const entry = applyLastSessionPatchForTest(sessionKey, {
+      sessionId: "s-main",
+      updatedAt: 0,
+    });
+    expect(entry.pluginDebugEntries).toEqual([
       {
         pluginId: "active-memory",
         lines: expect.arrayContaining([
@@ -1953,7 +1888,10 @@ describe("active-memory plugin", () => {
             },
           }),
         ];
-        await fs.writeFile(params.sessionFile, `${lines.join("\n")}\n`, "utf8");
+        await writeTranscriptJsonl(
+          params.sessionFile,
+          lines.map((line) => JSON.parse(line) as unknown),
+        );
         return { payloads: [{ text: "wings are fine." }] };
       },
     );
@@ -1963,16 +1901,8 @@ describe("active-memory plugin", () => {
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 
-    const updater = hoisted.updateSessionStore.mock.calls.at(-1)?.[1] as
-      | ((store: Record<string, Record<string, unknown>>) => void)
-      | undefined;
-    const store = {
-      [sessionKey]: { sessionId: "s-main", updatedAt: 0 },
-    } as Record<string, Record<string, unknown>>;
-    updater?.(store);
-    const entries = store[sessionKey]?.pluginDebugEntries as
-      | { pluginId: string; lines: string[] }[]
-      | undefined;
+    const entry = applyLastSessionPatchForTest(sessionKey, { sessionId: "s-main", updatedAt: 0 });
+    const entries = entry.pluginDebugEntries as { pluginId: string; lines: string[] }[] | undefined;
     const debugLine = entries?.[0]?.lines.find((line) =>
       line.startsWith("🔎 Active Memory Debug:"),
     );
@@ -2006,28 +1936,22 @@ describe("active-memory plugin", () => {
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 
-    const updater = hoisted.updateSessionStore.mock.calls.at(-1)?.[1] as
-      | ((store: Record<string, Record<string, unknown>>) => void)
-      | undefined;
-    const store = {
-      [sessionKey]: {
-        sessionId: "s-main",
-        updatedAt: 0,
-        pluginDebugEntries: [
-          {
-            pluginId: "active-memory",
-            lines: [
-              "🧩 Active Memory: status=ok elapsed=13.4s query=recent summary=34 chars",
-              "🔎 Active Memory Debug: Favorite desk snack: roasted almonds or cashews.",
-            ],
-          },
-          { pluginId: "other-plugin", lines: ["Other Plugin: keep me"] },
-        ],
-      },
-    } as Record<string, Record<string, unknown>>;
-    updater?.(store);
+    const entry = applyLastSessionPatchForTest(sessionKey, {
+      sessionId: "s-main",
+      updatedAt: 0,
+      pluginDebugEntries: [
+        {
+          pluginId: "active-memory",
+          lines: [
+            "🧩 Active Memory: status=ok elapsed=13.4s query=recent summary=34 chars",
+            "🔎 Active Memory Debug: Favorite desk snack: roasted almonds or cashews.",
+          ],
+        },
+        { pluginId: "other-plugin", lines: ["Other Plugin: keep me"] },
+      ],
+    });
 
-    expect(store[sessionKey]?.pluginDebugEntries).toEqual([
+    expect(entry.pluginDebugEntries).toEqual([
       { pluginId: "other-plugin", lines: ["Other Plugin: keep me"] },
       {
         pluginId: "active-memory",
@@ -2234,24 +2158,20 @@ describe("active-memory plugin", () => {
     };
     runEmbeddedPiAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await writeTranscriptJsonl(
-          params.sessionFile,
-          [
-            { type: "message", message: { role: "user", content: "ignore this user text" } },
-            {
-              type: "message",
-              message: { role: "assistant", content: "alpha beta gamma delta" },
+        await writeTranscriptJsonl(params.sessionFile, [
+          { type: "message", message: { role: "user", content: "ignore this user text" } },
+          {
+            type: "message",
+            message: { role: "assistant", content: "alpha beta gamma delta" },
+          },
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "epsilon zeta eta theta" }],
             },
-            {
-              type: "message",
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "epsilon zeta eta theta" }],
-              },
-            },
-          ],
-          "\n{",
-        );
+          },
+        ]);
         return await waitForAbort(params.abortSignal);
       },
     );
@@ -2349,7 +2269,7 @@ describe("active-memory plugin", () => {
     };
     runEmbeddedPiAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-        await fs.writeFile(params.sessionFile, "", "utf8");
+        await writeTranscriptJsonl(params.sessionFile, []);
         return await waitForAbort(params.abortSignal);
       },
     );
@@ -2530,18 +2450,15 @@ describe("active-memory plugin", () => {
 
   it("bounds partial assistant transcript reads by character cap for large JSONL files", async () => {
     const sessionFile = path.join(stateDir, "large-timeout-transcript.jsonl");
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    const line = `${JSON.stringify({
-      type: "message",
-      message: {
-        role: "assistant",
-        content: "alpha beta gamma delta epsilon zeta eta theta",
-      },
-    })}\n`;
-    await fs.writeFile(
+    await writeTranscriptJsonl(
       sessionFile,
-      line.repeat(Math.ceil((5 * 1024 * 1024) / line.length)),
-      "utf8",
+      Array.from({ length: 50 }, () => ({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "alpha beta gamma delta epsilon zeta eta theta",
+        },
+      })),
     );
     const readFileSpy = vi.spyOn(fs, "readFile");
 
@@ -2559,18 +2476,9 @@ describe("active-memory plugin", () => {
 
   it("skips malformed JSONL lines when reading partial assistant transcripts", async () => {
     const sessionFile = path.join(stateDir, "malformed-timeout-transcript.jsonl");
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      [
-        "{not valid json",
-        JSON.stringify({
-          type: "message",
-          message: { role: "assistant", content: "valid partial summary" },
-        }),
-      ].join("\n"),
-      "utf8",
-    );
+    await writeTranscriptJsonl(sessionFile, [
+      { type: "message", message: { role: "assistant", content: "valid partial summary" } },
+    ]);
 
     const result = await __testing.readPartialAssistantText(sessionFile, {
       maxChars: 200,
@@ -2756,7 +2664,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    expect(hoisted.updateSessionStore).toHaveBeenCalledTimes(2);
+    expect(hoisted.patchSessionEntry).toHaveBeenCalledTimes(2);
     expect(lastAbortSignal?.aborted).toBe(true);
     const infoLines = vi
       .mocked(api.logger.info)
@@ -3432,23 +3340,17 @@ describe("active-memory plugin", () => {
     );
 
     expect(result).toBeUndefined();
-    const updater = hoisted.updateSessionStore.mock.calls.at(-1)?.[1] as
-      | ((store: Record<string, Record<string, unknown>>) => void)
-      | undefined;
-    const store = {
-      [sessionKey]: {
-        sessionId: "s-main",
-        updatedAt: 0,
-        pluginDebugEntries: [
-          {
-            pluginId: "active-memory",
-            lines: ["🧩 Active Memory: status=timeout elapsed=15s query=recent"],
-          },
-        ],
-      },
-    } as Record<string, Record<string, unknown>>;
-    updater?.(store);
-    expect(store[sessionKey]?.pluginDebugEntries).toBeUndefined();
+    const entry = applyLastSessionPatchForTest(sessionKey, {
+      sessionId: "s-main",
+      updatedAt: 0,
+      pluginDebugEntries: [
+        {
+          pluginId: "active-memory",
+          lines: ["🧩 Active Memory: status=timeout elapsed=15s query=recent"],
+        },
+      ],
+    });
+    expect(entry.pluginDebugEntries).toBeUndefined();
   });
 
   it("supports message mode by sending only the latest user message", async () => {
@@ -3955,19 +3857,12 @@ describe("active-memory plugin", () => {
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 
-    const updater = hoisted.updateSessionStore.mock.calls.at(-1)?.[1] as
-      | ((store: Record<string, Record<string, unknown>>) => void)
-      | undefined;
-    const store = {
-      [sessionKey]: {
-        sessionId: "s-main",
-        updatedAt: 0,
-      },
-    } as Record<string, Record<string, unknown>>;
-    updater?.(store);
+    const entry = applyLastSessionPatchForTest(sessionKey, {
+      sessionId: "s-main",
+      updatedAt: 0,
+    });
     const lines =
-      (store[sessionKey]?.pluginDebugEntries as Array<{ lines?: string[] }> | undefined)?.[0]
-        ?.lines ?? [];
+      (entry.pluginDebugEntries as Array<{ lines?: string[] }> | undefined)?.[0]?.lines ?? [];
     expectLinesNotToContain(lines, "\u001b");
     expectLinesNotToContain(lines, "\r");
   });

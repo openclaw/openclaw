@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   registerWikiCli,
@@ -47,6 +48,7 @@ describe("memory-wiki cli", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resetPluginStateStoreForTests();
     process.exitCode = undefined;
   });
 
@@ -490,6 +492,9 @@ cli note
     });
     expect(applied.runId).toMatch(/^chatgpt-[a-f0-9]{12}$/u);
     expect(applied.createdCount).toBe(1);
+    await expect(
+      fs.stat(path.join(rootDir, ".openclaw-wiki", "import-runs", `${applied.runId}.json`)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
       (entry) => entry !== "index.md",
     );

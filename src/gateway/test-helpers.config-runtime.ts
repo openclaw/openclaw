@@ -80,9 +80,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       ...fileSession,
       mainKey: fileSession.mainKey ?? "main",
     };
-    if (typeof testState.sessionStorePath === "string") {
-      session.store = testState.sessionStorePath;
-    }
     if (testState.sessionConfig) {
       Object.assign(session, testState.sessionConfig);
     }

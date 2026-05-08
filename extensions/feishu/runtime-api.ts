@@ -39,10 +39,8 @@ export {
   filterSupplementalContextItems,
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
-export {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+export { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+export { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 export { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 export { createPersistentDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 export { normalizeAgentId } from "openclaw/plugin-sdk/routing";

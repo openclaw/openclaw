@@ -182,7 +182,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
 
     expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Migrated containers"),
+      expect.stringContaining("Migrated 2 containers registry entries"),
       "Doctor changes",
     );
   });

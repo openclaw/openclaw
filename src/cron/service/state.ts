@@ -150,7 +150,6 @@ export type CronServiceState = {
    */
   warnedMissingSessionTargetJobIds: Set<string>;
   storeLoadedAtMs: number | null;
-  storeFileMtimeMs: number | null;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
@@ -163,7 +162,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     warnedDisabled: false,
     warnedMissingSessionTargetJobIds: new Set<string>(),
     storeLoadedAtMs: null,
-    storeFileMtimeMs: null,
   };
 }
 

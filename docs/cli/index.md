@@ -187,7 +187,6 @@ openclaw [--dev] [--profile <name>] <command>
   status
   health
   sessions
-    cleanup
   tasks
     list
     audit

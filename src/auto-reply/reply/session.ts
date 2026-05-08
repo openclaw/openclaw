@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
@@ -10,7 +9,7 @@ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -22,7 +21,11 @@ import {
 } from "../../config/sessions/reset.js";
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../../config/sessions/store.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import { deleteSqliteSessionTranscript } from "../../config/sessions/transcript-store.sqlite.js";
 import {
@@ -33,7 +36,7 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
+import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-paths.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { closeTrackedBrowserTabsForSessions } from "../../plugin-sdk/browser-maintenance.js";
@@ -150,7 +153,6 @@ export type SessionInitResult = {
   resetTriggered: boolean;
   systemSent: boolean;
   abortedLastRun: boolean;
-  storePath: string;
   sessionScope: SessionScope;
   groupResolution?: GroupKeyResolution;
   isGroup: boolean;
@@ -262,15 +264,16 @@ export async function initSessionState(params: {
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath);
+  const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
+    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
   if (ingressTimingEnabled) {
     log.info(
-      `session-init store-load agent=${agentId} session=${sessionCtxForState.SessionKey ?? "(no-session)"} ` +
-        `elapsedMs=${Date.now() - sessionStoreLoadStartMs} path=${storePath}`,
+      `session-init row-store agent=${agentId} session=${sessionCtxForState.SessionKey ?? "(no-session)"} ` +
+        `elapsedMs=${Date.now() - sessionStoreLoadStartMs}`,
     );
   }
   let sessionKey: string | undefined;
@@ -419,7 +422,6 @@ export async function initSessionState(params: {
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
-    storePath,
   });
   const entryFreshness = entry
     ? skipImplicitExpiry
@@ -699,7 +701,7 @@ export async function initSessionState(params: {
     const parentEntry = sessionStore[parentSessionKey];
     const forkDecision = await resolveParentForkDecision({
       parentEntry,
-      storePath,
+      agentId,
     });
     if (forkDecision.status === "skip") {
       // The parent branch is too large to inherit usefully. Start fresh and
@@ -717,7 +719,6 @@ export async function initSessionState(params: {
       const forked = await forkSessionFromParent({
         parentEntry,
         agentId,
-        sessionsDir: path.dirname(storePath),
       });
       if (forked) {
         sessionId = forked.sessionId;
@@ -742,10 +743,8 @@ export async function initSessionState(params: {
     sessionId: sessionEntry.sessionId,
     sessionKey,
     sessionStore,
-    storePath,
     sessionEntry,
     agentId,
-    sessionsDir: path.dirname(storePath),
     fallbackSessionFile,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
@@ -769,13 +768,21 @@ export async function initSessionState(params: {
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
-  await updateSessionStore(storePath, (store) => {
-    // Preserve per-session overrides while resetting compaction state on /new.
-    store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
-    if (retiredLegacyMainDelivery) {
-      store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
-    }
+  upsertSessionEntry({
+    agentId,
+    sessionKey,
+    entry: {
+      ...getSessionEntry({ agentId, sessionKey }),
+      ...sessionEntry,
+    },
   });
+  if (retiredLegacyMainDelivery) {
+    upsertSessionEntry({
+      agentId,
+      sessionKey: retiredLegacyMainDelivery.key,
+      entry: retiredLegacyMainDelivery.entry,
+    });
+  }
 
   // Resolve the previous transcript before rotating session metadata.
   let previousSessionTranscript: {
@@ -784,7 +791,6 @@ export async function initSessionState(params: {
   if (previousSessionEntry?.sessionId) {
     previousSessionTranscript = resolveStableSessionEndTranscript({
       sessionId: previousSessionEntry.sessionId,
-      storePath,
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
     });
@@ -863,8 +869,8 @@ export async function initSessionState(params: {
   if (
     previousSessionEntry?.sessionId &&
     previousSessionEntry.sessionId !== sessionId &&
-    !Object.values(loadSessionStore(storePath)).some(
-      (candidate) => candidate.sessionId === previousSessionEntry.sessionId,
+    !listSessionEntries({ agentId }).some(
+      ({ entry: candidate }) => candidate.sessionId === previousSessionEntry.sessionId,
     )
   ) {
     deleteSqliteSessionTranscript({
@@ -884,7 +890,6 @@ export async function initSessionState(params: {
     resetTriggered,
     systemSent,
     abortedLastRun,
-    storePath,
     sessionScope,
     groupResolution,
     isGroup,

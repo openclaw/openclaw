@@ -175,7 +175,7 @@ async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;
     }
-    const record = entry as Partial<DeviceBootstrapTokenRecord>;
+    const record = entry;
     const token =
       typeof record.token === "string" && record.token.trim().length > 0 ? record.token : tokenKey;
     const issuedAtMs = typeof record.issuedAtMs === "number" ? record.issuedAtMs : 0;

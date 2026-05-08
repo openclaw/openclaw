@@ -52,8 +52,6 @@ export type ShortTermAuditIssue = {
     | "recall-store-unreadable"
     | "recall-store-empty"
     | "recall-store-invalid"
-    | "recall-lock-stale"
-    | "recall-lock-unreadable"
     | "qmd-index-missing"
     | "qmd-index-empty"
     | "qmd-collections-empty";
@@ -63,7 +61,6 @@ export type ShortTermAuditIssue = {
 
 export type ShortTermAuditSummary = {
   storePath: string;
-  lockPath: string;
   updatedAt?: string;
   exists: boolean;
   entryCount: number;
@@ -86,7 +83,6 @@ export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
   rewroteStore: boolean;
-  removedStaleLock: boolean;
 };
 
 type MemoryIndexManagerFacade = {

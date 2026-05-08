@@ -28,7 +28,7 @@ import { resolveContextEngineCapabilities } from "./context-engine-capabilities.
 import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import {
-  rewriteTranscriptEntriesInSessionFile,
+  rewriteTranscriptEntriesInSqliteTranscript,
   rewriteTranscriptEntriesInSessionManager,
 } from "./transcript-rewrite.js";
 
@@ -303,8 +303,8 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
         });
       }
       const rewriteTranscriptEntriesInFile = async () =>
-        await rewriteTranscriptEntriesInSessionFile({
-          sessionFile: params.sessionFile,
+        await rewriteTranscriptEntriesInSqliteTranscript({
+          transcriptPath: params.sessionFile,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           config: params.config,

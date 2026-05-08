@@ -1,14 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: vi.fn(),
-}));
-
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
-  resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
-  resolveSessionFilePath: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
+vi.mock("../../config/sessions/store.js", () => ({
+  getSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/reset-policy.js", () => ({
@@ -27,13 +21,14 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { getSessionEntry } from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
 
-type SessionStore = ReturnType<typeof loadSessionStore>;
-type SessionStoreEntry = SessionStore[string];
+type SessionStore = Record<string, SessionEntry>;
+type SessionStoreEntry = SessionEntry;
 type MockSessionStoreEntry = Partial<SessionStoreEntry>;
 
 function resolveWithStoredEntry(params?: {
@@ -46,7 +41,9 @@ function resolveWithStoredEntry(params?: {
   const store: SessionStore = params?.entry
     ? ({ [sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
     : {};
-  vi.mocked(loadSessionStore).mockReturnValue(store);
+  vi.mocked(getSessionEntry).mockImplementation(
+    ({ sessionKey }: { sessionKey: string }) => store[sessionKey],
+  );
   vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
 
   return resolveCronSession({
@@ -61,6 +58,7 @@ function resolveWithStoredEntry(params?: {
 describe("resolveCronSession", () => {
   beforeEach(() => {
     vi.mocked(clearBootstrapSnapshot).mockReset();
+    vi.mocked(getSessionEntry).mockReset();
   });
 
   it("preserves modelOverride and providerOverride from existing session entry", () => {

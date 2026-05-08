@@ -8,15 +8,15 @@ type TargetedSyncProgress = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
-export function clearMemorySyncedSessionFiles(params: {
+export function clearMemorySyncedSessionTranscripts(params: {
   sessionsDirtyFiles: Set<string>;
-  targetSessionFiles?: Iterable<string> | null;
+  targetSessionTranscripts?: Iterable<string> | null;
 }): boolean {
-  if (!params.targetSessionFiles) {
+  if (!params.targetSessionTranscripts) {
     params.sessionsDirtyFiles.clear();
   } else {
-    for (const targetSessionFile of params.targetSessionFiles) {
-      params.sessionsDirtyFiles.delete(targetSessionFile);
+    for (const targetSessionTranscript of params.targetSessionTranscripts) {
+      params.sessionsDirtyFiles.delete(targetSessionTranscript);
     }
   }
   return params.sessionsDirtyFiles.size > 0;
@@ -24,14 +24,14 @@ export function clearMemorySyncedSessionFiles(params: {
 
 export async function runMemoryTargetedSessionSync(params: {
   hasSessionSource: boolean;
-  targetSessionFiles: Set<string> | null;
+  targetSessionTranscripts: Set<string> | null;
   reason?: string;
   progress?: TargetedSyncProgress;
   useUnsafeReindex: boolean;
   sessionsDirtyFiles: Set<string>;
-  syncSessionFiles: (params: {
+  syncSessionTranscripts: (params: {
     needsFullReindex: boolean;
-    targetSessionFiles?: string[];
+    targetSessionTranscripts?: string[];
     progress?: TargetedSyncProgress;
   }) => Promise<void>;
   shouldFallbackOnError: (message: string) => boolean;
@@ -47,7 +47,7 @@ export async function runMemoryTargetedSessionSync(params: {
     progress?: TargetedSyncProgress;
   }) => Promise<void>;
 }): Promise<{ handled: boolean; sessionsDirty: boolean }> {
-  if (!params.hasSessionSource || !params.targetSessionFiles) {
+  if (!params.hasSessionSource || !params.targetSessionTranscripts) {
     return {
       handled: false,
       sessionsDirty: params.sessionsDirtyFiles.size > 0,
@@ -55,16 +55,16 @@ export async function runMemoryTargetedSessionSync(params: {
   }
 
   try {
-    await params.syncSessionFiles({
+    await params.syncSessionTranscripts({
       needsFullReindex: false,
-      targetSessionFiles: Array.from(params.targetSessionFiles),
+      targetSessionTranscripts: Array.from(params.targetSessionTranscripts),
       progress: params.progress,
     });
     return {
       handled: true,
-      sessionsDirty: clearMemorySyncedSessionFiles({
+      sessionsDirty: clearMemorySyncedSessionTranscripts({
         sessionsDirtyFiles: params.sessionsDirtyFiles,
-        targetSessionFiles: params.targetSessionFiles,
+        targetSessionTranscripts: params.targetSessionTranscripts,
       }),
     };
   } catch (err) {

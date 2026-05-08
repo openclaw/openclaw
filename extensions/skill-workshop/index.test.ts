@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginTrustedToolPolicyRegistration } from "openclaw/plugin-sdk/core";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
@@ -24,6 +25,7 @@ async function makeTempDir(): Promise<string> {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  resetPluginStateStoreForTests();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -100,8 +102,7 @@ describe("skill-workshop", () => {
 
   it("stores pending proposals and deduplicates repeated skill changes", async () => {
     const workspaceDir = await makeTempDir();
-    const stateDir = await makeTempDir();
-    const store = new SkillWorkshopStore({ stateDir, workspaceDir });
+    const store = new SkillWorkshopStore({ workspaceDir });
     const proposal = createProposal(workspaceDir);
 
     await store.add(proposal, 50);
@@ -615,7 +616,7 @@ describe("skill-workshop", () => {
     await expect(
       fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
     ).rejects.toMatchObject({ code: "ENOENT" });
-    const store = new SkillWorkshopStore({ stateDir, workspaceDir });
+    const store = new SkillWorkshopStore({ workspaceDir });
     expect(await store.list("pending")).toHaveLength(1);
   });
 
@@ -658,7 +659,7 @@ describe("skill-workshop", () => {
     await expect(
       fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
     ).rejects.toMatchObject({ code: "ENOENT" });
-    const store = new SkillWorkshopStore({ stateDir, workspaceDir });
+    const store = new SkillWorkshopStore({ workspaceDir });
     expect(await store.list("pending")).toHaveLength(1);
     expect(await store.list("applied")).toHaveLength(0);
   });
@@ -716,6 +717,10 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          session: {
+            resolveSessionFilePath: (sessionId: string) =>
+              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
+          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -750,6 +755,7 @@ describe("skill-workshop", () => {
       expect.objectContaining({
         disableTools: true,
         toolsAllow: [],
+        sessionFile: expect.stringContaining(path.join("agents", "main", "sessions")),
         provider: "openai",
         model: "gpt-5.4",
       }),
@@ -775,6 +781,10 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          session: {
+            resolveSessionFilePath: (sessionId: string) =>
+              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
+          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -845,6 +855,10 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          session: {
+            resolveSessionFilePath: (sessionId: string) =>
+              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
+          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -904,6 +918,10 @@ describe("skill-workshop", () => {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentWorkspaceDir: () => workspaceDir,
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
+          session: {
+            resolveSessionFilePath: (sessionId: string) =>
+              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
+          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -923,7 +941,7 @@ describe("skill-workshop", () => {
       { workspaceDir, agentId: "main" },
     );
 
-    const store = new SkillWorkshopStore({ stateDir, workspaceDir });
+    const store = new SkillWorkshopStore({ workspaceDir });
     expect(await store.list("pending")).toHaveLength(1);
     expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
   });
@@ -964,7 +982,7 @@ describe("skill-workshop", () => {
         scanFindings: expect.arrayContaining([expect.objectContaining({ severity: "critical" })]),
       },
     });
-    const store = new SkillWorkshopStore({ stateDir, workspaceDir });
+    const store = new SkillWorkshopStore({ workspaceDir });
     expect(await store.list("quarantined")).toHaveLength(1);
   });
 });

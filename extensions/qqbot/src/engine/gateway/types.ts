@@ -53,7 +53,6 @@ export interface GatewayPluginRuntime {
       resolveEnvelopeFormatOptions: (cfg: unknown) => unknown;
     };
     session: {
-      resolveStorePath: (store: unknown, params: { agentId: string }) => string;
       recordInboundSession: (params: unknown) => Promise<unknown>;
     };
     turn: {
@@ -76,6 +75,13 @@ export interface GatewayPluginRuntime {
       outputFormat?: string;
       error?: string;
     }>;
+  };
+  state: {
+    openKeyedStore: <T>(options: {
+      namespace: string;
+      maxEntries: number;
+      defaultTtlMs?: number;
+    }) => import("../state/keyed-store.js").KeyedStore<T>;
   };
   /**
    * Config API for reading/writing the framework configuration.

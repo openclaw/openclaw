@@ -1,6 +1,5 @@
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveStorePath, saveSessionStore } from "../config/sessions.js";
+import { upsertSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { ErrorCodes } from "./protocol/index.js";
@@ -10,14 +9,15 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   const freshUpdatedAt = () => Date.now();
 
   it("resolves legacy main-alias matches by sessionId and label for the configured default agent", async () => {
-    await withStateDirEnv("openclaw-sessions-resolve-alias-", async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "sessions.json");
+    await withStateDirEnv("openclaw-sessions-resolve-alias-", async () => {
       const cfg = {
-        session: { store: storePath, mainKey: "main" },
+        session: { mainKey: "main" },
         agents: { list: [{ id: "ops", default: true }] },
       } satisfies OpenClawConfig;
-      await saveSessionStore(storePath, {
-        "agent:main:main": {
+      upsertSessionEntry({
+        agentId: "ops",
+        sessionKey: "agent:main:main",
+        entry: {
           sessionId: "sess-default-alias",
           label: "default-alias",
           updatedAt: freshUpdatedAt(),
@@ -41,14 +41,15 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   });
 
   it("still rejects non-alias agent:main matches when main is no longer configured", async () => {
-    await withStateDirEnv("openclaw-sessions-resolve-stale-main-", async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "sessions.json");
+    await withStateDirEnv("openclaw-sessions-resolve-stale-main-", async () => {
       const cfg = {
-        session: { store: storePath, mainKey: "main" },
+        session: { mainKey: "main" },
         agents: { list: [{ id: "ops", default: true }] },
       } satisfies OpenClawConfig;
-      await saveSessionStore(storePath, {
-        "agent:main:guildchat:direct:u1": {
+      upsertSessionEntry({
+        agentId: "ops",
+        sessionKey: "agent:main:guildchat:direct:u1",
+        entry: {
           sessionId: "sess-stale-main",
           label: "stale-main",
           updatedAt: freshUpdatedAt(),
@@ -75,9 +76,10 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       const cfg: OpenClawConfig = {
         agents: { list: [{ id: "ops", default: true }] },
       };
-      const staleMainStorePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-      await saveSessionStore(staleMainStorePath, {
-        "agent:main:main": {
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        entry: {
           sessionId: "sess-discovered-main",
           label: "discovered-main",
           updatedAt: freshUpdatedAt(),
@@ -117,16 +119,18 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       const cfg: OpenClawConfig = {
         agents: { list: [{ id: "ops", default: true }] },
       };
-      const liveDefaultStorePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
-      await saveSessionStore(liveDefaultStorePath, {
-        "agent:ops:main": {
+      upsertSessionEntry({
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        entry: {
           sessionId: "sess-live-default",
           updatedAt: freshUpdatedAt(),
         },
       });
-      const staleMainStorePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-      await saveSessionStore(staleMainStorePath, {
-        "agent:main:main": {
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        entry: {
           sessionId: "sess-deleted-main",
           updatedAt: freshUpdatedAt(),
         },

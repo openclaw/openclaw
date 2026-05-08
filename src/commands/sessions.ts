@@ -2,7 +2,7 @@ import path from "node:path";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.js";
+import { listSessionEntries, resolveSessionTotalTokens } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { info } from "../globals.js";
@@ -13,7 +13,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveSessionDatabaseTargetsOrExit } from "./session-database-targets.js";
 import {
   resolveSessionDisplayModelRef,
   resolveSessionDisplayDefaults,
@@ -202,7 +202,6 @@ function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "runtimeLabel"> {
 export async function sessionsCommand(
   opts: {
     json?: boolean;
-    store?: string;
     active?: string;
     agent?: string;
     allAgents?: boolean;
@@ -218,10 +217,9 @@ export async function sessionsCommand(
     configuredContextTokens ??
     (await lookupContextTokensForDisplay(displayDefaults.model)) ??
     DEFAULT_CONTEXT_TOKENS;
-  const targets = resolveSessionStoreTargetsOrExit({
+  const targets = resolveSessionDatabaseTargetsOrExit({
     cfg,
     opts: {
-      store: opts.store,
       agent: opts.agent,
       allAgents: opts.allAgents,
     },
@@ -249,17 +247,16 @@ export async function sessionsCommand(
     return;
   }
 
-  const allRows = targets.flatMap((target) => {
-    const store = loadSessionStore(target.storePath);
-    return Object.entries(store)
-      .filter(([, entry]) => {
+  const allRows = targets.flatMap((target) =>
+    listSessionEntries({ agentId: target.agentId })
+      .filter(({ entry }) => {
         if (activeMinutes === undefined) {
           return true;
         }
         const updatedAt = entry?.updatedAt;
         return typeof updatedAt === "number" && Date.now() - updatedAt <= activeMinutes * 60_000;
       })
-      .map(([key, entry]) => {
+      .map(({ sessionKey: key, entry }) => {
         const row = toSessionDisplayRow(key, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
         const modelRef = resolveSessionDisplayModelRef(cfg, row);
@@ -273,7 +270,7 @@ export async function sessionsCommand(
         return Object.assign({}, row, {
           agentId,
           agentRuntime,
-          kind: classifySessionKey(row.key, store[row.key]),
+          kind: classifySessionKey(row.key, entry),
           runtimeLabel: resolveSessionRuntimeLabel({
             cfg,
             entry,
@@ -284,8 +281,8 @@ export async function sessionsCommand(
             sessionKey: row.key,
           }),
         });
-      });
-  });
+      }),
+  );
   const totalCount = allRows.length;
   const rows = selectNewestSessionRows(allRows, limit);
   const hasMore = rows.length < totalCount;
@@ -294,11 +291,11 @@ export async function sessionsCommand(
     const multi = targets.length > 1;
     const aggregate = aggregateAgents || multi;
     writeRuntimeJson(runtime, {
-      path: aggregate ? null : (targets[0]?.storePath ?? null),
-      stores: aggregate
+      databasePath: aggregate ? null : (targets[0]?.databasePath ?? null),
+      databases: aggregate
         ? targets.map((target) => ({
             agentId: target.agentId,
-            path: target.storePath,
+            path: target.databasePath,
           }))
         : undefined,
       allAgents: aggregateAgents ? true : undefined,
@@ -332,10 +329,10 @@ export async function sessionsCommand(
   }
 
   if (targets.length === 1 && !aggregateAgents) {
-    runtime.log(info(`Session store: ${targets[0]?.storePath}`));
+    runtime.log(info(`Session database: ${targets[0]?.databasePath}`));
   } else {
     runtime.log(
-      info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),
+      info(`Session databases: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),
     );
   }
   runtime.log(

@@ -53,14 +53,15 @@ vi.mock("../config/sessions.js", () => {
   );
 
   return {
-    loadSessionStore: vi.fn(() => sessionStore),
+    getSessionEntry: vi.fn(({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey]),
+    listSessionEntries: vi.fn(() =>
+      Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    ),
     resolveAgentIdFromSessionKey: (key: string) => {
       const match = key.match(/^agent:([^:]+)/);
       return match?.[1] ?? "main";
     },
     resolveMainSessionKey: () => "agent:main:main",
-    resolveStorePath: () => "/tmp/test-store",
-    updateSessionStore: vi.fn(),
   };
 });
 

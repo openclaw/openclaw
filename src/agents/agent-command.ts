@@ -49,6 +49,7 @@ import {
   resolveInternalEventTranscriptBody,
 } from "./command/attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
+import { updateSessionEntryAfterAgentRun } from "./command/session-entry-updates.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -85,7 +86,6 @@ type AcpPolicyRuntime = typeof import("../acp/policy.js");
 type AcpRuntimeErrorsRuntime = typeof import("../acp/runtime/errors.js");
 type AcpSessionIdentifiersRuntime = typeof import("../acp/runtime/session-identifiers.js");
 type DeliveryRuntime = typeof import("./command/delivery.runtime.js");
-type SessionStoreRuntime = typeof import("./command/session-store.runtime.js");
 type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
 type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
 type CliDepsRuntime = typeof import("../cli/deps.js");
@@ -112,9 +112,6 @@ const acpSessionIdentifiersRuntimeLoader = createLazyImportLoader<AcpSessionIden
 );
 const deliveryRuntimeLoader = createLazyImportLoader<DeliveryRuntime>(
   () => import("./command/delivery.runtime.js"),
-);
-const sessionStoreRuntimeLoader = createLazyImportLoader<SessionStoreRuntime>(
-  () => import("./command/session-store.runtime.js"),
 );
 const cliCompactionRuntimeLoader = createLazyImportLoader<CliCompactionRuntime>(
   () => import("./command/cli-compaction.js"),
@@ -161,10 +158,6 @@ function loadDeliveryRuntime(): Promise<DeliveryRuntime> {
   return deliveryRuntimeLoader.load();
 }
 
-function loadSessionStoreRuntime(): Promise<SessionStoreRuntime> {
-  return sessionStoreRuntimeLoader.load();
-}
-
 function loadCliCompactionRuntime(): Promise<CliCompactionRuntime> {
   return cliCompactionRuntimeLoader.load();
 }
@@ -208,7 +201,6 @@ async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDe
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
-  storePath: string;
   entry: SessionEntry;
 };
 
@@ -370,7 +362,6 @@ async function prepareAgentCommandExecution(
     sessionKey,
     sessionEntry: sessionEntryRaw,
     sessionStore,
-    storePath,
     isNewSession,
     persistedThinking,
     persistedVerbose,
@@ -427,7 +418,6 @@ async function prepareAgentCommandExecution(
     sessionKey,
     sessionEntry: sessionEntryRaw,
     sessionStore,
-    storePath,
     isNewSession,
     persistedThinking,
     persistedVerbose,
@@ -463,7 +453,6 @@ async function agentCommandInternal(
     sessionId,
     sessionKey,
     sessionStore,
-    storePath,
     isNewSession,
     persistedThinking,
     persistedVerbose,
@@ -586,7 +575,6 @@ async function agentCommandInternal(
           sessionKey,
           sessionEntry,
           sessionStore,
-          storePath,
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
@@ -690,13 +678,12 @@ async function agentCommandInternal(
       await persistSessionEntry({
         sessionStore,
         sessionKey,
-        storePath,
         entry: next,
       });
       sessionEntry = next;
     }
 
-    // Persist explicit /command overrides to the session store when we have a key.
+    // Persist explicit /command overrides to the SQLite session row when we have a key.
     if (sessionStore && sessionKey) {
       const now = Date.now();
       const entry = sessionStore[sessionKey] ??
@@ -715,7 +702,6 @@ async function agentCommandInternal(
       await persistSessionEntry({
         sessionStore,
         sessionKey,
-        storePath,
         entry: next,
       });
       sessionEntry = next;
@@ -786,7 +772,6 @@ async function agentCommandInternal(
             await persistSessionEntry({
               sessionStore,
               sessionKey,
-              storePath,
               entry,
             });
           }
@@ -854,7 +839,6 @@ async function agentCommandInternal(
               sessionEntry: entry,
               sessionStore,
               sessionKey,
-              storePath,
             });
           }
         }
@@ -911,7 +895,6 @@ async function agentCommandInternal(
           await persistSessionEntry({
             sessionStore,
             sessionKey,
-            storePath,
             entry,
           });
         }
@@ -932,7 +915,6 @@ async function agentCommandInternal(
         sessionId,
         sessionKey,
         sessionStore,
-        storePath,
         sessionEntry,
         agentId: sessionAgentId,
         threadId: opts.threadId,
@@ -944,7 +926,6 @@ async function agentCommandInternal(
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
         sessionKey: sessionKey ?? sessionId,
-        storePath,
         sessionEntry,
         agentId: sessionAgentId,
         threadId: opts.threadId,
@@ -1042,7 +1023,6 @@ async function agentCommandInternal(
               agentDir,
               authProfileProvider: providerForAuthProfileValidation,
               sessionStore,
-              storePath,
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
                 !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
@@ -1194,15 +1174,13 @@ async function agentCommandInternal(
     }
     await fallbackTrajectoryRecorder?.flush();
 
-    // Update token+model fields in the session store.
+    // Update token+model fields in the SQLite session row.
     if (sessionStore && sessionKey) {
-      const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
-      await updateSessionStoreAfterAgentRun({
+      await updateSessionEntryAfterAgentRun({
         cfg,
         contextTokensOverride: agentCfg?.contextTokens,
         sessionId,
         sessionKey,
-        storePath,
         sessionStore,
         defaultProvider: provider,
         defaultModel: model,
@@ -1233,7 +1211,6 @@ async function agentCommandInternal(
           sessionKey: sessionKey ?? sessionId,
           sessionEntry,
           sessionStore,
-          storePath,
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
@@ -1248,7 +1225,6 @@ async function agentCommandInternal(
           sessionKey: sessionKey ?? sessionId,
           sessionEntry,
           sessionStore,
-          storePath,
           sessionAgentId,
           workspaceDir,
           agentDir,
@@ -1297,7 +1273,6 @@ async function agentCommandInternal(
         await persistSessionEntry({
           sessionStore,
           sessionKey,
-          storePath,
           entry: next,
         });
         sessionEntry = next;
@@ -1334,7 +1309,6 @@ async function agentCommandInternal(
       await persistSessionEntry({
         sessionStore,
         sessionKey,
-        storePath,
         entry: next,
       });
       sessionEntry = next;

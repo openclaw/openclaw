@@ -11,7 +11,7 @@
 
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { buildFileConsentCard } from "./file-consent.js";
-import { storePendingUploadFs } from "./pending-uploads-fs.js";
+import { storePendingUploadState } from "./pending-uploads-state.js";
 import { storePendingUpload } from "./pending-uploads.js";
 
 type FileConsentMedia = {
@@ -97,7 +97,7 @@ export async function prepareFileConsentActivityFs(params: {
     conversationId,
   });
 
-  await storePendingUploadFs({
+  await storePendingUploadState({
     id: uploadId,
     buffer: media.buffer,
     filename: media.filename,

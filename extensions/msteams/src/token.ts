@@ -9,7 +9,7 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "./secret-input.js";
-import { resolveMSTeamsStorePath } from "./storage.js";
+import { resolveMSTeamsCredentialFilePath } from "./storage.js";
 
 // ── Credential types ───────────────────────────────────────────────────────
 
@@ -145,7 +145,7 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 const DELEGATED_TOKEN_FILENAME = "msteams-delegated.json";
 
 function resolveDelegatedTokenPath(): string {
-  return resolveMSTeamsStorePath({ filename: DELEGATED_TOKEN_FILENAME });
+  return resolveMSTeamsCredentialFilePath({ filename: DELEGATED_TOKEN_FILENAME });
 }
 
 export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {

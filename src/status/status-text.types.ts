@@ -14,7 +14,6 @@ export type BuildStatusTextParams = {
   sessionKey: string;
   parentSessionKey?: string;
   sessionScope?: SessionScope;
-  storePath?: string;
   statusChannel: string;
   workspaceDir?: string;
   provider: string;

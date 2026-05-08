@@ -110,19 +110,22 @@ Provider and channel execution paths must use the active runtime config snapshot
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
 
-    **Session store helpers** are under `api.runtime.agent.session`:
+    **SQLite session row helpers** are under `api.runtime.agent.session`:
 
     ```typescript
-    const storePath = api.runtime.agent.session.resolveStorePath(cfg);
-    const store = api.runtime.agent.session.loadSessionStore(storePath);
-    await api.runtime.agent.session.updateSessionStore(storePath, (nextStore) => {
-      // Patch one entry without replacing the whole file from stale state.
-      nextStore[sessionKey] = { ...nextStore[sessionKey], thinkingLevel: "high" };
+    const entry = api.runtime.agent.session.getSessionEntry({ agentId, sessionKey });
+    await api.runtime.agent.session.patchSessionEntry({
+      agentId,
+      sessionKey,
+      update: (current) => ({
+        ...current,
+        thinkingLevel: "high",
+      }),
     });
     const filePath = api.runtime.agent.session.resolveSessionFilePath(cfg, sessionId);
     ```
 
-    Prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)` for runtime writes. They route through the Gateway-owned session-store writer, preserve concurrent updates, and reuse the hot cache. `saveSessionStore(...)` remains available for compatibility and offline maintenance-style rewrites.
+    Prefer row helpers such as `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, and `upsertSessionEntry(...)` for runtime writes. They route through the SQLite session row store and preserve concurrent updates. Legacy `sessions.json` parsing belongs in doctor/migration code, not plugin runtime paths.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">

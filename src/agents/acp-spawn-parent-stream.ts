@@ -1,16 +1,12 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
-import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { appendRegularFile } from "../infra/regular-file.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { recordAcpParentStreamEvent } from "./acp-parent-stream-store.sqlite.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -37,45 +33,11 @@ function toFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: string): string {
-  const baseDir = path.dirname(path.resolve(sessionFile));
-  return path.join(baseDir, `${sessionId}.acp-stream.jsonl`);
-}
-
-export function resolveAcpSpawnStreamLogPath(params: {
-  childSessionKey: string;
-}): string | undefined {
-  const childSessionKey = normalizeOptionalString(params.childSessionKey);
-  if (!childSessionKey) {
-    return undefined;
-  }
-  const storeEntry = readAcpSessionEntry({
-    sessionKey: childSessionKey,
-  });
-  const sessionId = normalizeOptionalString(storeEntry?.entry?.sessionId);
-  if (!storeEntry || !sessionId) {
-    return undefined;
-  }
-  try {
-    const sessionFile = resolveSessionFilePath(
-      sessionId,
-      storeEntry.entry,
-      resolveSessionFilePathOptions({
-        storePath: storeEntry.storePath,
-      }),
-    );
-    return resolveAcpStreamLogPathFromSessionFile(sessionFile, sessionId);
-  } catch {
-    return undefined;
-  }
-}
-
 export function startAcpSpawnParentStreamRelay(params: {
   runId: string;
   parentSessionKey: string;
   childSessionKey: string;
   agentId: string;
-  logPath?: string;
   deliveryContext?: DeliveryContext;
   surfaceUpdates?: boolean;
   streamFlushMs?: number;
@@ -112,67 +74,27 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
-  const logPath = normalizeOptionalString(params.logPath);
-  let logDirReady = false;
-  let pendingLogLines = "";
-  let logFlushScheduled = false;
-  let logWriteChain: Promise<void> = Promise.resolve();
-  const flushLogBuffer = () => {
-    if (!logPath || !pendingLogLines) {
-      return;
-    }
-    const chunk = pendingLogLines;
-    pendingLogLines = "";
-    logWriteChain = logWriteChain
-      .then(async () => {
-        if (!logDirReady) {
-          await mkdir(path.dirname(logPath), {
-            recursive: true,
-          });
-          logDirReady = true;
-        }
-        await appendRegularFile({ filePath: logPath, content: chunk });
-      })
-      .catch(() => {
-        // Best-effort diagnostics; never break relay flow.
-      });
-  };
-  const scheduleLogFlush = () => {
-    if (!logPath || logFlushScheduled) {
-      return;
-    }
-    logFlushScheduled = true;
-    queueMicrotask(() => {
-      logFlushScheduled = false;
-      flushLogBuffer();
-    });
-  };
-  const writeLogLine = (entry: Record<string, unknown>) => {
-    if (!logPath) {
-      return;
-    }
+  const logEvent = (kind: string, fields?: Record<string, unknown>) => {
+    const epochMs = Date.now();
     try {
-      pendingLogLines += `${JSON.stringify(entry)}\n`;
-      if (pendingLogLines.length >= 16_384) {
-        flushLogBuffer();
-        return;
-      }
-      scheduleLogFlush();
+      recordAcpParentStreamEvent({
+        agentId: params.agentId,
+        runId,
+        createdAt: epochMs,
+        event: {
+          ts: new Date(epochMs).toISOString(),
+          epochMs,
+          runId,
+          parentSessionKey,
+          childSessionKey: params.childSessionKey,
+          agentId: params.agentId,
+          kind,
+          ...fields,
+        },
+      });
     } catch {
       // Best-effort diagnostics; never break relay flow.
     }
-  };
-  const logEvent = (kind: string, fields?: Record<string, unknown>) => {
-    writeLogLine({
-      ts: new Date().toISOString(),
-      epochMs: Date.now(),
-      runId,
-      parentSessionKey,
-      childSessionKey: params.childSessionKey,
-      agentId: params.agentId,
-      kind,
-      ...fields,
-    });
   };
   const shouldSurfaceUpdates = params.surfaceUpdates !== false;
   const wake = () => {
@@ -405,7 +327,6 @@ export function startAcpSpawnParentStreamRelay(params: {
     disposed = true;
     clearFlushTimer();
     clearRelayLifetimeTimer();
-    flushLogBuffer();
     clearInterval(noOutputWatcherTimer);
     unsubscribe();
   };

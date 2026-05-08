@@ -221,21 +221,16 @@ describe("info command handlers", () => {
     );
   });
 
-  it("preserves the shared session store path when routing /status", async () => {
+  it("does not route the legacy session store path through /status", async () => {
     const params = buildInfoParams("/status", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
-    params.storePath = "/tmp/target-session-store.json";
 
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/tmp/target-session-store.json",
-      }),
-    );
+    expect(vi.mocked(buildStatusReply).mock.calls[0]?.[0]).not.toHaveProperty("storePath");
   });
 
   it("prefers the target session entry when routing /status", async () => {

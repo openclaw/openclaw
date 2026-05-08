@@ -1,6 +1,5 @@
-import path from "node:path";
+import { appendSessionTranscriptMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
@@ -232,7 +231,7 @@ async function handleFeedbackInvoke(
     route.sessionKey = threadKeys.sessionKey;
   }
 
-  // Log feedback event to session JSONL
+  // Log feedback event to the SQLite transcript.
   const feedbackEvent = buildFeedbackEvent({
     messageId,
     value: isNegative ? "negative" : "positive",
@@ -249,19 +248,12 @@ async function handleFeedbackInvoke(
     hasComment: Boolean(userComment),
   });
 
-  // Write feedback event to session transcript
+  // Append feedback to the SQLite transcript.
   try {
-    const storePath = core.channel.session.resolveStorePath(deps.cfg.session?.store, {
+    await appendSessionTranscriptMessage({
       agentId: route.agentId,
-    });
-    const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const transcriptFile = path.join(storePath, `${safeKey}.jsonl`);
-    await appendRegularFile({
-      filePath: transcriptFile,
-      content: `${JSON.stringify(feedbackEvent)}\n`,
-      rejectSymlinkParents: true,
-    }).catch(() => {
-      // Best effort — transcript dir may not exist yet
+      sessionId: route.sessionKey,
+      message: feedbackEvent,
     });
   } catch {
     // Best effort

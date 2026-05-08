@@ -1,5 +1,4 @@
-import { readFileSync } from "node:fs";
-import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   Category,
@@ -10,7 +9,7 @@ import {
   type ISyncResponse,
   type IStoredClientOpts,
 } from "matrix-js-sdk/lib/matrix.js";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "../../record-shared.js";
 import { createAsyncLock } from "../async-lock.js";
 import { LogService } from "../sdk/logger.js";
@@ -18,6 +17,7 @@ import { claimCurrentTokenStorageState } from "./storage.js";
 
 const STORE_VERSION = 1;
 const PERSIST_DEBOUNCE_MS = 250;
+export const MATRIX_SYNC_STORE_NAMESPACE = "sync-store";
 
 type PersistedMatrixSyncStore = {
   version: number;
@@ -25,6 +25,11 @@ type PersistedMatrixSyncStore = {
   clientOptions?: IStoredClientOpts;
   cleanShutdown?: boolean;
 };
+
+const SYNC_STORE = createPluginStateSyncKeyedStore<PersistedMatrixSyncStore>("matrix", {
+  namespace: MATRIX_SYNC_STORE_NAMESPACE,
+  maxEntries: 1000,
+});
 
 function normalizeRoomsData(value: unknown): IRooms | null {
   if (!isRecord(value)) {
@@ -79,7 +84,7 @@ function toPersistedSyncData(value: unknown): ISyncData | null {
   return null;
 }
 
-function readPersistedStore(raw: string): PersistedMatrixSyncStore | null {
+export function parsePersistedMatrixSyncStore(raw: string): PersistedMatrixSyncStore | null {
   try {
     const parsed = JSON.parse(raw) as {
       version?: unknown;
@@ -111,8 +116,16 @@ function readPersistedStore(raw: string): PersistedMatrixSyncStore | null {
   }
 }
 
+export function resolveMatrixSyncStoreKey(storagePath: string): string {
+  return createHash("sha256").update(path.resolve(storagePath), "utf8").digest("hex").slice(0, 32);
+}
+
 function cloneJson<T>(value: T): T {
   return structuredClone(value);
+}
+
+function toStoredJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function syncDataToSyncResponse(syncData: ISyncData): ISyncResponse {
@@ -143,15 +156,10 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     let restoredSavedSync: ISyncData | null = null;
     let restoredClientOptions: IStoredClientOpts | undefined;
     let restoredCleanShutdown = false;
-    try {
-      const raw = readFileSync(this.storagePath, "utf8");
-      const persisted = readPersistedStore(raw);
-      restoredSavedSync = persisted?.savedSync ?? null;
-      restoredClientOptions = persisted?.clientOptions;
-      restoredCleanShutdown = persisted?.cleanShutdown === true;
-    } catch {
-      // Missing or unreadable sync cache should not block startup.
-    }
+    const persisted = SYNC_STORE.lookup(resolveMatrixSyncStoreKey(this.storagePath));
+    restoredSavedSync = persisted?.savedSync ?? null;
+    restoredClientOptions = persisted?.clientOptions;
+    restoredCleanShutdown = persisted?.cleanShutdown === true;
 
     this.savedSync = restoredSavedSync;
     this.savedClientOptions = restoredClientOptions;
@@ -228,7 +236,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     this.savedSync = null;
     this.savedClientOptions = undefined;
     this.cleanShutdown = false;
-    await fs.rm(this.storagePath, { force: true }).catch(() => undefined);
+    SYNC_STORE.delete(resolveMatrixSyncStoreKey(this.storagePath));
   }
 
   markCleanShutdown(): void {
@@ -268,15 +276,15 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
 
   private async persist(): Promise<void> {
     this.dirty = false;
-    const payload: PersistedMatrixSyncStore = {
+    const payload: PersistedMatrixSyncStore = toStoredJson({
       version: STORE_VERSION,
       savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
       cleanShutdown: this.cleanShutdown,
       ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
-    };
+    });
     try {
       await this.persistLock(async () => {
-        await writeJsonFileAtomically(this.storagePath, payload);
+        SYNC_STORE.register(resolveMatrixSyncStoreKey(this.storagePath), payload);
         claimCurrentTokenStorageState({
           rootDir: path.dirname(this.storagePath),
         });

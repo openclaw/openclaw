@@ -1,4 +1,3 @@
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -18,12 +17,9 @@ import {
 } from "./harness/lifecycle-hook-helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { SessionManager } from "./transcript/session-manager-contract.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
-
-function flushSessionManagerFile(sessionManager: SessionManager): void {
-  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
-}
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
   const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
@@ -258,7 +254,6 @@ export async function runPreparedCliAgent(
           },
         },
       } as Parameters<typeof sessionManager.appendMessage>[0]);
-      flushSessionManagerFile(sessionManager);
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(
@@ -477,7 +472,7 @@ export async function runPreparedCliAgent(
         // Check if this is a session expired error and we have a session to clear
         if (err.reason === "session_expired" && retryableSessionId && params.sessionKey) {
           // Clear the expired session ID from the session entry
-          // This requires access to the session store, which we don't have here
+          // This requires access to the persisted session row, which we don't have here
           // We'll need to modify the caller to handle this case
 
           // For now, retry without the session ID to create a new session

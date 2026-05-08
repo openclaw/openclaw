@@ -14,6 +14,15 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
+vi.mock("../config/sessions.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+  return {
+    ...actual,
+    getSessionEntry: vi.fn(() => undefined),
+  };
+});
+
 describe("sandbox explain command", () => {
   it("prints JSON shape + fix-it keys", { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS }, async () => {
     mockCfg = {
@@ -26,7 +35,7 @@ describe("sandbox explain command", () => {
         sandbox: { tools: { deny: ["browser"] } },
         elevated: { enabled: true, allowFrom: { quietchat: ["*"] } },
       },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      session: {},
     };
 
     const logs: string[] = [];
@@ -73,7 +82,7 @@ describe("sandbox explain command", () => {
           },
         },
       },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      session: {},
     };
 
     const logs: string[] = [];

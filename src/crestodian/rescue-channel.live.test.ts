@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { listCrestodianAuditEntriesForTests } from "./audit.js";
 import { runCrestodianRescueMessage } from "./rescue-message.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -52,6 +54,7 @@ async function runRescue(params: {
 describeLive("Crestodian live rescue channel smoke", () => {
   afterEach(() => {
     clearConfigCache();
+    resetPluginStateStoreForTests();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -99,10 +102,9 @@ describeLive("Crestodian live rescue channel smoke", () => {
 
     const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
     expect(config.agents?.defaults?.model).toMatchObject({ primary: "openai/gpt-5.5" });
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const auditLines = (await fs.readFile(auditPath, "utf8")).trim().split("\n");
-    expect(auditLines).toEqual(
-      expect.arrayContaining([expect.stringContaining('"operation":"config.setDefaultModel"')]),
+    const auditEntries = await listCrestodianAuditEntriesForTests();
+    expect(auditEntries.some((entry) => entry.value.operation === "config.setDefaultModel")).toBe(
+      true,
     );
   });
 });

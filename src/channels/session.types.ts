@@ -15,7 +15,7 @@ export type InboundLastRouteUpdate = {
 };
 
 export type RecordInboundSession = (params: {
-  storePath: string;
+  agentId?: string;
   sessionKey: string;
   ctx: MsgContext;
   groupResolution?: GroupKeyResolution | null;

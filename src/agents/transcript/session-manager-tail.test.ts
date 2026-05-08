@@ -7,16 +7,37 @@ function createSessionManager() {
     { type: "message", id: "a", parentId: "root", message: { role: "user" } },
     { type: "message", id: "b", parentId: "a", message: { role: "assistant" } },
   ];
-  return {
-    fileEntries: entries,
-    byId: new Map(entries.map((entry) => [entry.id, entry])),
+  const sessionManager = {
+    entries,
     leafId: "b" as string | null,
-    _rewriteFile: vi.fn(),
+    removeTailEntries: vi.fn(
+      (
+        shouldRemove: (entry: (typeof entries)[number]) => boolean,
+        options?: { maxEntries?: number; minEntries?: number },
+      ) => {
+        const minEntries = options?.minEntries ?? 0;
+        const maxEntries = options?.maxEntries ?? Number.POSITIVE_INFINITY;
+        let removed = 0;
+        while (entries.length > minEntries && removed < maxEntries) {
+          const last = entries.at(-1);
+          if (!last || !shouldRemove(last)) {
+            break;
+          }
+          entries.pop();
+          removed += 1;
+        }
+        if (removed > 0) {
+          sessionManager.leafId = entries.at(-1)?.id ?? null;
+        }
+        return removed;
+      },
+    ),
   };
+  return sessionManager;
 }
 
 describe("removeSessionManagerTailEntries", () => {
-  it("removes matching tail entries and rewrites once", () => {
+  it("removes matching tail entries through the public session-manager API", () => {
     const sessionManager = createSessionManager();
 
     const result = removeSessionManagerTailEntries(
@@ -25,27 +46,25 @@ describe("removeSessionManagerTailEntries", () => {
     );
 
     expect(result).toEqual({ removed: 1, unavailable: false, rewriteUnavailable: false });
-    expect(sessionManager.fileEntries.map((entry) => entry.id)).toEqual(["root", "a"]);
-    expect(sessionManager.byId.has("b")).toBe(false);
+    expect(sessionManager.entries.map((entry) => entry.id)).toEqual(["root", "a"]);
     expect(sessionManager.leafId).toBe("a");
-    expect(sessionManager._rewriteFile).toHaveBeenCalledTimes(1);
+    expect(sessionManager.removeTailEntries).toHaveBeenCalledTimes(1);
   });
 
-  it("does not mutate when the rewrite hook is unavailable", () => {
-    const sessionManager = createSessionManager() as Omit<
+  it("does not mutate when the public tail removal API is unavailable", () => {
+    const sessionManager = createSessionManager() as unknown as Omit<
       ReturnType<typeof createSessionManager>,
-      "_rewriteFile"
-    > & { _rewriteFile?: () => void };
-    delete sessionManager._rewriteFile;
+      "removeTailEntries"
+    > & { removeTailEntries?: undefined };
+    delete sessionManager.removeTailEntries;
 
     const result = removeSessionManagerTailEntries(
       sessionManager,
       (entry) => entry.type === "message" && entry.id === "b",
     );
 
-    expect(result).toEqual({ removed: 0, unavailable: false, rewriteUnavailable: true });
-    expect(sessionManager.fileEntries.map((entry) => entry.id)).toEqual(["root", "a", "b"]);
-    expect(sessionManager.byId.has("b")).toBe(true);
+    expect(result).toEqual({ removed: 0, unavailable: true, rewriteUnavailable: false });
+    expect(sessionManager.entries.map((entry) => entry.id)).toEqual(["root", "a", "b"]);
     expect(sessionManager.leafId).toBe("b");
   });
 
@@ -57,7 +76,7 @@ describe("removeSessionManagerTailEntries", () => {
     });
 
     expect(result.removed).toBe(2);
-    expect(sessionManager.fileEntries.map((entry) => entry.id)).toEqual(["root"]);
+    expect(sessionManager.entries.map((entry) => entry.id)).toEqual(["root"]);
     expect(sessionManager.leafId).toBe("root");
   });
 });

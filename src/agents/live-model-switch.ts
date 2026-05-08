@@ -1,6 +1,6 @@
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import { getSessionEntry, upsertSessionEntry } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
@@ -15,6 +15,21 @@ import {
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+
+function resolveSessionEntryAgentId(params: { agentId?: string; sessionKey: string }): string {
+  return normalizeOptionalString(params.agentId) ?? resolveAgentIdFromSessionKey(params.sessionKey);
+}
+
+function readLiveSessionEntry(params: {
+  agentId?: string;
+  sessionKey: string;
+}): SessionEntry | undefined {
+  return getSessionEntry({
+    agentId: resolveSessionEntryAgentId(params),
+    sessionKey: params.sessionKey,
+  });
+}
+
 export function resolveLiveSessionModelSelection(params: {
   cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
@@ -34,10 +49,7 @@ export function resolveLiveSessionModelSelection(params: {
         agentId,
       })
     : { provider: params.defaultProvider, model: params.defaultModel };
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId,
-  });
-  const entry = loadSessionStore(storePath)[sessionKey];
+  const entry = readLiveSessionEntry({ agentId, sessionKey });
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -156,10 +168,7 @@ export function shouldSwitchToLiveModel(params: {
   if (!cfg || !sessionKey) {
     return undefined;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: params.agentId?.trim(),
-  });
-  const entry = loadSessionStore(storePath)[sessionKey];
+  const entry = readLiveSessionEntry({ agentId: params.agentId, sessionKey });
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }
@@ -210,16 +219,18 @@ export async function clearLiveModelSwitchPending(params: {
   if (!cfg || !sessionKey) {
     return;
   }
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: params.agentId?.trim(),
-  });
-  if (!storePath) {
+  const agentId = resolveSessionEntryAgentId({ agentId: params.agentId, sessionKey });
+  const entry = getSessionEntry({ agentId, sessionKey });
+  if (!entry?.liveModelSwitchPending) {
     return;
   }
-  await updateSessionStore(storePath, (store) => {
-    const entry = store[sessionKey];
-    if (entry) {
-      delete entry.liveModelSwitchPending;
-    }
+  const next: SessionEntry = {
+    ...entry,
+  };
+  delete next.liveModelSwitchPending;
+  upsertSessionEntry({
+    agentId,
+    sessionKey,
+    entry: next,
   });
 }

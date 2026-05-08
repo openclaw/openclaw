@@ -138,7 +138,7 @@ function normalizeSources(
   return Array.from(normalized);
 }
 
-function resolveStorePath(agentId: string, raw?: string): string {
+function resolveMemoryStorePath(agentId: string, raw?: string): string {
   const stateDir = resolveStateDir(process.env, os.homedir);
   const fallback = path.join(stateDir, "memory", `${agentId}.sqlite`);
   if (!raw) {
@@ -258,7 +258,7 @@ function mergeConfig(
   };
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
-    path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
+    path: resolveMemoryStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
     fts,
     vector,
   };

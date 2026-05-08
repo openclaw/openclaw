@@ -6,6 +6,7 @@ import type {
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -408,7 +409,9 @@ describe("plugin conversation binding approvals", () => {
     sessionBindingState.reset();
     __testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
+    closeOpenClawStateDatabaseForTest();
     fs.rmSync(approvalsPath, { force: true });
+    fs.rmSync(path.join(tempRoot, "state"), { recursive: true, force: true });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "isolated" });

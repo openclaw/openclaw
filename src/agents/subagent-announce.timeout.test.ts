@@ -48,7 +48,7 @@ function createGatewayCallModuleMock() {
 
 function createSubagentDepthModuleMock() {
   return {
-    getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
+    getSubagentDepthFromSessionEntries: (sessionKey?: string) => requesterDepthResolver(sessionKey),
   };
 }
 
@@ -83,10 +83,9 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
       return await callGatewayImpl(typed);
     },
     getRuntimeConfig: () => configOverride,
-    loadSessionStore: () => sessionStore,
+    getSessionEntry: (params: { sessionKey: string }) => sessionStore[params.sessionKey],
     resolveAgentIdFromSessionKey: () => "main",
     resolveMainSessionKey: () => "agent:main:main",
-    resolveStorePath: () => "/tmp/sessions-main.json",
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
     queueEmbeddedPiMessage: () => false,
   }),
@@ -171,9 +170,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: createGatewayCallModuleMock().callGateway,
   getRuntimeConfig: () => configOverride,
-  loadSessionStore: vi.fn(() => sessionStore),
+  getSessionEntry: (params: { sessionKey: string }) => sessionStore[params.sessionKey],
   resolveAgentIdFromSessionKey: () => "main",
-  resolveStorePath: () => "/tmp/sessions-main.json",
   resolveMainSessionKey: () => "agent:main:main",
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
   queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,

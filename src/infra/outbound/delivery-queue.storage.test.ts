@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,12 +9,16 @@ import {
   markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
 } from "./delivery-queue.js";
-import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
+import {
+  installDeliveryQueueTmpDirHooks,
+  readFailedQueuedEntry,
+  readPendingQueuedEntries,
+  readQueuedEntry,
+  setQueuedEntryState,
+} from "./delivery-queue.test-helpers.js";
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
-  const queueDir = () => path.join(tmpDir(), "delivery-queue");
-  const queueJsonFiles = () => fs.readdirSync(queueDir()).filter((file) => file.endsWith(".json"));
   const enqueueTextDelivery = (params: Parameters<typeof enqueueDelivery>[0], rootDir = tmpDir()) =>
     enqueueDelivery(params, rootDir);
 
@@ -55,7 +58,7 @@ describe("delivery-queue storage", () => {
         tmpDir(),
       );
 
-      expect(queueJsonFiles()).toEqual([`${id}.json`]);
+      expect(readPendingQueuedEntries(tmpDir()).map((entry) => entry.id)).toEqual([id]);
 
       const entry = readQueuedEntry(tmpDir(), id);
       expect(entry).toMatchObject({
@@ -92,7 +95,7 @@ describe("delivery-queue storage", () => {
       expect(entry.payloads).toEqual([{ text: "hello" }]);
 
       await ackDelivery(id, tmpDir());
-      expect(queueJsonFiles()).toHaveLength(0);
+      expect(readPendingQueuedEntries(tmpDir())).toHaveLength(0);
     });
 
     it("ack is idempotent (no error on missing file)", async () => {
@@ -101,38 +104,28 @@ describe("delivery-queue storage", () => {
 
     it.each([
       {
-        name: "ack cleans up leftover .delivered marker when .json is already gone",
-        payload: { channel: "directchat", to: "+1", payloads: [{ text: "stale-marker" }] },
-        prepareDeliveredMarker: true,
-        action: (id: string) => ackDelivery(id, tmpDir()),
-      },
-      {
-        name: "ack removes .delivered marker so recovery does not replay",
+        name: "ack removes a pending row so recovery does not replay",
         payload: { channel: "directchat", to: "+1", payloads: [{ text: "ack-test" }] },
         action: (id: string) => ackDelivery(id, tmpDir()),
       },
       {
-        name: "loadPendingDeliveries cleans up stale .delivered markers without replaying",
+        name: "loadPendingDeliveries ignores acked rows",
         payload: { channel: "forum", to: "99", payloads: [{ text: "stale" }] },
-        prepareDeliveredMarker: true,
-        action: () => loadPendingDeliveries(tmpDir()),
+        action: async (id: string) => {
+          await ackDelivery(id, tmpDir());
+          return loadPendingDeliveries(tmpDir());
+        },
         expectedEntriesLength: 0,
       },
-    ])("$name", async ({ payload, prepareDeliveredMarker, action, expectedEntriesLength }) => {
+    ])("$name", async ({ payload, action, expectedEntriesLength }) => {
       const id = await enqueueTextDelivery(payload);
-      const deliveredPath = path.join(queueDir(), `${id}.delivered`);
-
-      if (prepareDeliveredMarker) {
-        fs.renameSync(path.join(queueDir(), `${id}.json`), deliveredPath);
-      }
 
       const entries = await action(id);
 
       if (expectedEntriesLength !== undefined) {
         expect(entries).toHaveLength(expectedEntriesLength);
       }
-      expect(fs.existsSync(deliveredPath)).toBe(false);
-      expect(fs.existsSync(path.join(queueDir(), `${id}.json`))).toBe(false);
+      expect(readPendingQueuedEntries(tmpDir())).toHaveLength(0);
     });
   });
 
@@ -209,9 +202,8 @@ describe("delivery-queue storage", () => {
 
       await moveToFailed(id, tmpDir());
 
-      const failedDir = path.join(queueDir(), "failed");
-      expect(fs.existsSync(path.join(queueDir(), `${id}.json`))).toBe(false);
-      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+      expect(readPendingQueuedEntries(tmpDir()).map((entry) => entry.id)).not.toContain(id);
+      expect(readFailedQueuedEntry(tmpDir(), id)).toMatchObject({ id });
     });
   });
 
@@ -279,11 +271,7 @@ describe("delivery-queue storage", () => {
         to: "+1",
         payloads: [{ text: "legacy" }],
       });
-      const filePath = path.join(queueDir(), `${id}.json`);
-      const legacyEntry = readQueuedEntry(tmpDir(), id);
-      legacyEntry.retryCount = 2;
-      delete legacyEntry.lastAttemptAt;
-      fs.writeFileSync(filePath, JSON.stringify(legacyEntry), "utf-8");
+      setQueuedEntryState(tmpDir(), id, { retryCount: 2 });
 
       const entries = await loadPendingDeliveries(tmpDir());
       expect(entries).toHaveLength(1);

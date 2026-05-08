@@ -9,6 +9,9 @@ import {
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -61,6 +64,29 @@ function userMessage(text: string, timestamp: number): AgentMessage {
     content: [{ type: "text", text }],
     timestamp,
   } as AgentMessage;
+}
+
+function seedSessionTranscript(sessionFile: string, messages: AgentMessage[]): void {
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "session-1",
+    transcriptPath: sessionFile,
+    events: [
+      {
+        type: "session",
+        id: "session-1",
+        timestamp: new Date(1).toISOString(),
+        cwd: tempDir || "/tmp/openclaw-codex-test",
+      },
+      ...messages.map((message, index) => ({
+        type: "message",
+        id: `entry-${index + 1}`,
+        parentId: index === 0 ? null : `entry-${index}`,
+        timestamp: new Date(message.timestamp ?? Date.now()).toISOString(),
+        message,
+      })),
+    ],
+  });
 }
 
 function threadStartResult(threadId = "thread-1") {
@@ -200,20 +226,22 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEng
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-context-engine-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
   });
 
   afterEach(async () => {
     __testing.resetCodexAppServerClientFactoryForTests();
     vi.restoreAllMocks();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("bootstraps and assembles non-legacy context before the Codex turn starts", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
-      assistantMessage("existing context", Date.now()) as never,
-    );
+    seedSessionTranscript(sessionFile, [assistantMessage("existing context", Date.now())]);
     const openSpy = vi.spyOn(SessionManager, "open");
     const contextEngine = createContextEngine();
     const harness = createStartedThreadHarness();
@@ -309,9 +337,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
-      assistantMessage("existing context", Date.now()) as never,
-    );
+    seedSessionTranscript(sessionFile, [assistantMessage("existing context", Date.now())]);
     const afterTurn = vi.fn(
       async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
     );

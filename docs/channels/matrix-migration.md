@@ -20,21 +20,21 @@ You do not need to rename config keys or reinstall the plugin under a new name.
 
 ## What the migration does automatically
 
-When the gateway starts, and when you run [`openclaw doctor --fix`](/gateway/doctor), OpenClaw tries to repair old Matrix state automatically.
+When you run [`openclaw doctor --fix`](/gateway/doctor), OpenClaw imports or repairs old Matrix state through the migration system. Runtime startup does not move legacy Matrix files; startup reads the SQLite-backed state created by doctor/migrate.
 Before any actionable Matrix migration step mutates on-disk state, OpenClaw creates or reuses a focused recovery snapshot.
 
 When you use `openclaw update`, the exact trigger depends on how OpenClaw is installed:
 
 - source installs run `openclaw doctor --fix` during the update flow, then restart the gateway by default
-- package-manager installs update the package, run a non-interactive doctor pass, then rely on the default gateway restart so startup can finish Matrix migration
-- if you use `openclaw update --no-restart`, startup-backed Matrix migration is deferred until you later run `openclaw doctor --fix` and restart the gateway
+- package-manager installs update the package, then run a non-interactive doctor pass before the normal gateway restart
+- if you use `openclaw update --no-restart`, rerun `openclaw doctor --fix` yourself before restarting the gateway
 
 Automatic migration covers:
 
 - creating or reusing a pre-migration snapshot under `~/Backups/openclaw-migrations/`
 - reusing your cached Matrix credentials
 - keeping the same account selection and `channels.matrix` config
-- moving the oldest flat Matrix sync store into the current account-scoped location
+- importing old Matrix sync stores into SQLite plugin state
 - moving the oldest flat Matrix crypto store into the current account-scoped location when the target account can be resolved safely
 - extracting a previously saved Matrix room-key backup decryption key from the old rust crypto store, when that key exists locally
 - reusing the most complete existing token-hash storage root for the same Matrix account, homeserver, and user when the access token changes later
@@ -43,7 +43,7 @@ Automatic migration covers:
 
 Snapshot details:
 
-- OpenClaw writes a marker file at `~/.openclaw/matrix/migration-snapshot.json` after a successful snapshot so later startup and repair passes can reuse the same archive.
+- OpenClaw writes a marker file at `~/.openclaw/matrix/migration-snapshot.json` after a successful snapshot so later doctor/migration passes can reuse the same archive.
 - These automatic Matrix migration snapshots back up config + state only (`includeWorkspace: false`).
 - If Matrix only has warning-only migration state, for example because `userId` or `accessToken` is still missing, OpenClaw does not create the snapshot yet because no Matrix mutation is actionable.
 - If the snapshot step fails, OpenClaw skips Matrix migration for that run instead of mutating state without a recovery point.
@@ -69,14 +69,14 @@ OpenClaw cannot automatically recover:
 
 Current warning scope:
 
-- custom Matrix plugin path installs are surfaced by both gateway startup and `openclaw doctor`
+- custom Matrix plugin path installs are surfaced by `openclaw doctor`
 
 If your old installation had local-only encrypted history that was never backed up, some older encrypted messages may remain unreadable after the upgrade.
 
 ## Recommended upgrade flow
 
 1. Update OpenClaw and the Matrix plugin normally.
-   Prefer plain `openclaw update` without `--no-restart` so startup can finish the Matrix migration immediately.
+   Prefer plain `openclaw update` so the update flow runs doctor before the gateway restarts.
 2. Run:
 
    ```bash
@@ -136,8 +136,8 @@ If your old installation had local-only encrypted history that was never backed 
 
 Encrypted migration is a two-stage process:
 
-1. Startup or `openclaw doctor --fix` creates or reuses the pre-migration snapshot if encrypted migration is actionable.
-2. Startup or `openclaw doctor --fix` inspects the old Matrix crypto store through the active Matrix plugin install.
+1. `openclaw doctor --fix` creates or reuses the pre-migration snapshot if encrypted migration is actionable.
+2. `openclaw doctor --fix` inspects the old Matrix crypto store through the active Matrix plugin install.
 3. If a backup decryption key is found, OpenClaw writes it into the new recovery-key flow and marks room-key restore as pending.
 4. On the next Matrix startup, OpenClaw restores backed-up room keys into the new crypto store automatically.
 
@@ -165,7 +165,7 @@ If the old store reports room keys that were never backed up, OpenClaw warns ins
 `Legacy Matrix state detected at ... but channels.matrix is not configured yet.`
 
 - Meaning: old Matrix state exists, but OpenClaw cannot map it to a current Matrix account because Matrix is not configured.
-- What to do: configure `channels.matrix`, then rerun `openclaw doctor --fix` or restart the gateway.
+- What to do: configure `channels.matrix`, then rerun `openclaw doctor --fix`.
 
 `Legacy Matrix state detected at ... but the new account-scoped target could not be resolved yet (need homeserver, userId, and access token for channels.matrix...).`
 
@@ -175,22 +175,12 @@ If the old store reports room keys that were never backed up, OpenClaw warns ins
 `Legacy Matrix state detected at ... but multiple Matrix accounts are configured and channels.matrix.defaultAccount is not set.`
 
 - Meaning: OpenClaw found one shared flat Matrix store, but it refuses to guess which named Matrix account should receive it.
-- What to do: set `channels.matrix.defaultAccount` to the intended account, then rerun `openclaw doctor --fix` or restart the gateway.
-
-`Matrix legacy sync store not migrated because the target already exists (...)`
-
-- Meaning: the new account-scoped location already has a sync or crypto store, so OpenClaw did not overwrite it automatically.
-- What to do: verify that the current account is the correct one before manually removing or moving the conflicting target.
-
-`Failed migrating Matrix legacy sync store (...)` or `Failed migrating Matrix legacy crypto store (...)`
-
-- Meaning: OpenClaw tried to move old Matrix state but the filesystem operation failed.
-- What to do: inspect filesystem permissions and disk state, then rerun `openclaw doctor --fix`.
+- What to do: set `channels.matrix.defaultAccount` to the intended account, then rerun `openclaw doctor --fix`.
 
 `Legacy Matrix encrypted state detected at ... but channels.matrix is not configured yet.`
 
 - Meaning: OpenClaw found an old encrypted Matrix store, but there is no current Matrix config to attach it to.
-- What to do: configure `channels.matrix`, then rerun `openclaw doctor --fix` or restart the gateway.
+- What to do: configure `channels.matrix`, then rerun `openclaw doctor --fix`.
 
 `Legacy Matrix encrypted state detected at ... but the account-scoped target could not be resolved yet (need homeserver, userId, and access token for channels.matrix...).`
 
@@ -200,34 +190,29 @@ If the old store reports room keys that were never backed up, OpenClaw warns ins
 `Legacy Matrix encrypted state detected at ... but multiple Matrix accounts are configured and channels.matrix.defaultAccount is not set.`
 
 - Meaning: OpenClaw found one shared flat legacy crypto store, but it refuses to guess which named Matrix account should receive it.
-- What to do: set `channels.matrix.defaultAccount` to the intended account, then rerun `openclaw doctor --fix` or restart the gateway.
+- What to do: set `channels.matrix.defaultAccount` to the intended account, then rerun `openclaw doctor --fix`.
 
 `Matrix migration warnings are present, but no on-disk Matrix mutation is actionable yet. No pre-migration snapshot was needed.`
 
 - Meaning: OpenClaw detected old Matrix state, but the migration is still blocked on missing identity or credential data.
-- What to do: finish Matrix login or config setup, then rerun `openclaw doctor --fix` or restart the gateway.
+- What to do: finish Matrix login or config setup, then rerun `openclaw doctor --fix`.
 
 `Legacy Matrix encrypted state was detected, but the Matrix plugin helper is unavailable. Install or repair @openclaw/matrix so OpenClaw can inspect the old rust crypto store before upgrading.`
 
 - Meaning: OpenClaw found old encrypted Matrix state, but it could not load the helper entrypoint from the Matrix plugin that normally inspects that store.
-- What to do: reinstall or repair the Matrix plugin (`openclaw plugins install @openclaw/matrix`, or `openclaw plugins install ./path/to/local/matrix-plugin` for a repo checkout), then rerun `openclaw doctor --fix` or restart the gateway.
+- What to do: reinstall or repair the Matrix plugin (`openclaw plugins install @openclaw/matrix`, or `openclaw plugins install ./path/to/local/matrix-plugin` for a repo checkout), then rerun `openclaw doctor --fix`.
 
 `Matrix plugin helper path is unsafe: ... Reinstall @openclaw/matrix and try again.`
 
 - Meaning: OpenClaw found a helper file path that escapes the plugin root or fails plugin boundary checks, so it refused to import it.
-- What to do: reinstall the Matrix plugin from a trusted path, then rerun `openclaw doctor --fix` or restart the gateway.
+- What to do: reinstall the Matrix plugin from a trusted path, then rerun `openclaw doctor --fix`.
 
 `- Failed creating a Matrix migration snapshot before repair: ...`
 
 `- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".`
 
 - Meaning: OpenClaw refused to mutate Matrix state because it could not create the recovery snapshot first.
-- What to do: resolve the backup error, then rerun `openclaw doctor --fix` or restart the gateway.
-
-`Failed migrating legacy Matrix client storage: ...`
-
-- Meaning: the Matrix client-side fallback found old flat storage, but the move failed. OpenClaw now aborts that fallback instead of silently starting with a fresh store.
-- What to do: inspect filesystem permissions or conflicts, keep the old state intact, and retry after fixing the error.
+- What to do: resolve the backup error, then rerun `openclaw doctor --fix`.
 
 `Matrix is installed from a custom path: ...`
 

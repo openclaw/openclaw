@@ -1,16 +1,16 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { PluginLogger } from "../api.js";
 import type { DiffArtifactContext, DiffArtifactMeta, DiffOutputFormat } from "./types.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const MAX_TTL_MS = 6 * 60 * 60 * 1000;
-const SWEEP_FALLBACK_AGE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const VIEWER_PREFIX = "/plugins/diffs/view";
+const SQLITE_VIEWER_PATH_PREFIX = "sqlite:diffs/artifacts/";
 
 type CreateArtifactParams = {
   html: string;
@@ -36,8 +36,10 @@ type StandaloneFileMeta = {
   context?: DiffArtifactContext;
 };
 
-type ArtifactMetaFileName = "meta.json" | "file-meta.json";
 type ArtifactRoot = Awaited<ReturnType<typeof fsRoot>>;
+export type DiffBlobMetadata =
+  | { kind: "viewer"; meta: DiffArtifactMeta }
+  | { kind: "standalone_file"; meta: StandaloneFileMeta };
 
 export class DiffArtifactStore {
   private readonly rootDir: string;
@@ -46,22 +48,29 @@ export class DiffArtifactStore {
   private cleanupInFlight: Promise<void> | null = null;
   private nextCleanupAt = 0;
 
-  constructor(params: { rootDir: string; logger?: PluginLogger; cleanupIntervalMs?: number }) {
+  constructor(params: {
+    rootDir: string;
+    logger?: PluginLogger;
+    cleanupIntervalMs?: number;
+    blobStore: PluginBlobStore<DiffBlobMetadata>;
+  }) {
     this.rootDir = path.resolve(params.rootDir);
     this.logger = params.logger;
+    this.blobStore = params.blobStore;
     this.cleanupIntervalMs =
       params.cleanupIntervalMs === undefined
         ? DEFAULT_CLEANUP_INTERVAL_MS
         : Math.max(0, Math.floor(params.cleanupIntervalMs));
   }
 
+  private readonly blobStore: PluginBlobStore<DiffBlobMetadata>;
+
   async createArtifact(params: CreateArtifactParams): Promise<DiffArtifactMeta> {
     await this.ensureRoot();
 
     const id = crypto.randomBytes(10).toString("hex");
     const token = crypto.randomBytes(24).toString("hex");
-    const artifactDir = this.artifactDir(id);
-    const htmlPath = path.join(artifactDir, "viewer.html");
+    const htmlPath = `${SQLITE_VIEWER_PATH_PREFIX}${viewerBlobKey(id)}`;
     const ttlMs = normalizeTtlMs(params.ttlMs);
     const createdAt = new Date();
     const expiresAt = new Date(createdAt.getTime() + ttlMs);
@@ -78,10 +87,12 @@ export class DiffArtifactStore {
       ...(params.context ? { context: params.context } : {}),
     };
 
-    const root = await this.artifactRoot();
-    await root.mkdir(id);
-    await root.write(path.posix.join(id, "viewer.html"), params.html);
-    await this.writeMeta(meta);
+    await this.blobStore.register(
+      viewerBlobKey(id),
+      { kind: "viewer", meta },
+      Buffer.from(params.html, "utf8"),
+      { ttlMs },
+    );
     this.scheduleCleanup();
     return meta;
   }
@@ -106,8 +117,11 @@ export class DiffArtifactStore {
     if (!meta) {
       throw new Error(`Diff artifact not found: ${id}`);
     }
-    const htmlPath = this.normalizeStoredPath(meta.htmlPath, "htmlPath");
-    return await (await this.artifactRoot()).readText(this.relativeStoredPath(htmlPath));
+    const entry = await this.blobStore.lookup(viewerBlobKey(id));
+    if (!entry || entry.metadata.kind !== "viewer") {
+      throw new Error(`Diff artifact not found: ${id}`);
+    }
+    return entry.blob.toString("utf8");
   }
 
   async updateFilePath(id: string, filePath: string): Promise<DiffArtifactMeta> {
@@ -176,7 +190,6 @@ export class DiffArtifactStore {
   async cleanupExpired(): Promise<void> {
     const root = await this.artifactRoot();
     const entries = await root.list("", { withFileTypes: true }).catch(() => []);
-    const now = Date.now();
 
     await Promise.all(
       entries
@@ -199,9 +212,7 @@ export class DiffArtifactStore {
             return;
           }
 
-          if (now - entry.mtimeMs > SWEEP_FALLBACK_AGE_MS) {
-            await this.deleteArtifact(id);
-          }
+          await this.deleteArtifact(id);
         }),
     );
   }
@@ -241,77 +252,37 @@ export class DiffArtifactStore {
   }
 
   private async writeMeta(meta: DiffArtifactMeta): Promise<void> {
-    await this.writeJsonMeta(meta.id, "meta.json", meta);
+    const entry = await this.blobStore.lookup(viewerBlobKey(meta.id));
+    await this.blobStore.register(
+      viewerBlobKey(meta.id),
+      { kind: "viewer", meta },
+      entry?.blob ?? Buffer.alloc(0),
+      { ttlMs: remainingTtlMs(meta.expiresAt) },
+    );
   }
 
   private async readMeta(id: string): Promise<DiffArtifactMeta | null> {
-    const parsed = await this.readJsonMeta(id, "meta.json", "diff artifact");
-    if (!parsed) {
-      return null;
-    }
-    return parsed as DiffArtifactMeta;
+    const entry = await this.blobStore.lookup(viewerBlobKey(id));
+    return entry?.metadata.kind === "viewer" ? entry.metadata.meta : null;
   }
 
   private async writeStandaloneMeta(meta: StandaloneFileMeta): Promise<void> {
-    await this.writeJsonMeta(meta.id, "file-meta.json", meta);
+    await this.blobStore.register(
+      standaloneBlobKey(meta.id),
+      { kind: "standalone_file", meta },
+      Buffer.alloc(0),
+      { ttlMs: remainingTtlMs(meta.expiresAt) },
+    );
   }
 
   private async readStandaloneMeta(id: string): Promise<StandaloneFileMeta | null> {
-    const parsed = await this.readJsonMeta(id, "file-meta.json", "standalone diff");
-    if (!parsed) {
-      return null;
-    }
-    try {
-      const value = parsed as Partial<StandaloneFileMeta>;
-      if (
-        value.kind !== "standalone_file" ||
-        typeof value.id !== "string" ||
-        typeof value.createdAt !== "string" ||
-        typeof value.expiresAt !== "string" ||
-        typeof value.filePath !== "string"
-      ) {
-        return null;
-      }
-      return {
-        kind: value.kind,
-        id: value.id,
-        createdAt: value.createdAt,
-        expiresAt: value.expiresAt,
-        filePath: this.normalizeStoredPath(value.filePath, "filePath"),
-        ...(value.context ? { context: normalizeArtifactContext(value.context) } : {}),
-      };
-    } catch (error) {
-      this.logger?.warn(`Failed to normalize standalone diff metadata for ${id}: ${String(error)}`);
-      return null;
-    }
-  }
-
-  private async writeJsonMeta(
-    id: string,
-    fileName: ArtifactMetaFileName,
-    data: unknown,
-  ): Promise<void> {
-    await (await this.artifactRoot()).writeJson(path.posix.join(id, fileName), data, { space: 2 });
-  }
-
-  private async readJsonMeta(
-    id: string,
-    fileName: ArtifactMetaFileName,
-    context: string,
-  ): Promise<unknown> {
-    try {
-      const raw = await (await this.artifactRoot()).readText(path.posix.join(id, fileName));
-      return JSON.parse(raw) as unknown;
-    } catch (error) {
-      if (isFileNotFound(error)) {
-        return null;
-      }
-      this.logger?.warn(`Failed to read ${context} metadata for ${id}: ${String(error)}`);
-      return null;
-    }
+    const entry = await this.blobStore.lookup(standaloneBlobKey(id));
+    return entry?.metadata.kind === "standalone_file" ? entry.metadata.meta : null;
   }
 
   private async deleteArtifact(id: string): Promise<void> {
+    await this.blobStore.delete(viewerBlobKey(id)).catch(() => false);
+    await this.blobStore.delete(standaloneBlobKey(id)).catch(() => false);
     await fs.rm(this.artifactDir(id), { recursive: true, force: true }).catch(() => {});
   }
 
@@ -365,23 +336,18 @@ function isExpired(meta: { expiresAt: string }): boolean {
   return Date.now() >= expiresAt;
 }
 
-function isFileNotFound(error: unknown): boolean {
-  const code = error instanceof Error && "code" in error ? error.code : undefined;
-  return code === "ENOENT" || code === "not-found";
+function viewerBlobKey(id: string): string {
+  return `view:${id}`;
 }
 
-function normalizeArtifactContext(value: unknown): DiffArtifactContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
+function standaloneBlobKey(id: string): string {
+  return `file:${id}`;
+}
+
+function remainingTtlMs(expiresAt: string): number {
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    return 1;
   }
-
-  const raw = value as Record<string, unknown>;
-  const context = {
-    agentId: normalizeOptionalString(raw.agentId),
-    sessionId: normalizeOptionalString(raw.sessionId),
-    messageChannel: normalizeOptionalString(raw.messageChannel),
-    agentAccountId: normalizeOptionalString(raw.agentAccountId),
-  };
-
-  return Object.values(context).some((entry) => entry !== undefined) ? context : undefined;
+  return Math.max(1, Math.floor(expiresAtMs - Date.now()));
 }

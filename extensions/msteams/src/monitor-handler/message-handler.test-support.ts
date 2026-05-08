@@ -40,7 +40,6 @@ export function createMessageHandlerDeps(
     recordInboundSession,
     resolveAgentRoute,
     resolveTextChunkLimit: () => 4000,
-    resolveStorePath: () => "/tmp/test-store",
   });
 
   const conversationStore = {

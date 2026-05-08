@@ -21,7 +21,7 @@ import {
   type ComponentInteractionContext,
   type DiscordChannelContext,
 } from "./agent-components-helpers.js";
-import { readSessionUpdatedAt, resolveStorePath } from "./agent-components.deps.runtime.js";
+import { readSessionUpdatedAt } from "./agent-components.deps.runtime.js";
 import {
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
@@ -170,10 +170,9 @@ export async function dispatchDiscordComponentEvent(params: {
     guildInfo,
     allowNameMatching,
   });
-  const storePath = resolveStorePath(ctx.cfg.session?.store, { agentId });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
-    storePath,
+    agentId,
     sessionKey,
   });
   const timestamp = Date.now();
@@ -285,8 +284,8 @@ export async function dispatchDiscordComponentEvent(params: {
       resolveTurn: () => ({
         channel: "discord",
         accountId,
+        agentId,
         routeSessionKey: sessionKey,
-        storePath,
         ctxPayload,
         recordInboundSession,
         record: {

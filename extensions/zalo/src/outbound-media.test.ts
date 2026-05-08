@@ -1,7 +1,8 @@
-import { stat } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadOutboundMediaFromUrlMock = vi.fn();
 
@@ -31,14 +32,26 @@ function createMockResponse() {
 }
 
 describe("zalo outbound hosted media", () => {
-  beforeEach(() => {
-    clearHostedZaloMediaForTest();
+  let stateDir: string;
+
+  beforeEach(async () => {
+    stateDir = await mkdtemp(join(tmpdir(), "openclaw-zalo-outbound-media-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    resetPluginBlobStoreForTests();
+    await clearHostedZaloMediaForTest();
     loadOutboundMediaFromUrlMock.mockReset();
     loadOutboundMediaFromUrlMock.mockResolvedValue({
       buffer: Buffer.from("image-bytes"),
       contentType: "image/png",
       fileName: "photo.png",
     });
+  });
+
+  afterEach(async () => {
+    await clearHostedZaloMediaForTest();
+    resetPluginBlobStoreForTests();
+    vi.unstubAllEnvs();
+    await rm(stateDir, { recursive: true, force: true });
   });
 
   it("loads outbound media under OpenClaw control and returns a hosted URL", async () => {
@@ -70,7 +83,7 @@ describe("zalo outbound hosted media", () => {
     });
   });
 
-  it("creates hosted media storage with private filesystem permissions", async () => {
+  it("stores hosted media in the OpenClaw SQLite database", async () => {
     const hostedUrl = await prepareHostedZaloMediaUrl({
       mediaUrl: "https://example.com/photo.png",
       webhookUrl: "https://gateway.example.com/zalo-webhook",
@@ -89,16 +102,11 @@ describe("zalo outbound hosted media", () => {
     }
     expect(id).toEqual(expect.stringMatching(/^[a-f0-9-]+$/));
 
-    const storageDir = join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-outbound-media");
-    const [dirStats, metadataStats, bufferStats] = await Promise.all([
-      stat(storageDir),
-      stat(join(storageDir, `${id}.json`)),
-      stat(join(storageDir, `${id}.bin`)),
-    ]);
-
-    expect(dirStats.mode & 0o777).toBe(0o700);
-    expect(metadataStats.mode & 0o777).toBe(0o600);
-    expect(bufferStats.mode & 0o777).toBe(0o600);
+    const dbStats = await stat(join(stateDir, "state", "openclaw.sqlite"));
+    expect(dbStats.isFile()).toBe(true);
+    await expect(
+      stat(join(stateDir, "openclaw-zalo-outbound-media", `${id}.json`)),
+    ).rejects.toThrow();
   });
 
   it("preserves the root webhook path when deriving the hosted media route", () => {

@@ -198,9 +198,6 @@ export function createImageLifecycleCore() {
         })) as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
       },
       session: {
-        resolveStorePath: vi.fn(
-          () => "/tmp/zalo-sessions.json",
-        ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
         readSessionUpdatedAt: vi.fn(
           () => undefined,
         ) as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
@@ -249,7 +246,6 @@ export function createImageLifecycleCore() {
             {},
           );
           await resolved.recordInboundSession({
-            storePath: resolved.storePath,
             sessionKey: resolved.ctxPayload.SessionKey ?? resolved.routeSessionKey,
             ctx: resolved.ctxPayload,
             groupResolution: resolved.record?.groupResolution,

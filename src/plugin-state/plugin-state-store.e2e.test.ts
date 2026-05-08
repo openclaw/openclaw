@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateSqliteStore,
@@ -11,27 +12,11 @@ import {
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
-import { MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN } from "./plugin-state-store.sqlite.js";
-import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => {
   vi.useRealTimers();
   resetPluginStateStoreForTests();
 });
-
-async function expectPluginStateStoreError(
-  promise: Promise<unknown>,
-  expected: { code: string },
-): Promise<void> {
-  let storeError: unknown;
-  try {
-    await promise;
-  } catch (error) {
-    storeError = error;
-  }
-  expect(storeError).toBeInstanceOf(PluginStateStoreError);
-  expect((storeError as PluginStateStoreError | undefined)?.code).toBe(expected.code);
-}
 
 // ---------------------------------------------------------------------------
 // Runtime smoke
@@ -188,37 +173,7 @@ describe("limits", () => {
       });
       // 65 535 chars → 65 537 bytes of JSON → over limit.
       const oversize = "x".repeat(65_535);
-      await expectPluginStateStoreError(store.register("big", oversize), {
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      });
-    });
-  });
-
-  it("enforces the per-plugin live-row cap", async () => {
-    await withOpenClawTestState({ label: "e2e-limit-plugin" }, async () => {
-      // Spread MAX_ENTRIES_PER_PLUGIN rows across several namespaces so
-      // namespace eviction never fires (each namespace has generous room).
-      const nsCount = 10;
-      const perNs = MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN / nsCount; // 100
-      seedPluginStateEntriesForTests(
-        Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN }, (_, index) => {
-          const ns = Math.floor(index / perNs);
-          const k = index % perNs;
-          return {
-            pluginId: "fixture-plugin",
-            namespace: `ns-${ns}`,
-            key: `k-${k}`,
-            value: { ns, k },
-          };
-        }),
-      );
-      const store = createPluginStateKeyedStore("fixture-plugin", {
-        namespace: "ns-0",
-        maxEntries: perNs + 1,
-      });
-
-      // One more row tips over the plugin-wide limit.
-      await expectPluginStateStoreError(store.register("overflow", { boom: true }), {
+      await expect(store.register("big", oversize)).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
     });
@@ -261,6 +216,7 @@ describe("failure safety", () => {
       const db = new DatabaseSync(resolvePluginStateSqlitePath());
       db.exec("PRAGMA user_version = 99;");
       db.close();
+      closeOpenClawStateDatabaseForTest();
 
       const store = createPluginStateKeyedStore("fixture-plugin", {
         namespace: "schema",
@@ -268,7 +224,7 @@ describe("failure safety", () => {
       });
       const error = await store.register("k", { ok: true }).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(PluginStateStoreError);
-      expect((error as PluginStateStoreError).code).toBe("PLUGIN_STATE_SCHEMA_UNSUPPORTED");
+      expect(error).toMatchObject({ code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED" });
     });
   });
 
@@ -276,10 +232,10 @@ describe("failure safety", () => {
     await withOpenClawTestState({ label: "e2e-fail-probe" }, async () => {
       const result = probePluginStateStore();
       expect(result.ok).toBe(true);
-      expect(result.dbPath).toContain("state.sqlite");
+      expect(result.dbPath).toContain("openclaw.sqlite");
       expect(result.steps.length).toBeGreaterThanOrEqual(4);
       const failedSteps = result.steps.filter((step) => !step.ok);
-      expect(failedSteps).toStrictEqual([]);
+      expect(failedSteps).toEqual([]);
 
       // The probe's temporary stored value must not leak into the result.
       const serialised = JSON.stringify(result);

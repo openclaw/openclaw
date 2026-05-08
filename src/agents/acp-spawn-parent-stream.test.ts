@@ -1,11 +1,16 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
+import { listAcpParentStreamEvents } from "./acp-parent-stream-store.sqlite.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
-const readAcpSessionEntryMock = vi.fn();
-const resolveSessionFilePathMock = vi.fn();
-const resolveSessionFilePathOptionsMock = vi.fn();
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+let tempStateDir: string | null = null;
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
@@ -22,32 +27,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
   );
 });
 
-vi.mock("../acp/runtime/session-meta.js", async () => {
-  return await mergeMockedModule(
-    await vi.importActual<typeof import("../acp/runtime/session-meta.js")>(
-      "../acp/runtime/session-meta.js",
-    ),
-    () => ({
-      readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
-    }),
-  );
-});
-
-vi.mock("../config/sessions/paths.js", async () => {
-  return await mergeMockedModule(
-    await vi.importActual<typeof import("../config/sessions/paths.js")>(
-      "../config/sessions/paths.js",
-    ),
-    () => ({
-      resolveSessionFilePath: (...args: unknown[]) => resolveSessionFilePathMock(...args),
-      resolveSessionFilePathOptions: (...args: unknown[]) =>
-        resolveSessionFilePathOptionsMock(...args),
-    }),
-  );
-});
-
 let emitAgentEvent: typeof import("../infra/agent-events.js").emitAgentEvent;
-let resolveAcpSpawnStreamLogPath: typeof import("./acp-spawn-parent-stream.js").resolveAcpSpawnStreamLogPath;
 let startAcpSpawnParentStreamRelay: typeof import("./acp-spawn-parent-stream.js").startAcpSpawnParentStreamRelay;
 
 function collectedTexts() {
@@ -65,23 +45,31 @@ function expectNoTextWithFragment(texts: string[], fragment: string): void {
 describe("startAcpSpawnParentStreamRelay", () => {
   beforeAll(async () => {
     ({ emitAgentEvent } = await import("../infra/agent-events.js"));
-    ({ resolveAcpSpawnStreamLogPath, startAcpSpawnParentStreamRelay } =
-      await import("./acp-spawn-parent-stream.js"));
+    ({ startAcpSpawnParentStreamRelay } = await import("./acp-spawn-parent-stream.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-parent-stream-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
     enqueueSystemEventMock.mockClear();
     requestHeartbeatMock.mockClear();
-    readAcpSessionEntryMock.mockReset();
-    resolveSessionFilePathMock.mockReset();
-    resolveSessionFilePathOptionsMock.mockReset();
-    resolveSessionFilePathOptionsMock.mockImplementation((value: unknown) => value);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-04T01:00:00.000Z"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    if (tempStateDir) {
+      await fs.rm(tempStateDir, { recursive: true, force: true });
+      tempStateDir = null;
+    }
   });
 
   it("relays assistant progress and completion to the parent session", () => {
@@ -150,6 +138,14 @@ describe("startAcpSpawnParentStreamRelay", () => {
       ),
     ).toBe(true);
     relay.dispose();
+    const events = listAcpParentStreamEvents({ agentId: "codex", runId: "run-1" });
+    expect(events.map((event) => event.event.kind)).toEqual([
+      "system_event",
+      "assistant_delta",
+      "system_event",
+      "lifecycle",
+      "system_event",
+    ]);
   });
 
   it("emits a no-output notice and a resumed notice when output returns", () => {
@@ -358,36 +354,5 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expectNoTextWithFragment(texts, "checking thread context");
     expectTextWithFragment(texts, "codex: final answer ready");
     relay.dispose();
-  });
-
-  it("resolves ACP spawn stream log path from session metadata", () => {
-    readAcpSessionEntryMock.mockReturnValue({
-      storePath: "/tmp/openclaw/agents/codex/sessions/sessions.json",
-      entry: {
-        sessionId: "sess-123",
-        sessionFile: "/tmp/openclaw/agents/codex/sessions/sess-123.jsonl",
-      },
-    });
-    resolveSessionFilePathMock.mockReturnValue(
-      "/tmp/openclaw/agents/codex/sessions/sess-123.jsonl",
-    );
-
-    const resolved = resolveAcpSpawnStreamLogPath({
-      childSessionKey: "agent:codex:acp:child-1",
-    });
-
-    expect(resolved).toBe("/tmp/openclaw/agents/codex/sessions/sess-123.acp-stream.jsonl");
-    expect(readAcpSessionEntryMock).toHaveBeenCalledWith({
-      sessionKey: "agent:codex:acp:child-1",
-    });
-    expect(resolveSessionFilePathMock).toHaveBeenCalledTimes(1);
-    const [sessionId, entry, options] = resolveSessionFilePathMock.mock.calls[0] as [
-      string,
-      { sessionId?: unknown },
-      { storePath?: unknown },
-    ];
-    expect(sessionId).toBe("sess-123");
-    expect(entry.sessionId).toBe("sess-123");
-    expect(options.storePath).toBe("/tmp/openclaw/agents/codex/sessions/sessions.json");
   });
 });

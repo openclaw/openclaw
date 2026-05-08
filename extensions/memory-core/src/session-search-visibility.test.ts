@@ -8,27 +8,27 @@ const crossAgentStore = {
   "agent:peer:only": {
     sessionId: "w1",
     updatedAt: 1,
-    sessionFile: "/tmp/sessions/w1.jsonl",
+    sessionTranscript: "/tmp/sessions/w1.jsonl",
   },
 };
-let combinedSessionStore: typeof crossAgentStore | Record<string, never> = crossAgentStore;
+let combinedSessionEntries: typeof crossAgentStore | Record<string, never> = crossAgentStore;
 
 vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({
-      storePath: "(test)",
-      store: combinedSessionStore,
+    loadCombinedSessionEntriesForGateway: vi.fn(() => ({
+      databasePath: "(test)",
+      entries: combinedSessionEntries,
     })),
   };
 });
 
 describe("filterMemorySearchHitsBySessionVisibility", () => {
   afterEach(() => {
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGateway).mockClear();
-    combinedSessionStore = crossAgentStore;
+    vi.mocked(sessionTranscriptHit.loadCombinedSessionEntriesForGateway).mockClear();
+    combinedSessionEntries = crossAgentStore;
   });
 
   it("drops sessions-sourced hits when requester key is missing (fail closed)", async () => {
@@ -73,7 +73,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toEqual(hits);
   });
 
-  it("loads the combined session store once per filter pass", async () => {
+  it("loads the combined session entries once per filter pass", async () => {
     const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
     const hits: MemorySearchResult[] = [
       {
@@ -99,8 +99,8 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       sandboxed: false,
       hits,
     });
-    expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).toHaveBeenCalledTimes(1);
-    expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(cfg);
+    expect(sessionTranscriptHit.loadCombinedSessionEntriesForGateway).toHaveBeenCalledTimes(1);
+    expect(sessionTranscriptHit.loadCombinedSessionEntriesForGateway).toHaveBeenCalledWith(cfg);
   });
 
   it("allows cross-agent session hits when visibility=all and agent-to-agent is enabled", async () => {

@@ -14,6 +14,7 @@ import {
   importLegacyCommitmentStoreFileToSqlite,
   legacyCommitmentStoreFileExists,
 } from "../commitments/store.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   importLegacyManagedOutgoingImageRecordFilesToSqlite,
@@ -31,8 +32,6 @@ import {
   importLegacyDeviceIdentityFileToSqlite,
   legacyDeviceIdentityFileExists,
 } from "../infra/device-identity.js";
-import type { DevicePairingPendingRequest, PairedDevice } from "../infra/device-pairing.js";
-import type { NodePairingPairedNode, NodePairingPendingRequest } from "../infra/node-pairing.js";
 import {
   importLegacyPairingStateFilesToSqlite,
   legacyPairingStateFilesExist,
@@ -47,9 +46,42 @@ import {
   legacyUpdateCheckFileExists,
 } from "../infra/update-startup.js";
 import {
+  importLegacyVoiceWakeRoutingConfigFileToSqlite,
+  legacyVoiceWakeRoutingConfigFileExists,
+} from "../infra/voicewake-routing.js";
+import {
+  importLegacyVoiceWakeConfigFileToSqlite,
+  legacyVoiceWakeConfigFileExists,
+} from "../infra/voicewake.js";
+import { importLegacyMediaFilesToSqlite, legacyMediaFilesExist } from "../media/store.js";
+import {
+  importLegacyMemoryCoreDreamingStateFilesToSqlite,
+  legacyMemoryCoreDreamingStateFilesExist,
+} from "../memory-host-sdk/dreaming-state-migration.js";
+import {
   importLegacyChannelPairingFilesToSqlite,
   legacyChannelPairingFilesExist,
 } from "../pairing/pairing-store.js";
+import {
+  importLegacyPluginStateSidecarToSqlite,
+  legacyPluginStateSidecarExists,
+} from "../plugin-state/plugin-state-store.js";
+import {
+  importLegacyPluginBindingApprovalFileToSqlite,
+  legacyPluginBindingApprovalFileExists,
+} from "../plugins/conversation-binding.js";
+import {
+  importLegacyInstalledPluginIndexFileToSqlite,
+  legacyInstalledPluginIndexFileExists,
+} from "../plugins/installed-plugin-index-store.js";
+import {
+  importLegacyTaskFlowRegistrySidecarToSqlite,
+  legacyTaskFlowRegistrySidecarExists,
+} from "../tasks/task-flow-registry.store.sqlite.js";
+import {
+  importLegacyTaskRegistrySidecarToSqlite,
+  legacyTaskRegistrySidecarExists,
+} from "../tasks/task-registry.store.sqlite.js";
 import { note } from "../terminal/note.js";
 import {
   importLegacyTuiLastSessionStoreToSqlite,
@@ -69,13 +101,26 @@ type LegacyStateProbe = {
   apns: boolean;
   updateCheck: boolean;
   managedImages: boolean;
+  mediaFiles: boolean;
+  pluginState: boolean;
+  pluginBindingApprovals: boolean;
+  installedPluginIndex: boolean;
   subagents: boolean;
+  taskRegistry: boolean;
+  taskFlowRegistry: boolean;
   tuiLastSession: boolean;
+  voiceWake: boolean;
+  voiceWakeRouting: boolean;
   authProfileStateAgentDirs: string[];
   openRouterModelCache: boolean;
+  memoryCoreDreamingState: boolean;
 };
 
-async function probeLegacyRuntimeStateFiles(env: NodeJS.ProcessEnv): Promise<LegacyStateProbe> {
+async function probeLegacyRuntimeStateFiles(params: {
+  env: NodeJS.ProcessEnv;
+  cfg?: OpenClawConfig;
+}): Promise<LegacyStateProbe> {
+  const env = params.env;
   const baseDir = resolveStateDir(env);
   return {
     deviceIdentity: legacyDeviceIdentityFileExists(env),
@@ -89,10 +134,21 @@ async function probeLegacyRuntimeStateFiles(env: NodeJS.ProcessEnv): Promise<Leg
     apns: await legacyApnsRegistrationFileExists(baseDir),
     updateCheck: await legacyUpdateCheckFileExists(env),
     managedImages: await legacyManagedOutgoingImageRecordFilesExist(baseDir),
+    mediaFiles: await legacyMediaFilesExist(env),
+    pluginState: legacyPluginStateSidecarExists(env),
+    pluginBindingApprovals: legacyPluginBindingApprovalFileExists(),
+    installedPluginIndex: legacyInstalledPluginIndexFileExists({ env, stateDir: baseDir }),
     subagents: legacySubagentRegistryFileExists(env),
+    taskRegistry: legacyTaskRegistrySidecarExists(env),
+    taskFlowRegistry: legacyTaskFlowRegistrySidecarExists(env),
     tuiLastSession: await legacyTuiLastSessionFileExists({ stateDir: baseDir }),
+    voiceWake: await legacyVoiceWakeConfigFileExists(baseDir),
+    voiceWakeRouting: await legacyVoiceWakeRoutingConfigFileExists(baseDir),
     authProfileStateAgentDirs: discoverLegacyAuthProfileStateAgentDirs(env),
     openRouterModelCache: legacyOpenRouterModelCapabilitiesCacheExists(env),
+    memoryCoreDreamingState: params.cfg
+      ? await legacyMemoryCoreDreamingStateFilesExist({ cfg: params.cfg })
+      : false,
   };
 }
 
@@ -103,16 +159,17 @@ function hasLegacyRuntimeStateFiles(probe: LegacyStateProbe): boolean {
 export async function maybeRepairLegacyRuntimeStateFiles(params: {
   prompter: Pick<DoctorPrompter, "shouldRepair">;
   env?: NodeJS.ProcessEnv;
+  cfg?: OpenClawConfig;
 }): Promise<void> {
   const env = params.env ?? process.env;
   const baseDir = resolveStateDir(env);
-  const probe = await probeLegacyRuntimeStateFiles(env);
+  const probe = await probeLegacyRuntimeStateFiles({ env, cfg: params.cfg });
   if (!hasLegacyRuntimeStateFiles(probe)) {
     return;
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime JSON state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, channel pairing, node pairing, push, media, subagent, TUI, auth routing, OpenRouter cache, and update-check state into SQLite.",
+      "Legacy runtime state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, channel pairing, node pairing, push, media, plugin, plugin binding approvals, installed plugin index, subagent, task, Task Flow, TUI, Voice Wake, memory-core dreaming checkpoints, auth routing, OpenRouter cache, and update-check state into SQLite.",
       "SQLite state",
     );
     return;
@@ -154,10 +211,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (probe.devicePairing) {
     await runImport("Device pairing", async () => {
-      const result = await importLegacyPairingStateFilesToSqlite<
-        DevicePairingPendingRequest,
-        PairedDevice
-      >({ baseDir, subdir: "devices" });
+      const result = await importLegacyPairingStateFilesToSqlite({ baseDir, subdir: "devices" });
       if (result.files > 0) {
         changes.push(
           `- Imported ${result.pending} pending device pairing request(s) and ${result.paired} paired device record(s) into SQLite.`,
@@ -167,10 +221,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (probe.nodePairing) {
     await runImport("Node pairing", async () => {
-      const result = await importLegacyPairingStateFilesToSqlite<
-        NodePairingPendingRequest,
-        NodePairingPairedNode
-      >({ baseDir, subdir: "nodes" });
+      const result = await importLegacyPairingStateFilesToSqlite({ baseDir, subdir: "nodes" });
       if (result.files > 0) {
         changes.push(
           `- Imported ${result.pending} pending node pairing request(s) and ${result.paired} paired node record(s) into SQLite.`,
@@ -230,6 +281,44 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
       }
     });
   }
+  if (probe.mediaFiles) {
+    await runImport("Media files", async () => {
+      const result = await importLegacyMediaFilesToSqlite(env);
+      if (result.imported > 0 || result.removed > 0) {
+        changes.push(
+          `- Imported ${result.imported} media attachment file(s) into SQLite${result.skipped > 0 ? `; skipped ${result.skipped}.` : "."}`,
+        );
+      }
+    });
+  }
+  if (probe.pluginState) {
+    await runImport("Plugin state", () => {
+      const result = importLegacyPluginStateSidecarToSqlite(env);
+      if (result.importedEntries > 0 || result.removedSource) {
+        changes.push(
+          `- Imported ${result.importedEntries} plugin state entr${result.importedEntries === 1 ? "y" : "ies"} into SQLite.`,
+        );
+      }
+    });
+  }
+  if (probe.pluginBindingApprovals) {
+    await runImport("Plugin binding approvals", () => {
+      const result = importLegacyPluginBindingApprovalFileToSqlite();
+      if (result.imported) {
+        changes.push(`- Imported ${result.approvals} plugin binding approval(s) into SQLite.`);
+      }
+    });
+  }
+  if (probe.installedPluginIndex) {
+    await runImport("Installed plugin index", () => {
+      const result = importLegacyInstalledPluginIndexFileToSqlite({ env, stateDir: baseDir });
+      if (result.imported) {
+        changes.push(
+          `- Imported installed plugin index with ${result.plugins} plugin record(s) and ${result.installRecords} install record(s) into SQLite.`,
+        );
+      }
+    });
+  }
   if (probe.subagents) {
     await runImport("Subagent registry", () => {
       const result = importLegacySubagentRegistryFileToSqlite(env);
@@ -238,11 +327,45 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
       }
     });
   }
+  if (probe.taskRegistry) {
+    await runImport("Task registry", () => {
+      const result = importLegacyTaskRegistrySidecarToSqlite(env);
+      if (result.importedTasks > 0 || result.importedDeliveryStates > 0) {
+        changes.push(
+          `- Imported ${result.importedTasks} task record(s) and ${result.importedDeliveryStates} task delivery state row(s) into SQLite.`,
+        );
+      }
+    });
+  }
+  if (probe.taskFlowRegistry) {
+    await runImport("Task Flow registry", () => {
+      const result = importLegacyTaskFlowRegistrySidecarToSqlite(env);
+      if (result.importedFlows > 0) {
+        changes.push(`- Imported ${result.importedFlows} Task Flow record(s) into SQLite.`);
+      }
+    });
+  }
   if (probe.tuiLastSession) {
     await runImport("TUI last-session", async () => {
       const result = await importLegacyTuiLastSessionStoreToSqlite({ stateDir: baseDir });
       if (result.imported) {
         changes.push(`- Imported ${result.pointers} TUI last-session pointer(s) into SQLite.`);
+      }
+    });
+  }
+  if (probe.voiceWake) {
+    await runImport("Voice Wake config", async () => {
+      const result = await importLegacyVoiceWakeConfigFileToSqlite(baseDir);
+      if (result.imported) {
+        changes.push(`- Imported ${result.triggers} Voice Wake trigger(s) into SQLite.`);
+      }
+    });
+  }
+  if (probe.voiceWakeRouting) {
+    await runImport("Voice Wake routing config", async () => {
+      const result = await importLegacyVoiceWakeRoutingConfigFileToSqlite(baseDir);
+      if (result.imported) {
+        changes.push(`- Imported ${result.routes} Voice Wake routing rule(s) into SQLite.`);
       }
     });
   }
@@ -266,6 +389,19 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
       if (result.imported) {
         changes.push(
           `- Imported ${result.models} OpenRouter model cache entr${result.models === 1 ? "y" : "ies"} into SQLite.`,
+        );
+      }
+    });
+  }
+  if (probe.memoryCoreDreamingState && params.cfg) {
+    await runImport("Memory-core dreaming state", async () => {
+      const result = await importLegacyMemoryCoreDreamingStateFilesToSqlite({
+        cfg: params.cfg as OpenClawConfig,
+        env,
+      });
+      if (result.files > 0 || result.removedLocks > 0) {
+        changes.push(
+          `- Imported ${result.rows} memory-core dreaming checkpoint row(s) from ${result.files} legacy file(s) into SQLite${result.removedLocks > 0 ? ` and removed ${result.removedLocks} stale lock file(s)` : ""}.`,
         );
       }
     });

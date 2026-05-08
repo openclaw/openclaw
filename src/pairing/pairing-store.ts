@@ -4,6 +4,11 @@ import path from "node:path";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,6 +16,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -32,6 +38,12 @@ import {
 } from "./allow-from-store-file.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 export type { PairingChannel } from "./pairing-store.types.js";
+
+type PairingKvRow = {
+  value_json?: string;
+};
+
+type PairingDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -256,7 +268,7 @@ function normalizeChannelPairingState(
         lastSeenAt:
           typeof candidate.lastSeenAt === "string" ? candidate.lastSeenAt : candidate.createdAt,
         ...(candidate.meta && typeof candidate.meta === "object" && !Array.isArray(candidate.meta)
-          ? { meta: candidate.meta as Record<string, string> }
+          ? { meta: candidate.meta }
           : {}),
       } satisfies PairingRequest,
     ];
@@ -279,9 +291,15 @@ function readChannelPairingStateFromDatabase(
   database: OpenClawStateDatabase,
   channel: PairingChannel,
 ): ChannelPairingState {
-  const row = database.db
-    .prepare("SELECT value_json FROM kv WHERE scope = ? AND key = ?")
-    .get(CHANNEL_PAIRING_SCOPE, channelPairingKey(channel)) as { value_json?: string } | undefined;
+  const db = getNodeSqliteKysely<PairingDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync<PairingKvRow>(
+    database.db,
+    db
+      .selectFrom("kv")
+      .select(["value_json"])
+      .where("scope", "=", CHANNEL_PAIRING_SCOPE)
+      .where("key", "=", channelPairingKey(channel)),
+  );
   if (!row?.value_json) {
     return { version: 1, requests: [], allowFrom: {} };
   }
@@ -311,26 +329,30 @@ function writeChannelPairingStateToDatabase(
   channel: PairingChannel,
   state: ChannelPairingState,
 ): void {
-  database.db
-    .prepare(
-      `
-        INSERT INTO kv (scope, key, value_json, updated_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(scope, key) DO UPDATE SET
-          value_json = excluded.value_json,
-          updated_at = excluded.updated_at
-      `,
-    )
-    .run(
-      CHANNEL_PAIRING_SCOPE,
-      channelPairingKey(channel),
-      JSON.stringify({
-        version: 1,
-        requests: state.requests,
-        allowFrom: state.allowFrom ?? {},
-      } satisfies ChannelPairingState),
-      Date.now(),
-    );
+  const valueJson = JSON.stringify({
+    version: 1,
+    requests: state.requests,
+    allowFrom: state.allowFrom ?? {},
+  } satisfies ChannelPairingState);
+  const updatedAt = Date.now();
+  const db = getNodeSqliteKysely<PairingDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("kv")
+      .values({
+        scope: CHANNEL_PAIRING_SCOPE,
+        key: channelPairingKey(channel),
+        value_json: valueJson,
+        updated_at: updatedAt,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["scope", "key"]).doUpdateSet({
+          value_json: valueJson,
+          updated_at: updatedAt,
+        }),
+      ),
+  );
 }
 
 function writeChannelPairingState(

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, ComponentRegistry, type AnyListener } from "./client.js";
 import { BaseCommand } from "./commands.js";
@@ -24,7 +25,9 @@ function createDeferred<T = void>(): {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
+  resetPluginStateStoreForTests();
 });
 
 function createTestCommand(params: {
@@ -278,22 +281,16 @@ describe("Client.deployCommands", () => {
   });
 
   it("skips unchanged command deploys across client restarts using the hash store", async () => {
-    const hashStorePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-command-deploy-")),
-      "hashes.json",
-    );
-    const first = createInternalTestClient([createTestCommand({ name: "one" })], {
-      commandDeployHashStorePath: hashStorePath,
-    });
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-command-deploy-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const first = createInternalTestClient([createTestCommand({ name: "one" })]);
     const firstGet = vi.fn(async () => []);
     const firstPost = vi.fn(async () => undefined);
     attachRestMock(first, { get: firstGet, post: firstPost });
 
     await first.deployCommands({ mode: "reconcile" });
 
-    const second = createInternalTestClient([createTestCommand({ name: "one" })], {
-      commandDeployHashStorePath: hashStorePath,
-    });
+    const second = createInternalTestClient([createTestCommand({ name: "one" })]);
     const secondGet = vi.fn(async () => []);
     const secondPost = vi.fn(async () => undefined);
     attachRestMock(second, { get: secondGet, post: secondPost });

@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   noopLogger,
@@ -8,7 +7,7 @@ import {
   writeCronStoreSnapshot,
 } from "./service.issue-regressions.test-helpers.js";
 import { CronService } from "./service.js";
-import { loadCronStore } from "./store.js";
+import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob, CronJobState } from "./types.js";
 
 describe("Cron issue regressions", () => {
@@ -118,13 +117,13 @@ describe("Cron issue regressions", () => {
         state: { nextRunAtMs: scheduledAt },
       },
     ]);
-    const before = await fs.readFile(store.storePath, "utf8");
+    const before = JSON.stringify(await loadCronStore(store.storePath));
 
     const cron = await startCronForStore({
       storePath: store.storePath,
       cronEnabled: true,
     });
-    const after = await fs.readFile(store.storePath, "utf8");
+    const after = JSON.stringify(await loadCronStore(store.storePath));
 
     expect(after).toBe(before);
     cron.stop();
@@ -321,13 +320,12 @@ describe("Cron issue regressions", () => {
     const originalTarget = "https://t.me/obviyus";
     const rewrittenTarget = "-10012345/6789";
     const runIsolatedAgentJob = vi.fn(async (params: { job: { id: string } }) => {
-      const raw = await fs.readFile(store.storePath, "utf-8");
-      const persisted = JSON.parse(raw) as { version: number; jobs: CronJob[] };
+      const persisted = await loadCronStore(store.storePath);
       const targetJob = persisted.jobs.find((job) => job.id === params.job.id);
       if (targetJob?.delivery?.channel === "telegram") {
         targetJob.delivery.to = rewrittenTarget;
       }
-      await fs.writeFile(store.storePath, JSON.stringify(persisted), "utf-8");
+      await saveCronStore(store.storePath, persisted);
       return { status: "ok" as const, summary: "done", delivered: true };
     });
 
@@ -397,7 +395,7 @@ describe("Cron issue regressions", () => {
     ];
     for (const { id, state } of terminalStates) {
       const job: CronJob = { id, ...baseJob, state };
-      await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [job] }), "utf-8");
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
       const enqueueSystemEvent = vi.fn();
       const cron = await startCronForStore({
         storePath: store.storePath,

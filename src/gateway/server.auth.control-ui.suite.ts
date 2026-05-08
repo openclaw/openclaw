@@ -183,24 +183,36 @@ export function registerControlUiAndPairingSuite(): void {
   };
 
   const stripPairedMetadataRolesAndScopes = async (deviceId: string) => {
-    const { resolvePairingPaths, tryReadJson } = await import("../infra/pairing-files.js");
-    const { writeJson } = await import("../infra/json-files.js");
-    const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await tryReadJson<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
+    const { readPairingStateRecord, writePairingStateRecord } =
+      await import("../infra/pairing-files.js");
+    const paired = readPairingStateRecord<Record<string, unknown>>({
+      subdir: "devices",
+      key: "paired",
+    });
     const legacy = getRequiredPairedMetadata(paired, deviceId);
     delete legacy.roles;
     delete legacy.scopes;
-    await writeJson(pairedPath, paired);
+    writePairingStateRecord({
+      subdir: "devices",
+      key: "paired",
+      value: paired,
+    });
   };
 
   const overwritePairedPublicKey = async (deviceId: string, publicKey: string) => {
-    const { resolvePairingPaths, tryReadJson } = await import("../infra/pairing-files.js");
-    const { writeJson } = await import("../infra/json-files.js");
-    const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await tryReadJson<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
+    const { readPairingStateRecord, writePairingStateRecord } =
+      await import("../infra/pairing-files.js");
+    const paired = readPairingStateRecord<Record<string, unknown>>({
+      subdir: "devices",
+      key: "paired",
+    });
     const metadata = getRequiredPairedMetadata(paired, deviceId);
     metadata.publicKey = publicKey;
-    await writeJson(pairedPath, paired);
+    writePairingStateRecord({
+      subdir: "devices",
+      key: "paired",
+      value: paired,
+    });
   };
 
   const seedApprovedOperatorReadPairing = async (params: {

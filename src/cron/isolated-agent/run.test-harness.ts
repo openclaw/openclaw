@@ -15,11 +15,11 @@ type CronSessionEntry = {
 };
 
 type CronSession = {
-  storePath: string;
   store: Record<string, unknown>;
   sessionEntry: CronSessionEntry;
   systemSent: boolean;
   isNewSession: boolean;
+  previousSessionId: string | undefined;
   [key: string]: unknown;
 };
 
@@ -54,7 +54,7 @@ export const runEmbeddedPiAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
 export const getCliSessionIdMock = createMock();
-export const updateSessionStoreMock = createMock();
+export const upsertSessionEntryMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
 export const countActiveDescendantRunsMock = createMock();
@@ -202,9 +202,17 @@ vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
-vi.mock("../../config/sessions/store.runtime.js", () => ({
-  updateSessionStore: updateSessionStoreMock,
-}));
+const sessionStoreRuntimeMock = {
+  resolveAgentIdFromSessionKey: (sessionKey: string) => {
+    const parts = sessionKey.split(":");
+    return parts[0] === "agent" && parts[1] ? parts[1] : "main";
+  },
+  upsertSessionEntry: upsertSessionEntryMock,
+};
+
+vi.mock("../../config/sessions.js", () => sessionStoreRuntimeMock);
+
+vi.mock("../../config/sessions/store.runtime.js", () => sessionStoreRuntimeMock);
 
 vi.mock("../delivery-plan.js", () => ({
   resolveCronDeliveryPlan: resolveCronDeliveryPlanMock,
@@ -255,11 +263,11 @@ export function makeCronSessionEntry(overrides?: Record<string, unknown>): CronS
 
 export function makeCronSession(overrides?: Record<string, unknown>): CronSession {
   return {
-    storePath: "/tmp/store.json",
     store: {},
     sessionEntry: makeCronSessionEntry(),
     systemSent: false,
     isNewSession: true,
+    previousSessionId: undefined,
     ...overrides,
   } as CronSession;
 }
@@ -493,8 +501,8 @@ function resetRunOutcomeMocks(): void {
 }
 
 function resetRunSessionMocks(): void {
-  updateSessionStoreMock.mockReset();
-  updateSessionStoreMock.mockResolvedValue(undefined);
+  upsertSessionEntryMock.mockReset();
+  upsertSessionEntryMock.mockResolvedValue(undefined);
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
   retireSessionMcpRuntimeMock.mockReset();

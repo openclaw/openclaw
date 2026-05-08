@@ -1,20 +1,23 @@
-// Narrow session-store helpers for channel hot paths.
+// Narrow SQLite session row helpers for channel hot paths.
 
-export { loadSessionStore } from "../config/sessions/store-load.js";
-export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
-export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
+export { resolveSessionRowEntry } from "../config/sessions/store-entry.js";
+export {
+  resolveSessionTranscriptPath,
+  resolveSessionTranscriptPathInDir,
+} from "../config/sessions/paths.js";
 export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 export {
-  clearSessionStoreCacheForTest,
+  deleteSessionEntry,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
-  saveSessionStore,
   updateLastRoute,
-  updateSessionStore,
-  updateSessionStoreEntry,
+  upsertSessionEntry,
 } from "../config/sessions/store.js";
 export {
   evaluateSessionFreshness,

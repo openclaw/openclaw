@@ -1,21 +1,24 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import {
   CURRENT_SESSION_VERSION,
   type CompactionEntry,
   type SessionEntry,
   type SessionHeader,
+  migrateSessionEntries,
 } from "../transcript/session-transcript-contract.js";
-import {
-  readTranscriptFileState,
-  TranscriptFileState,
-  writeTranscriptFileAtomic,
-} from "../transcript/transcript-file-state.js";
+import { TranscriptState } from "../transcript/transcript-state.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
 
 type ReadonlySessionManagerForRotation = Pick<
-  TranscriptFileState,
+  TranscriptState,
   "buildSessionContext" | "getBranch" | "getCwd" | "getEntries" | "getHeader"
 >;
 
@@ -23,6 +26,8 @@ export type CompactionTranscriptRotation = {
   rotated: boolean;
   reason?: string;
   sessionId?: string;
+  transcriptPath?: string;
+  /** Compatibility metadata for callers that still surface transcript paths. */
   sessionFile?: string;
   compactionEntryId?: string;
   leafId?: string;
@@ -35,6 +40,7 @@ export function shouldRotateCompactionTranscript(config?: OpenClawConfig): boole
 
 export async function rotateTranscriptAfterCompaction(params: {
   sessionManager: ReadonlySessionManagerForRotation;
+  agentId?: string;
   sessionFile: string;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
@@ -52,8 +58,8 @@ export async function rotateTranscriptAfterCompaction(params: {
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
   const timestamp = (params.now?.() ?? new Date()).toISOString();
   const sessionId = randomUUID();
-  const successorFile = resolveSuccessorSessionFile({
-    sessionFile,
+  const successorTranscriptPath = resolveSuccessorTranscriptPath({
+    transcriptPath: sessionFile,
     sessionId,
     timestamp,
   });
@@ -73,13 +79,23 @@ export async function rotateTranscriptAfterCompaction(params: {
     cwd: params.sessionManager.getCwd(),
     parentSession: sessionFile,
   });
-  await writeTranscriptFileAtomic(successorFile, [header, ...successorEntries]);
-  new TranscriptFileState({ header, entries: successorEntries }).buildSessionContext();
+  const sourceScope = resolveSourceTranscriptScope({
+    agentId: params.agentId,
+    transcriptPath: sessionFile,
+  });
+  replaceSqliteSessionTranscriptEvents({
+    agentId: sourceScope.agentId,
+    sessionId,
+    transcriptPath: successorTranscriptPath,
+    events: [header, ...successorEntries],
+  });
+  new TranscriptState({ header, entries: successorEntries }).buildSessionContext();
 
   return {
     rotated: true,
     sessionId,
-    sessionFile: successorFile,
+    transcriptPath: successorTranscriptPath,
+    sessionFile: successorTranscriptPath,
     compactionEntryId: compaction.id,
     leafId: successorEntries[successorEntries.length - 1]?.id,
     entriesWritten: successorEntries.length,
@@ -87,14 +103,78 @@ export async function rotateTranscriptAfterCompaction(params: {
 }
 
 export async function rotateTranscriptFileAfterCompaction(params: {
+  agentId?: string;
   sessionFile: string;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
-  const state = await readTranscriptFileState(params.sessionFile);
+  const state = loadTranscriptStateFromSqlite({
+    agentId: params.agentId,
+    transcriptPath: params.sessionFile,
+  });
+  if (!state) {
+    return { rotated: false, reason: "transcript not in SQLite" };
+  }
   return rotateTranscriptAfterCompaction({
     sessionManager: state,
+    agentId: params.agentId,
     sessionFile: params.sessionFile,
     ...(params.now ? { now: params.now } : {}),
+  });
+}
+
+function resolveAgentIdFromTranscriptPath(transcriptPath: string): string {
+  const resolved = path.resolve(transcriptPath);
+  const sessionsDir = path.dirname(resolved);
+  const agentDir = path.dirname(sessionsDir);
+  const agentsDir = path.dirname(agentDir);
+  if (path.basename(sessionsDir) === "sessions" && path.basename(agentsDir) === "agents") {
+    return normalizeAgentId(path.basename(agentDir));
+  }
+  return DEFAULT_AGENT_ID;
+}
+
+function resolveSourceTranscriptScope(params: { agentId?: string; transcriptPath: string }): {
+  agentId: string;
+} {
+  if (params.agentId?.trim()) {
+    return { agentId: normalizeAgentId(params.agentId) };
+  }
+  const existing = resolveSqliteSessionTranscriptScopeForPath({
+    transcriptPath: params.transcriptPath,
+  });
+  return {
+    agentId: existing?.agentId ?? resolveAgentIdFromTranscriptPath(params.transcriptPath),
+  };
+}
+
+function loadTranscriptStateFromSqlite(params: {
+  agentId?: string;
+  transcriptPath: string;
+}): TranscriptState | null {
+  const scope = resolveSqliteSessionTranscriptScopeForPath({
+    transcriptPath: params.transcriptPath,
+  });
+  const agentId = params.agentId?.trim()
+    ? normalizeAgentId(params.agentId)
+    : (scope?.agentId ?? resolveAgentIdFromTranscriptPath(params.transcriptPath));
+  const sessionId = scope?.sessionId;
+  if (!sessionId) {
+    return null;
+  }
+  const events = loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map(
+    (entry) => entry.event,
+  );
+  if (events.length === 0) {
+    return null;
+  }
+  const fileEntries = events.filter((event): event is SessionHeader | SessionEntry =>
+    Boolean(event && typeof event === "object"),
+  );
+  migrateSessionEntries(fileEntries);
+  const header = fileEntries.find((entry): entry is SessionHeader => entry.type === "session");
+  return new TranscriptState({
+    header: header ?? null,
+    entries: fileEntries.filter((entry): entry is SessionEntry => entry.type !== "session"),
   });
 }
 
@@ -279,11 +359,14 @@ function buildSuccessorHeader(params: {
   };
 }
 
-function resolveSuccessorSessionFile(params: {
-  sessionFile: string;
+function resolveSuccessorTranscriptPath(params: {
+  transcriptPath: string;
   sessionId: string;
   timestamp: string;
 }): string {
   const fileTimestamp = params.timestamp.replace(/[:.]/g, "-");
-  return path.join(path.dirname(params.sessionFile), `${fileTimestamp}_${params.sessionId}.jsonl`);
+  return path.join(
+    path.dirname(params.transcriptPath),
+    `${fileTimestamp}_${params.sessionId}.jsonl`,
+  );
 }

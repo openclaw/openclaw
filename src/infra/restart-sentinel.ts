@@ -2,8 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  deleteOpenClawStateKvJson,
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { writeJson } from "./json-files.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -67,6 +72,8 @@ export const DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE =
   "The gateway restart completed successfully. Tell the user OpenClaw restarted successfully and continue any pending work.";
 
 const SENTINEL_FILENAME = "restart-sentinel.json";
+const RESTART_SENTINEL_KV_SCOPE = "gateway.restart-sentinel";
+const RESTART_SENTINEL_KV_KEY = "current";
 
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -82,10 +89,14 @@ export async function writeRestartSentinel(
   payload: RestartSentinelPayload,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const filePath = resolveRestartSentinelPath(env);
   const data: RestartSentinel = { version: 1, payload };
-  await writeJson(filePath, data, { trailingNewline: true, dirMode: 0o700 });
-  return filePath;
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    RESTART_SENTINEL_KV_SCOPE,
+    RESTART_SENTINEL_KV_KEY,
+    data as unknown as OpenClawStateJsonValue,
+    { env },
+  );
+  return resolveRestartSentinelPath(env);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -152,7 +163,11 @@ export async function markUpdateRestartSentinelFailure(
   }, env);
 }
 
-export async function removeRestartSentinelFile(filePath: string | null | undefined) {
+export async function removeRestartSentinelFile(
+  filePath: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  deleteOpenClawStateKvJson(RESTART_SENTINEL_KV_SCOPE, RESTART_SENTINEL_KV_KEY, { env });
   if (!filePath) {
     return;
   }
@@ -175,33 +190,22 @@ export function buildRestartSuccessContinuation(params: {
 export async function readRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  const filePath = resolveRestartSentinelPath(env);
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    let parsed: RestartSentinel | undefined;
-    try {
-      parsed = JSON.parse(raw) as RestartSentinel | undefined;
-    } catch {
-      await fs.unlink(filePath).catch(() => {});
-      return null;
-    }
-    if (!parsed || parsed.version !== 1 || !parsed.payload) {
-      await fs.unlink(filePath).catch(() => {});
-      return null;
-    }
-    return parsed;
-  } catch {
+  const parsed = readOpenClawStateKvJson(RESTART_SENTINEL_KV_SCOPE, RESTART_SENTINEL_KV_KEY, {
+    env,
+  });
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
+  const sentinel = parsed as unknown as RestartSentinel;
+  if (sentinel.version !== 1 || !sentinel.payload) {
+    deleteOpenClawStateKvJson(RESTART_SENTINEL_KV_SCOPE, RESTART_SENTINEL_KV_KEY, { env });
+    return null;
+  }
+  return sentinel;
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  try {
-    await fs.access(resolveRestartSentinelPath(env));
-    return true;
-  } catch {
-    return false;
-  }
+  return (await readRestartSentinel(env)) !== null;
 }
 
 export async function consumeRestartSentinel(
@@ -212,7 +216,7 @@ export async function consumeRestartSentinel(
   if (!parsed) {
     return null;
   }
-  await removeRestartSentinelFile(filePath);
+  await removeRestartSentinelFile(filePath, env);
   return parsed;
 }
 

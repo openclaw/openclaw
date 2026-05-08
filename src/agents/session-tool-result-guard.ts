@@ -51,8 +51,8 @@ function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage 
 }
 
 // `details` is runtime/UI metadata, not model-visible tool output. Keep the
-// session JSONL useful for debugging without letting metadata blobs dominate
-// disk, replay repair, transcript broadcasts, or future tooling that reads raw
+// transcript useful for debugging without letting metadata blobs dominate
+// replay repair, transcript broadcasts, or future tooling that reads persisted
 // sessions. Model-visible text belongs in tool result `content`.
 const MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES = 8_192;
 const MAX_PERSISTED_DETAIL_STRING_CHARS = 2_000;
@@ -300,7 +300,7 @@ export function installSessionToolResultGuard(
      */
     allowedToolNames?: Iterable<string>;
     /**
-     * Synchronous hook invoked before any message is written to the session JSONL.
+     * Synchronous hook invoked before any message is written to the persisted transcript.
      * If the hook returns { block: true }, the message is silently dropped.
      * If it returns { message }, the modified message is written instead.
      */

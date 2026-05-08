@@ -1,22 +1,47 @@
-import path from "node:path";
-import {
-  appendRegularFile,
-  privateFileStore,
-  privateFileStoreSync,
-} from "openclaw/plugin-sdk/security-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { CallRecordSchema, TerminalStates, type CallId, type CallRecord } from "../types.js";
 
 const pendingPersistWrites = new Set<Promise<void>>();
+const memoryStores = new Map<string, Map<string, { value: CallRecord; createdAt: number }>>();
 
-export function persistCallRecord(storePath: string, call: CallRecord): void {
-  const logPath = path.join(storePath, "calls.jsonl");
-  const line = `${JSON.stringify(call)}\n`;
+export type VoiceCallRecordStore = {
+  register(key: string, value: CallRecord): Promise<void>;
+  entries(): Promise<Array<{ key: string; value: CallRecord; createdAt: number }>>;
+};
+
+export function createVoiceCallRecordStore(
+  openKeyedStore: PluginRuntime["state"]["openKeyedStore"],
+): VoiceCallRecordStore {
+  return openKeyedStore<CallRecord>({
+    namespace: "calls",
+    maxEntries: 10_000,
+  });
+}
+
+export function createMemoryCallRecordStore(key: string): VoiceCallRecordStore {
+  let store = memoryStores.get(key);
+  if (!store) {
+    store = new Map();
+    memoryStores.set(key, store);
+  }
+  return {
+    async register(callKey, value) {
+      store.set(callKey, { value, createdAt: Date.now() });
+    },
+    async entries() {
+      return [...store].map(([entryKey, entry]) => ({
+        key: entryKey,
+        value: entry.value,
+        createdAt: entry.createdAt,
+      }));
+    },
+  };
+}
+
+export function persistCallRecord(store: VoiceCallRecordStore, call: CallRecord): void {
   // Fire-and-forget async write to avoid blocking event loop.
-  const write = appendRegularFile({
-    filePath: logPath,
-    content: line,
-    rejectSymlinkParents: true,
-  })
+  const write = store
+    .register(call.callId, call)
     .catch((err) => {
       console.error("[voice-call] Failed to persist call record:", err);
     })
@@ -30,34 +55,19 @@ export async function flushPendingCallRecordWritesForTest(): Promise<void> {
   await Promise.allSettled(pendingPersistWrites);
 }
 
-export function loadActiveCallsFromStore(storePath: string): {
+export async function loadActiveCallsFromStore(store: VoiceCallRecordStore): Promise<{
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
   processedEventIds: Set<string>;
   rejectedProviderCallIds: Set<string>;
-} {
-  const logPath = path.join(storePath, "calls.jsonl");
-  const content = privateFileStoreSync(storePath).readTextIfExists(path.basename(logPath));
-  if (content === null) {
-    return {
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      processedEventIds: new Set(),
-      rejectedProviderCallIds: new Set(),
-    };
-  }
-  const lines = content.split("\n");
-
+}> {
   const callMap = new Map<CallId, CallRecord>();
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
+  for (const entry of await store.entries()) {
     try {
-      const call = CallRecordSchema.parse(JSON.parse(line));
+      const call = CallRecordSchema.parse(entry.value);
       callMap.set(call.callId, call);
     } catch {
-      // Skip invalid lines.
+      // Skip invalid rows.
     }
   }
 
@@ -83,23 +93,18 @@ export function loadActiveCallsFromStore(storePath: string): {
 }
 
 export async function getCallHistoryFromStore(
-  storePath: string,
+  store: VoiceCallRecordStore,
   limit = 50,
 ): Promise<CallRecord[]> {
-  const logPath = path.join(storePath, "calls.jsonl");
-  const content = await privateFileStore(storePath).readTextIfExists(path.basename(logPath));
-  if (content === null) {
-    return [];
-  }
-  const lines = content.trim().split("\n").filter(Boolean);
   const calls: CallRecord[] = [];
 
-  for (const line of lines.slice(-limit)) {
+  const entries = await store.entries();
+  for (const entry of entries.slice(-limit)) {
     try {
-      const parsed = CallRecordSchema.parse(JSON.parse(line));
+      const parsed = CallRecordSchema.parse(entry.value);
       calls.push(parsed);
     } catch {
-      // Skip invalid lines.
+      // Skip invalid rows.
     }
   }
 

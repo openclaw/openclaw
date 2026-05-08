@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { resolveMSTeamsStorePath } from "./storage.js";
-import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { toPluginJsonValue, withMSTeamsSqliteStateEnv } from "./sqlite-state.js";
 
 type MSTeamsPollVote = {
   pollId: string;
@@ -39,14 +39,13 @@ type MSTeamsPollCard = {
   fallbackText: string;
 };
 
-type PollStoreData = {
-  version: 1;
-  polls: Record<string, MSTeamsPoll>;
-};
-
-const STORE_FILENAME = "msteams-polls.json";
 const MAX_POLLS = 1000;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const POLL_STORE = createPluginStateKeyedStore<MSTeamsPoll>("msteams", {
+  namespace: "polls",
+  maxEntries: MAX_POLLS,
+  defaultTtlMs: POLL_TTL_MS,
+});
 
 function normalizeChoiceValue(value: unknown): string | null {
   if (typeof value === "string") {
@@ -210,11 +209,10 @@ export function buildMSTeamsPollCard(params: {
   };
 }
 
-type MSTeamsPollStoreFsOptions = {
+type MSTeamsPollStoreStateOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;
-  storePath?: string;
 };
 
 function parseTimestamp(value?: string): number | null {
@@ -234,20 +232,6 @@ function pruneExpired(polls: Record<string, MSTeamsPoll>) {
   return Object.fromEntries(entries);
 }
 
-function pruneToLimit(polls: Record<string, MSTeamsPoll>) {
-  const entries = Object.entries(polls);
-  if (entries.length <= MAX_POLLS) {
-    return polls;
-  }
-  entries.sort((a, b) => {
-    const aTs = parseTimestamp(a[1].updatedAt ?? a[1].createdAt) ?? 0;
-    const bTs = parseTimestamp(b[1].updatedAt ?? b[1].createdAt) ?? 0;
-    return aTs - bTs;
-  });
-  const keep = entries.slice(entries.length - MAX_POLLS);
-  return Object.fromEntries(keep);
-}
-
 export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
@@ -259,52 +243,43 @@ export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: st
   return Array.from(new Set(limited));
 }
 
-export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MSTeamsPollStore {
-  const filePath = resolveMSTeamsStorePath({
-    filename: STORE_FILENAME,
-    env: params?.env,
-    homedir: params?.homedir,
-    stateDir: params?.stateDir,
-    storePath: params?.storePath,
-  });
-  const empty: PollStoreData = { version: 1, polls: {} };
-
-  const readStore = async (): Promise<PollStoreData> => {
-    const { value } = await readJsonFile(filePath, empty);
-    const pruned = pruneToLimit(pruneExpired(value.polls ?? {}));
-    return { version: 1, polls: pruned };
-  };
-
-  const writeStore = async (data: PollStoreData) => {
-    await writeJsonFile(filePath, data);
-  };
-
+export function createMSTeamsPollStoreState(
+  params?: MSTeamsPollStoreStateOptions,
+): MSTeamsPollStore {
   const createPoll = async (poll: MSTeamsPoll) => {
-    await withFileLock(filePath, empty, async () => {
-      const data = await readStore();
-      data.polls[poll.id] = poll;
-      await writeStore({ version: 1, polls: pruneToLimit(data.polls) });
+    await withMSTeamsSqliteStateEnv(params, async () => {
+      await POLL_STORE.register(poll.id, toPluginJsonValue(poll));
     });
   };
 
   const getPoll = async (pollId: string) =>
-    await withFileLock(filePath, empty, async () => {
-      const data = await readStore();
-      return data.polls[pollId] ?? null;
-    });
-
-  const recordVote = async (params: { pollId: string; voterId: string; selections: string[] }) =>
-    await withFileLock(filePath, empty, async () => {
-      const data = await readStore();
-      const poll = data.polls[params.pollId];
+    await withMSTeamsSqliteStateEnv(params, async () => {
+      const poll = await POLL_STORE.lookup(pollId);
       if (!poll) {
         return null;
       }
-      const normalized = normalizeMSTeamsPollSelections(poll, params.selections);
-      poll.votes[params.voterId] = normalized;
+      const pruned = pruneExpired({ [pollId]: poll });
+      if (!pruned[pollId]) {
+        await POLL_STORE.delete(pollId);
+        return null;
+      }
+      return poll;
+    });
+
+  const recordVote = async (vote: { pollId: string; voterId: string; selections: string[] }) =>
+    await withMSTeamsSqliteStateEnv(params, async () => {
+      const poll = await POLL_STORE.lookup(vote.pollId);
+      if (!poll) {
+        return null;
+      }
+      if (!pruneExpired({ [vote.pollId]: poll })[vote.pollId]) {
+        await POLL_STORE.delete(vote.pollId);
+        return null;
+      }
+      const normalized = normalizeMSTeamsPollSelections(poll, vote.selections);
+      poll.votes[vote.voterId] = normalized;
       poll.updatedAt = new Date().toISOString();
-      data.polls[poll.id] = poll;
-      await writeStore({ version: 1, polls: pruneToLimit(data.polls) });
+      await POLL_STORE.register(poll.id, toPluginJsonValue(poll));
       return poll;
     });
 

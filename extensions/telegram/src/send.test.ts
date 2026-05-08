@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { Bot } from "grammy";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -143,11 +142,10 @@ describe("sent-message-cache", () => {
   });
 
   it("keeps sent-message ownership across restart", async () => {
-    const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-restart.json`;
-    const sentMessageCfg = { session: { store: persistedStorePath } };
+    const scope = { accountId: "restart" };
 
-    recordSentMessage(123, 1, sentMessageCfg);
-    expect(wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
+    recordSentMessage(123, 1, scope);
+    expect(wasSentByBot(123, 1, scope)).toBe(true);
 
     resetSentMessageCacheForTest();
 
@@ -157,49 +155,37 @@ describe("sent-message-cache", () => {
     );
 
     try {
-      expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
+      expect(restartedCache.wasSentByBot(123, 1, scope)).toBe(true);
     } finally {
       restartedCache.clearSentMessageCache();
     }
   });
 
-  it("keeps expired custom-store cleanup away from the default store", () => {
-    const customStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-custom-cleanup.json`;
-    const customCfg = { session: { store: customStorePath } };
+  it("keeps expired account-scoped cleanup away from the default store", () => {
+    const accountScope = { accountId: "custom-cleanup" };
     const startedAt = new Date("2026-01-01T00:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(startedAt);
 
-    try {
-      recordSentMessage(123, 2, customCfg);
+    recordSentMessage(123, 2, accountScope);
 
-      vi.setSystemTime(startedAt.getTime() + 24 * 60 * 60 * 1000 + 1);
-      recordSentMessage(123, 1);
+    vi.setSystemTime(startedAt.getTime() + 24 * 60 * 60 * 1000 + 1);
+    recordSentMessage(123, 1);
 
-      expect(wasSentByBot(123, 2, customCfg)).toBe(false);
-      expect(wasSentByBot(123, 1)).toBe(true);
-    } finally {
-      fs.rmSync(customStorePath, { force: true });
-      fs.rmSync(`${customStorePath}.telegram-sent-messages.json`, { force: true });
-    }
+    expect(wasSentByBot(123, 2, accountScope)).toBe(false);
+    expect(wasSentByBot(123, 1)).toBe(true);
   });
 
-  it("keeps default and custom stores isolated while both are loaded", () => {
-    const customStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-custom-isolated.json`;
-    const customCfg = { session: { store: customStorePath } };
+  it("keeps default and account-scoped stores isolated while both are loaded", () => {
+    const accountScope = { accountId: "custom-isolated" };
 
-    try {
-      recordSentMessage(123, 1);
-      recordSentMessage(123, 2, customCfg);
+    recordSentMessage(123, 1);
+    recordSentMessage(123, 2, accountScope);
 
-      expect(wasSentByBot(123, 1)).toBe(true);
-      expect(wasSentByBot(123, 2)).toBe(false);
-      expect(wasSentByBot(123, 1, customCfg)).toBe(false);
-      expect(wasSentByBot(123, 2, customCfg)).toBe(true);
-    } finally {
-      fs.rmSync(customStorePath, { force: true });
-      fs.rmSync(`${customStorePath}.telegram-sent-messages.json`, { force: true });
-    }
+    expect(wasSentByBot(123, 1)).toBe(true);
+    expect(wasSentByBot(123, 2)).toBe(false);
+    expect(wasSentByBot(123, 1, accountScope)).toBe(false);
+    expect(wasSentByBot(123, 2, accountScope)).toBe(true);
   });
 
   it("shares sent-message state across distinct module instances", async () => {

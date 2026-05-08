@@ -1,4 +1,3 @@
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   readStoreAllowFromForDmPolicy,
@@ -291,12 +290,9 @@ export async function handleIrcInbound(params: {
   });
 
   const fromLabel = message.isGroup ? message.target : senderDisplay;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config as OpenClawConfig);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    storePath,
+    agentId: route.agentId,
     sessionKey: route.sessionKey,
   });
   const body = core.channel.reply.formatAgentEnvelope({
@@ -334,53 +330,37 @@ export async function handleIrcInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+  const { dispatchChannelMessageReplyWithBase } =
+    await import("openclaw/plugin-sdk/channel-message");
+  await dispatchChannelMessageReplyWithBase({
     cfg: config as OpenClawConfig,
-    agentId: route.agentId,
     channel: CHANNEL_ID,
     accountId: account.accountId,
-  });
-
-  await core.channel.turn.runPrepared({
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-    routeSessionKey: route.sessionKey,
-    storePath,
+    route,
     ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    runDispatch: async () =>
-      await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
-        cfg: config as OpenClawConfig,
-        dispatcherOptions: {
-          ...replyPipeline,
-          deliver: async (payload) => {
-            await deliverIrcReply({
-              payload,
-              cfg: config,
-              target: peerId,
-              accountId: account.accountId,
-              sendReply: params.sendReply,
-              statusSink,
-            });
-          },
-          onError: (err, info) => {
-            runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
-          },
-        },
-        replyOptions: {
-          onModelSelected,
-          skillFilter: groupMatch.groupConfig?.skills,
-          disableBlockStreaming:
-            typeof account.config.blockStreaming === "boolean"
-              ? !account.config.blockStreaming
-              : undefined,
-        },
-      }),
-    record: {
-      onRecordError: (err) => {
-        runtime.error?.(`irc: failed updating session meta: ${String(err)}`);
-      },
+    core,
+    deliver: async (payload) => {
+      await deliverIrcReply({
+        payload,
+        cfg: config,
+        target: peerId,
+        accountId: account.accountId,
+        sendReply: params.sendReply,
+        statusSink,
+      });
+    },
+    onRecordError: (err) => {
+      runtime.error?.(`irc: failed updating session meta: ${String(err)}`);
+    },
+    onDispatchError: (err, info) => {
+      runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
+    },
+    replyOptions: {
+      skillFilter: groupMatch.groupConfig?.skills,
+      disableBlockStreaming:
+        typeof account.config.blockStreaming === "boolean"
+          ? !account.config.blockStreaming
+          : undefined,
     },
   });
 }

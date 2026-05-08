@@ -1,18 +1,5 @@
-/**
- * File-backed store for Bot Framework OAuth SSO tokens.
- *
- * Tokens are keyed by (connectionName, userId). `userId` should be the
- * stable AAD object ID (`activity.from.aadObjectId`) when available,
- * falling back to the Bot Framework `activity.from.id`.
- *
- * The store is intentionally minimal: it persists the exchanged user
- * token plus its expiration so consumers (for example tool handlers
- * that call Microsoft Graph with delegated permissions) can fetch a
- * valid token without reaching back into Bot Framework every turn.
- */
-
-import { resolveMSTeamsStorePath } from "./storage.js";
-import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { withMSTeamsSqliteStateEnv, type MSTeamsSqliteStateOptions } from "./sqlite-state.js";
 
 type MSTeamsSsoStoredToken = {
   /** Connection name from the Bot Framework OAuth connection setting. */
@@ -33,14 +20,15 @@ export type MSTeamsSsoTokenStore = {
   remove(params: { connectionName: string; userId: string }): Promise<boolean>;
 };
 
-type SsoStoreData = {
-  version: 1;
-  // Keyed by `${connectionName}::${userId}` for a simple flat map on disk.
-  tokens: Record<string, MSTeamsSsoStoredToken>;
-};
-
-const STORE_FILENAME = "msteams-sso-tokens.json";
+export const MSTEAMS_SSO_TOKEN_STORE_FILENAME = "msteams-sso-tokens.json";
+export const MSTEAMS_SSO_TOKEN_NAMESPACE = "sso-tokens";
+const MSTEAMS_PLUGIN_ID = "msteams";
 const STORE_KEY_VERSION_PREFIX = "v2:";
+
+const ssoTokenStore = createPluginStateKeyedStore<MSTeamsSsoStoredToken>(MSTEAMS_PLUGIN_ID, {
+  namespace: MSTEAMS_SSO_TOKEN_NAMESPACE,
+  maxEntries: 20_000,
+});
 
 function makeKey(connectionName: string, userId: string): string {
   return `${STORE_KEY_VERSION_PREFIX}${Buffer.from(
@@ -75,76 +63,48 @@ function normalizeStoredToken(value: unknown): MSTeamsSsoStoredToken | null {
   };
 }
 
-function isSsoStoreData(value: unknown): value is SsoStoreData {
+export function parseMSTeamsSsoTokenStoreData(
+  value: unknown,
+): Record<string, MSTeamsSsoStoredToken> | null {
   if (!value || typeof value !== "object") {
-    return false;
+    return null;
   }
   const obj = value as Record<string, unknown>;
-  return obj.version === 1 && typeof obj.tokens === "object" && obj.tokens !== null;
+  if (obj.version !== 1 || !obj.tokens || typeof obj.tokens !== "object") {
+    return null;
+  }
+  const tokens: Record<string, MSTeamsSsoStoredToken> = {};
+  for (const stored of Object.values(obj.tokens)) {
+    const normalized = normalizeStoredToken(stored);
+    if (!normalized) {
+      continue;
+    }
+    tokens[makeKey(normalized.connectionName, normalized.userId)] = normalized;
+  }
+  return tokens;
 }
 
-export function createMSTeamsSsoTokenStoreFs(params?: {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  stateDir?: string;
-  storePath?: string;
-}): MSTeamsSsoTokenStore {
-  const filePath = resolveMSTeamsStorePath({
-    filename: STORE_FILENAME,
-    env: params?.env,
-    homedir: params?.homedir,
-    stateDir: params?.stateDir,
-    storePath: params?.storePath,
-  });
-
-  const empty: SsoStoreData = { version: 1, tokens: {} };
-
-  const readStore = async (): Promise<SsoStoreData> => {
-    const { value } = await readJsonFile(filePath, empty);
-    if (!isSsoStoreData(value)) {
-      return { version: 1, tokens: {} };
-    }
-    const tokens: Record<string, MSTeamsSsoStoredToken> = {};
-    for (const stored of Object.values(value.tokens)) {
-      const normalized = normalizeStoredToken(stored);
-      if (!normalized) {
-        continue;
-      }
-      tokens[makeKey(normalized.connectionName, normalized.userId)] = normalized;
-    }
-    return {
-      version: 1,
-      tokens,
-    };
-  };
-
+export function createMSTeamsSsoTokenStore(
+  params?: MSTeamsSqliteStateOptions,
+): MSTeamsSsoTokenStore {
   return {
     async get({ connectionName, userId }) {
-      const store = await readStore();
-      return store.tokens[makeKey(connectionName, userId)] ?? null;
+      return await withMSTeamsSqliteStateEnv(
+        params,
+        async () => (await ssoTokenStore.lookup(makeKey(connectionName, userId))) ?? null,
+      );
     },
 
     async save(token) {
-      await withFileLock(filePath, empty, async () => {
-        const store = await readStore();
-        const key = makeKey(token.connectionName, token.userId);
-        store.tokens[key] = { ...token };
-        await writeJsonFile(filePath, store);
+      await withMSTeamsSqliteStateEnv(params, async () => {
+        await ssoTokenStore.register(makeKey(token.connectionName, token.userId), { ...token });
       });
     },
 
     async remove({ connectionName, userId }) {
-      let removed = false;
-      await withFileLock(filePath, empty, async () => {
-        const store = await readStore();
-        const key = makeKey(connectionName, userId);
-        if (store.tokens[key]) {
-          delete store.tokens[key];
-          removed = true;
-          await writeJsonFile(filePath, store);
-        }
+      return await withMSTeamsSqliteStateEnv(params, async () => {
+        return await ssoTokenStore.delete(makeKey(connectionName, userId));
       });
-      return removed;
     },
   };
 }

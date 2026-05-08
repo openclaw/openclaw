@@ -34,12 +34,39 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
     payloads,
     meta: {},
   }));
-  const updateSessionStore = vi.fn(
-    async (
-      _storePath: string,
-      mutator: (store: Record<string, { sessionId?: string; updatedAt?: number }>) => unknown,
-    ) => {
-      return await mutator(sessionStore);
+  const getSessionEntry = vi.fn(
+    (params: { sessionKey: string }) => sessionStore[params.sessionKey],
+  );
+  const listSessionEntries = vi.fn(() =>
+    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+  );
+  const upsertSessionEntry = vi.fn(
+    (params: { sessionKey: string; entry: (typeof sessionStore)[string] }) => {
+      sessionStore[params.sessionKey] = params.entry;
+    },
+  );
+  const patchSessionEntry = vi.fn(
+    async (params: {
+      sessionKey: string;
+      fallbackEntry?: (typeof sessionStore)[string];
+      update: (
+        entry: (typeof sessionStore)[string],
+      ) =>
+        | Promise<Partial<(typeof sessionStore)[string]> | null>
+        | Partial<(typeof sessionStore)[string]>
+        | null;
+    }) => {
+      const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
+      if (!existing) {
+        return null;
+      }
+      const patch = await params.update(existing);
+      if (!patch) {
+        return existing;
+      }
+      const next = { ...existing, ...patch };
+      sessionStore[params.sessionKey] = next;
+      return next;
     },
   );
   return {
@@ -49,10 +76,10 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       ensureAgentWorkspace: vi.fn(async () => {}),
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       session: {
-        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore,
+        getSessionEntry,
+        listSessionEntries,
+        patchSessionEntry,
+        upsertSessionEntry,
         resolveSessionFilePath: vi.fn(
           (_sessionId: string, entry?: { sessionFile?: string }) =>
             entry?.sessionFile ?? "/tmp/session.json",
@@ -246,12 +273,11 @@ describe("realtime voice agent consult runtime", () => {
 
     expect(resolveParentForkDecision).toHaveBeenCalledWith({
       parentEntry: sessionStore["agent:main:main"],
-      storePath: "/tmp/sessions.json",
+      agentId: "main",
     });
     expect(forkSessionFromParent).toHaveBeenCalledWith({
       parentEntry: sessionStore["agent:main:main"],
       agentId: "main",
-      sessionsDir: "/tmp",
     });
     const forkedEntry = sessionStore["agent:main:subagent:google-meet:meet-1"];
     if (!forkedEntry) {

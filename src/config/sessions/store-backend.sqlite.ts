@@ -1,50 +1,50 @@
 import fs, { readFileSync } from "node:fs";
-import type { SQLInputValue, StatementSync } from "node:sqlite";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import type { Insertable, Selectable } from "kysely";
 import {
-  type OpenClawStateDatabase,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
-import { resolveAgentIdFromSessionStorePath } from "./paths.js";
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  type OpenClawAgentDatabase,
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { type OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionStore } from "./store-normalize.js";
 import type { SessionEntry } from "./types.js";
 
-export type SqliteSessionStoreOptions = OpenClawStateDatabaseOptions & {
+export type SqliteSessionEntriesOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
   sourcePath?: string;
   now?: () => number;
 };
 
-export type SessionStoreBackendImportResult = {
+export type JsonSessionEntriesImportResult = {
   imported: number;
   sourcePath: string;
   removedSource: boolean;
 };
 
-type SessionEntryRow = {
-  session_key: string;
-  entry_json: string;
+export type ReplaceSqliteSessionEntryOptions = SqliteSessionEntriesOptions & {
+  sessionKey: string;
+  entry: SessionEntry;
 };
 
-export function isSqliteSessionStoreBackendEnabled(_env: NodeJS.ProcessEnv = process.env): boolean {
-  return true;
-}
+export type ApplySqliteSessionEntriesPatchOptions = SqliteSessionEntriesOptions & {
+  upsertEntries?: Readonly<Record<string, SessionEntry>>;
+  expectedEntries?: ReadonlyMap<string, SessionEntry | null>;
+};
 
-export function resolveSqliteSessionStoreOptionsForPath(
-  storePath: string,
-  env: NodeJS.ProcessEnv = process.env,
-): SqliteSessionStoreOptions | null {
-  if (!isSqliteSessionStoreBackendEnabled(env)) {
-    return null;
-  }
-  const agentId = resolveAgentIdFromSessionStorePath(storePath) ?? DEFAULT_AGENT_ID;
-  return { agentId, env, sourcePath: storePath };
-}
+type SessionEntriesTable = OpenClawAgentKyselyDatabase["session_entries"];
+type SessionEntriesDatabase = Pick<OpenClawAgentKyselyDatabase, "session_entries">;
 
-function resolveNow(options: SqliteSessionStoreOptions): number {
+type SessionEntryRow = Pick<Selectable<SessionEntriesTable>, "entry_json" | "session_key"> &
+  Partial<Pick<Selectable<SessionEntriesTable>, "updated_at">>;
+
+function resolveNow(options: SqliteSessionEntriesOptions): number {
   return options.now?.() ?? Date.now();
 }
 
@@ -54,44 +54,94 @@ function parseSessionEntry(row: SessionEntryRow): SessionEntry | null {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
-    return parsed as SessionEntry;
+    const store = { [row.session_key]: parsed as SessionEntry };
+    normalizeSessionStore(store);
+    return store[row.session_key] ?? null;
   } catch {
     return null;
   }
 }
 
 function bindSessionEntry(params: {
-  agentId: string;
   sessionKey: string;
   entry: SessionEntry;
   updatedAt: number;
-}): Record<string, SQLInputValue> {
+}): Insertable<SessionEntriesTable> {
   return {
-    agent_id: params.agentId,
     session_key: params.sessionKey,
     entry_json: JSON.stringify(params.entry),
     updated_at: params.entry.updatedAt ?? params.updatedAt,
   };
 }
 
-function prepareReplaceStatement(statement: StatementSync, params: Record<string, SQLInputValue>) {
-  statement.run(params);
+function serializeExpectedSessionEntry(sessionKey: string, entry: SessionEntry): string {
+  const store = { [sessionKey]: entry };
+  normalizeSessionStore(store);
+  return JSON.stringify(store[sessionKey] ?? entry);
 }
 
-function countSqliteSessionEntries(
-  database: OpenClawStateDatabase,
-  options: SqliteSessionStoreOptions,
-): number {
-  const row = database.db
-    .prepare("SELECT COUNT(*) AS count FROM session_entries WHERE agent_id = ?")
-    .get(options.agentId) as { count?: number | bigint } | undefined;
+function upsertSessionEntries(
+  database: OpenClawAgentDatabase,
+  rows: ReadonlyArray<Insertable<SessionEntriesTable>>,
+): void {
+  if (rows.length === 0) {
+    return;
+  }
+  const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("session_entries")
+      .values(rows)
+      .onConflict((conflict) =>
+        conflict.column("session_key").doUpdateSet({
+          entry_json: (eb) => eb.ref("excluded.entry_json"),
+          updated_at: (eb) => eb.ref("excluded.updated_at"),
+        }),
+      ),
+  );
+}
+
+function countSessionEntryRows(database: OpenClawAgentDatabase): number {
+  const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync<{ count?: number | bigint }>(
+    database.db,
+    db.selectFrom("session_entries").select((eb) => eb.fn.countAll<number | bigint>().as("count")),
+  );
   const count = row?.count ?? 0;
   return typeof count === "bigint" ? Number(count) : count;
 }
 
-export function countSqliteSessionStoreEntries(options: SqliteSessionStoreOptions): number {
-  const database = openOpenClawStateDatabase(options);
-  return countSqliteSessionEntries(database, options);
+function readSqliteSessionEntryJson(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+): string | null {
+  const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync<{ entry_json?: string }>(
+    database.db,
+    db.selectFrom("session_entries").select(["entry_json"]).where("session_key", "=", sessionKey),
+  );
+  return row?.entry_json ?? null;
+}
+
+function normalizeStoredSessionEntryJson(
+  sessionKey: string,
+  entryJson: string | null,
+): string | null {
+  if (entryJson === null) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(entryJson) as SessionEntry;
+    return serializeExpectedSessionEntry(sessionKey, parsed);
+  } catch {
+    return entryJson;
+  }
+}
+
+export function countSqliteSessionEntries(options: SqliteSessionEntriesOptions): number {
+  const database = openOpenClawAgentDatabase(options);
+  return countSessionEntryRows(database);
 }
 
 function parseJsonSessionStoreFromPath(sourcePath: string): Record<string, SessionEntry> {
@@ -109,55 +159,132 @@ function parseJsonSessionStoreFromPath(sourcePath: string): Record<string, Sessi
   return store;
 }
 
-function replaceSqliteSessionStore(params: {
-  database: OpenClawStateDatabase;
-  options: SqliteSessionStoreOptions;
+function replaceSqliteSessionEntrySet(params: {
+  database: OpenClawAgentDatabase;
+  options: SqliteSessionEntriesOptions;
   store: Record<string, SessionEntry>;
 }): void {
   const updatedAt = resolveNow(params.options);
-  params.database.db
-    .prepare("DELETE FROM session_entries WHERE agent_id = ?")
-    .run(params.options.agentId);
-  const insert = params.database.db.prepare(`
-    INSERT INTO session_entries (
-      agent_id,
-      session_key,
-      entry_json,
-      updated_at
-    ) VALUES (
-      @agent_id,
-      @session_key,
-      @entry_json,
-      @updated_at
-    )
-  `);
-  for (const [sessionKey, entry] of Object.entries(params.store)) {
-    prepareReplaceStatement(
-      insert,
+  const db = getNodeSqliteKysely<SessionEntriesDatabase>(params.database.db);
+  executeSqliteQuerySync(params.database.db, db.deleteFrom("session_entries"));
+  upsertSessionEntries(
+    params.database,
+    Object.entries(params.store).map(([sessionKey, entry]) =>
       bindSessionEntry({
-        agentId: params.options.agentId,
         sessionKey,
         entry,
         updatedAt,
       }),
-    );
-  }
+    ),
+  );
 }
 
-export function loadSqliteSessionStore(
-  options: SqliteSessionStoreOptions,
+export function replaceSqliteSessionEntry(options: ReplaceSqliteSessionEntryOptions): void {
+  const store = { [options.sessionKey]: options.entry };
+  normalizeSessionStore(store);
+  const entry = store[options.sessionKey] ?? options.entry;
+  const updatedAt = resolveNow(options);
+  runOpenClawAgentWriteTransaction((database) => {
+    upsertSessionEntries(database, [
+      bindSessionEntry({
+        sessionKey: options.sessionKey,
+        entry,
+        updatedAt,
+      }),
+    ]);
+  }, options);
+}
+
+export function applySqliteSessionEntriesPatch(
+  options: ApplySqliteSessionEntriesPatchOptions,
+): boolean {
+  const upsertEntries = { ...options.upsertEntries };
+  normalizeSessionStore(upsertEntries);
+  const updatedAt = resolveNow(options);
+  return runOpenClawAgentWriteTransaction((database) => {
+    for (const [sessionKey, expected] of options.expectedEntries?.entries() ?? []) {
+      const currentJson = normalizeStoredSessionEntryJson(
+        sessionKey,
+        readSqliteSessionEntryJson(database, sessionKey),
+      );
+      const expectedJson = expected ? serializeExpectedSessionEntry(sessionKey, expected) : null;
+      if (currentJson !== expectedJson) {
+        return false;
+      }
+    }
+    upsertSessionEntries(
+      database,
+      Object.entries(upsertEntries).map(([sessionKey, entry]) =>
+        bindSessionEntry({
+          sessionKey,
+          entry,
+          updatedAt,
+        }),
+      ),
+    );
+    return true;
+  }, options);
+}
+
+export function readSqliteSessionEntry(
+  options: SqliteSessionEntriesOptions & { sessionKey: string },
+): SessionEntry | undefined {
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync<SessionEntryRow>(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .select(["session_key", "entry_json"])
+      .where("session_key", "=", options.sessionKey),
+  );
+  return row ? (parseSessionEntry(row) ?? undefined) : undefined;
+}
+
+export function deleteSqliteSessionEntry(
+  options: SqliteSessionEntriesOptions & { sessionKey: string },
+): boolean {
+  return runOpenClawAgentWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+    const result = executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_entries").where("session_key", "=", options.sessionKey),
+    );
+    return Number(result.numAffectedRows ?? 0) > 0;
+  }, options);
+}
+
+export function listSqliteSessionEntries(
+  options: SqliteSessionEntriesOptions,
+): Array<{ sessionKey: string; entry: SessionEntry }> {
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+  const rows = executeSqliteQuerySync<SessionEntryRow>(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .select(["session_key", "entry_json"])
+      .orderBy("updated_at", "desc")
+      .orderBy("session_key", "asc"),
+  ).rows;
+  return rows.flatMap((row) => {
+    const entry = parseSessionEntry(row);
+    return entry ? [{ sessionKey: row.session_key, entry }] : [];
+  });
+}
+
+export function loadSqliteSessionEntries(
+  options: SqliteSessionEntriesOptions,
 ): Record<string, SessionEntry> {
-  const database = openOpenClawStateDatabase(options);
-  const rows = database.db
-    .prepare(
-      `
-        SELECT session_key, entry_json
-        FROM session_entries
-        WHERE agent_id = ?
-        ORDER BY session_key ASC
-      `,
-    )
-    .all(options.agentId) as SessionEntryRow[];
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+  const rows = executeSqliteQuerySync<SessionEntryRow>(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .select(["session_key", "entry_json"])
+      .orderBy("session_key", "asc"),
+  ).rows;
   const store: Record<string, SessionEntry> = {};
   for (const row of rows) {
     const entry = parseSessionEntry(row);
@@ -169,22 +296,22 @@ export function loadSqliteSessionStore(
   return store;
 }
 
-export function saveSqliteSessionStore(
-  options: SqliteSessionStoreOptions,
+export function replaceSqliteSessionEntries(
+  options: SqliteSessionEntriesOptions,
   store: Record<string, SessionEntry>,
 ): void {
   normalizeSessionStore(store);
-  runOpenClawStateWriteTransaction((database) => {
-    replaceSqliteSessionStore({ database, options, store });
+  runOpenClawAgentWriteTransaction((database) => {
+    replaceSqliteSessionEntrySet({ database, options, store });
   }, options);
 }
 
-export function mergeSqliteSessionStore(
-  options: SqliteSessionStoreOptions,
+export function mergeSqliteSessionEntries(
+  options: SqliteSessionEntriesOptions,
   incoming: Record<string, SessionEntry>,
 ): { imported: number; stored: number } {
-  const mergedStore = mergeSessionStoresByUpdatedAt(loadSqliteSessionStore(options), incoming);
-  saveSqliteSessionStore(options, mergedStore);
+  const mergedStore = mergeSessionEntriesByUpdatedAt(loadSqliteSessionEntries(options), incoming);
+  replaceSqliteSessionEntries(options, mergedStore);
   return {
     imported: Object.keys(incoming).length,
     stored: Object.keys(mergedStore).length,
@@ -197,7 +324,7 @@ function resolveSessionEntryUpdatedAt(entry: SessionEntry): number {
     : 0;
 }
 
-function mergeSessionStoresByUpdatedAt(
+function mergeSessionEntriesByUpdatedAt(
   existing: Record<string, SessionEntry>,
   incoming: Record<string, SessionEntry>,
 ): Record<string, SessionEntry> {
@@ -218,7 +345,7 @@ export function importJsonSessionStoreToSqlite(params: {
   dbPath?: string;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-}): SessionStoreBackendImportResult {
+}): JsonSessionEntriesImportResult {
   const options = {
     agentId: params.agentId,
     sourcePath: params.sourcePath,
@@ -227,7 +354,7 @@ export function importJsonSessionStoreToSqlite(params: {
     ...(params.now ? { now: params.now } : {}),
   };
   const importedStore = parseJsonSessionStoreFromPath(params.sourcePath);
-  const result = mergeSqliteSessionStore(options, importedStore);
+  const result = mergeSqliteSessionEntries(options, importedStore);
   let removedSource = false;
   try {
     fs.rmSync(params.sourcePath, { force: true });

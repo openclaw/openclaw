@@ -8,7 +8,7 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagent-recovery-state.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { getSessionEntry } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
@@ -23,15 +23,12 @@ import {
   isPluginStateDatabaseOpen,
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
@@ -84,8 +81,7 @@ type TaskRegistryMaintenanceRuntime = {
   }) => Promise<void>;
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
-  loadSessionStore: typeof loadSessionStore;
-  resolveStorePath: typeof resolveStorePath;
+  getSessionEntry: typeof getSessionEntry;
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
@@ -123,8 +119,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession: (sessionKey) =>
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
-  loadSessionStore,
-  resolveStorePath,
+  getSessionEntry,
   deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
@@ -174,13 +169,8 @@ type CronRecoveryContext = {
   runLogsByJobId: Map<string, CronRunLogEntry[]>;
 };
 
-type SessionStoreLookup = {
-  store: Record<string, SessionEntry>;
-  normalizedEntries?: Map<string, SessionEntry>;
-};
-
 type BackingSessionLookupContext = {
-  sessionStoresByPath: Map<string, SessionStoreLookup>;
+  sessionEntriesByKey: Map<string, SessionEntry | undefined>;
   sessionChatTypesByKey: Map<string, SessionKeyChatType>;
 };
 
@@ -193,58 +183,9 @@ function createCronRecoveryContext(): CronRecoveryContext {
 
 function createBackingSessionLookupContext(): BackingSessionLookupContext {
   return {
-    sessionStoresByPath: new Map<string, SessionStoreLookup>(),
+    sessionEntriesByKey: new Map<string, SessionEntry | undefined>(),
     sessionChatTypesByKey: new Map<string, SessionKeyChatType>(),
   };
-}
-
-function getSessionStoreLookup(
-  storePath: string,
-  context?: BackingSessionLookupContext,
-): SessionStoreLookup {
-  if (!context) {
-    return {
-      store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath),
-    };
-  }
-  const cached = context.sessionStoresByPath.get(storePath);
-  if (cached) {
-    return cached;
-  }
-  const lookup = {
-    store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath),
-  };
-  context.sessionStoresByPath.set(storePath, lookup);
-  return lookup;
-}
-
-function getNormalizedSessionEntries(lookup: SessionStoreLookup): Map<string, SessionEntry> {
-  if (lookup.normalizedEntries) {
-    return lookup.normalizedEntries;
-  }
-  const entries = new Map<string, SessionEntry>();
-  for (const [key, entry] of Object.entries(lookup.store)) {
-    if (entry) {
-      entries.set(normalizeLowercaseStringOrEmpty(key), entry);
-    }
-  }
-  lookup.normalizedEntries = entries;
-  return entries;
-}
-
-function findSessionEntryByKey(
-  lookup: SessionStoreLookup,
-  sessionKey: string,
-): SessionEntry | undefined {
-  const direct = lookup.store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!normalized) {
-    return undefined;
-  }
-  return getNormalizedSessionEntries(lookup).get(normalized);
 }
 
 function resolveSessionChatType(
@@ -273,9 +214,19 @@ function findTaskSessionEntry(
   if (!childSessionKey) {
     return undefined;
   }
-  const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
-  const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-  return findSessionEntryByKey(getSessionStoreLookup(storePath, context), childSessionKey);
+  const agentId =
+    taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId ??
+    resolveAgentIdFromSessionKey(childSessionKey);
+  const cacheKey = `${agentId}\0${childSessionKey}`;
+  if (context?.sessionEntriesByKey.has(cacheKey)) {
+    return context.sessionEntriesByKey.get(cacheKey);
+  }
+  const entry = taskRegistryMaintenanceRuntime.getSessionEntry({
+    agentId,
+    sessionKey: childSessionKey,
+  });
+  context?.sessionEntriesByKey.set(cacheKey, entry);
+  return entry;
 }
 
 function isActiveTask(task: TaskRecord): boolean {

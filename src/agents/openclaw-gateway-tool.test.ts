@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { __testing as restartTesting } from "../infra/restart.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -166,13 +168,9 @@ describe("gateway tool", () => {
           });
           expect(restartSignalKillCalls()).toHaveLength(0);
 
-          const sentinelPath = path.join(stateDir, "restart-sentinel.json");
-          const raw = await fs.readFile(sentinelPath, "utf-8");
-          const parsed = JSON.parse(raw) as {
-            payload?: { kind?: string; doctorHint?: string | null };
-          };
-          expect(parsed.payload?.kind).toBe("restart");
-          expect(parsed.payload?.doctorHint).toBe(
+          const sentinel = await readRestartSentinel();
+          expect(sentinel?.payload.kind).toBe("restart");
+          expect(sentinel?.payload.doctorHint).toBe(
             "Run: openclaw --profile isolated doctor --non-interactive",
           );
         },
@@ -181,6 +179,7 @@ describe("gateway tool", () => {
       process.removeListener("SIGUSR1", sigusr1Handler);
       kill.mockRestore();
       restartTesting.resetSigusr1State();
+      closeOpenClawStateDatabaseForTest();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

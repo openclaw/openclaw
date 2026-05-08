@@ -15,7 +15,7 @@ import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionKey } from "../config/sessions/session-key.js";
 import { resolveCronAgentSessionKey } from "../cron/isolated-agent/session-key.js";
-import { resolveSessionStoreKey } from "../gateway/session-store-key.js";
+import { resolveSessionRowKey } from "../gateway/session-row-key.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 
 function makeNonDefaultAgentCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
@@ -28,7 +28,7 @@ function makeNonDefaultAgentCfg(overrides?: Partial<OpenClawConfig>): OpenClawCo
 
 describe("session key write/read round-trip (#29683)", () => {
   describe("initSessionState write path consistency", () => {
-    it("write path key matches resolveSessionStoreKey read-back", () => {
+    it("write path key matches resolveSessionRowKey read-back", () => {
       const cfg = makeNonDefaultAgentCfg();
       const agentId = "ops";
       const mainKey = normalizeMainKey(cfg.session?.mainKey);
@@ -41,8 +41,8 @@ describe("session key write/read round-trip (#29683)", () => {
         sessionKey: rawWriteKey,
       });
 
-      // Re-read path: resolveSessionStoreKey (used by loadSessionEntry)
-      const readKey = resolveSessionStoreKey({ cfg, sessionKey: writeKey });
+      // Re-read path: resolveSessionRowKey (used by loadSessionEntry)
+      const readKey = resolveSessionRowKey({ cfg, sessionKey: writeKey });
 
       // The write key and read-back key must match
       expect(writeKey).toBe(readKey);
@@ -106,7 +106,7 @@ describe("session key write/read round-trip (#29683)", () => {
         sessionKey: rawWriteKey,
       });
 
-      const readKey = resolveSessionStoreKey({ cfg, sessionKey: writeKey });
+      const readKey = resolveSessionRowKey({ cfg, sessionKey: writeKey });
 
       // Group keys contain channel-scoped identifiers and are not main aliases,
       // so they round-trip correctly regardless of agent config.

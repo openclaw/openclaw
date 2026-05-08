@@ -1,8 +1,38 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, vi } from "vitest";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../kysely-sync.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue.js";
+
+type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
+
+type DeliveryQueueEntryRow = {
+  entry_json: string;
+};
+
+const QUEUE_NAME = "outbound-delivery";
+
+function databaseOptions(tmpDir: string) {
+  return { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } };
+}
+
+function parseEntry(row: DeliveryQueueEntryRow | undefined, id: string): Record<string, unknown> {
+  if (!row) {
+    throw new Error(`missing queued delivery test entry: ${id}`);
+  }
+  return JSON.parse(row.entry_json) as Record<string, unknown>;
+}
 
 export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => string } {
   let tmpDir = "";
@@ -19,6 +49,7 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   });
 
   afterAll(() => {
+    closeOpenClawStateDatabaseForTest();
     if (!fixtureRoot) {
       return;
     }
@@ -32,9 +63,48 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
 }
 
 export function readQueuedEntry(tmpDir: string, id: string): Record<string, unknown> {
-  return JSON.parse(
-    fs.readFileSync(path.join(tmpDir, "delivery-queue", `${id}.json`), "utf-8"),
-  ) as Record<string, unknown>;
+  const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
+  const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+  const row = executeSqliteQueryTakeFirstSync<DeliveryQueueEntryRow>(
+    stateDatabase.db,
+    db
+      .selectFrom("delivery_queue_entries")
+      .select(["entry_json"])
+      .where("queue_name", "=", QUEUE_NAME)
+      .where("id", "=", id)
+      .where("status", "=", "pending"),
+  );
+  return parseEntry(row, id);
+}
+
+export function readFailedQueuedEntry(tmpDir: string, id: string): Record<string, unknown> | null {
+  const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
+  const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+  const row = executeSqliteQueryTakeFirstSync<DeliveryQueueEntryRow>(
+    stateDatabase.db,
+    db
+      .selectFrom("delivery_queue_entries")
+      .select(["entry_json"])
+      .where("queue_name", "=", QUEUE_NAME)
+      .where("id", "=", id)
+      .where("status", "=", "failed"),
+  );
+  return row ? (JSON.parse(row.entry_json) as Record<string, unknown>) : null;
+}
+
+export function readPendingQueuedEntries(tmpDir: string): Record<string, unknown>[] {
+  const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
+  const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+  return executeSqliteQuerySync<DeliveryQueueEntryRow>(
+    stateDatabase.db,
+    db
+      .selectFrom("delivery_queue_entries")
+      .select(["entry_json"])
+      .where("queue_name", "=", QUEUE_NAME)
+      .where("status", "=", "pending")
+      .orderBy("enqueued_at", "asc")
+      .orderBy("id", "asc"),
+  ).rows.map((row) => JSON.parse(row.entry_json) as Record<string, unknown>);
 }
 
 export function setQueuedEntryState(
@@ -46,9 +116,9 @@ export function setQueuedEntryState(
     enqueuedAt?: number;
     platformSendStartedAt?: number;
     recoveryState?: "send_attempt_started" | "unknown_after_send";
+    lastError?: string;
   },
 ): void {
-  const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
   const entry = readQueuedEntry(tmpDir, id);
   entry.retryCount = state.retryCount;
   if (state.lastAttemptAt === undefined) {
@@ -65,7 +135,26 @@ export function setQueuedEntryState(
   if (state.recoveryState !== undefined) {
     entry.recoveryState = state.recoveryState;
   }
-  fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+  if (state.lastError !== undefined) {
+    entry.lastError = state.lastError;
+  }
+  const stateDatabaseOptions = databaseOptions(tmpDir);
+  runOpenClawStateWriteTransaction((stateDatabase) => {
+    const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+    executeSqliteQuerySync(
+      stateDatabase.db,
+      db
+        .updateTable("delivery_queue_entries")
+        .set({
+          entry_json: JSON.stringify(entry),
+          enqueued_at: typeof entry.enqueuedAt === "number" ? entry.enqueuedAt : Date.now(),
+          updated_at: Date.now(),
+        })
+        .where("queue_name", "=", QUEUE_NAME)
+        .where("id", "=", id)
+        .where("status", "=", "pending"),
+    );
+  }, stateDatabaseOptions);
 }
 
 export function createRecoveryLog(): RecoveryLogger & {

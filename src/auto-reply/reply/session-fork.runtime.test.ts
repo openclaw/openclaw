@@ -110,7 +110,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
 
     const tokens = await resolveParentForkTokenCountRuntime({
       parentEntry: entry,
-      storePath: path.join(sessionsDir, "sessions.json"),
+      agentId: "main",
     });
 
     expect(tokens).toBe(110_000);
@@ -153,7 +153,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
 
     const tokens = await resolveParentForkTokenCountRuntime({
       parentEntry: entry,
-      storePath: path.join(sessionsDir, "sessions.json"),
+      agentId: "main",
     });
 
     expect(tokens).toBeGreaterThan(100_000);
@@ -204,7 +204,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
 
     const tokens = await resolveParentForkTokenCountRuntime({
       parentEntry: entry,
-      storePath: path.join(sessionsDir, "sessions.json"),
+      agentId: "main",
     });
 
     expect(tokens).toBe(78_000);
@@ -254,7 +254,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
 
     const tokens = await resolveParentForkTokenCountRuntime({
       parentEntry: entry,
-      storePath: path.join(sessionsDir, "sessions.json"),
+      agentId: "main",
     });
 
     expect(tokens).toBeGreaterThan(100_000);
@@ -319,19 +319,16 @@ describe("forkSessionFromParentRuntime", () => {
         updatedAt: Date.now(),
       },
       agentId: "main",
-      sessionsDir,
     });
 
     if (fork === null) {
       throw new Error("Expected forked session");
     }
-    expect(fork.sessionFile).toContain(sessionsDir);
+    const agentSessionsDir = path.join(root, "agents", "main", "sessions");
+    expect(fork.sessionFile).toBe(fork.sessionId);
     expect(fork.sessionId).not.toBe(parentSessionId);
     const forkedEntries = readTranscript("main", fork.sessionId) as Array<Record<string, unknown>>;
-    const resolvedParentSessionFile = path.join(
-      await fs.realpath(sessionsDir),
-      `${parentSessionId}.jsonl`,
-    );
+    const resolvedParentSessionFile = path.join(agentSessionsDir, `${parentSessionId}.jsonl`);
     expect(forkedEntries[0]).toMatchObject({
       type: "session",
       id: fork.sessionId,
@@ -379,7 +376,6 @@ describe("forkSessionFromParentRuntime", () => {
         updatedAt: Date.now(),
       },
       agentId: "main",
-      sessionsDir,
     });
 
     if (!fork) {
@@ -388,7 +384,10 @@ describe("forkSessionFromParentRuntime", () => {
     const entries = readTranscript("main", fork.sessionId) as Array<Record<string, unknown>>;
     expect(entries).toHaveLength(1);
     const resolvedParentSessionFile = path.join(
-      await fs.realpath(sessionsDir),
+      root,
+      "agents",
+      "main",
+      "sessions",
       `${parentSessionId}.jsonl`,
     );
     expect(entries[0]).toMatchObject({

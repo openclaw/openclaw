@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
@@ -92,11 +93,6 @@ function logProgress(message: string): void {
   writeSync(2, `[live] ${message}\n`);
 }
 
-function resolveKnownProvider(provider: string): KnownProvider | undefined {
-  const normalized = provider.trim();
-  return getProviders().find((knownProvider) => knownProvider === normalized);
-}
-
 function loadPrioritizedHighSignalModels(): Model<Api>[] {
   const idsByProvider = new Map<string, Set<string>>();
   for (const ref of listPrioritizedHighSignalLiveModelRefs()) {
@@ -108,14 +104,17 @@ function loadPrioritizedHighSignalModels(): Model<Api>[] {
     }
   }
 
+  const agentDir = resolveDefaultAgentDir(getRuntimeConfig());
+  const registryModels = discoverModels(discoverAuthStorage(agentDir), agentDir, {
+    normalizeModels: false,
+  }).getAll();
   const models: Model<Api>[] = [];
   const seen = new Set<string>();
   for (const [provider, ids] of idsByProvider) {
-    const knownProvider = resolveKnownProvider(provider);
-    if (!knownProvider) {
-      continue;
-    }
-    for (const model of getModels(knownProvider)) {
+    for (const model of registryModels) {
+      if (model.provider !== provider) {
+        continue;
+      }
       const id = model.id.toLowerCase();
       if (!ids.has(id)) {
         continue;

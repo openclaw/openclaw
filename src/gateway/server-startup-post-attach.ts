@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -23,14 +20,12 @@ import type { logGatewayStartup } from "./server-startup-log.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
-const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
-const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -144,47 +139,9 @@ function schedulePostReadySidecarTask(params: {
   handle.unref?.();
 }
 
-function resolveRestartSentinelPathFast(env: NodeJS.ProcessEnv = process.env): string {
-  const normalizePathEnv = (value: string | undefined) => {
-    const trimmed = value?.trim();
-    return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
-  };
-  const resolveRawOsHome = () => normalizePathEnv(env.HOME) ?? normalizePathEnv(env.USERPROFILE);
-  const expandHomePrefix = (input: string, home: string) => input.replace(/^~(?=$|[\\/])/, home);
-  const resolveHome = () => {
-    const explicitHome = normalizePathEnv(env.OPENCLAW_HOME);
-    if (explicitHome) {
-      const osHome = resolveRawOsHome() ?? os.homedir();
-      return path.resolve(expandHomePrefix(explicitHome, osHome));
-    }
-    return path.resolve(resolveRawOsHome() ?? os.homedir());
-  };
-  const resolveUserPath = (input: string) => {
-    const trimmed = input.trim();
-    if (trimmed.startsWith("~")) {
-      return path.resolve(expandHomePrefix(trimmed, resolveHome()));
-    }
-    return path.resolve(trimmed);
-  };
-  const override = normalizePathEnv(env.OPENCLAW_STATE_DIR);
-  if (override) {
-    return path.join(resolveUserPath(override), RESTART_SENTINEL_FILENAME);
-  }
-  const home = resolveHome();
-  const newStateDir = path.join(home, ".openclaw");
-  if (env.OPENCLAW_TEST_FAST === "1" || fs.existsSync(newStateDir)) {
-    return path.join(newStateDir, RESTART_SENTINEL_FILENAME);
-  }
-  const legacyStateDir = path.join(home, ".clawdbot");
-  if (fs.existsSync(legacyStateDir)) {
-    return path.join(legacyStateDir, RESTART_SENTINEL_FILENAME);
-  }
-  return path.join(newStateDir, RESTART_SENTINEL_FILENAME);
-}
-
-function hasRestartSentinelFileFast(env: NodeJS.ProcessEnv = process.env): boolean {
+async function hasRestartSentinelState(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   try {
-    return fs.existsSync(resolveRestartSentinelPathFast(env));
+    return await (await import("../infra/restart-sentinel.js")).hasRestartSentinel(env);
   } catch {
     return false;
   }
@@ -193,7 +150,7 @@ function hasRestartSentinelFileFast(env: NodeJS.ProcessEnv = process.env): boole
 async function refreshLatestUpdateRestartSentinelIfPresent(): Promise<Awaited<
   ReturnType<typeof refreshLatestUpdateRestartSentinel>
 > | null> {
-  if (!hasRestartSentinelFileFast()) {
+  if (!(await hasRestartSentinelState())) {
     return null;
   }
   return await (await import("./server-restart-sentinel.js")).refreshLatestUpdateRestartSentinel();
@@ -547,49 +504,13 @@ export async function startGatewaySidecars(params: {
 
   schedulePostReadySidecarTask({
     startupTrace: params.startupTrace,
-    name: "sidecars.session-locks",
-    log: params.log,
-    run: async () => {
-      try {
-        const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
-          await Promise.all([
-            import("../config/paths.js"),
-            import("../agents/session-dirs.js"),
-            import("../agents/session-write-lock.js"),
-          ]);
-        const stateDir = resolveStateDir(process.env);
-        const sessionDirs = await resolveAgentSessionDirs(stateDir);
-        for (const sessionsDir of sessionDirs) {
-          const result = await cleanStaleLockFiles({
-            sessionsDir,
-            staleMs: SESSION_LOCK_STALE_MS,
-            removeStale: true,
-            log: { warn: (message) => params.log.warn(message) },
-          });
-          if (result.cleaned.length > 0) {
-            const { markRestartAbortedMainSessionsFromLocks } =
-              await import("../agents/main-session-restart-recovery.js");
-            await markRestartAbortedMainSessionsFromLocks({
-              sessionsDir,
-              cleanedLocks: result.cleaned,
-            });
-          }
-        }
-      } catch (err) {
-        params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
-      }
-    },
-  });
-
-  schedulePostReadySidecarTask({
-    startupTrace: params.startupTrace,
     name: "sidecars.restart-sentinel",
     log: params.log,
     run: async () => {
       if (!shouldCheckRestartSentinel()) {
         return;
       }
-      if (!hasRestartSentinelFileFast()) {
+      if (!(await hasRestartSentinelState())) {
         return;
       }
       setTimeout(() => {
@@ -866,7 +787,7 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const __testing = {
-  hasRestartSentinelFileFast,
+  hasRestartSentinelState,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
   refreshLatestUpdateRestartSentinelIfPresent,

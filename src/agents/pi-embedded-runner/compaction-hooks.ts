@@ -50,7 +50,7 @@ async function runPostCompactionSessionMemorySync(params: {
     }
     await manager.sync({
       reason: "post-compaction",
-      sessionFiles: [sessionFile],
+      sessionTranscripts: [sessionFile],
     });
   } catch (err) {
     log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);

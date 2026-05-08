@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { getSessionEntry } from "../config/sessions.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { readAgentCommandCall } from "./agent-command.test-helpers.js";
@@ -21,7 +22,7 @@ import {
   testState,
   trackConnectChallengeNonce,
   withGatewayServer,
-  writeSessionStore,
+  seedGatewaySessionEntries,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -137,7 +138,7 @@ async function writeMainSessionEntry(params: {
   lastTo?: string;
 }) {
   await useTempSessionStorePath();
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: {
         sessionId: params.sessionId,
@@ -178,7 +179,6 @@ async function sendAgentWsRequestAndWaitFinal(
 
 async function useTempSessionStorePath() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-  testState.sessionStorePath = path.join(dir, "sessions.json");
 }
 
 describe("gateway server agent", () => {
@@ -234,7 +234,7 @@ describe("gateway server agent", () => {
 
   test("agent preserves CLI session binding metadata when refreshing session state", async () => {
     await useTempSessionStorePath();
-    await writeSessionStore({
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-cli",
@@ -265,19 +265,8 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(true);
     await readAgentCommandCall({ runId: "idem-agent-cli-binding" });
 
-    const sessionStorePath = testState.sessionStorePath;
-    if (!sessionStorePath) {
-      throw new Error("expected session store path");
-    }
-    const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-      string,
-      {
-        cliSessionBindings?: Record<string, unknown>;
-        cliSessionIds?: Record<string, string>;
-        claudeCliSessionId?: string;
-      }
-    >;
-    expect(stored["agent:main:main"]?.cliSessionBindings).toEqual({
+    const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
+    expect(stored?.cliSessionBindings).toEqual({
       "claude-cli": {
         sessionId: "cli-session-123",
         authProfileId: "anthropic:work",
@@ -285,10 +274,10 @@ describe("gateway server agent", () => {
         mcpResumeHash: "mcp-resume-hash",
       },
     });
-    expect(stored["agent:main:main"]?.cliSessionIds).toEqual({
+    expect(stored?.cliSessionIds).toEqual({
       "claude-cli": "cli-session-123",
     });
-    expect(stored["agent:main:main"]?.claudeCliSessionId).toBe("cli-session-123");
+    expect(stored?.claudeCliSessionId).toBe("cli-session-123");
   });
 
   test("agent accepts built-in channel alias (imsg)", async () => {
@@ -464,12 +453,8 @@ describe("gateway server agent", () => {
   test("write-scoped callers cannot reset conversations via agent", async () => {
     await withGatewayServer(async ({ port }) => {
       await useTempSessionStorePath();
-      const storePath = testState.sessionStorePath;
-      if (!storePath) {
-        throw new Error("missing session store path");
-      }
 
-      await writeSessionStore({
+      await seedGatewaySessionEntries({
         entries: {
           main: {
             sessionId: "sess-main-before-write-reset",
@@ -496,11 +481,9 @@ describe("gateway server agent", () => {
       expect(viaAgent.ok).toBe(false);
       expect(viaAgent.error?.message).toContain("missing scope: operator.admin");
 
-      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { sessionId?: string }
-      >;
-      expect(store["agent:main:main"]?.sessionId).toBe("sess-main-before-write-reset");
+      const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
+      expect(stored?.sessionId).toBeDefined();
+      expect(stored?.sessionId).toBe("sess-main-before-write-reset");
       expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
 
       writeWs.close();

@@ -172,11 +172,6 @@ function loadSnapshotInstallRecords(params: LoadPluginRegistryParams, env: NodeJ
   return loadInstalledPluginIndexInstallRecordsSync({
     env,
     ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-    ...(params.filePath
-      ? { filePath: params.filePath }
-      : params.pluginIndexFilePath
-        ? { filePath: params.pluginIndexFilePath }
-        : {}),
   });
 }
 

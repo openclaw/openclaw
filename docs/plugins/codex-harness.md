@@ -12,7 +12,7 @@ Codex app-server instead of the built-in PI harness.
 
 Use this when you want Codex to own the low-level agent session: model
 discovery, native thread resume, native compaction, and app-server execution.
-OpenClaw still owns chat channels, session files, model selection, tools,
+OpenClaw still owns chat channels, session state, transcript mirroring, model selection, tools,
 approvals, media delivery, and the visible transcript mirror.
 
 When a source chat turn runs through the Codex harness, visible replies default
@@ -109,7 +109,7 @@ Enabling the plugin makes those capabilities available. It does **not**:
 - convert `openai-codex/*` model refs without `openclaw doctor --fix`
 - make ACP/acpx the default Codex path
 - use stale whole-agent or session runtime pins for routing
-- replace OpenClaw channel delivery, session files, auth-profile storage, or
+- replace OpenClaw channel delivery, session state, auth-profile storage, or
   message routing
 
 The same plugin also owns the native `/codex` chat-control command surface. If

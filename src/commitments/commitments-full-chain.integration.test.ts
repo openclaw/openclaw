@@ -45,7 +45,7 @@ describe("commitments full-chain integration", () => {
           },
         },
         channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: storePath },
+        session: {},
         commitments: { enabled: true },
       };
       await seedSessionStore(storePath, sessionKey, {

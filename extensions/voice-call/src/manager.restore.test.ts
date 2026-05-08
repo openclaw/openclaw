@@ -2,12 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
-  createTestStorePath,
+  createTestStoreKey,
   FakeProvider,
   makePersistedCall,
   writeCallsToStore,
 } from "./manager.test-harness.js";
-import { flushPendingCallRecordWritesForTest, loadActiveCallsFromStore } from "./manager/store.js";
+import {
+  createMemoryCallRecordStore,
+  flushPendingCallRecordWritesForTest,
+  loadActiveCallsFromStore,
+} from "./manager/store.js";
 
 function requireSingleActiveCall(manager: CallManager) {
   const activeCalls = manager.getActiveCalls();
@@ -31,9 +35,9 @@ describe("CallManager verification on restore", () => {
     configureProvider?: (provider: FakeProvider) => void;
     configOverrides?: Partial<{ maxDurationSeconds: number }>;
   }) {
-    const storePath = createTestStorePath();
+    const storeKey = createTestStoreKey();
     const call = makePersistedCall(params?.callOverrides);
-    writeCallsToStore(storePath, [call]);
+    writeCallsToStore(storeKey, [call]);
 
     const provider = new FakeProvider();
     if (params?.providerResult) {
@@ -47,10 +51,10 @@ describe("CallManager verification on restore", () => {
       fromNumber: "+15550000000",
       ...params?.configOverrides,
     });
-    const manager = new CallManager(config, storePath);
+    const manager = new CallManager(config, storeKey);
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
-    return { call, manager, provider, storePath };
+    return { call, manager, provider, storeKey };
   }
 
   it("skips stale calls reported terminal by provider", async () => {
@@ -81,7 +85,7 @@ describe("CallManager verification on restore", () => {
   });
 
   it("skips calls older than maxDurationSeconds", async () => {
-    const { manager, provider, storePath } = await initializeManager({
+    const { manager, provider, storeKey } = await initializeManager({
       callOverrides: {
         startedAt: Date.now() - 600_000,
         answeredAt: Date.now() - 590_000,
@@ -97,7 +101,9 @@ describe("CallManager verification on restore", () => {
     ]);
 
     await flushPendingCallRecordWritesForTest();
-    expect(loadActiveCallsFromStore(storePath).activeCalls.size).toBe(0);
+    expect(
+      (await loadActiveCallsFromStore(createMemoryCallRecordStore(storeKey))).activeCalls.size,
+    ).toBe(0);
   });
 
   it("skips calls without providerCallId", async () => {
@@ -124,7 +130,7 @@ describe("CallManager verification on restore", () => {
 
   it("summarizes repeated restored-call verification outcomes", async () => {
     const now = Date.now();
-    const storePath = createTestStorePath();
+    const storeKey = createTestStoreKey();
     const calls = [
       makePersistedCall({
         callId: "missing-provider-a",
@@ -183,7 +189,7 @@ describe("CallManager verification on restore", () => {
         answeredAt: undefined,
       }),
     ];
-    writeCallsToStore(storePath, calls);
+    writeCallsToStore(storeKey, calls);
 
     const provider = new FakeProvider();
     provider.getCallStatus = async ({ providerCallId }) => {
@@ -205,7 +211,7 @@ describe("CallManager verification on restore", () => {
       maxDurationSeconds: 300,
     });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const manager = new CallManager(config, storePath);
+    const manager = new CallManager(config, storeKey);
 
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
@@ -273,14 +279,14 @@ describe("CallManager verification on restore", () => {
   });
 
   it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {
-    const storePath = createTestStorePath();
+    const storeKey = createTestStoreKey();
     const persisted = makePersistedCall({
       state: "completed",
       endedAt: Date.now() - 5_000,
       endReason: "completed",
       processedEventIds: ["evt-terminal-init"],
     });
-    writeCallsToStore(storePath, [persisted]);
+    writeCallsToStore(storeKey, [persisted]);
 
     const provider = new FakeProvider();
     const config = VoiceCallConfigSchema.parse({
@@ -288,7 +294,7 @@ describe("CallManager verification on restore", () => {
       provider: "plivo",
       fromNumber: "+15550000000",
     });
-    const manager = new CallManager(config, storePath);
+    const manager = new CallManager(config, storeKey);
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
     manager.processEvent({

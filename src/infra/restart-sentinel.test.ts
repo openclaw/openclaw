@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -23,15 +28,15 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
   try {
     await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
       process.env.OPENCLAW_STATE_DIR = tempDir;
-      await run();
+      try {
+        await run();
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+      }
     });
   } finally {
     envSnapshot.restore();
   }
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("restart sentinel", () => {
@@ -50,6 +55,7 @@ describe("restart sentinel", () => {
       };
       const filePath = await writeRestartSentinel(payload);
       expect(filePath).toBe(resolveRestartSentinelPath());
+      await expect(fs.stat(filePath)).rejects.toThrow();
 
       const read = await readRestartSentinel();
       expect(read?.payload.kind).toBe("update");
@@ -64,27 +70,30 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("drops invalid sentinel payloads", async () => {
+  it("ignores legacy sentinel files at runtime", async () => {
     await withRestartSentinelStateDir(async () => {
       const filePath = resolveRestartSentinelPath();
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, "not-json", "utf-8");
 
       const read = await readRestartSentinel();
       expect(read).toBeNull();
-
-      await expectPathMissing(filePath);
+      await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("not-json");
     });
   });
 
-  it("drops structurally invalid sentinel payloads", async () => {
+  it("drops structurally invalid SQLite sentinel payloads", async () => {
     await withRestartSentinelStateDir(async () => {
-      const filePath = resolveRestartSentinelPath();
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
+      writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+        "gateway.restart-sentinel",
+        "current",
+        { version: 2, payload: null },
+        { env: process.env },
+      );
 
       await expect(readRestartSentinel()).resolves.toBeNull();
-      await expectPathMissing(filePath);
+      expect(
+        readOpenClawStateKvJson("gateway.restart-sentinel", "current", { env: process.env }),
+      ).toBeUndefined();
     });
   });
 

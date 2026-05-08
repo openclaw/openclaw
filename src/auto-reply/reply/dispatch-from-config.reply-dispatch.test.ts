@@ -61,10 +61,12 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
-    sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
-    sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
-    sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
-    sessionStoreMocks.updateSessionStoreEntry.mockClear();
+    sessionStoreMocks.entries.clear();
+    sessionStoreMocks.getSessionEntry.mockClear();
+    sessionStoreMocks.listSessionEntries.mockClear();
+    sessionStoreMocks.mergeSessionEntry.mockClear();
+    sessionStoreMocks.upsertSessionEntry.mockClear();
+    sessionStoreMocks.resolveSessionRowEntry.mockReset().mockReturnValue({ existing: undefined });
     acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
     acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
       resolveSession: () => ({ kind: "none" as const }),
@@ -165,7 +167,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       pendingFinalDeliveryLastError: "previous failure",
       pendingFinalDeliveryContext: { source: "heartbeat" },
     };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+    sessionStoreMocks.resolveSessionRowEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
     });
     mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
@@ -178,7 +180,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(result.queuedFinal).toBe(true);
-    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.upsertSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
@@ -196,7 +198,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       pendingFinalDeliveryText: "durable reply",
       pendingFinalDeliveryCreatedAt: 1,
     };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
+    sessionStoreMocks.resolveSessionRowEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
     });
     const dispatcher = createDispatcher();
@@ -210,7 +212,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(result.queuedFinal).toBe(false);
-    expect(sessionStoreMocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.upsertSessionEntry).not.toHaveBeenCalled();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);

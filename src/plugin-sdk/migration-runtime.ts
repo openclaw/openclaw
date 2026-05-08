@@ -4,11 +4,14 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "../infra/fs-safe.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type {
   MigrationApplyResult,
   MigrationItem,
   MigrationProviderContext,
 } from "../plugins/types.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
   MIGRATION_REASON_TARGET_EXISTS,
@@ -18,6 +21,90 @@ import {
 } from "./migration.js";
 
 export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
+
+type PluginMigrationDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "plugin_blob_entries" | "plugin_state_entries"
+>;
+
+export function upsertPluginStateMigrationEntry(params: {
+  pluginId: string;
+  namespace: string;
+  key: string;
+  value: unknown;
+  createdAt: number;
+  expiresAt?: number | null;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const valueJson = JSON.stringify(params.value);
+  runOpenClawStateWriteTransaction(
+    (stateDatabase) => {
+      const db = getNodeSqliteKysely<PluginMigrationDatabase>(stateDatabase.db);
+      executeSqliteQuerySync(
+        stateDatabase.db,
+        db
+          .insertInto("plugin_state_entries")
+          .values({
+            plugin_id: params.pluginId,
+            namespace: params.namespace,
+            entry_key: params.key,
+            value_json: valueJson,
+            created_at: params.createdAt,
+            expires_at: params.expiresAt ?? null,
+          })
+          .onConflict((conflict) =>
+            conflict.columns(["plugin_id", "namespace", "entry_key"]).doUpdateSet({
+              value_json: (eb) => eb.ref("excluded.value_json"),
+              created_at: (eb) => eb.ref("excluded.created_at"),
+              expires_at: (eb) => eb.ref("excluded.expires_at"),
+            }),
+          ),
+      );
+    },
+    { env: params.env },
+  );
+}
+
+export function upsertPluginBlobMigrationEntry(params: {
+  pluginId: string;
+  namespace: string;
+  key: string;
+  metadata: unknown;
+  blob: Buffer;
+  createdAt: number;
+  expiresAt?: number | null;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const metadataJson = JSON.stringify(params.metadata);
+  runOpenClawStateWriteTransaction(
+    (stateDatabase) => {
+      const db = getNodeSqliteKysely<PluginMigrationDatabase>(stateDatabase.db);
+      executeSqliteQuerySync(
+        stateDatabase.db,
+        db
+          .insertInto("plugin_blob_entries")
+          .values({
+            plugin_id: params.pluginId,
+            namespace: params.namespace,
+            entry_key: params.key,
+            metadata_json: metadataJson,
+            blob: params.blob,
+            created_at: params.createdAt,
+            expires_at: params.expiresAt ?? null,
+          })
+          .onConflict((conflict) =>
+            conflict.columns(["plugin_id", "namespace", "entry_key"]).doUpdateSet({
+              metadata_json: (eb) => eb.ref("excluded.metadata_json"),
+              blob: (eb) => eb.ref("excluded.blob"),
+              created_at: (eb) => eb.ref("excluded.created_at"),
+              expires_at: (eb) => eb.ref("excluded.expires_at"),
+            }),
+          ),
+      );
+    },
+    { env: params.env },
+  );
+}
 
 export function withCachedMigrationConfigRuntime(
   runtime: MigrationProviderContext["runtime"] | undefined,

@@ -39,7 +39,6 @@ describe("gateway session list plugin runtime normalization", () => {
 
     const listed = await listSessionsFromStoreAsync({
       cfg,
-      storePath: "",
       store,
       opts: {},
     });
@@ -71,7 +70,6 @@ describe("gateway session list plugin runtime normalization", () => {
 
     const row = buildGatewaySessionRow({
       cfg,
-      storePath: "",
       store: {},
       key: "main",
     });

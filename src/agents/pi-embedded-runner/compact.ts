@@ -89,14 +89,8 @@ import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
-import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockAcquireTimeoutMs,
-} from "../session-write-lock.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import {
   applySkillEnvOverrides,
@@ -104,9 +98,9 @@ import {
   resolveSkillsPromptForRun,
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
+import { repairTranscriptStateIfNeeded } from "../transcript-state-repair.js";
 import type { SessionManager as TranscriptSessionManager } from "../transcript/session-manager-contract.js";
 import { openTranscriptSessionManager } from "../transcript/session-manager.js";
-import { readTranscriptFileState } from "../transcript/transcript-file-state.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
@@ -598,6 +592,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     cwd: effectiveWorkspace,
+    agentId: earlyAgentIds.sessionAgentId,
   });
   const { sessionAgentId: effectiveSkillAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -941,17 +936,9 @@ async function compactEmbeddedPiSessionDirectOnce(
       );
     };
 
-    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: compactionTimeoutMs,
-      }),
-    });
     try {
-      await repairSessionFileIfNeeded({
-        sessionFile: params.sessionFile,
+      await repairTranscriptStateIfNeeded({
+        transcriptPath: params.sessionFile,
         debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
@@ -1204,6 +1191,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             // the sanity check below becomes a no-op instead of crashing compaction.
           }
           const activeSession = session;
+          const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
           const result = await compactWithSafetyTimeout(
             () => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
@@ -1237,9 +1225,8 @@ async function compactEmbeddedPiSessionDirectOnce(
                   hardenedBoundary.firstKeptEntryId ?? effectiveFirstKeptEntryId;
                 postCompactionLeafId = hardenedBoundary.leafId ?? postCompactionLeafId;
                 session.agent.state.messages = hardenedBoundary.messages;
-                transcriptRotationSessionManager = await readTranscriptFileState(
-                  params.sessionFile,
-                );
+                transcriptRotationSessionManager =
+                  hardenedBoundary.sessionManager ?? transcriptRotationSessionManager;
               }
             } catch (err) {
               log.warn("[compaction] failed to harden manual compaction boundary", {
@@ -1261,6 +1248,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             try {
               transcriptRotation = await rotateTranscriptAfterCompaction({
                 sessionManager: transcriptRotationSessionManager,
+                agentId: sessionAgentId,
                 sessionFile: params.sessionFile,
               });
             } catch (err) {
@@ -1401,7 +1389,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       } catch {
         /* best-effort */
       }
-      await sessionLock.release();
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({

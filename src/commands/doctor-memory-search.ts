@@ -250,7 +250,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
     const hasFixableRecallIssue = audit.issues.some((issue) => issue.fixable);
     if (hasFixableRecallIssue) {
       const approved = await params.prompter.confirmRuntimeRepair({
-        message: "Normalize memory recall artifacts and remove stale promotion locks?",
+        message: "Normalize memory recall artifacts?",
         initialValue: true,
       });
       if (approved) {
@@ -261,7 +261,6 @@ export async function maybeRepairMemoryRecallHealth(params: {
             repair.rewroteStore
               ? `- rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid entries)` : ""}`
               : null,
-            repair.removedStaleLock ? "- removed stale promotion lock" : null,
             `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
           ].filter(Boolean);
           note(lines.join("\n"), "Doctor changes");
@@ -288,7 +287,6 @@ export async function maybeRepairMemoryRecallHealth(params: {
     const lines = [
       "Dreaming artifacts repaired:",
       dreamingRepair.archivedSessionCorpus ? "- archived session corpus" : null,
-      dreamingRepair.archivedSessionIngestion ? "- archived session-ingestion state" : null,
       dreamingRepair.archivedDreamsDiary ? "- archived dream diary" : null,
       dreamingRepair.archiveDir ? `- archive dir: ${dreamingRepair.archiveDir}` : null,
       ...dreamingRepair.warnings.map((warning) => `- warning: ${warning}`),

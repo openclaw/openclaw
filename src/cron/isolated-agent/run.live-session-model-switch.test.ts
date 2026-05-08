@@ -13,7 +13,7 @@ import {
   resetRunCronIsolatedAgentTurnHarness,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
-  updateSessionStoreMock,
+  upsertSessionEntryMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -91,7 +91,7 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         isNewSession: true,
       }),
     );
-    updateSessionStoreMock.mockResolvedValue(undefined);
+    upsertSessionEntryMock.mockResolvedValue(undefined);
     logWarnMock.mockReturnValue(undefined);
   });
 
@@ -159,7 +159,7 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
 
     expect(result.status).toBe("error");
     expect(String(result.error)).toContain("transient network error");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(upsertSessionEntryMock).toHaveBeenCalled();
     expect(cronSession.sessionEntry).toMatchObject({
       model: "claude-sonnet-4-6",
       modelProvider: "anthropic",

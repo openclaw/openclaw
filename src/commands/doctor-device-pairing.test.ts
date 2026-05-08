@@ -133,7 +133,7 @@ describe("noteDevicePairingHealth", () => {
   });
 
   it("warns when the local cached device token predates the gateway rotation", async () => {
-    await withApprovedOperatorPairing(async ({ stateDir, identity }) => {
+    await withApprovedOperatorPairing(async ({ identity }) => {
       storeDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",

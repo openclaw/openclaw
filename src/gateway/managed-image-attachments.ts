@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { getSqliteSessionTranscriptStats } from "../config/sessions/transcript-store.sqlite.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
@@ -15,7 +16,7 @@ import {
 import { assertLocalMediaAllowed } from "../media/local-media-access.js";
 import { isPassThroughRemoteMediaSource } from "../media/media-source-url.js";
 import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   deleteOpenClawStateKvJson,
@@ -99,9 +100,9 @@ type CleanupManagedOutgoingImageRecordsResult = {
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
 
 type SessionManagedOutgoingAttachmentIndexCacheEntry = {
-  transcriptPath: string;
-  mtimeMs: number;
-  size: number;
+  sessionId: string;
+  updatedAt: number;
+  eventCount: number;
   index: SessionManagedOutgoingAttachmentIndex;
 };
 
@@ -531,6 +532,7 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       shouldDelete = !(await recordMatchesTranscriptMessage(
         record,
         transcriptAttachmentIndexCache,
+        stateDir,
       ));
     } else {
       const createdAtMs = Date.parse(record.createdAt);
@@ -664,16 +666,16 @@ function collectManagedOutgoingAttachmentRefs(
 
 function getCachedSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
-  stat: { transcriptPath: string; mtimeMs: number; size: number },
+  stat: { sessionId: string; updatedAt: number; eventCount: number },
 ) {
   const cached = sessionManagedOutgoingAttachmentIndexCache.get(sessionKey);
   if (!cached) {
     return null;
   }
   if (
-    cached.transcriptPath !== stat.transcriptPath ||
-    cached.mtimeMs !== stat.mtimeMs ||
-    cached.size !== stat.size
+    cached.sessionId !== stat.sessionId ||
+    cached.updatedAt !== stat.updatedAt ||
+    cached.eventCount !== stat.eventCount
   ) {
     sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
     return null;
@@ -685,13 +687,13 @@ function getCachedSessionManagedOutgoingAttachmentIndex(
 
 function setCachedSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
-  stat: { transcriptPath: string; mtimeMs: number; size: number },
+  stat: { sessionId: string; updatedAt: number; eventCount: number },
   index: SessionManagedOutgoingAttachmentIndex,
 ) {
   sessionManagedOutgoingAttachmentIndexCache.set(sessionKey, {
-    transcriptPath: stat.transcriptPath,
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
+    sessionId: stat.sessionId,
+    updatedAt: stat.updatedAt,
+    eventCount: stat.eventCount,
     index,
   });
   while (
@@ -709,42 +711,36 @@ function setCachedSessionManagedOutgoingAttachmentIndex(
 async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
+  stateDir?: string,
 ) {
   if (cache?.has(sessionKey)) {
     return cache.get(sessionKey) ?? null;
   }
-  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const { entry } = loadSessionEntry(sessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     cache?.set(sessionKey, null);
     return null;
   }
 
-  let transcriptStat: { transcriptPath: string; mtimeMs: number; size: number } | null = null;
-  const transcriptPath = typeof entry?.sessionFile === "string" ? entry.sessionFile.trim() : "";
-  if (transcriptPath) {
-    try {
-      const stat = await fs.stat(transcriptPath);
-      transcriptStat = {
-        transcriptPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      };
-      const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(
-        sessionKey,
-        transcriptStat,
-      );
-      if (cachedIndex) {
-        cache?.set(sessionKey, cachedIndex);
-        return cachedIndex;
-      }
-    } catch {
-      sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
+  const agentId = resolveAgentIdFromSessionKey(sessionKey) ?? DEFAULT_AGENT_ID;
+  const transcriptStat = getSqliteSessionTranscriptStats({
+    agentId,
+    sessionId,
+    ...(stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {}),
+  });
+  if (transcriptStat) {
+    const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(sessionKey, transcriptStat);
+    if (cachedIndex) {
+      cache?.set(sessionKey, cachedIndex);
+      return cachedIndex;
     }
+  } else {
+    sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
   }
 
-  const messages = await readSessionMessagesAsync(sessionId, storePath, entry.sessionFile, {
-    agentId: resolveAgentIdFromSessionKey(sessionKey),
+  const messages = await readSessionMessagesAsync(sessionId, entry.sessionFile, {
+    agentId,
     mode: "full",
     reason: "managed outgoing attachment index",
   });
@@ -775,11 +771,12 @@ async function getSessionManagedOutgoingAttachmentIndex(
 async function recordMatchesTranscriptMessage(
   record: ManagedImageRecord,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
+  stateDir?: string,
 ) {
   if (!record.messageId) {
     return false;
   }
-  const index = await getSessionManagedOutgoingAttachmentIndex(record.sessionKey, cache);
+  const index = await getSessionManagedOutgoingAttachmentIndex(record.sessionKey, cache, stateDir);
   return (
     index?.has(buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId)) ?? false
   );
@@ -1083,7 +1080,7 @@ export async function handleManagedOutgoingImageHttpRequest(
     });
     return true;
   }
-  if (!(await recordMatchesTranscriptMessage(record))) {
+  if (!(await recordMatchesTranscriptMessage(record, undefined, opts.stateDir))) {
     sendStatus(res, 404, "not found");
     return true;
   }

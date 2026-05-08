@@ -3,7 +3,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+export { loadCombinedSessionEntriesForGateway } from "../config/sessions/combined-session-entries-gateway.js";
 
 export type SessionTranscriptHitIdentity = {
   stem: string;

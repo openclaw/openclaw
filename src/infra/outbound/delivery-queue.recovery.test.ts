@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import {
@@ -13,6 +11,7 @@ import {
   asDeliverFn,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
+  readFailedQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
@@ -89,7 +88,7 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(result.skippedMaxRetries).toBe(1);
     expect(result.deferredBackoff).toBe(0);
-    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(readFailedQueuedEntry(tmpDir(), id)).toMatchObject({ id });
   });
 
   it("increments retryCount on failed recovery attempt", async () => {
@@ -133,7 +132,7 @@ describe("delivery-queue recovery", () => {
       deferredBackoff: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(readFailedQueuedEntry(tmpDir(), id)).toMatchObject({ id });
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("unknown_after_send"));
   });
 
@@ -160,7 +159,7 @@ describe("delivery-queue recovery", () => {
       deferredBackoff: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(readFailedQueuedEntry(tmpDir(), id)).toMatchObject({ id });
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("refusing blind replay without adapter reconciliation"),
     );
@@ -247,56 +246,46 @@ describe("delivery-queue recovery", () => {
       },
     });
 
-    const rename = fs.promises.rename.bind(fs.promises);
-    const renameSpy = vi.spyOn(fs.promises, "rename").mockImplementation(async (...args) => {
-      order.push("ack");
-      return await rename(...args);
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({ deliver });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      recovered: 1,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
     });
-
-    try {
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { result } = await runRecovery({ deliver });
-
-      expect(deliver).not.toHaveBeenCalled();
-      expect(result).toEqual({
-        recovered: 1,
-        failed: 0,
-        skippedMaxRetries: 0,
-        deferredBackoff: 0,
-      });
-      expect(reconcileUnknownSend).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cfg: baseCfg,
-          queueId: id,
-          channel: "demo-channel-a",
-          to: "+1",
-          accountId: "acct-1",
-          payloads: [{ text: "maybe sent" }],
-          replyToId: "root-message",
-          threadId: "thread-1",
-          silent: true,
-          retryCount: 0,
-        }),
-      );
-      expect(afterCommit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "text",
-          to: "+1",
-          accountId: "acct-1",
-          replyToId: "root-message",
-          threadId: "thread-1",
-          silent: true,
-          result: expect.objectContaining({ messageId: "platform-1" }),
-        }),
-      );
-      expect(order).toEqual(["ack", "afterCommit"]);
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    } finally {
-      renameSpy.mockRestore();
-    }
+    expect(reconcileUnknownSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: baseCfg,
+        queueId: id,
+        channel: "demo-channel-a",
+        to: "+1",
+        accountId: "acct-1",
+        payloads: [{ text: "maybe sent" }],
+        replyToId: "root-message",
+        threadId: "thread-1",
+        silent: true,
+        retryCount: 0,
+      }),
+    );
+    expect(afterCommit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "text",
+        to: "+1",
+        accountId: "acct-1",
+        replyToId: "root-message",
+        threadId: "thread-1",
+        silent: true,
+        result: expect.objectContaining({ messageId: "platform-1" }),
+      }),
+    );
+    expect(order).toEqual(["afterCommit"]);
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
 
-  it("records retry state when acking a reconciled sent entry fails", async () => {
+  it("acks a reconciled sent entry in the sqlite queue", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "maybe sent" }] },
       tmpDir(),
@@ -321,34 +310,22 @@ describe("delivery-queue recovery", () => {
         }),
       },
     });
-    const renameSpy = vi
-      .spyOn(fs.promises, "rename")
-      .mockRejectedValueOnce(Object.assign(new Error("ack denied"), { code: "EACCES" }));
 
-    try {
-      const deliver = vi.fn().mockResolvedValue([]);
-      const log = createRecoveryLog();
-      const { result } = await runRecovery({ deliver, log });
+    const deliver = vi.fn().mockResolvedValue([]);
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
 
-      expect(deliver).not.toHaveBeenCalled();
-      expect(result).toEqual({
-        recovered: 0,
-        failed: 1,
-        skippedMaxRetries: 0,
-        deferredBackoff: 0,
-      });
-      const entries = await loadPendingDeliveries(tmpDir());
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.id).toBe(id);
-      expect(entries[0]?.retryCount).toBe(1);
-      expect(entries[0]?.lastError).toContain("failed to ack reconciled sent delivery");
-      expect(entries[0]?.lastError).toContain("ack denied");
-      expect(log.warn).toHaveBeenCalledWith(
-        expect.stringContaining("failed to ack reconciled sent delivery"),
-      );
-    } finally {
-      renameSpy.mockRestore();
-    }
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      recovered: 1,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(log.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to ack reconciled sent delivery"),
+    );
   });
 
   it("replays unknown-after-send entries only after adapter proves they were not sent", async () => {
@@ -443,7 +420,7 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(result.failed).toBe(1);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(readFailedQueuedEntry(tmpDir(), id)).toMatchObject({ id });
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("refusing blind replay without adapter reconciliation"),
     );
@@ -463,7 +440,7 @@ describe("delivery-queue recovery", () => {
     expect(result.failed).toBe(1);
     expect(result.recovered).toBe(0);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(readFailedQueuedEntry(tmpDir(), id)).toMatchObject({ id });
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
   });
 
@@ -485,7 +462,7 @@ describe("delivery-queue recovery", () => {
     expect(result.failed).toBe(1);
     expect(result.recovered).toBe(0);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(readFailedQueuedEntry(tmpDir(), id)).toMatchObject({ id });
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
   });
 
@@ -525,7 +502,7 @@ describe("delivery-queue recovery", () => {
       deferredBackoff: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(readFailedQueuedEntry(tmpDir(), id)).toMatchObject({ id });
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("refusing blind replay without adapter reconciliation"),
     );
@@ -540,10 +517,9 @@ describe("delivery-queue recovery", () => {
     const result = attachOutboundDeliveryCommitHook(
       { channel: "demo-channel-a", messageId: "m1" },
       async () => {
+        const pending = await loadPendingDeliveries(tmpDir());
         order.push(
-          fs.existsSync(path.join(tmpDir(), "delivery-queue", "pending", `${id}.json`))
-            ? "commit-before-ack"
-            : "commit-after-ack",
+          pending.some((entry) => entry.id === id) ? "commit-before-ack" : "commit-after-ack",
         );
       },
     );
@@ -556,9 +532,6 @@ describe("delivery-queue recovery", () => {
 
     expect(order).toEqual(["deliver", "commit-after-ack"]);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "pending", `${id}.json`))).toBe(
-      false,
-    );
   });
 
   it("replays stored delivery options during recovery", async () => {

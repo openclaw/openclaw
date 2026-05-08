@@ -11,7 +11,7 @@ import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
-import { runMigrationApply } from "./migrate/apply.js";
+import { createPreMigrationBackup, runMigrationApply } from "./migrate/apply.js";
 import { formatMigrationPlan } from "./migrate/output.js";
 import { createMigrationPlan, resolveMigrationProvider } from "./migrate/providers.js";
 import {
@@ -43,6 +43,34 @@ import type {
 } from "./migrate/types.js";
 
 export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
+
+export type MigrateStatePlanOptions = {
+  json?: boolean;
+};
+
+export type MigrateStateApplyOptions = MigrateStatePlanOptions & {
+  yes?: boolean;
+  noBackup?: boolean;
+  force?: boolean;
+  backupOutput?: string;
+};
+
+type StateMigrationPlanSummary = {
+  total: number;
+  sessions: boolean;
+  agentDir: boolean;
+  channelPlans: number;
+  sqliteTables: number;
+};
+
+type StateMigrationPlanOutput = {
+  kind: "legacy-state";
+  stateDir: string;
+  targetAgentId: string;
+  targetMainKey: string;
+  summary: StateMigrationPlanSummary;
+  preview: string[];
+};
 
 function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
   return applyMigrationPluginSelection(
@@ -204,6 +232,111 @@ function shouldSkipCodexApplyAfterInteractiveSelection(plan: MigrationPlan): boo
 
 function logNoCodexSelection(runtime: RuntimeEnv): void {
   runtime.log("No Codex skills or native Codex plugins selected for migration.");
+}
+
+function summarizeStateMigrationPlan(
+  detected: Awaited<
+    ReturnType<typeof import("./doctor-state-migrations.js").detectLegacyStateMigrations>
+  >,
+): StateMigrationPlanSummary {
+  const total =
+    (detected.sessions.hasLegacy ? 1 : 0) +
+    (detected.agentDir.hasLegacy ? 1 : 0) +
+    detected.channelPlans.plans.length +
+    detected.sqlite.legacyTables.length;
+  return {
+    total,
+    sessions: detected.sessions.hasLegacy,
+    agentDir: detected.agentDir.hasLegacy,
+    channelPlans: detected.channelPlans.plans.length,
+    sqliteTables: detected.sqlite.legacyTables.length,
+  };
+}
+
+function formatStateMigrationPlan(plan: StateMigrationPlanOutput): string[] {
+  if (plan.preview.length === 0) {
+    return ["No legacy OpenClaw state detected."];
+  }
+  return [`Legacy OpenClaw state migration plan for agent ${plan.targetAgentId}:`, ...plan.preview];
+}
+
+async function createStateMigrationPlan(): Promise<{
+  detected: Awaited<
+    ReturnType<typeof import("./doctor-state-migrations.js").detectLegacyStateMigrations>
+  >;
+  output: StateMigrationPlanOutput;
+}> {
+  const { detectLegacyStateMigrations } = await import("./doctor-state-migrations.js");
+  const detected = await detectLegacyStateMigrations({ cfg: getRuntimeConfig() });
+  return {
+    detected,
+    output: {
+      kind: "legacy-state",
+      stateDir: detected.stateDir,
+      targetAgentId: detected.targetAgentId,
+      targetMainKey: detected.targetMainKey,
+      summary: summarizeStateMigrationPlan(detected),
+      preview: detected.preview,
+    },
+  };
+}
+
+export async function migrateStatePlanCommand(
+  runtime: RuntimeEnv,
+  opts: MigrateStatePlanOptions = {},
+): Promise<StateMigrationPlanOutput> {
+  const { output } = await createStateMigrationPlan();
+  if (opts.json) {
+    writeRuntimeJson(runtime, output);
+  } else {
+    runtime.log(formatStateMigrationPlan(output).join("\n"));
+  }
+  return output;
+}
+
+export async function migrateStateApplyCommand(
+  runtime: RuntimeEnv,
+  opts: MigrateStateApplyOptions,
+): Promise<{ kind: "legacy-state"; changes: string[]; warnings: string[]; backupPath?: string }> {
+  if (opts.noBackup && !opts.force) {
+    throw new Error("--no-backup requires --force.");
+  }
+  if (!opts.yes && !process.stdin.isTTY) {
+    throw new Error("openclaw migrate state apply requires --yes in non-interactive mode.");
+  }
+  const { detected, output } = await createStateMigrationPlan();
+  if (!opts.yes) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, output);
+      return { kind: "legacy-state", changes: [], warnings: [] };
+    }
+    runtime.log(formatStateMigrationPlan(output).join("\n"));
+    const ok = await promptYesNo("Apply this state migration now?", false);
+    if (!ok) {
+      runtime.log("State migration cancelled.");
+      return { kind: "legacy-state", changes: [], warnings: [] };
+    }
+  }
+  const backupPath =
+    opts.noBackup || output.summary.total === 0
+      ? undefined
+      : await createPreMigrationBackup({ output: opts.backupOutput });
+  const { runLegacyStateMigrations } = await import("./doctor-state-migrations.js");
+  const migrated = await runLegacyStateMigrations({ detected, backupPath });
+  const result = { kind: "legacy-state" as const, backupPath, ...migrated };
+  if (opts.json) {
+    writeRuntimeJson(runtime, result);
+  } else if (migrated.changes.length === 0 && migrated.warnings.length === 0) {
+    runtime.log("No legacy OpenClaw state migrated.");
+  } else {
+    const lines = [
+      ...(backupPath ? [`Backup: ${backupPath}`] : []),
+      ...migrated.changes,
+      ...migrated.warnings.map((warning) => `Warning: ${warning}`),
+    ];
+    runtime.log(lines.join("\n"));
+  }
+  return result;
 }
 
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {

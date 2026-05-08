@@ -157,7 +157,6 @@ export async function resolveReplyDirectives(params: {
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
-  storePath?: string;
   sessionScope: Parameters<typeof applyInlineDirectiveOverrides>[0]["sessionScope"];
   groupResolution: Parameters<typeof resolveGroupRequireMention>[0]["groupResolution"];
   isGroup: boolean;
@@ -185,7 +184,6 @@ export async function resolveReplyDirectives(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
-    storePath,
     sessionScope,
     groupResolution,
     isGroup,
@@ -523,7 +521,6 @@ export async function resolveReplyDirectives(params: {
         sessionKey,
         parentSessionKey:
           targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
-        storePath,
         defaultProvider,
         defaultModel,
         provider,
@@ -597,7 +594,6 @@ export async function resolveReplyDirectives(params: {
     sessionEntry: targetSessionEntry,
     sessionStore,
     sessionKey,
-    storePath,
     sessionScope,
     isGroup,
     allowTextCommands,

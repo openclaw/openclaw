@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 
@@ -10,6 +11,7 @@ describe("Matrix inbound event dedupe", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    resetPluginStateStoreForTests();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -70,19 +72,20 @@ describe("Matrix inbound event dedupe", () => {
 
   it("prunes expired and overflowed entries on load", async () => {
     const storagePath = createStoragePath();
-    fs.writeFileSync(
+    let now = 10;
+    const first = await createMatrixInboundEventDeduper({
+      auth: auth as never,
       storagePath,
-      JSON.stringify({
-        version: 1,
-        entries: [
-          { key: "!room:example.org|$old", ts: 10 },
-          { key: "!room:example.org|$keep-1", ts: 90 },
-          { key: "!room:example.org|$keep-2", ts: 95 },
-          { key: "!room:example.org|$keep-3", ts: 100 },
-        ],
-      }),
-      "utf8",
-    );
+      ttlMs: 1_000,
+      maxEntries: 10,
+      nowMs: () => now,
+    });
+    for (const eventId of ["$old", "$keep-1", "$keep-2", "$keep-3"]) {
+      expect(first.claimEvent({ roomId: "!room:example.org", eventId })).toBe(true);
+      await first.commitEvent({ roomId: "!room:example.org", eventId });
+      now += eventId === "$old" ? 80 : 5;
+    }
+    await first.stop();
 
     const deduper = await createMatrixInboundEventDeduper({
       auth: auth as never,
@@ -125,22 +128,17 @@ describe("Matrix inbound event dedupe", () => {
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$backlog" })).toBe(false);
   });
 
-  it("treats stop persistence failures as best-effort cleanup", async () => {
-    const blockingPath = createStoragePath();
-    fs.writeFileSync(blockingPath, "blocking file", "utf8");
+  it("does not create the legacy JSON file", async () => {
+    const storagePath = createStoragePath();
     const deduper = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      storagePath: path.join(blockingPath, "nested", "inbound-dedupe.json"),
+      storagePath,
     });
 
-    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$persist-fail" })).toBe(
-      true,
-    );
-    await deduper.commitEvent({
-      roomId: "!room:example.org",
-      eventId: "$persist-fail",
-    });
+    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$sqlite" })).toBe(true);
+    await deduper.commitEvent({ roomId: "!room:example.org", eventId: "$sqlite" });
+    await deduper.stop();
 
-    await expect(deduper.stop()).resolves.toBeUndefined();
+    expect(fs.existsSync(storagePath)).toBe(false);
   });
 });

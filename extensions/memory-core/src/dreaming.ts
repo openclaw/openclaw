@@ -140,16 +140,12 @@ type LegacyPhaseMigrationMode = "enabled" | "disabled";
 function formatRepairSummary(repair: {
   rewroteStore: boolean;
   removedInvalidEntries: number;
-  removedStaleLock: boolean;
 }): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
     actions.push(
       `rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
     );
-  }
-  if (repair.removedStaleLock) {
-    actions.push("removed stale promotion lock");
   }
   return actions.join(", ");
 }

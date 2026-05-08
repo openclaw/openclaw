@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -216,6 +218,7 @@ describe("config plugin validation", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -536,46 +539,42 @@ describe("config plugin validation", () => {
   });
 
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
-    const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
-    await mkdirSafe(path.dirname(installedPluginIndexPath));
-    await fs.writeFile(
-      installedPluginIndexPath,
-      JSON.stringify(
-        {
-          installRecords: {
-            "missing-sms": {
-              source: "npm",
-              spec: "missing-sms@1.0.0",
-              installedAt: "2026-04-12T00:00:00.000Z",
-            },
+    writePersistedInstalledPluginIndexSync(
+      {
+        version: 1,
+        hostContractVersion: "test-host",
+        compatRegistryVersion: "test-compat",
+        migrationVersion: 1,
+        policyHash: "test-policy",
+        generatedAtMs: 0,
+        installRecords: {
+          "missing-sms": {
+            source: "npm",
+            spec: "missing-sms@1.0.0",
+            installedAt: "2026-04-12T00:00:00.000Z",
           },
-          plugins: [],
         },
-        null,
-        2,
-      ),
-      "utf-8",
+        plugins: [],
+        diagnostics: [],
+      },
+      { stateDir: path.join(suiteHome, ".openclaw") },
     );
-    try {
-      const res = validateInSuite({
-        agents: { list: [{ id: "pi" }] },
-        channels: {
-          "missing-sms": { token: "stale" },
-        },
-      });
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        "missing-sms": { token: "stale" },
+      },
+    });
 
-      expect(res.ok).toBe(true);
-      if (!res.ok) {
-        return;
-      }
-      expect(res.warnings).toContainEqual({
-        path: "channels.missing-sms",
-        message:
-          "unknown channel id: missing-sms (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
-      });
-    } finally {
-      await fs.rm(installedPluginIndexPath, { force: true });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
     }
+    expect(res.warnings).toContainEqual({
+      path: "channels.missing-sms",
+      message:
+        "unknown channel id: missing-sms (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
+    });
   });
 
   it("warns with actionable guidance when a runtime command name is used in plugins.allow", () => {

@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -120,7 +119,6 @@ describe("gateway e2e", () => {
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    clearSessionStoreCacheForTest();
     resetAgentRunContextForTest();
     clearAllBootstrapSnapshots();
     clearGatewaySubagentRuntime();
@@ -129,7 +127,6 @@ describe("gateway e2e", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    clearSessionStoreCacheForTest();
     resetAgentRunContextForTest();
     clearAllBootstrapSnapshots();
     clearGatewaySubagentRuntime();

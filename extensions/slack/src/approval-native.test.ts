@@ -2,8 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it } from "vitest";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../../../src/state/openclaw-agent-db.js";
 import { slackApprovalCapability, slackNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
@@ -25,11 +26,17 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-const STORE_PATH = path.join(os.tmpdir(), "openclaw-slack-approval-native-test.json");
+const SLACK_CHANNEL_SESSION_KEY = "agent:main:slack:channel:c123";
 
-function writeStore(store: Record<string, unknown>) {
-  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-  clearSessionStoreCacheForTest();
+let previousStateDir: string | undefined;
+let tempStateDir = "";
+
+function seedSessionEntry(entry: Parameters<typeof upsertSessionEntry>[0]["entry"]) {
+  upsertSessionEntry({
+    agentId: "main",
+    sessionKey: SLACK_CHANNEL_SESSION_KEY,
+    entry,
+  });
 }
 
 function createExecApprovalRequest(
@@ -65,6 +72,23 @@ async function resolveExecOriginTarget(
 }
 
 describe("slack native approval adapter", () => {
+  beforeEach(() => {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-approval-native-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(tempStateDir, { recursive: true, force: true });
+    tempStateDir = "";
+  });
+
   it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
     const cfg = buildConfig({
       execApprovals: {
@@ -199,24 +223,19 @@ describe("slack native approval adapter", () => {
   });
 
   it("falls back to the session-bound origin target for plugin approvals", async () => {
-    writeStore({
-      "agent:main:slack:channel:c123": {
-        sessionId: "sess",
-        updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "slack",
-          to: "channel:C123",
-          accountId: "default",
-          threadId: "1712345678.123456",
-        },
+    seedSessionEntry({
+      sessionId: "sess",
+      updatedAt: Date.now(),
+      deliveryContext: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "default",
+        threadId: "1712345678.123456",
       },
     });
 
     const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
-      cfg: {
-        ...buildConfig(),
-        session: { store: STORE_PATH },
-      },
+      cfg: buildConfig(),
       accountId: "default",
       approvalKind: "plugin",
       request: {
@@ -224,7 +243,7 @@ describe("slack native approval adapter", () => {
         request: {
           title: "Plugin approval",
           description: "Allow access",
-          sessionKey: "agent:main:slack:channel:c123",
+          sessionKey: SLACK_CHANNEL_SESSION_KEY,
         },
         createdAtMs: 0,
         expiresAtMs: 1000,
@@ -239,10 +258,7 @@ describe("slack native approval adapter", () => {
 
   it("falls back to the session-key origin target for plugin approvals when the store is missing", async () => {
     const target = await slackNativeApprovalAdapter.native?.resolveOriginTarget?.({
-      cfg: {
-        ...buildConfig(),
-        session: { store: STORE_PATH },
-      },
+      cfg: buildConfig(),
       accountId: "default",
       approvalKind: "plugin",
       request: {

@@ -31,10 +31,10 @@ const MISSING_CONFIG_MAX_RETRIES = 2;
 
 /**
  * Paths under `skills.*` always change the snapshot that sessions cache in
- * sessions.json. Any prefix match here (for example `skills.allowBundled`,
- * `skills.entries.X.enabled`, `skills.profile`) forces sessions to rebuild
- * their snapshot on the next turn rather than silently advertising stale
- * tools to the model.
+ * SQLite session rows. Any prefix match here (for example
+ * `skills.allowBundled`, `skills.entries.X.enabled`, `skills.profile`) forces
+ * sessions to rebuild their snapshot on the next turn rather than silently
+ * advertising stale tools to the model.
  */
 const SKILLS_INVALIDATION_PREFIXES = ["skills"] as const;
 
@@ -228,7 +228,7 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
 
-    // Invalidate cached skills snapshots (persisted in sessions.json) whenever
+    // Invalidate cached skills snapshots (persisted in SQLite session rows) whenever
     // the user touches skills.* config. Without this, sessions keep advertising
     // tools that no longer exist in the allowlist, which causes infinite
     // tool-not-found loops against the model.

@@ -1,9 +1,8 @@
 import {
-  resolveDefaultSessionStorePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
+import { getSessionEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -45,9 +44,10 @@ export function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
 ): ExportCommandSessionTarget | ReplyPayload {
   const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId || "main";
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
-  const store = loadSessionStore(storePath);
-  const entry = store[params.sessionKey] as SessionEntry | undefined;
+  const entry = getSessionEntry({
+    agentId: targetAgentId,
+    sessionKey: params.sessionKey,
+  });
   if (!entry?.sessionId) {
     return { text: `❌ Session not found: ${params.sessionKey}` };
   }
@@ -56,7 +56,7 @@ export function resolveExportCommandSessionTarget(
     const sessionFile = resolveSessionFilePath(
       entry.sessionId,
       entry,
-      resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
+      resolveSessionFilePathOptions({ agentId: targetAgentId }),
     );
     return { agentId: targetAgentId, entry, sessionFile };
   } catch (err) {

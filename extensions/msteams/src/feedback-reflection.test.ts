@@ -1,7 +1,9 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { upsertPluginStateMigrationEntry } from "openclaw/plugin-sdk/migration-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { storeSessionLearning } from "./feedback-reflection-store.js";
 import {
   buildFeedbackEvent,
@@ -160,78 +162,84 @@ describe("reflection cooldown", () => {
 
 describe("loadSessionLearnings", () => {
   let tmpDir: string;
+  let previousStateDir: string | undefined;
+
+  beforeEach(async () => {
+    resetPluginStateStoreForTests();
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+  });
 
   afterEach(async () => {
+    resetPluginStateStoreForTests();
+    if (previousStateDir == null) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     if (tmpDir) {
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("returns empty array when file doesn't exist", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    const learnings = await loadSessionLearnings(tmpDir, "nonexistent");
-    expect(learnings).toStrictEqual([]);
+  it("returns empty array when no row exists", async () => {
+    const learnings = await loadSessionLearnings("nonexistent");
+    expect(learnings).toEqual([]);
   });
 
   it("reads existing learnings", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
     const safeKey = Buffer.from("msteams:user1", "utf8").toString("base64url");
-    const filePath = path.join(tmpDir, `${safeKey}.learnings.json`);
-    await writeFile(filePath, JSON.stringify(["Be concise", "Use examples"]), "utf-8");
+    upsertPluginStateMigrationEntry({
+      pluginId: "msteams",
+      namespace: "feedback-learnings",
+      key: safeKey,
+      value: { learnings: ["Be concise", "Use examples"], updatedAt: Date.now() },
+      createdAt: Date.now(),
+    });
 
-    const learnings = await loadSessionLearnings(tmpDir, "msteams:user1");
+    const learnings = await loadSessionLearnings("msteams:user1");
     expect(learnings).toEqual(["Be concise", "Use examples"]);
   });
 
-  it("keeps distinct session keys isolated across the filename persistence boundary", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-
+  it("keeps distinct session keys isolated across the SQLite key boundary", async () => {
     await storeSessionLearning({
-      storePath: tmpDir,
       sessionKey: "msteams:user1",
       learning: "Use bullets",
     });
     await storeSessionLearning({
-      storePath: tmpDir,
       sessionKey: "msteams/user1",
       learning: "Avoid bullets",
     });
 
-    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual(["Use bullets"]);
-    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual(["Avoid bullets"]);
+    await expect(loadSessionLearnings("msteams:user1")).resolves.toEqual(["Use bullets"]);
+    await expect(loadSessionLearnings("msteams/user1")).resolves.toEqual(["Avoid bullets"]);
   });
 
-  it("reads and migrates legacy sanitized session learning files", async () => {
-    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    const legacyFile = path.join(tmpDir, "msteams_user1.learnings.json");
-    await writeFile(legacyFile, JSON.stringify(["Legacy learning"]), "utf-8");
+  it("reads and migrates legacy sanitized session learning rows", async () => {
+    upsertPluginStateMigrationEntry({
+      pluginId: "msteams",
+      namespace: "feedback-learnings",
+      key: "msteams_user1",
+      value: { learnings: ["Legacy learning"], updatedAt: Date.now() },
+      createdAt: Date.now(),
+    });
 
-    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
-      "Legacy learning",
-    ]);
+    await expect(loadSessionLearnings("msteams:user1")).resolves.toEqual(["Legacy learning"]);
 
     await storeSessionLearning({
-      storePath: tmpDir,
       sessionKey: "msteams:user1",
       learning: "New learning",
     });
 
-    const migratedFile = path.join(
-      tmpDir,
-      `${Buffer.from("msteams:user1", "utf8").toString("base64url")}.learnings.json`,
-    );
-    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
+    await expect(loadSessionLearnings("msteams:user1")).resolves.toEqual([
       "Legacy learning",
       "New learning",
     ]);
-    await expect(rm(legacyFile, { force: false })).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
+    await expect(loadSessionLearnings("msteams:user1")).resolves.toEqual([
       "Legacy learning",
       "New learning",
     ]);
-    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toStrictEqual([]);
-    await expect(
-      import("node:fs/promises").then((fs) => fs.readFile(migratedFile, "utf-8")),
-    ).resolves.toContain("Legacy learning");
+    await expect(loadSessionLearnings("msteams/user1")).resolves.toEqual([]);
   });
 });

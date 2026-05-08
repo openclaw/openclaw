@@ -1,6 +1,4 @@
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
-import { closePluginStateSqliteStore, probePluginStateStore } from "./plugin-state-store.sqlite.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 
 export type PluginStateSeedEntry = {
   pluginId: string;
@@ -16,32 +14,25 @@ export function seedPluginStateEntriesForTests(entries: PluginStateSeedEntry[]):
     return;
   }
 
-  probePluginStateStore();
-  closePluginStateSqliteStore();
-
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(resolvePluginStateSqlitePath());
-  const insertEntry = db.prepare(`
-    INSERT INTO plugin_state_entries (
-      plugin_id,
-      namespace,
-      entry_key,
-      value_json,
-      created_at,
-      expires_at
-    ) VALUES (
-      @plugin_id,
-      @namespace,
-      @entry_key,
-      @value_json,
-      @created_at,
-      @expires_at
-    )
-  `);
   const now = Date.now();
-
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  runOpenClawStateWriteTransaction((database) => {
+    const insertEntry = database.db.prepare(`
+      INSERT INTO plugin_state_entries (
+        plugin_id,
+        namespace,
+        entry_key,
+        value_json,
+        created_at,
+        expires_at
+      ) VALUES (
+        @plugin_id,
+        @namespace,
+        @entry_key,
+        @value_json,
+        @created_at,
+        @expires_at
+      )
+    `);
     for (let index = 0; index < entries.length; index += 1) {
       const entry = entries[index];
       const valueJson = JSON.stringify(entry.value);
@@ -57,11 +48,5 @@ export function seedPluginStateEntriesForTests(entries: PluginStateSeedEntry[]):
         expires_at: entry.expiresAt ?? null,
       });
     }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  } finally {
-    db.close();
-  }
+  });
 }

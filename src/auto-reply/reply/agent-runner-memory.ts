@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import type { AgentMessage } from "../../agents/agent-core-contract.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
@@ -18,8 +17,12 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
-  updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import {
+  listSqliteSessionTranscriptFiles,
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScope,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -45,6 +48,7 @@ import {
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { writeSessionEntryRow } from "./session-row-patch.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 type PiEmbeddedRuntime = typeof import("../../agents/pi-embedded.js");
@@ -80,7 +84,7 @@ const memoryDeps = {
   registerAgentRunContext,
   refreshQueuedFollowupSession,
   incrementCompactionCount,
-  updateSessionStoreEntry,
+  writeSessionEntryRow,
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
 };
@@ -93,7 +97,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
     registerAgentRunContext,
     refreshQueuedFollowupSession,
     incrementCompactionCount,
-    updateSessionStoreEntry,
+    writeSessionEntryRow,
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
     ...overrides,
@@ -161,41 +165,47 @@ function resolveMemoryFlushModelFallbackOptions(
 export type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
-  trailingBytesTokens?: number;
 };
 
 // Keep a generous near-threshold window so large assistant outputs still trigger
 // transcript reads in time to flip memory-flush gating when needed.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
-const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
 const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
 
-function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
-  const trimmed = line.trim();
-  if (!trimmed) {
+function parseUsageFromTranscriptEvent(
+  event: unknown,
+): ReturnType<typeof normalizeUsage> | undefined {
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(trimmed) as {
-      message?: { usage?: UsageLike };
-      usage?: UsageLike;
-    };
-    const usageRaw = parsed.message?.usage ?? parsed.usage;
-    const usage = normalizeUsage(usageRaw);
-    if (usage && hasNonzeroUsage(usage)) {
-      return usage;
-    }
-  } catch {
-    // ignore bad lines
+  const parsed = event as {
+    message?: { usage?: UsageLike };
+    usage?: UsageLike;
+  };
+  const usageRaw = parsed.message?.usage ?? parsed.usage;
+  const usage = normalizeUsage(usageRaw);
+  if (usage && hasNonzeroUsage(usage)) {
+    return usage;
   }
   return undefined;
+}
+
+function isTranscriptPressureEvent(event: unknown): boolean {
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    return false;
+  }
+  const record = event as Record<string, unknown>;
+  if (record.type === "session") {
+    return false;
+  }
+  const message = record.message;
+  return Boolean(message && typeof message === "object" && !Array.isArray(message));
 }
 
 function resolveSessionLogPath(
   sessionId?: string,
   sessionEntry?: SessionEntry,
   sessionKey?: string,
-  opts?: { storePath?: string },
 ): string | undefined {
   if (!sessionId) {
     return undefined;
@@ -209,7 +219,6 @@ function resolveSessionLogPath(
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const pathOpts = resolveSessionFilePathOptions({
       agentId,
-      storePath: opts?.storePath,
     });
     // Normalize sessionFile through resolveSessionFilePath so relative entries
     // are resolved against the sessions dir/store layout, not process.cwd().
@@ -223,15 +232,35 @@ function resolveSessionLogPath(
   }
 }
 
+function resolveSqliteSessionTranscriptPath(params: {
+  sessionId?: string;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+}): string | undefined {
+  const sessionId = normalizeOptionalString(params.sessionId);
+  if (!sessionId) {
+    return undefined;
+  }
+  const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
+  const candidates = listSqliteSessionTranscriptFiles().filter(
+    (entry) => (!agentId || entry.agentId === agentId) && entry.sessionId === sessionId,
+  );
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const explicit = normalizeOptionalString(params.sessionEntry?.sessionFile);
+  if (explicit) {
+    const matched = candidates.find((entry) => entry.path === explicit);
+    if (matched) {
+      return matched.path;
+    }
+  }
+  return candidates[0]?.path;
+}
+
 function deriveTranscriptUsageSnapshot(
-  snapshot:
-    | {
-        usage: ReturnType<typeof normalizeUsage> | undefined;
-        trailingBytes?: number;
-      }
-    | undefined,
+  usage: ReturnType<typeof normalizeUsage> | undefined,
 ): SessionTranscriptUsageSnapshot | undefined {
-  const usage = snapshot?.usage;
   if (!usage) {
     return undefined;
   }
@@ -247,12 +276,6 @@ function deriveTranscriptUsageSnapshot(
   return {
     promptTokens,
     outputTokens,
-    trailingBytesTokens:
-      typeof snapshot.trailingBytes === "number" &&
-      Number.isFinite(snapshot.trailingBytes) &&
-      snapshot.trailingBytes > 0
-        ? Math.ceil(snapshot.trailingBytes / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
-        : undefined,
   };
 }
 
@@ -287,89 +310,56 @@ async function readSessionLogSnapshot(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
-  opts?: { storePath?: string };
   includeByteSize: boolean;
   includeUsage: boolean;
 }): Promise<SessionLogSnapshot> {
-  const logPath = resolveSessionLogPath(
-    params.sessionId,
-    params.sessionEntry,
-    params.sessionKey,
-    params.opts,
-  );
-  if (!logPath) {
+  const sessionId = normalizeOptionalString(params.sessionId);
+  if (!sessionId) {
     return {};
   }
 
   const snapshot: SessionLogSnapshot = {};
-
-  if (params.includeByteSize) {
-    try {
-      const stat = await fs.promises.stat(logPath);
-      const size = Math.floor(stat.size);
-      snapshot.byteSize = Number.isFinite(size) && size >= 0 ? size : undefined;
-    } catch {
-      snapshot.byteSize = undefined;
-    }
+  const scope = resolveSqliteSessionTranscriptScope({
+    agentId: params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined,
+    sessionId,
+    transcriptPath: params.sessionEntry?.sessionFile,
+  });
+  if (!scope) {
+    return snapshot;
   }
 
-  if (params.includeUsage) {
-    try {
-      const lastUsage = await readLastNonzeroUsageFromSessionLog(logPath);
-      snapshot.usage = deriveTranscriptUsageSnapshot(lastUsage);
-    } catch {
-      snapshot.usage = undefined;
-    }
-  }
-
-  return snapshot;
-}
-
-async function readLastNonzeroUsageFromSessionLog(logPath: string) {
-  const handle = await fs.promises.open(logPath, "r");
   try {
-    const stat = await handle.stat();
-    let position = stat.size;
-    let leadingPartial = "";
-    while (position > 0) {
-      const chunkSize = Math.min(TRANSCRIPT_TAIL_CHUNK_BYTES, position);
-      const start = position - chunkSize;
-      const buffer = Buffer.allocUnsafe(chunkSize);
-      const { bytesRead } = await handle.read(buffer, 0, chunkSize, start);
-      if (bytesRead <= 0) {
-        break;
-      }
-      const chunk = buffer.toString("utf-8", 0, bytesRead);
-      const appendedPartialBytes = Buffer.byteLength(leadingPartial, "utf8");
-      const combined = `${chunk}${leadingPartial}`;
-      const lines = combined.split(/\n+/);
-      leadingPartial = lines.shift() ?? "";
-      const suffixBytesBeforeChunk = stat.size - position;
-      const suffixBytesOutsideCombined = Math.max(0, suffixBytesBeforeChunk - appendedPartialBytes);
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
-        const usage = parseUsageFromTranscriptLine(lines[i] ?? "");
+    const events = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
+    let latestUsageIndex = -1;
+    if (params.includeUsage) {
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const usage = parseUsageFromTranscriptEvent(events[index]);
         if (usage) {
-          const trailingLines = lines.slice(i + 1);
-          const trailingBytesInChunk =
-            Buffer.byteLength(trailingLines.join("\n"), "utf8") + trailingLines.length;
-          return {
-            usage,
-            trailingBytes: suffixBytesOutsideCombined + trailingBytesInChunk,
-          };
+          latestUsageIndex = index;
+          snapshot.usage = deriveTranscriptUsageSnapshot(usage);
+          break;
         }
       }
-      position = start;
     }
-    const usage = parseUsageFromTranscriptLine(leadingPartial);
-    return usage
-      ? {
-          usage,
-          trailingBytes: Math.max(0, stat.size - Buffer.byteLength(leadingPartial, "utf8")),
+    if (params.includeByteSize) {
+      const byteEvents =
+        params.includeUsage && latestUsageIndex >= 0 ? events.slice(latestUsageIndex + 1) : events;
+      const size = byteEvents.reduce((total: number, event) => {
+        if (!isTranscriptPressureEvent(event)) {
+          return total;
         }
-      : undefined;
-  } finally {
-    await handle.close();
+        try {
+          return total + Buffer.byteLength(`${JSON.stringify(event)}\n`, "utf8");
+        } catch {
+          return total;
+        }
+      }, 0);
+      snapshot.byteSize = Number.isFinite(size) && size >= 0 ? size : undefined;
+    }
+  } catch {
+    return snapshot;
   }
+  return snapshot;
 }
 
 type TranscriptTokenEstimate = {
@@ -383,7 +373,6 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   sessionFile?: string;
-  storePath?: string;
 }): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
@@ -399,7 +388,6 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       sessionId,
       sessionEntry: sessionEntryForTranscript,
       sessionKey: params.sessionKey,
-      opts: { storePath: params.storePath },
       includeByteSize: true,
       includeUsage: true,
     });
@@ -410,10 +398,19 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         ? Math.ceil(snapshot.byteSize / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
         : undefined;
     const promptTokens = snapshot.usage?.promptTokens;
-    const trailingBytesTokens = snapshot.usage?.trailingBytesTokens;
+    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
+      const outputTokens = snapshot.usage?.outputTokens;
+      return {
+        promptTokens: Math.ceil(promptTokens),
+        outputTokens:
+          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
+            ? Math.ceil(outputTokens)
+            : undefined,
+        transcriptBytesTokens,
+      };
+    }
     const messages = (await readSessionMessagesAsync(
       sessionId,
-      params.storePath,
       sessionEntryForTranscript?.sessionFile,
       {
         agentId: resolveAgentIdFromSessionKey(params.sessionKey),
@@ -422,27 +419,11 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         maxBytes: 1024 * 1024,
       },
     )) as AgentMessage[];
-    const estimatedMessageTokens = (() => {
-      if (messages.length === 0) {
-        return undefined;
-      }
-      const tokens = estimateMessagesTokens(messages);
-      return Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : undefined;
-    })();
-    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
-      const outputTokens = snapshot.usage?.outputTokens;
-      const usagePromptTokens = Math.ceil(promptTokens) + (trailingBytesTokens ?? 0);
-      return {
-        promptTokens: Math.max(usagePromptTokens, estimatedMessageTokens ?? 0),
-        outputTokens:
-          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
-            ? Math.ceil(outputTokens)
-            : undefined,
-        transcriptBytesTokens,
-      };
+    if (messages.length === 0) {
+      return undefined;
     }
-    const estimatedTokens = estimatedMessageTokens ?? transcriptBytesTokens;
-    if (estimatedTokens === undefined) {
+    const estimatedTokens = estimateMessagesTokens(messages);
+    if (!Number.isFinite(estimatedTokens) || estimatedTokens <= 0) {
       return undefined;
     }
     return {
@@ -464,7 +445,6 @@ export async function runPreflightCompactionIfNeeded(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   runtimePolicySessionKey?: string;
-  storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
 }): Promise<SessionEntry | undefined> {
@@ -512,7 +492,6 @@ export async function runPreflightCompactionIfNeeded(params: {
             ? entry
             : { ...entry, sessionFile: params.followupRun.run.sessionFile },
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-        opts: { storePath: params.storePath },
         includeByteSize: true,
         includeUsage: false,
       })
@@ -537,23 +516,28 @@ export async function runPreflightCompactionIfNeeded(params: {
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
           sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
-          storePath: params.storePath,
         });
   const stalePersistedPromptTokens = hasPersistedTotalTokens
     ? Math.floor(persistedTotalTokens)
     : undefined;
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
   const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
+  const postUsageTailTokens = transcriptUsageTokens?.transcriptBytesTokens;
+  const transcriptBytesProjectedTokens =
+    typeof postUsageTailTokens === "number"
+      ? resolveEffectivePromptTokens(postUsageTailTokens, undefined, promptTokenEstimate)
+      : undefined;
   const usageProjectedTokenCount =
     typeof transcriptPromptTokens === "number"
       ? resolveEffectivePromptTokens(
-          transcriptPromptTokens,
+          transcriptPromptTokens + (postUsageTailTokens ?? 0),
           transcriptOutputTokens,
           promptTokenEstimate,
         )
       : undefined;
   const projectedTokenCount = Math.max(
     usageProjectedTokenCount ?? 0,
+    transcriptBytesProjectedTokens ?? 0,
     stalePersistedPromptTokens ?? 0,
   );
   const tokenCountForCompaction =
@@ -597,12 +581,20 @@ export async function runPreflightCompactionIfNeeded(params: {
   );
 
   params.replyOperation.setPhase("preflight_compacting");
-  const sessionFile = resolveSessionLogPath(
-    entry.sessionId,
-    entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
-    params.sessionKey ?? params.followupRun.run.sessionKey,
-    { storePath: params.storePath },
-  );
+  const sessionFile =
+    resolveSqliteSessionTranscriptPath({
+      sessionId: entry.sessionId,
+      sessionEntry:
+        entry.sessionFile || !params.followupRun.run.sessionFile
+          ? entry
+          : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+      sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+    }) ??
+    resolveSessionLogPath(
+      entry.sessionId,
+      entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+      params.sessionKey ?? params.followupRun.run.sessionKey,
+    );
   const result = await memoryDeps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
@@ -646,7 +638,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     sessionEntry: entry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
-    storePath: params.storePath,
     tokensAfter: result.result?.tokensAfter,
     newSessionId: result.result?.sessionId,
     newSessionFile: result.result?.sessionFile,
@@ -689,7 +680,6 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   runtimePolicySessionKey?: string;
-  storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
 }): Promise<SessionEntry | undefined> {
@@ -773,7 +763,6 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionId: params.followupRun.run.sessionId,
         sessionEntry: entry,
         sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-        opts: { storePath: params.storePath },
         includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
         includeUsage: shouldReadTranscript,
       })
@@ -804,11 +793,12 @@ export async function runMemoryFlushIfNeeded(params: {
     if (params.sessionKey && params.sessionStore) {
       params.sessionStore[params.sessionKey] = nextEntry;
     }
-    if (params.storePath && params.sessionKey) {
+    if (params.sessionKey) {
       try {
-        const updatedEntry = await updateSessionStoreEntry({
-          storePath: params.storePath,
+        const updatedEntry = await writeSessionEntryRow({
           sessionKey: params.sessionKey,
+          fallbackEntry: entry,
+          sessionStore: params.sessionStore,
           update: async () => ({ totalTokens: transcriptPromptTokens, totalTokensFresh: true }),
         });
         if (updatedEntry) {
@@ -980,7 +970,6 @@ export async function runMemoryFlushIfNeeded(params: {
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey: params.sessionKey,
-        storePath: params.storePath,
         newSessionId: postCompactionSessionId,
         newSessionFile: postCompactionSessionFile,
       });
@@ -1003,11 +992,12 @@ export async function runMemoryFlushIfNeeded(params: {
         }
       }
     }
-    if (params.storePath && params.sessionKey) {
+    if (params.sessionKey) {
       try {
-        const updatedEntry = await memoryDeps.updateSessionStoreEntry({
-          storePath: params.storePath,
+        const updatedEntry = await memoryDeps.writeSessionEntryRow({
           sessionKey: params.sessionKey,
+          fallbackEntry: activeSessionEntry,
+          sessionStore: params.sessionStore,
           update: async () => ({
             memoryFlushAt: memoryDeps.now(),
             memoryFlushCompactionCount: flushedCompactionCount,

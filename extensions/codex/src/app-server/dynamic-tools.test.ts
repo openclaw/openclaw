@@ -499,7 +499,7 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("keeps config out of Codex tool-result contexts", async () => {
-    const config = { session: { store: "/tmp/openclaw-session-store.json" } };
+    const config = { session: {} };
     const registry = createEmptyPluginRegistry();
     const middlewareContexts: Record<string, unknown>[] = [];
     const legacyContexts: Record<string, unknown>[] = [];

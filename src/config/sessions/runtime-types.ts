@@ -3,22 +3,12 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { SessionEntry, GroupKeyResolution } from "./types.js";
 
 export type ReadSessionUpdatedAt = (params: {
-  storePath: string;
+  agentId?: string;
   sessionKey: string;
 }) => number | undefined;
 
-export type SaveSessionStoreOptions = {
-  allowDropAcpMetaSessionKeys?: string[];
-};
-
-export type SaveSessionStore = (
-  storePath: string,
-  store: Record<string, SessionEntry>,
-  opts?: SaveSessionStoreOptions,
-) => Promise<void>;
-
 export type RecordSessionMetaFromInbound = (params: {
-  storePath: string;
+  agentId?: string;
   sessionKey: string;
   ctx: MsgContext;
   groupResolution?: GroupKeyResolution | null;
@@ -26,7 +16,7 @@ export type RecordSessionMetaFromInbound = (params: {
 }) => Promise<SessionEntry | null>;
 
 export type UpdateLastRoute = (params: {
-  storePath: string;
+  agentId?: string;
   sessionKey: string;
   channel?: SessionEntry["lastChannel"];
   to?: string;

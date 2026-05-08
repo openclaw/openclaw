@@ -40,6 +40,5 @@ export function createSandboxMediaStageConfig(home: string): OpenClawConfig {
       },
     },
     channels: { whatsapp: { allowFrom: ["*"] } },
-    session: { store: join(home, "sessions.json") },
   } as OpenClawConfig;
 }

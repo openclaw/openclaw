@@ -45,11 +45,7 @@ import {
 import { authorizeSlackBotRoomMessage, resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
-import {
-  readSessionUpdatedAt,
-  resolveChannelContextVisibilityMode,
-  resolveStorePath,
-} from "../config.runtime.js";
+import { readSessionUpdatedAt, resolveChannelContextVisibilityMode } from "../config.runtime.js";
 import {
   normalizeSlackChannelType,
   resolveSlackChatType,
@@ -671,12 +667,9 @@ export async function prepareSlackMessage(params: {
       ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
       : "";
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
-  const storePath = resolveStorePath(ctx.cfg.session?.store, {
-    agentId: route.agentId,
-  });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
-    storePath,
+    agentId: route.agentId,
     sessionKey,
   });
   const dmHistoryLimit = isDirectMessage
@@ -754,7 +747,7 @@ export async function prepareSlackMessage(params: {
     threadTs,
     threadStarter,
     roomLabel,
-    storePath,
+    agentId: route.agentId,
     sessionKey,
     allowFromLower: threadContextAllowFromLower,
     allowNameMatching: ctx.allowNameMatching,
@@ -857,7 +850,6 @@ export async function prepareSlackMessage(params: {
     replyTarget,
     ctxPayload,
     turn: {
-      storePath,
       record: {
         updateLastRoute: isDirectMessage
           ? {
@@ -890,7 +882,7 @@ export async function prepareSlackMessage(params: {
           ctx.logger.warn(
             {
               error: formatErrorMessage(err),
-              storePath,
+              agentId: route.agentId,
               sessionKey,
             },
             "failed updating session meta",

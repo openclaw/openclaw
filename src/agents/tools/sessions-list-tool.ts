@@ -1,11 +1,5 @@
-import path from "node:path";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveStorePath,
-} from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -118,7 +112,7 @@ export function createSessionsListTool(opts?: {
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
 
-      const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
+      const list = await gatewayCall<{ sessions: Array<SessionListRow>; databasePath?: string }>({
         method: "sessions.list",
         params: {
           limit,
@@ -135,7 +129,6 @@ export function createSessionsListTool(opts?: {
       });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-      const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
         requesterSessionKey: effectiveRequesterKey,
@@ -227,33 +220,6 @@ export function createSessionsListTool(opts?: {
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = readStringValue(sessionFileRaw);
         const resolvedAgentId = resolveAgentIdFromSessionKey(key);
-        let transcriptPath: string | undefined;
-        if (sessionId) {
-          try {
-            const trimmedStorePath = storePath?.trim();
-            let effectiveStorePath: string | undefined;
-            if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
-              if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
-                effectiveStorePath = resolveStorePath(trimmedStorePath, {
-                  agentId: resolvedAgentId,
-                });
-              } else if (path.isAbsolute(trimmedStorePath)) {
-                effectiveStorePath = trimmedStorePath;
-              }
-            }
-            const filePathOpts = resolveSessionFilePathOptions({
-              agentId: resolvedAgentId,
-              storePath: effectiveStorePath,
-            });
-            transcriptPath = resolveSessionFilePath(
-              sessionId,
-              sessionFile ? { sessionFile } : undefined,
-              filePathOpts,
-            );
-          } catch {
-            transcriptPath = undefined;
-          }
-        }
 
         const row: SessionListRow = {
           key: displayKey,
@@ -332,7 +298,6 @@ export function createSessionsListTool(opts?: {
           lastChannel,
           lastTo: deliveryTo ?? readStringValue(entry.lastTo),
           lastAccountId,
-          transcriptPath,
         };
         if (
           sessionId &&
@@ -377,7 +342,6 @@ export function createSessionsListTool(opts?: {
             const target = titleTargets[next];
             const fields = await readSessionTitleFieldsFromTranscriptAsync(
               target.sessionId,
-              storePath,
               target.sessionFile,
               target.agentId,
             );

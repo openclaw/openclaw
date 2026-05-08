@@ -6,7 +6,6 @@ import path from "node:path";
 import readline from "node:readline";
 import chokidar, { type FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
   isPathInside,
@@ -19,16 +18,16 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntry,
+  buildSessionTranscriptEntry,
   deriveQmdScopeChannel,
   deriveQmdScopeChatType,
   isQmdScopeAllowed,
-  listSessionFilesForAgent,
+  listSessionTranscriptsForAgent,
   parseQmdQueryJson,
   resolveCliSpawnInvocation,
   runCliCommand,
   type QmdQueryResult,
-  type SessionFileEntry,
+  type SessionTranscriptEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildMemoryReadResult,
@@ -49,6 +48,7 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { withOpenClawStateLock } from "openclaw/plugin-sdk/sqlite-state-lock";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -1293,11 +1293,13 @@ export class QmdMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
-    if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-      log.debug("qmd sync ignoring targeted sessionFiles hint; running regular update");
+    if (
+      params?.sessionTranscripts?.some((sessionTranscript) => sessionTranscript.trim().length > 0)
+    ) {
+      log.debug("qmd sync ignoring targeted sessionTranscripts hint; running regular update");
     }
     if (params?.progress) {
       params.progress({ completed: 0, total: 1, label: "Updating QMD index…" });
@@ -1721,7 +1723,6 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async withQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
-    const lockPath = path.join(this.stateDir, "qmd", "embed.lock");
     const queue = getQmdEmbedQueueState();
     const previous = queue.tail;
     let releaseCurrent!: () => void;
@@ -1734,8 +1735,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
     await previous.catch(() => undefined);
     try {
-      return await withFileLock(
-        lockPath,
+      return await withOpenClawStateLock(
+        `qmd:embed:${this.qmdDir}`,
         resolveQmdEmbedLockOptions(this.qmd.update.embedTimeoutMs),
         task,
       );
@@ -2231,30 +2232,30 @@ export class QmdMemoryManager implements MemorySearchManager {
     const exportDir = this.sessionExporter.dir;
     await fs.mkdir(exportDir, { recursive: true });
     const exportRoot = await root(exportDir);
-    const files = await listSessionFilesForAgent(this.agentId);
+    const files = await listSessionTranscriptsForAgent(this.agentId);
     const keep = new Set<string>();
     const tracked = new Set<string>();
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
-    for (const sessionFile of files) {
-      const entry = await buildSessionEntry(sessionFile);
+    for (const sessionTranscript of files) {
+      const entry = await buildSessionTranscriptEntry(sessionTranscript);
       if (!entry) {
         continue;
       }
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
+      const targetName = `${path.basename(sessionTranscript, ".jsonl")}.md`;
       const target = path.join(exportDir, targetName);
-      tracked.add(sessionFile);
-      const state = this.exportedSessionState.get(sessionFile);
+      tracked.add(sessionTranscript);
+      const state = this.exportedSessionState.get(sessionTranscript);
       if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
         await exportRoot.write(targetName, this.renderSessionMarkdown(entry), {
           encoding: "utf-8",
         });
       }
-      this.exportedSessionState.set(sessionFile, {
+      this.exportedSessionState.set(sessionTranscript, {
         hash: entry.hash,
         mtimeMs: entry.mtimeMs,
         target,
@@ -2271,14 +2272,14 @@ export class QmdMemoryManager implements MemorySearchManager {
         await exportRoot.remove(name).catch(() => undefined);
       }
     }
-    for (const [sessionFile, state] of this.exportedSessionState) {
-      if (!tracked.has(sessionFile) || !isPathInside(exportDir, state.target)) {
-        this.exportedSessionState.delete(sessionFile);
+    for (const [sessionTranscript, state] of this.exportedSessionState) {
+      if (!tracked.has(sessionTranscript) || !isPathInside(exportDir, state.target)) {
+        this.exportedSessionState.delete(sessionTranscript);
       }
     }
   }
 
-  private renderSessionMarkdown(entry: SessionFileEntry): string {
+  private renderSessionMarkdown(entry: SessionTranscriptEntry): string {
     const header = `# Session ${path.basename(entry.absPath, path.extname(entry.absPath))}`;
     const body = entry.content?.trim().length ? entry.content.trim() : "(empty)";
     return `${header}\n\n${body}\n`;

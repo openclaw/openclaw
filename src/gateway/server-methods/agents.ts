@@ -28,7 +28,7 @@ import {
 } from "../../commands/agents.config.js";
 import { replaceConfigFile } from "../../config/config.js";
 import {
-  purgeAgentSessionStoreEntries,
+  purgeAgentSessionRows,
   resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions.js";
 import type { IdentityConfig } from "../../config/types.base.js";
@@ -645,8 +645,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
       afterWrite: { mode: "auto" },
     });
 
-    // Purge session store entries so orphaned sessions cannot be targeted (#65524).
-    await purgeAgentSessionStoreEntries(cfg, agentId);
+    // Purge SQLite session rows so orphaned sessions cannot be targeted (#65524).
+    await purgeAgentSessionRows(cfg, agentId);
 
     if (deleteFiles) {
       const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);

@@ -1,9 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { Insertable } from "kysely";
+import { sql } from "kysely";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import { readCaptureBlobText, writeCaptureBlob } from "./blob-store.js";
+import { decodeCaptureBlobText, encodeCaptureBlob } from "./blob-store.js";
+import type { DB as ProxyCaptureKyselyDatabase } from "./db.generated.js";
+import { PROXY_CAPTURE_SCHEMA_SQL } from "./schema.generated.js";
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
@@ -30,44 +40,7 @@ function openDatabase(dbPath: string): OpenedDatabase {
   const db = new DatabaseSync(dbPath);
   const walMaintenance = configureSqliteWalMaintenance(db);
   db.exec("PRAGMA busy_timeout = 5000");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS capture_sessions (
-      id TEXT PRIMARY KEY,
-      started_at INTEGER NOT NULL,
-      ended_at INTEGER,
-      mode TEXT NOT NULL,
-      source_scope TEXT NOT NULL,
-      source_process TEXT NOT NULL,
-      proxy_url TEXT,
-      db_path TEXT NOT NULL,
-      blob_dir TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS capture_events (
-      id INTEGER PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      ts INTEGER NOT NULL,
-      source_scope TEXT NOT NULL,
-      source_process TEXT NOT NULL,
-      protocol TEXT NOT NULL,
-      direction TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      flow_id TEXT NOT NULL,
-      method TEXT,
-      host TEXT,
-      path TEXT,
-      status INTEGER,
-      close_code INTEGER,
-      content_type TEXT,
-      headers_json TEXT,
-      data_text TEXT,
-      data_blob_id TEXT,
-      data_sha256 TEXT,
-      error_text TEXT,
-      meta_json TEXT
-    );
-    CREATE INDEX IF NOT EXISTS capture_events_session_ts_idx ON capture_events(session_id, ts);
-    CREATE INDEX IF NOT EXISTS capture_events_flow_idx ON capture_events(flow_id, ts);
-  `);
+  db.exec(PROXY_CAPTURE_SCHEMA_SQL);
   return { db, walMaintenance };
 }
 
@@ -95,6 +68,57 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
   return [...counts.entries()]
     .map(([value, count]) => ({ value, count }))
     .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
+}
+
+type CaptureSessionRow = {
+  id: string;
+  startedAt: number;
+  endedAt: number | null;
+  mode: string;
+  sourceProcess: string;
+  proxyUrl: string | null;
+  eventCount: number;
+};
+
+type BlobIdRow = {
+  blobId: string | null;
+};
+
+type CountRow = {
+  count: number;
+};
+
+function getCaptureKysely(db: DatabaseSync) {
+  return getNodeSqliteKysely<ProxyCaptureKyselyDatabase>(db);
+}
+
+function captureBlobRecordFromEncoded(
+  encoded: ReturnType<typeof encodeCaptureBlob>,
+): CaptureBlobRecord {
+  return {
+    blobId: encoded.blobId,
+    path: encoded.path,
+    encoding: encoded.encoding,
+    sizeBytes: encoded.sizeBytes,
+    sha256: encoded.sha256,
+    ...(encoded.contentType ? { contentType: encoded.contentType } : {}),
+  };
+}
+
+function countTable(
+  db: DatabaseSync,
+  table: "capture_blobs" | "capture_events" | "capture_sessions",
+): number {
+  return (
+    executeSqliteQueryTakeFirstSync<CountRow>(
+      db,
+      getCaptureKysely(db).selectFrom(table).select((eb) => eb.fn.countAll<number>().as("count")),
+    )?.count ?? 0
+  );
+}
+
+function assertNeverCaptureQueryPreset(preset: never): never {
+  throw new Error(`Unhandled capture query preset: ${String(preset)}`);
 }
 
 export class DebugProxyCaptureStore {
@@ -125,116 +149,165 @@ export class DebugProxyCaptureStore {
   }
 
   upsertSession(session: CaptureSessionRecord): void {
-    this.db
-      .prepare(
-        `INSERT INTO capture_sessions (
-          id, started_at, ended_at, mode, source_scope, source_process, proxy_url, db_path, blob_dir
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          ended_at=excluded.ended_at,
-          proxy_url=excluded.proxy_url,
-          source_process=excluded.source_process`,
-      )
-      .run(
-        session.id,
-        session.startedAt,
-        session.endedAt ?? null,
-        session.mode,
-        session.sourceScope,
-        session.sourceProcess,
-        session.proxyUrl ?? null,
-        session.dbPath,
-        session.blobDir,
-      );
+    executeSqliteQuerySync(
+      this.db,
+      getCaptureKysely(this.db)
+        .insertInto("capture_sessions")
+        .values({
+          id: session.id,
+          started_at: session.startedAt,
+          ended_at: session.endedAt ?? null,
+          mode: session.mode,
+          source_scope: session.sourceScope,
+          source_process: session.sourceProcess,
+          proxy_url: session.proxyUrl ?? null,
+          db_path: session.dbPath,
+          blob_dir: session.blobDir,
+        })
+        .onConflict((conflict) =>
+          conflict.column("id").doUpdateSet({
+            ended_at: (eb) => eb.ref("excluded.ended_at"),
+            proxy_url: (eb) => eb.ref("excluded.proxy_url"),
+            source_process: (eb) => eb.ref("excluded.source_process"),
+          }),
+        ),
+    );
   }
 
   endSession(sessionId: string, endedAt = Date.now()): void {
-    this.db
-      .prepare(`UPDATE capture_sessions SET ended_at = ? WHERE id = ?`)
-      .run(endedAt, sessionId);
+    executeSqliteQuerySync(
+      this.db,
+      getCaptureKysely(this.db)
+        .updateTable("capture_sessions")
+        .set({ ended_at: endedAt })
+        .where("id", "=", sessionId),
+    );
   }
 
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord {
-    return writeCaptureBlob({ blobDir: this.blobDir, data, contentType });
+    const encoded = encodeCaptureBlob({ data, contentType });
+    const row: Insertable<ProxyCaptureKyselyDatabase["capture_blobs"]> = {
+      blob_id: encoded.blobId,
+      content_type: encoded.contentType ?? null,
+      encoding: encoded.encoding,
+      size_bytes: encoded.sizeBytes,
+      sha256: encoded.sha256,
+      data: encoded.encodedData,
+      created_at: Date.now(),
+    };
+    executeSqliteQuerySync(
+      this.db,
+      getCaptureKysely(this.db)
+        .insertInto("capture_blobs")
+        .values(row)
+        .onConflict((conflict) => conflict.column("blob_id").doNothing()),
+    );
+    return captureBlobRecordFromEncoded(encoded);
   }
 
   recordEvent(event: CaptureEventRecord): void {
-    this.db
-      .prepare(
-        `INSERT INTO capture_events (
-          session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-          method, host, path, status, close_code, content_type, headers_json,
-          data_text, data_blob_id, data_sha256, error_text, meta_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        event.sessionId,
-        event.ts,
-        event.sourceScope,
-        event.sourceProcess,
-        event.protocol,
-        event.direction,
-        event.kind,
-        event.flowId,
-        event.method ?? null,
-        event.host ?? null,
-        event.path ?? null,
-        event.status ?? null,
-        event.closeCode ?? null,
-        event.contentType ?? null,
-        event.headersJson ?? null,
-        event.dataText ?? null,
-        event.dataBlobId ?? null,
-        event.dataSha256 ?? null,
-        event.errorText ?? null,
-        event.metaJson ?? null,
-      );
+    executeSqliteQuerySync(
+      this.db,
+      getCaptureKysely(this.db)
+        .insertInto("capture_events")
+        .values({
+          session_id: event.sessionId,
+          ts: event.ts,
+          source_scope: event.sourceScope,
+          source_process: event.sourceProcess,
+          protocol: event.protocol,
+          direction: event.direction,
+          kind: event.kind,
+          flow_id: event.flowId,
+          method: event.method ?? null,
+          host: event.host ?? null,
+          path: event.path ?? null,
+          status: event.status ?? null,
+          close_code: event.closeCode ?? null,
+          content_type: event.contentType ?? null,
+          headers_json: event.headersJson ?? null,
+          data_text: event.dataText ?? null,
+          data_blob_id: event.dataBlobId ?? null,
+          data_sha256: event.dataSha256 ?? null,
+          error_text: event.errorText ?? null,
+          meta_json: event.metaJson ?? null,
+        }),
+    );
   }
 
   listSessions(limit = 50): CaptureSessionSummary[] {
-    return this.db
-      .prepare(
-        `SELECT
-           s.id,
-           s.started_at AS startedAt,
-           s.ended_at AS endedAt,
-           s.mode,
-           s.source_process AS sourceProcess,
-           s.proxy_url AS proxyUrl,
-           COUNT(e.id) AS eventCount
-         FROM capture_sessions s
-         LEFT JOIN capture_events e ON e.session_id = s.id
-         GROUP BY s.id
-         ORDER BY s.started_at DESC
-         LIMIT ?`,
-      )
-      .all(limit) as CaptureSessionSummary[];
+    const rows = executeSqliteQuerySync<CaptureSessionRow>(
+      this.db,
+      getCaptureKysely(this.db)
+        .selectFrom("capture_sessions as s")
+        .leftJoin("capture_events as e", "e.session_id", "s.id")
+        .select((eb) => [
+          "s.id as id",
+          "s.started_at as startedAt",
+          "s.ended_at as endedAt",
+          "s.mode as mode",
+          "s.source_process as sourceProcess",
+          "s.proxy_url as proxyUrl",
+          eb.fn.count<number>("e.id").as("eventCount"),
+        ])
+        .groupBy("s.id")
+        .orderBy("s.started_at", "desc")
+        .limit(limit),
+    ).rows;
+    return rows.map((row) =>
+      Object.assign(
+        { id: row.id, startedAt: row.startedAt },
+        row.endedAt != null ? { endedAt: row.endedAt } : {},
+        { mode: row.mode, sourceProcess: row.sourceProcess },
+        row.proxyUrl ? { proxyUrl: row.proxyUrl } : {},
+        { eventCount: row.eventCount },
+      ),
+    );
   }
 
   getSessionEvents(sessionId: string, limit = 500): Array<Record<string, unknown>> {
-    return this.db
-      .prepare(
-        `SELECT
-           id, session_id AS sessionId, ts, source_scope AS sourceScope, source_process AS sourceProcess,
-           protocol, direction, kind, flow_id AS flowId, method, host, path, status, close_code AS closeCode,
-           content_type AS contentType, headers_json AS headersJson, data_text AS dataText,
-           data_blob_id AS dataBlobId, data_sha256 AS dataSha256, error_text AS errorText, meta_json AS metaJson
-         FROM capture_events
-         WHERE session_id = ?
-         ORDER BY ts DESC, id DESC
-         LIMIT ?`,
-      )
-      .all(sessionId, limit) as Array<Record<string, unknown>>;
+    return executeSqliteQuerySync<Record<string, unknown>>(
+      this.db,
+      getCaptureKysely(this.db)
+        .selectFrom("capture_events")
+        .select([
+          "id",
+          "session_id as sessionId",
+          "ts",
+          "source_scope as sourceScope",
+          "source_process as sourceProcess",
+          "protocol",
+          "direction",
+          "kind",
+          "flow_id as flowId",
+          "method",
+          "host",
+          "path",
+          "status",
+          "close_code as closeCode",
+          "content_type as contentType",
+          "headers_json as headersJson",
+          "data_text as dataText",
+          "data_blob_id as dataBlobId",
+          "data_sha256 as dataSha256",
+          "error_text as errorText",
+          "meta_json as metaJson",
+        ])
+        .where("session_id", "=", sessionId)
+        .orderBy("ts", "desc")
+        .orderBy("id", "desc")
+        .limit(limit),
+    ).rows;
   }
 
   summarizeSessionCoverage(sessionId: string): CaptureSessionCoverageSummary {
-    const rows = this.db
-      .prepare(
-        `SELECT host, meta_json AS metaJson
-         FROM capture_events
-         WHERE session_id = ?`,
-      )
-      .all(sessionId) as Array<{ host?: string | null; metaJson?: string | null }>;
+    const rows = executeSqliteQuerySync<{ host: string | null; metaJson: string | null }>(
+      this.db,
+      getCaptureKysely(this.db)
+        .selectFrom("capture_events")
+        .select(["host", "meta_json as metaJson"])
+        .where("session_id", "=", sessionId),
+    ).rows;
     const providers = new Map<string, number>();
     const apis = new Map<string, number>();
     const models = new Map<string, number>();
@@ -283,110 +356,138 @@ export class DebugProxyCaptureStore {
   }
 
   readBlob(blobId: string): string | null {
-    const row = this.db
-      .prepare(`SELECT data_blob_id AS blobId FROM capture_events WHERE data_blob_id = ? LIMIT 1`)
-      .get(blobId) as { blobId?: string } | undefined;
-    if (!row?.blobId) {
-      return null;
-    }
-    const blobPath = path.join(this.blobDir, `${row.blobId}.bin.gz`);
-    return fs.existsSync(blobPath) ? readCaptureBlobText(blobPath) : null;
+    const row = executeSqliteQueryTakeFirstSync<{ data: Buffer }>(
+      this.db,
+      getCaptureKysely(this.db)
+        .selectFrom("capture_blobs")
+        .select("data")
+        .where("blob_id", "=", blobId)
+        .limit(1),
+    );
+    return row ? decodeCaptureBlobText(Buffer.from(row.data)) : null;
   }
 
   queryPreset(preset: CaptureQueryPreset, sessionId?: string): CaptureQueryRow[] {
-    const sessionWhere = sessionId ? "AND session_id = ?" : "";
-    const args = sessionId ? [sessionId] : [];
+    const db = getCaptureKysely(this.db);
     switch (preset) {
       case "double-sends":
-        return this.db
-          .prepare(
-            `SELECT host, path, method, COUNT(*) AS duplicateCount
-             FROM capture_events
-             WHERE kind = 'request' ${sessionWhere}
-             GROUP BY host, path, method, data_sha256
-             HAVING COUNT(*) > 1
-             ORDER BY duplicateCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
+        return executeSqliteQuerySync<CaptureQueryRow>(
+          this.db,
+          db
+            .selectFrom("capture_events")
+            .select((eb) => [
+              "host",
+              "path",
+              "method",
+              eb.fn.countAll<number>().as("duplicateCount"),
+            ])
+            .where("kind", "=", "request")
+            .$if(Boolean(sessionId), (qb) => qb.where("session_id", "=", sessionId ?? ""))
+            .groupBy(["host", "path", "method", "data_sha256"])
+            .having((eb) => eb.fn.countAll<number>(), ">", 1)
+            .orderBy("duplicateCount", "desc")
+            .orderBy("host", "asc"),
+        ).rows;
       case "retry-storms":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS errorCount
-             FROM capture_events
-             WHERE kind = 'response' AND status >= 429 ${sessionWhere}
-             GROUP BY host, path
-             HAVING COUNT(*) > 1
-             ORDER BY errorCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
+        return executeSqliteQuerySync<CaptureQueryRow>(
+          this.db,
+          db
+            .selectFrom("capture_events")
+            .select((eb) => ["host", "path", eb.fn.countAll<number>().as("errorCount")])
+            .where("kind", "=", "response")
+            .where("status", ">=", 429)
+            .$if(Boolean(sessionId), (qb) => qb.where("session_id", "=", sessionId ?? ""))
+            .groupBy(["host", "path"])
+            .having((eb) => eb.fn.countAll<number>(), ">", 1)
+            .orderBy("errorCount", "desc")
+            .orderBy("host", "asc"),
+        ).rows;
       case "cache-busting":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS variantCount
-             FROM capture_events
-             WHERE kind = 'request'
-               AND (path LIKE '%?%' OR headers_json LIKE '%cache-control%' OR headers_json LIKE '%pragma%')
-               ${sessionWhere}
-             GROUP BY host, path
-             ORDER BY variantCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
+        return executeSqliteQuerySync<CaptureQueryRow>(
+          this.db,
+          db
+            .selectFrom("capture_events")
+            .select((eb) => ["host", "path", eb.fn.countAll<number>().as("variantCount")])
+            .where("kind", "=", "request")
+            .where((eb) =>
+              eb.or([
+                eb("path", "like", "%?%"),
+                eb("headers_json", "like", "%cache-control%"),
+                eb("headers_json", "like", "%pragma%"),
+              ]),
+            )
+            .$if(Boolean(sessionId), (qb) => qb.where("session_id", "=", sessionId ?? ""))
+            .groupBy(["host", "path"])
+            .orderBy("variantCount", "desc")
+            .orderBy("host", "asc"),
+        ).rows;
       case "ws-duplicate-frames":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS duplicateFrames
-             FROM capture_events
-             WHERE kind = 'ws-frame' AND direction = 'outbound' ${sessionWhere}
-             GROUP BY host, path, data_sha256
-             HAVING COUNT(*) > 1
-             ORDER BY duplicateFrames DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
-      case "missing-ack":
-        return this.db
-          .prepare(
-            `SELECT flow_id AS flowId, host, path, COUNT(*) AS outboundFrames
-             FROM capture_events
-             WHERE kind = 'ws-frame' AND direction = 'outbound' ${sessionWhere}
-               AND flow_id NOT IN (
-                 SELECT flow_id FROM capture_events
-                 WHERE kind = 'ws-frame' AND direction = 'inbound' ${sessionId ? "AND session_id = ?" : ""}
-               )
-             GROUP BY flow_id, host, path
-             ORDER BY outboundFrames DESC`,
-          )
-          .all(...(sessionId ? [sessionId, sessionId] : [])) as CaptureQueryRow[];
+        return executeSqliteQuerySync<CaptureQueryRow>(
+          this.db,
+          db
+            .selectFrom("capture_events")
+            .select((eb) => ["host", "path", eb.fn.countAll<number>().as("duplicateFrames")])
+            .where("kind", "=", "ws-frame")
+            .where("direction", "=", "outbound")
+            .$if(Boolean(sessionId), (qb) => qb.where("session_id", "=", sessionId ?? ""))
+            .groupBy(["host", "path", "data_sha256"])
+            .having((eb) => eb.fn.countAll<number>(), ">", 1)
+            .orderBy("duplicateFrames", "desc")
+            .orderBy("host", "asc"),
+        ).rows;
+      case "missing-ack": {
+        const inboundFlows = db
+          .selectFrom("capture_events")
+          .select("flow_id")
+          .where("kind", "=", "ws-frame")
+          .where("direction", "=", "inbound")
+          .$if(Boolean(sessionId), (qb) => qb.where("session_id", "=", sessionId ?? ""));
+        return executeSqliteQuerySync<CaptureQueryRow>(
+          this.db,
+          db
+            .selectFrom("capture_events")
+            .select((eb) => [
+              "flow_id as flowId",
+              "host",
+              "path",
+              eb.fn.countAll<number>().as("outboundFrames"),
+            ])
+            .where("kind", "=", "ws-frame")
+            .where("direction", "=", "outbound")
+            .$if(Boolean(sessionId), (qb) => qb.where("session_id", "=", sessionId ?? ""))
+            .where("flow_id", "not in", inboundFlows)
+            .groupBy(["flow_id", "host", "path"])
+            .orderBy("outboundFrames", "desc"),
+        ).rows;
+      }
       case "error-bursts":
-        return this.db
-          .prepare(
-            `SELECT host, path, COUNT(*) AS errorCount
-             FROM capture_events
-             WHERE kind = 'error' ${sessionWhere}
-             GROUP BY host, path
-             ORDER BY errorCount DESC, host ASC`,
-          )
-          .all(...args) as CaptureQueryRow[];
+        return executeSqliteQuerySync<CaptureQueryRow>(
+          this.db,
+          db
+            .selectFrom("capture_events")
+            .select((eb) => ["host", "path", eb.fn.countAll<number>().as("errorCount")])
+            .where("kind", "=", "error")
+            .$if(Boolean(sessionId), (qb) => qb.where("session_id", "=", sessionId ?? ""))
+            .groupBy(["host", "path"])
+            .orderBy("errorCount", "desc")
+            .orderBy("host", "asc"),
+        ).rows;
       default:
-        return [];
+        return assertNeverCaptureQueryPreset(preset);
     }
   }
 
   purgeAll(): { sessions: number; events: number; blobs: number } {
-    const sessionCount =
-      (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_sessions`).get() as { count: number })
-        .count ?? 0;
-    const eventCount =
-      (this.db.prepare(`SELECT COUNT(*) AS count FROM capture_events`).get() as { count: number })
-        .count ?? 0;
-    this.db.exec(`DELETE FROM capture_events; DELETE FROM capture_sessions;`);
-    let blobs = 0;
-    if (fs.existsSync(this.blobDir)) {
-      for (const entry of fs.readdirSync(this.blobDir)) {
-        fs.rmSync(path.join(this.blobDir, entry), { force: true });
-        blobs += 1;
-      }
-    }
-    return { sessions: sessionCount, events: eventCount, blobs };
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const sessionCount = countTable(this.db, "capture_sessions");
+      const eventCount = countTable(this.db, "capture_events");
+      const blobCount = countTable(this.db, "capture_blobs");
+      const db = getCaptureKysely(this.db);
+      executeSqliteQuerySync(this.db, db.deleteFrom("capture_events"));
+      executeSqliteQuerySync(this.db, db.deleteFrom("capture_sessions"));
+      executeSqliteQuerySync(this.db, db.deleteFrom("capture_blobs"));
+      return { sessions: sessionCount, events: eventCount, blobs: blobCount };
+    });
   }
 
   deleteSessions(sessionIds: string[]): { sessions: number; events: number; blobs: number } {
@@ -394,74 +495,67 @@ export class DebugProxyCaptureStore {
     if (uniqueSessionIds.length === 0) {
       return { sessions: 0, events: 0, blobs: 0 };
     }
-    const placeholders = uniqueSessionIds.map(() => "?").join(", ");
-    const blobRows = this.db
-      .prepare(
-        `SELECT DISTINCT data_blob_id AS blobId
-         FROM capture_events
-         WHERE session_id IN (${placeholders})
-           AND data_blob_id IS NOT NULL`,
-      )
-      .all(...uniqueSessionIds) as Array<{ blobId?: string | null }>;
+    const db = getCaptureKysely(this.db);
+    const blobRows = executeSqliteQuerySync<BlobIdRow>(
+      this.db,
+      db
+        .selectFrom("capture_events")
+        .select("data_blob_id as blobId")
+        .distinct()
+        .where("session_id", "in", uniqueSessionIds)
+        .where("data_blob_id", "is not", null),
+    ).rows;
     const eventCount =
-      (
-        this.db
-          .prepare(
-            `SELECT COUNT(*) AS count
-             FROM capture_events
-             WHERE session_id IN (${placeholders})`,
-          )
-          .get(...uniqueSessionIds) as { count: number }
-      ).count ?? 0;
+      executeSqliteQueryTakeFirstSync<CountRow>(
+        this.db,
+        db
+          .selectFrom("capture_events")
+          .select(sql<number>`COUNT(*)`.as("count"))
+          .where("session_id", "in", uniqueSessionIds),
+      )?.count ?? 0;
     const sessionCount =
-      (
-        this.db
-          .prepare(
-            `SELECT COUNT(*) AS count
-             FROM capture_sessions
-             WHERE id IN (${placeholders})`,
-          )
-          .get(...uniqueSessionIds) as { count: number }
-      ).count ?? 0;
-    this.db
-      .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
-      .run(...uniqueSessionIds);
-    this.db
-      .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
-      .run(...uniqueSessionIds);
+      executeSqliteQueryTakeFirstSync<CountRow>(
+        this.db,
+        db
+          .selectFrom("capture_sessions")
+          .select(sql<number>`COUNT(*)`.as("count"))
+          .where("id", "in", uniqueSessionIds),
+      )?.count ?? 0;
+    executeSqliteQuerySync(
+      this.db,
+      db.deleteFrom("capture_events").where("session_id", "in", uniqueSessionIds),
+    );
+    executeSqliteQuerySync(
+      this.db,
+      db.deleteFrom("capture_sessions").where("id", "in", uniqueSessionIds),
+    );
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));
     const remainingBlobRefs =
       candidateBlobIds.length > 0
         ? new Set(
-            (
-              this.db
-                .prepare(
-                  `SELECT DISTINCT data_blob_id AS blobId
-                   FROM capture_events
-                   WHERE data_blob_id IN (${candidateBlobIds.map(() => "?").join(", ")})
-                     AND data_blob_id IS NOT NULL`,
-                )
-                .all(...candidateBlobIds) as Array<{ blobId?: string | null }>
+            executeSqliteQuerySync<BlobIdRow>(
+              this.db,
+              db
+                .selectFrom("capture_events")
+                .select("data_blob_id as blobId")
+                .distinct()
+                .where("data_blob_id", "in", candidateBlobIds)
+                .where("data_blob_id", "is not", null),
             )
-              .map((row) => row.blobId?.trim())
+              .rows.map((row) => row.blobId?.trim())
               .filter((blobId): blobId is string => Boolean(blobId)),
           )
         : new Set<string>();
-    let blobs = 0;
-    for (const row of blobRows) {
-      const blobId = row.blobId?.trim();
-      if (!blobId || remainingBlobRefs.has(blobId)) {
-        continue;
-      }
-      const blobPath = path.join(this.blobDir, `${blobId}.bin.gz`);
-      if (fs.existsSync(blobPath)) {
-        fs.rmSync(blobPath, { force: true });
-        blobs += 1;
-      }
+    const orphanBlobIds = candidateBlobIds.filter((blobId) => !remainingBlobRefs.has(blobId));
+    if (orphanBlobIds.length > 0) {
+      executeSqliteQuerySync(
+        this.db,
+        db.deleteFrom("capture_blobs").where("blob_id", "in", orphanBlobIds),
+      );
     }
-    return { sessions: sessionCount, events: eventCount, blobs };
+    return { sessions: sessionCount, events: eventCount, blobs: orphanBlobIds.length };
   }
 }
 

@@ -28,7 +28,7 @@ function createMainAgentStatus() {
         id: "main",
         workspaceDir: null,
         bootstrapPending: false,
-        sessionsPath: "/tmp/main.json",
+        sessionsDatabasePath: "/tmp/main.sqlite",
         sessionsCount: 0,
         lastUpdatedAt: null,
         lastActiveAgeMs: null,

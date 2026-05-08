@@ -2,6 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
+  MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
+  MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
+  readDreamingWorkspaceMap,
+  writeDreamingWorkspaceMap,
+  writeDreamingWorkspaceValue,
+} from "openclaw/plugin-sdk/memory-core-host-status";
+import {
   enqueueSystemEvent,
   resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
@@ -24,6 +31,20 @@ afterEach(() => {
 });
 
 function clearInternalHooks(): void {}
+
+async function withWorkspaceStateEnv<T>(workspaceDir: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(workspaceDir, ".state");
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+  }
+}
 
 type CronParam = NonNullable<Parameters<typeof reconcileShortTermDreamingCronJob>[0]["cron"]>;
 type CronJobLike = Awaited<ReturnType<CronParam["list"]>>[number];
@@ -2191,75 +2212,69 @@ describe("short-term dreaming trigger", () => {
       "Move backups to S3 Glacier and sync router failover notes.",
       "Keep router recovery docs current.",
     ]);
-    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: "2026-04-01T00:00:00.000Z",
-          entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              key: "memory:memory/2026-04-03.md:1:2",
-              path: "memory/2026-04-03.md",
-              startLine: 1,
-              endLine: 2,
-              source: "memory",
-              snippet: "Move backups to S3 Glacier and sync router failover notes.",
-              recallCount: 3,
-              totalScore: 2.7,
-              maxScore: 0.95,
-              firstRecalledAt: "2026-04-01T00:00:00.000Z",
-              lastRecalledAt: "2026-04-03T00:00:00.000Z",
-              queryHashes: ["abc", "abc", "def"],
-              recallDays: ["2026-04-01", "2026-04-01", "2026-04-03"],
-              conceptTags: [],
-            },
-          },
+    await withWorkspaceStateEnv(workspaceDir, async () => {
+      await writeDreamingWorkspaceMap(MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE, workspaceDir, {
+        "memory:memory/2026-04-03.md:1:2": {
+          key: "memory:memory/2026-04-03.md:1:2",
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "Move backups to S3 Glacier and sync router failover notes.",
+          recallCount: 3,
+          totalScore: 2.7,
+          maxScore: 0.95,
+          firstRecalledAt: "2026-04-01T00:00:00.000Z",
+          lastRecalledAt: "2026-04-03T00:00:00.000Z",
+          queryHashes: ["abc", "abc", "def"],
+          recallDays: ["2026-04-01", "2026-04-01", "2026-04-03"],
+          conceptTags: [],
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-
-    const result = await runShortTermDreamingPromotionIfTriggered({
-      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
-      trigger: "heartbeat",
-      workspaceDir,
-      config: {
-        enabled: true,
-        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
-        limit: 10,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
-        verboseLogging: false,
-      },
-      logger,
+      });
+      await writeDreamingWorkspaceValue(
+        MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
+        workspaceDir,
+        "recall",
+        { updatedAt: "2026-04-01T00:00:00.000Z" },
+      );
     });
+
+    const result = await withWorkspaceStateEnv(workspaceDir, () =>
+      runShortTermDreamingPromotionIfTriggered({
+        cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+        trigger: "heartbeat",
+        workspaceDir,
+        config: {
+          enabled: true,
+          cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+          limit: 10,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+          verboseLogging: false,
+        },
+        logger,
+      }),
+    );
 
     expect(result?.handled).toBe(true);
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("normalized recall artifacts before dreaming"),
     );
-    const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      entries: Record<
-        string,
-        { queryHashes?: string[]; recallDays?: string[]; conceptTags?: string[] }
-      >;
-    };
-    expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.queryHashes).toEqual([
-      "abc",
-      "def",
-    ]);
-    expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.recallDays).toEqual([
+    const repaired = await withWorkspaceStateEnv(workspaceDir, () =>
+      readDreamingWorkspaceMap<{
+        queryHashes?: string[];
+        recallDays?: string[];
+        conceptTags?: string[];
+      }>(MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE, workspaceDir),
+    );
+    expect(repaired["memory:memory/2026-04-03.md:1:2"]?.queryHashes).toEqual(["abc", "def"]);
+    expect(repaired["memory:memory/2026-04-03.md:1:2"]?.recallDays).toEqual([
       "2026-04-01",
       "2026-04-03",
     ]);
-    expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.conceptTags).toEqual(
+    expect(repaired["memory:memory/2026-04-03.md:1:2"]?.conceptTags).toEqual(
       expect.arrayContaining(["glacier", "router", "failover"]),
     );
   });

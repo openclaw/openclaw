@@ -1,19 +1,18 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writeCronStoreSnapshot } from "./service.issue-regressions.test-helpers.js";
 import { CronService } from "./service.js";
 import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
+import { loadCronStore } from "./store.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-issue-35195-" });
 
-describe("cron backup timing for edit", () => {
-  it("keeps .bak as the pre-edit store even after later normalization persists", async () => {
+describe("cron SQLite edit persistence", () => {
+  it("persists edits in SQLite without creating legacy backup files", async () => {
     const store = await makeStorePath();
     const base = Date.now();
 
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await writeCronStoreSnapshot(store.storePath, [
       {
         id: "job-35195",
@@ -40,25 +39,17 @@ describe("cron backup timing for edit", () => {
 
     await service.start();
 
-    const beforeEditRaw = await fs.readFile(store.storePath, "utf-8");
-
     await service.update("job-35195", {
       payload: { kind: "systemEvent", text: "edited" },
     });
 
-    const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
-    expect(JSON.parse(backupRaw)).toEqual(JSON.parse(beforeEditRaw));
-
-    const diskAfterEdit = JSON.parse(await fs.readFile(store.storePath, "utf-8"));
-    const normalizedJob = {
-      ...diskAfterEdit.jobs[0],
-      payload: {
-        ...diskAfterEdit.jobs[0].payload,
-        channel: "forum",
-      },
-    };
-
-    await writeCronStoreSnapshot(store.storePath, [normalizedJob]);
+    const afterEdit = await loadCronStore(store.storePath);
+    expect(afterEdit.jobs[0]?.payload).toMatchObject({
+      kind: "systemEvent",
+      text: "edited",
+    });
+    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+    await expect(fs.stat(store.storePath)).rejects.toThrow();
 
     service.stop();
     const service2 = new CronService({
@@ -72,8 +63,12 @@ describe("cron backup timing for edit", () => {
 
     await service2.start();
 
-    const backupAfterNormalize = await fs.readFile(`${store.storePath}.bak`, "utf-8");
-    expect(JSON.parse(backupAfterNormalize)).toEqual(JSON.parse(beforeEditRaw));
+    const afterRestart = await loadCronStore(store.storePath);
+    expect(afterRestart.jobs[0]?.payload).toMatchObject({
+      kind: "systemEvent",
+      text: "edited",
+    });
+    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
 
     service2.stop();
     await store.cleanup();

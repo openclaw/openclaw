@@ -1,17 +1,17 @@
 import path from "node:path";
 import { getMSTeamsRuntime } from "./runtime.js";
 
-type MSTeamsStorePathOptions = {
+type MSTeamsCredentialPathOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;
-  storePath?: string;
+  pathOverride?: string;
   filename: string;
 };
 
-export function resolveMSTeamsStorePath(params: MSTeamsStorePathOptions): string {
-  if (params.storePath) {
-    return params.storePath;
+export function resolveMSTeamsCredentialFilePath(params: MSTeamsCredentialPathOptions): string {
+  if (params.pathOverride) {
+    return params.pathOverride;
   }
   if (params.stateDir) {
     return path.join(params.stateDir, params.filename);

@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { AgentMessage } from "../../agents/agent-core-contract.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
+import { rewriteTranscriptEntriesInSqliteTranscript } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { readTranscriptState } from "../../agents/transcript/transcript-state.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -100,7 +100,6 @@ import {
 } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
-import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
@@ -1026,25 +1025,34 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   if (!("MediaPath" in mediaFields)) {
     return;
   }
-  const index = await readSessionTranscriptIndex(params.transcriptPath);
-  const target = index?.entries.toReversed().find((entry) => {
-    const message = entry.record.message as Record<string, unknown> | undefined;
-    if (!message || message.role !== "user") {
-      return false;
-    }
-    const existingPaths = Array.isArray((message as { MediaPaths?: unknown }).MediaPaths)
-      ? (message as { MediaPaths?: unknown[] }).MediaPaths
-      : undefined;
-    if (
-      (typeof (message as { MediaPath?: unknown }).MediaPath === "string" &&
-        (message as { MediaPath?: string }).MediaPath) ||
-      (existingPaths && existingPaths.length > 0)
-    ) {
-      return false;
-    }
-    return extractTranscriptUserText((message as { content?: unknown }).content) === params.message;
-  });
-  const targetMessage = target?.record.message as Record<string, unknown> | undefined;
+  const transcriptState = await readTranscriptState(params.transcriptPath);
+  const target = transcriptState
+    .getBranch()
+    .toReversed()
+    .find((entry) => {
+      if (entry.type !== "message") {
+        return false;
+      }
+      const message = entry.message as unknown as Record<string, unknown>;
+      if (!message || message.role !== "user") {
+        return false;
+      }
+      const existingPaths = Array.isArray((message as { MediaPaths?: unknown }).MediaPaths)
+        ? (message as { MediaPaths?: unknown[] }).MediaPaths
+        : undefined;
+      if (
+        (typeof (message as { MediaPath?: unknown }).MediaPath === "string" &&
+          (message as { MediaPath?: string }).MediaPath) ||
+        (existingPaths && existingPaths.length > 0)
+      ) {
+        return false;
+      }
+      return (
+        extractTranscriptUserText((message as { content?: unknown }).content) === params.message
+      );
+    });
+  const targetMessage =
+    target?.type === "message" ? (target.message as unknown as Record<string, unknown>) : undefined;
   if (!target || !target.id || !targetMessage) {
     return;
   }
@@ -1052,8 +1060,8 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
     ...targetMessage,
     ...mediaFields,
   };
-  await rewriteTranscriptEntriesInSessionFile({
-    sessionFile: params.transcriptPath,
+  await rewriteTranscriptEntriesInSqliteTranscript({
+    transcriptPath: params.transcriptPath,
     sessionKey: params.sessionKey,
     config: params.cfg,
     request: {
@@ -1303,20 +1311,18 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
 
 function resolveTranscriptPath(params: {
   sessionId: string;
-  storePath: string | undefined;
   sessionFile?: string;
   agentId?: string;
 }): string | null {
-  const { sessionId, storePath, sessionFile, agentId } = params;
-  if (!storePath && !sessionFile) {
+  const { sessionId, sessionFile, agentId } = params;
+  if (!agentId && !sessionFile) {
     return null;
   }
   try {
-    const sessionsDir = storePath ? path.dirname(storePath) : undefined;
     return resolveSessionFilePath(
       sessionId,
       sessionFile ? { sessionFile } : undefined,
-      sessionsDir || agentId ? { sessionsDir, agentId } : undefined,
+      agentId ? { agentId } : undefined,
     );
   } catch {
     return null;
@@ -1328,7 +1334,6 @@ async function appendAssistantTranscriptMessage(params: {
   label?: string;
   content?: Array<Record<string, unknown>>;
   sessionId: string;
-  storePath: string | undefined;
   sessionFile?: string;
   agentId?: string;
   createIfMissing?: boolean;
@@ -1342,7 +1347,6 @@ async function appendAssistantTranscriptMessage(params: {
 }): Promise<TranscriptAppendResult> {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
-    storePath: params.storePath,
     sessionFile: params.sessionFile,
     agentId: params.agentId,
   });
@@ -1396,14 +1400,15 @@ async function persistAbortedPartials(params: {
   if (params.snapshots.length === 0) {
     return;
   }
-  const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey);
+  const { cfg, entry } = loadSessionEntry(params.sessionKey);
+  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg });
   for (const snapshot of params.snapshots) {
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = await appendAssistantTranscriptMessage({
       message: snapshot.text,
       sessionId,
-      storePath,
       sessionFile: entry?.sessionFile,
+      agentId,
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
       cfg,
@@ -1669,7 +1674,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       limit?: number;
       maxChars?: number;
     };
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+    const { cfg, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
@@ -1678,14 +1683,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-    const localMessages =
-      sessionId && storePath
-        ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            agentId: sessionAgentId,
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-          })
-        : [];
+    const localMessages = sessionId
+      ? await readRecentSessionMessagesAsync(sessionId, entry?.sessionFile, {
+          agentId: sessionAgentId,
+          maxMessages: max,
+          maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+        })
+      : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
@@ -2250,15 +2254,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           await measureDiagnosticsTimelineSpan(
             "gateway.chat_send.emit_user_transcript",
             async () => {
-              const { storePath: latestStorePath, entry: latestEntry } =
-                loadSessionEntry(sessionKey);
+              const { entry: latestEntry } = loadSessionEntry(sessionKey);
               const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
               if (!resolvedSessionId) {
                 return;
               }
               const transcriptPath = resolveTranscriptPath({
                 sessionId: resolvedSessionId,
-                storePath: latestStorePath,
                 sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
                 agentId,
               });
@@ -2290,14 +2292,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (transcriptMediaRewriteDone) {
           return;
         }
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const { entry: latestEntry } = loadSessionEntry(sessionKey);
         const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
         if (!resolvedSessionId) {
           return;
         }
         const transcriptPath = resolveTranscriptPath({
           sessionId: resolvedSessionId,
-          storePath: latestStorePath,
           sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
@@ -2327,11 +2328,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!transcriptPayload) {
           return;
         }
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const { entry: latestEntry } = loadSessionEntry(sessionKey);
         const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
         const resolvedTranscriptPath = resolveTranscriptPath({
           sessionId,
-          storePath: latestStorePath,
           sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
           agentId,
         });
@@ -2378,7 +2378,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           message: transcriptReply,
           ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
           sessionId,
-          storePath: latestStorePath,
           sessionFile: latestEntry?.sessionFile,
           agentId,
           createIfMissing: true,
@@ -2523,12 +2522,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                     accountId,
                     payloads: rawFinalPayloads,
                   });
-                  const { storePath: latestStorePath, entry: latestEntry } =
-                    loadSessionEntry(sessionKey);
+                  const { entry: latestEntry } = loadSessionEntry(sessionKey);
                   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
                   const resolvedTranscriptPath = resolveTranscriptPath({
                     sessionId,
-                    storePath: latestStorePath,
                     sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
                     agentId,
                   });
@@ -2613,7 +2610,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                         ? { content: persistedContentForAppend }
                         : {}),
                       sessionId,
-                      storePath: latestStorePath,
                       sessionFile: latestEntry?.sessionFile,
                       agentId,
                       createIfMissing: true,
@@ -2774,20 +2770,20 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
-    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const sessionId = entry?.sessionId;
-    if (!sessionId || !storePath) {
+    if (!sessionId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
       return;
     }
+    const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
 
     const appended = await appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
       sessionId,
-      storePath,
       sessionFile: entry?.sessionFile,
-      agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+      agentId,
       createIfMissing: true,
       cfg,
     });

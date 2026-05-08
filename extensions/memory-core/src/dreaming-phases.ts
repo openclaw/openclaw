@@ -3,20 +3,25 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  buildSessionEntry,
-  listSessionFilesForAgent,
+  buildSessionTranscriptEntry,
+  listSessionTranscriptsForAgent,
   parseUsageCountedSessionIdFromFileName,
-  sessionPathForFile,
+  sessionPathForTranscript,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
+  MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
+  MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
+  MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
+  readDreamingWorkspaceMap,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
+  writeDreamingWorkspaceMap,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { appendRegularFile, privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -73,16 +78,10 @@ const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
-const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
-const SESSION_INGESTION_STATE_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "session-ingestion.json",
-);
 const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 const SESSION_INGESTION_SCORE = 0.58;
 const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
@@ -436,25 +435,24 @@ function normalizeMemoryDay(value: unknown): string | undefined {
 }
 
 async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
-  try {
-    return normalizeDailyIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(DAILY_INGESTION_STATE_RELATIVE_PATH),
-    );
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      return { version: 1, files: {} };
-    }
-    throw err;
-  }
+  return normalizeDailyIngestionState({
+    version: 1,
+    files: await readDreamingWorkspaceMap<DailyIngestionFileState>(
+      MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
+      workspaceDir,
+    ),
+  });
 }
 
 async function writeDailyIngestionState(
   workspaceDir: string,
   state: DailyIngestionState,
 ): Promise<void> {
-  await privateFileStore(workspaceDir).writeJson(DAILY_INGESTION_STATE_RELATIVE_PATH, state, {
-    trailingNewline: true,
-  });
+  await writeDreamingWorkspaceMap(
+    MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
+    workspaceDir,
+    normalizeDailyIngestionState(state).files,
+  );
 }
 
 type SessionIngestionFileState = {
@@ -542,25 +540,36 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
 }
 
 async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
-  try {
-    return normalizeSessionIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(SESSION_INGESTION_STATE_RELATIVE_PATH),
-    );
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      return { version: 3, files: {}, seenMessages: {} };
-    }
-    throw err;
-  }
+  return normalizeSessionIngestionState({
+    version: 3,
+    files: await readDreamingWorkspaceMap<SessionIngestionFileState>(
+      MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+    ),
+    seenMessages: await readDreamingWorkspaceMap<string[]>(
+      MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
+      workspaceDir,
+    ),
+  });
 }
 
 async function writeSessionIngestionState(
   workspaceDir: string,
   state: SessionIngestionState,
 ): Promise<void> {
-  await privateFileStore(workspaceDir).writeJson(SESSION_INGESTION_STATE_RELATIVE_PATH, state, {
-    trailingNewline: true,
-  });
+  const normalized = normalizeSessionIngestionState(state);
+  await Promise.all([
+    writeDreamingWorkspaceMap(
+      MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+      normalized.files,
+    ),
+    writeDreamingWorkspaceMap(
+      MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
+      workspaceDir,
+      normalized.seenMessages,
+    ),
+  ]);
 }
 
 function trimTrackedSessionScopes(
@@ -625,7 +634,7 @@ function areStringArraysEqual(a: string[], b: string[]): boolean {
 }
 
 function buildSessionStateKey(agentId: string, absolutePath: string): string {
-  return `${agentId}:${sessionPathForFile(absolutePath)}`;
+  return `${agentId}:${sessionPathForTranscript(absolutePath)}`;
 }
 
 function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
@@ -746,26 +755,26 @@ async function collectSessionIngestionBatches(params: {
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   let changed = false;
 
-  const sessionFiles: Array<{
+  const sessionTranscripts: Array<{
     agentId: string;
     absolutePath: string;
     sessionPath: string;
   }> = [];
   for (const agentId of agentIds) {
-    const files = await listSessionFilesForAgent(agentId);
+    const files = await listSessionTranscriptsForAgent(agentId);
     for (const absolutePath of files) {
       if (isCheckpointSessionTranscriptPath(absolutePath)) {
         continue;
       }
-      sessionFiles.push({
+      sessionTranscripts.push({
         agentId,
         absolutePath,
-        sessionPath: sessionPathForFile(absolutePath),
+        sessionPath: sessionPathForTranscript(absolutePath),
       });
     }
   }
 
-  const sortedFiles = sessionFiles.toSorted((a, b) => {
+  const sortedFiles = sessionTranscripts.toSorted((a, b) => {
     if (a.agentId !== b.agentId) {
       return a.agentId.localeCompare(b.agentId);
     }
@@ -788,7 +797,7 @@ async function collectSessionIngestionBatches(params: {
     }
     const stateKey = buildSessionStateKey(file.agentId, file.absolutePath);
     const previous = params.state.files[stateKey];
-    const entry = await buildSessionEntry(file.absolutePath);
+    const entry = await buildSessionTranscriptEntry(file.absolutePath);
     if (!entry) {
       if (previous) {
         changed = true;
@@ -1824,6 +1833,8 @@ async function runPhaseIfTriggered(
 export const __testing = {
   runPhaseIfTriggered,
   previewRemDreaming,
+  readDailyIngestionState,
+  readSessionIngestionState,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,

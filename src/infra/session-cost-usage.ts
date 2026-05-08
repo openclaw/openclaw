@@ -476,7 +476,7 @@ export async function refreshCostUsageCache(params?: {
   config?: OpenClawConfig;
   agentId?: string;
   maxFiles?: number;
-  sessionFiles?: string[];
+  sessionTranscripts?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
   void params;
@@ -531,7 +531,7 @@ export async function loadSessionCostSummaryFromCache(params: {
 export function requestCostUsageCacheRefresh(_params?: {
   config?: OpenClawConfig;
   agentId?: string;
-  sessionFiles?: string[];
+  sessionTranscripts?: string[];
 }): void {
   // Usage is computed from SQLite transcript_events directly now.
 }

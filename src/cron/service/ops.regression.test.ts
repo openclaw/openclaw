@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   createAbortAwareIsolatedRunner,
@@ -326,11 +325,7 @@ describe("cron service ops regressions", () => {
       nowMs: dueAt,
       nextRunAtMs: dueAt,
     });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify({ version: 1, jobs: [first, second] }),
-      "utf-8",
-    );
+    await writeCronJobs(store.storePath, [first, second]);
 
     let now = dueAt;
     let activeRuns = 0;
@@ -399,25 +394,18 @@ describe("cron service ops regressions", () => {
     clearCommandLane(CommandLane.Cron);
   });
 
-  it("logs unexpected queued manual run background failures once", async () => {
+  it("persists queued manual run completion through SQLite", async () => {
     vi.useRealTimers();
     clearCommandLane(CommandLane.Cron);
     setCommandLaneConcurrency(CommandLane.Cron, 1);
 
+    const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
     const job = createDueIsolatedJob({ id: "queued-failure", nowMs: dueAt, nextRunAtMs: dueAt });
-    const errorLogged = createDeferred<void>();
-    const log = {
-      ...noopLogger,
-      error: vi.fn<(payload: unknown, message?: string) => void>(() => {
-        errorLogged.resolve();
-      }),
-    };
-    const badStore = `${opsRegressionFixtures.makeStorePath().storePath}.dir`;
-    await fs.mkdir(badStore, { recursive: true });
+    await writeCronJobs(store.storePath, [job]);
     const state = createRunningCronServiceState({
-      storePath: badStore,
-      log,
+      storePath: store.storePath,
+      log: noopLogger,
       nowMs: () => dueAt,
       jobs: [job],
     });
@@ -425,11 +413,8 @@ describe("cron service ops regressions", () => {
     const result = await enqueueRun(state, job.id, "force");
     expect(result).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
 
-    await errorLogged.promise;
-    expect(log.error).toHaveBeenCalledTimes(1);
-    expect(log.error.mock.calls[0]?.[1]).toBe(
-      "cron: queued manual run background execution failed",
-    );
+    await waitForActiveTasks(5_000);
+    expect(state.store?.jobs[0]?.state.lastStatus).toBe("ok");
 
     clearCommandLane(CommandLane.Cron);
   });

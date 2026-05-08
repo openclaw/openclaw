@@ -1,11 +1,10 @@
 import { resolveFeishuConfigReasoningDefault } from "./agent-config.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "./bot-runtime-api.js";
+import { getSessionEntry, resolveAgentIdFromSessionKey } from "./bot-runtime-api.js";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
 
 export function resolveFeishuReasoningPreviewEnabled(params: {
   cfg: ClawdbotConfig;
   agentId: string;
-  storePath: string;
   sessionKey?: string;
 }): boolean {
   const configDefault = resolveFeishuConfigReasoningDefault(params.cfg, params.agentId);
@@ -15,14 +14,16 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
   }
 
   try {
-    const store = loadSessionStore(params.storePath);
-    const level = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing
-      ?.reasoningLevel;
+    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+    if (!agentId) {
+      return configDefault === "stream";
+    }
+    const level = getSessionEntry({ agentId, sessionKey: params.sessionKey })?.reasoningLevel;
     if (level === "on" || level === "stream" || level === "off") {
       return level === "stream";
     }
   } catch {
-    return false;
+    return configDefault === "stream";
   }
   return configDefault === "stream";
 }

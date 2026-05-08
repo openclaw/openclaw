@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 
 const ttsMocks = vi.hoisted(() => ({
   getResolvedSpeechProviderConfig: vi.fn(),
@@ -280,15 +281,17 @@ describe("handleTtsCommands status fallback reporting", () => {
   it("reads the latest assistant transcript reply once", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-latest-"));
     const sessionFile = path.join(tempDir, "session.jsonl");
-    fs.writeFileSync(
-      sessionFile,
-      [
-        JSON.stringify({ type: "session", id: "s1" }),
-        JSON.stringify({
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "s1",
+      transcriptPath: sessionFile,
+      events: [
+        { type: "session", id: "s1" },
+        {
           type: "message",
           message: { role: "assistant", content: [{ type: "text", text: "older reply" }] },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "message",
           message: {
             role: "assistant",
@@ -313,10 +316,9 @@ describe("handleTtsCommands status fallback reporting", () => {
               },
             ],
           },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
+        },
+      ],
+    });
     ttsMocks.textToSpeech.mockResolvedValue({
       success: true,
       audioPath: "/tmp/latest.ogg",
@@ -348,17 +350,18 @@ describe("handleTtsCommands status fallback reporting", () => {
   it("does not resend /tts latest for the same assistant reply", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-latest-"));
     const sessionFile = path.join(tempDir, "session.jsonl");
-    fs.writeFileSync(
-      sessionFile,
-      [
-        JSON.stringify({ type: "session", id: "s1" }),
-        JSON.stringify({
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "s1",
+      transcriptPath: sessionFile,
+      events: [
+        { type: "session", id: "s1" },
+        {
           type: "message",
           message: { role: "assistant", content: [{ type: "text", text: "read me once" }] },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
+        },
+      ],
+    });
     ttsMocks.textToSpeech.mockResolvedValue({
       success: true,
       audioPath: "/tmp/latest.ogg",

@@ -11,7 +11,7 @@ function buildResult(
 ): SessionsListResult {
   return {
     ts: Date.now(),
-    path: "(multiple)",
+    databasePath: "(multiple)",
     count: 1,
     defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
     sessions: [session],
@@ -21,7 +21,7 @@ function buildResult(
 function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
     ts: Date.now(),
-    path: "(multiple)",
+    databasePath: "(multiple)",
     count: sessions.length,
     defaults: { modelProvider: null, model: null, contextTokens: null },
     sessions,

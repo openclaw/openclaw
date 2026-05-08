@@ -20,7 +20,7 @@ import type {
   SessionTreeNode,
 } from "./session-transcript-contract.js";
 import { CURRENT_SESSION_VERSION } from "./session-transcript-format.js";
-import { TranscriptFileState } from "./transcript-file-state.js";
+import { TranscriptState } from "./transcript-state.js";
 
 function createSessionHeader(params: {
   id?: string;
@@ -73,19 +73,19 @@ function resolveFallbackSessionIdFromPath(sessionFile: string): string {
   return timestampIdMatch?.[1] ?? stem;
 }
 
-function createTranscriptStateFromEvents(events: unknown[]): TranscriptFileState {
+function createTranscriptStateFromEvents(events: unknown[]): TranscriptState {
   const fileEntries = events.filter((event): event is FileEntry =>
     Boolean(event && typeof event === "object"),
   );
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = fileEntries.filter((entry): entry is SessionEntry => entry.type !== "session");
-  return new TranscriptFileState({ header, entries });
+  return new TranscriptState({ header, entries });
 }
 
 function persistFullTranscriptStateToSqlite(
   scope: TranscriptSqliteScope,
-  state: TranscriptFileState,
+  state: TranscriptState,
 ): void {
   replaceSqliteSessionTranscriptEvents({
     agentId: scope.agentId,
@@ -105,7 +105,7 @@ function appendTranscriptEntryToSqlite(scope: TranscriptSqliteScope, entry: Sess
 }
 
 function loadTranscriptState(params: { sessionFile: string; sessionId?: string; cwd?: string }): {
-  state: TranscriptFileState;
+  state: TranscriptState;
   scope: TranscriptSqliteScope;
 } {
   const transcriptPath = path.resolve(params.sessionFile);
@@ -127,7 +127,7 @@ function loadTranscriptState(params: { sessionFile: string; sessionId?: string; 
     id: params.sessionId,
     cwd: params.cwd ?? process.cwd(),
   });
-  const state = new TranscriptFileState({ header, entries: [] });
+  const state = new TranscriptState({ header, entries: [] });
   const headerScope = { ...scope, sessionId: header.id };
   persistFullTranscriptStateToSqlite(headerScope, state);
   return { state, scope: headerScope };
@@ -166,7 +166,7 @@ function extractTextContent(message: { content: unknown }): string {
 
 function buildSessionInfoFromState(
   filePath: string,
-  state: TranscriptFileState,
+  state: TranscriptState,
   modifiedFallback: Date,
 ): SessionInfo | null {
   const header = state.getHeader();
@@ -263,7 +263,7 @@ async function listSessionsFromDir(
 }
 
 export class TranscriptSessionManager implements SessionManager {
-  private state: TranscriptFileState;
+  private state: TranscriptState;
   private sessionFile: string | undefined;
   private sessionDir: string;
   private persist: boolean;
@@ -271,7 +271,7 @@ export class TranscriptSessionManager implements SessionManager {
 
   private constructor(params: {
     sessionDir: string;
-    state: TranscriptFileState;
+    state: TranscriptState;
     sessionFile?: string;
     persist: boolean;
     sqliteScope?: TranscriptSqliteScope;
@@ -313,7 +313,7 @@ export class TranscriptSessionManager implements SessionManager {
       sessionId: header.id,
       transcriptPath: path.resolve(sessionFile),
     };
-    const state = new TranscriptFileState({ header, entries: [] });
+    const state = new TranscriptState({ header, entries: [] });
     persistFullTranscriptStateToSqlite(sqliteScope, state);
     return new TranscriptSessionManager({
       sessionDir: dir,
@@ -329,7 +329,7 @@ export class TranscriptSessionManager implements SessionManager {
     return new TranscriptSessionManager({
       sessionDir: "",
       persist: false,
-      state: new TranscriptFileState({ header, entries: [] }),
+      state: new TranscriptState({ header, entries: [] }),
       sqliteScope: undefined,
     });
   }
@@ -366,7 +366,7 @@ export class TranscriptSessionManager implements SessionManager {
       parentSession: sourceFile,
     });
     const sessionFile = path.join(dir, createSessionFileName(header));
-    const state = new TranscriptFileState({ header, entries: sourceState.getEntries() });
+    const state = new TranscriptState({ header, entries: sourceState.getEntries() });
     const sqliteScope = {
       agentId: resolveAgentIdFromSessionPath(sessionFile),
       sessionId: header.id,
@@ -426,7 +426,7 @@ export class TranscriptSessionManager implements SessionManager {
       cwd: this.getCwd(),
       parentSession: options?.parentSession,
     });
-    this.state = new TranscriptFileState({ header, entries: [] });
+    this.state = new TranscriptState({ header, entries: [] });
     if (this.persist) {
       this.sessionFile =
         this.sessionFile ?? path.join(this.sessionDir, createSessionFileName(header));
@@ -559,6 +559,17 @@ export class TranscriptSessionManager implements SessionManager {
     this.state.resetLeaf();
   }
 
+  removeTailEntries(
+    shouldRemove: Parameters<SessionManager["removeTailEntries"]>[0],
+    options?: Parameters<SessionManager["removeTailEntries"]>[1],
+  ): number {
+    const removed = this.state.removeTailEntries(shouldRemove, options);
+    if (removed > 0 && this.persist && this.sessionFile && this.sqliteScope) {
+      persistFullTranscriptStateToSqlite(this.sqliteScope, this.state);
+    }
+    return removed;
+  }
+
   branchWithSummary(
     branchFromId: string | null,
     summary: string,
@@ -584,7 +595,7 @@ export class TranscriptSessionManager implements SessionManager {
     if (!this.persist) {
       return undefined;
     }
-    const state = new TranscriptFileState({
+    const state = new TranscriptState({
       header,
       entries: branch.filter((e) => e.type !== "label"),
     });

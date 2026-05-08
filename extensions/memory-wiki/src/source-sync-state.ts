@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
 
@@ -18,26 +19,120 @@ type MemoryWikiImportedSourceState = {
   entries: Record<string, MemoryWikiImportedSourceStateEntry>;
 };
 
-const EMPTY_STATE: MemoryWikiImportedSourceState = {
-  version: 1,
-  entries: {},
+type PersistedMemoryWikiImportedSourceStateEntry = MemoryWikiImportedSourceStateEntry & {
+  vaultHash: string;
+  syncKey: string;
 };
 
-function resolveMemoryWikiSourceSyncStatePath(vaultRoot: string): string {
+const sourceSyncStore = createPluginStateKeyedStore<PersistedMemoryWikiImportedSourceStateEntry>(
+  "memory-wiki",
+  {
+    namespace: "source-sync",
+    maxEntries: 100_000,
+  },
+);
+
+function hashSegment(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 32);
+}
+
+function normalizeVaultRoot(vaultRoot: string): string {
+  return path.resolve(vaultRoot);
+}
+
+function resolveVaultHash(vaultRoot: string): string {
+  return hashSegment(normalizeVaultRoot(vaultRoot));
+}
+
+function resolveSourceSyncStoreKey(vaultHash: string, syncKey: string): string {
+  return `${vaultHash}:${hashSegment(syncKey)}`;
+}
+
+export function resolveMemoryWikiLegacySourceSyncStatePath(vaultRoot: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "source-sync.json");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseLegacySourceSyncEntry(raw: unknown): MemoryWikiImportedSourceStateEntry | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  if (raw.group !== "bridge" && raw.group !== "unsafe-local") {
+    return null;
+  }
+  if (
+    typeof raw.pagePath !== "string" ||
+    typeof raw.sourcePath !== "string" ||
+    typeof raw.sourceUpdatedAtMs !== "number" ||
+    typeof raw.sourceSize !== "number" ||
+    typeof raw.renderFingerprint !== "string"
+  ) {
+    return null;
+  }
+  return {
+    group: raw.group,
+    pagePath: raw.pagePath,
+    sourcePath: raw.sourcePath,
+    sourceUpdatedAtMs: raw.sourceUpdatedAtMs,
+    sourceSize: raw.sourceSize,
+    renderFingerprint: raw.renderFingerprint,
+  };
+}
+
+export async function importMemoryWikiLegacySourceSyncState(params: {
+  vaultRoot: string;
+}): Promise<{ imported: number; warnings: string[]; sourcePath: string }> {
+  const sourcePath = resolveMemoryWikiLegacySourceSyncStatePath(params.vaultRoot);
+  const rawText = await fs.readFile(sourcePath, "utf8");
+  const raw = JSON.parse(rawText) as unknown;
+  const warnings: string[] = [];
+  if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.entries)) {
+    return {
+      imported: 0,
+      warnings: [`Skipped invalid Memory Wiki source sync file: ${sourcePath}`],
+      sourcePath,
+    };
+  }
+  const state = await readMemoryWikiSourceSyncState(params.vaultRoot);
+  let imported = 0;
+  for (const [syncKey, entry] of Object.entries(raw.entries)) {
+    const parsed = parseLegacySourceSyncEntry(entry);
+    if (!parsed) {
+      warnings.push(`Skipped invalid Memory Wiki source sync entry "${syncKey}".`);
+      continue;
+    }
+    state.entries[syncKey] = parsed;
+    imported++;
+  }
+  await writeMemoryWikiSourceSyncState(params.vaultRoot, state);
+  await fs.rm(sourcePath, { force: true });
+  return { imported, warnings, sourcePath };
 }
 
 export async function readMemoryWikiSourceSyncState(
   vaultRoot: string,
 ): Promise<MemoryWikiImportedSourceState> {
-  const statePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-  const { value: parsed } = await readJsonFileWithFallback<Partial<MemoryWikiImportedSourceState>>(
-    statePath,
-    EMPTY_STATE,
-  );
+  const vaultHash = resolveVaultHash(vaultRoot);
+  const entries: Record<string, MemoryWikiImportedSourceStateEntry> = {};
+  for (const row of await sourceSyncStore.entries()) {
+    if (row.value.vaultHash !== vaultHash) {
+      continue;
+    }
+    entries[row.value.syncKey] = {
+      group: row.value.group,
+      pagePath: row.value.pagePath,
+      sourcePath: row.value.sourcePath,
+      sourceUpdatedAtMs: row.value.sourceUpdatedAtMs,
+      sourceSize: row.value.sourceSize,
+      renderFingerprint: row.value.renderFingerprint,
+    };
+  }
   return {
     version: 1,
-    entries: { ...parsed.entries },
+    entries,
   };
 }
 
@@ -45,8 +140,22 @@ export async function writeMemoryWikiSourceSyncState(
   vaultRoot: string,
   state: MemoryWikiImportedSourceState,
 ): Promise<void> {
-  const statePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-  await writeJsonFileAtomically(statePath, state);
+  const vaultHash = resolveVaultHash(vaultRoot);
+  const activeStoreKeys = new Set<string>();
+  for (const [syncKey, entry] of Object.entries(state.entries)) {
+    const storeKey = resolveSourceSyncStoreKey(vaultHash, syncKey);
+    activeStoreKeys.add(storeKey);
+    await sourceSyncStore.register(storeKey, {
+      vaultHash,
+      syncKey,
+      ...entry,
+    });
+  }
+  for (const row of await sourceSyncStore.entries()) {
+    if (row.value.vaultHash === vaultHash && !activeStoreKeys.has(row.key)) {
+      await sourceSyncStore.delete(row.key);
+    }
+  }
 }
 
 export async function shouldSkipImportedSourceWrite(params: {

@@ -6,13 +6,13 @@ describe("memory session sync state", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
       files: ["/tmp/a.jsonl", "/tmp/b.jsonl"],
-      targetSessionFiles: null,
+      targetSessionTranscripts: null,
       sessionsDirtyFiles: new Set(),
       existingRows: [
         { path: "sessions/a.jsonl", hash: "hash-a" },
         { path: "sessions/b.jsonl", hash: "hash-b" },
       ],
-      sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
+      sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
     });
 
     expect(plan.indexAll).toBe(true);
@@ -33,13 +33,13 @@ describe("memory session sync state", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
       files: ["/tmp/targeted-first.jsonl"],
-      targetSessionFiles: new Set(["/tmp/targeted-first.jsonl"]),
+      targetSessionTranscripts: new Set(["/tmp/targeted-first.jsonl"]),
       sessionsDirtyFiles: new Set(["/tmp/targeted-first.jsonl"]),
       existingRows: [
         { path: "sessions/targeted-first.jsonl", hash: "hash-first" },
         { path: "sessions/targeted-second.jsonl", hash: "hash-second" },
       ],
-      sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
+      sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
     });
 
     expect(plan.indexAll).toBe(true);
@@ -52,10 +52,10 @@ describe("memory session sync state", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
       files: ["/tmp/incremental.jsonl"],
-      targetSessionFiles: null,
+      targetSessionTranscripts: null,
       sessionsDirtyFiles: new Set(["/tmp/incremental.jsonl"]),
       existingRows: [],
-      sessionPathForFile: (file) => `sessions/${file.split("/").at(-1)}`,
+      sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
     });
 
     expect(plan.indexAll).toBe(false);

@@ -452,7 +452,7 @@ export function renderSessions(props: SessionsProps) {
           <div class="card-title">${t("sessionsView.title")}</div>
           <div class="card-sub">
             ${props.result
-              ? t("sessionsView.store", { path: props.result.path })
+              ? t("sessionsView.store", { path: props.result.databasePath })
               : t("sessionsView.subtitle")}
           </div>
         </div>

@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   listCommitments,
   listDueCommitmentsForSession,
@@ -147,7 +148,10 @@ describe("commitment store delivery selection", () => {
     const store = await loadCommitmentStore();
     expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
     expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
-    const raw = JSON.stringify(readOpenClawStateKvJson("commitments", "store"));
+    const row = openOpenClawStateDatabase()
+      .db.prepare("SELECT record_json FROM commitments WHERE id = ?")
+      .get("cm_interview") as { record_json?: string } | undefined;
+    const raw = row?.record_json ?? "";
     expect(raw).not.toContain("I have an interview tomorrow.");
     expect(raw).not.toContain("sourceUserText");
     expect(raw).not.toContain("sourceAssistantText");

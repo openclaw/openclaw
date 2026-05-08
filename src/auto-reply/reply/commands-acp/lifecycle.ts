@@ -30,7 +30,7 @@ import {
   resolveThreadBindingPlacementForCurrentContext,
   resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
-import { updateSessionStore } from "../../../config/sessions.js";
+import { getSessionEntry, upsertSessionEntry } from "../../../config/sessions.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -42,6 +42,7 @@ import {
   type SessionBindingRecord,
   type SessionBindingService,
 } from "../../../infra/outbound/session-binding-service.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { ReplyPayload } from "../../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
@@ -466,20 +467,20 @@ async function persistSpawnedSessionLabel(params: {
       };
     }
   }
-  if (!params.commandParams.storePath) {
-    return;
+  const agentId =
+    resolveAgentIdFromSessionKey(params.sessionKey) ?? params.commandParams.agentId ?? "main";
+  const existing = getSessionEntry({ agentId, sessionKey: params.sessionKey });
+  if (existing) {
+    upsertSessionEntry({
+      agentId,
+      sessionKey: params.sessionKey,
+      entry: {
+        ...existing,
+        label,
+        updatedAt: now,
+      },
+    });
   }
-  await updateSessionStore(params.commandParams.storePath, (store) => {
-    const existing = store[params.sessionKey];
-    if (!existing) {
-      return;
-    }
-    store[params.sessionKey] = {
-      ...existing,
-      label,
-      updatedAt: now,
-    };
-  });
 }
 
 export async function handleAcpSpawnAction(

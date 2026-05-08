@@ -128,18 +128,16 @@ export type {
   TtsProvider,
 } from "../config/types.js";
 export {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
-  saveSessionStore,
+  resolveSessionRowEntry,
   updateLastRoute,
-  updateSessionStore,
-  updateSessionStoreEntry,
-  resolveSessionStoreEntry,
+  upsertSessionEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
-export { resolveStorePath } from "../config/sessions/paths.js";
 export type { SessionResetMode } from "../config/sessions/reset.js";
 export type { SessionScope } from "../config/sessions/types.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";

@@ -5,10 +5,9 @@ import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-sta
 type DeliveryRuntimeMockOptions = {
   callGateway: (request: unknown) => Promise<unknown>;
   getRuntimeConfig: () => OpenClawConfig;
-  loadSessionStore: (storePath: string) => unknown;
+  getSessionEntry: (params: { agentId: string; sessionKey: string }) => unknown;
   resolveAgentIdFromSessionKey: (sessionKey: string) => string;
   resolveMainSessionKey: (cfg: unknown) => string;
-  resolveStorePath: (store: unknown, options: unknown) => string;
   isEmbeddedPiRunActive: (sessionId: string) => boolean;
   queueEmbeddedPiMessage: (
     sessionId: string,
@@ -53,10 +52,9 @@ export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRunti
     callGateway: (async <T = Record<string, unknown>>(request: Parameters<typeof callGateway>[0]) =>
       (await options.callGateway(request)) as T) as typeof callGateway,
     getRuntimeConfig: options.getRuntimeConfig,
-    loadSessionStore: options.loadSessionStore,
+    getSessionEntry: options.getSessionEntry,
     resolveAgentIdFromSessionKey: options.resolveAgentIdFromSessionKey,
     resolveMainSessionKey: options.resolveMainSessionKey,
-    resolveStorePath: options.resolveStorePath,
     isEmbeddedPiRunActive: options.isEmbeddedPiRunActive,
     queueEmbeddedPiMessage: options.queueEmbeddedPiMessage,
     isSteeringQueueMode: (mode: string) =>

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { upsertSessionEntry } from "../config/sessions.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   filterToolsByPolicy,
@@ -334,40 +335,36 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   });
 
   it("uses stored leaf role for flat depth-1 session keys", () => {
-    const storePath = path.join(
+    const stateDir = path.join(
       os.tmpdir(),
-      `openclaw-subagent-policy-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+      `openclaw-subagent-policy-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     );
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:subagent:flat-leaf": {
-            sessionId: "flat-leaf",
-            updatedAt: Date.now(),
-            spawnDepth: 1,
-            subagentRole: "leaf",
-            subagentControlScope: "none",
-          },
+    try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:subagent:flat-leaf",
+        entry: {
+          sessionId: "flat-leaf",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    const cfg = {
-      ...baseCfg,
-      session: {
-        store: storePath,
-      },
-    } as unknown as OpenClawConfig;
+      });
+      const cfg = {
+        ...baseCfg,
+      } as unknown as OpenClawConfig;
 
-    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
-    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
-    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
+      const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
+      expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+      expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
+      expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+      expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("defaults to leaf behavior when no depth is provided", () => {

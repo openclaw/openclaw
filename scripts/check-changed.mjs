@@ -23,6 +23,19 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/test-live-models-docker.sh",
 ];
 
+const KYSELY_CODEGEN_PATHS = new Set([
+  "scripts/generate-kysely-types.mjs",
+  "src/proxy-capture/db.generated.d.ts",
+  "src/proxy-capture/schema.sql",
+  "src/proxy-capture/schema.generated.ts",
+  "src/state/openclaw-agent-db.generated.d.ts",
+  "src/state/openclaw-agent-schema.sql",
+  "src/state/openclaw-agent-schema.generated.ts",
+  "src/state/openclaw-state-db.generated.d.ts",
+  "src/state/openclaw-state-schema.sql",
+  "src/state/openclaw-state-schema.generated.ts",
+]);
+
 export function createChangedCheckChildEnv(baseEnv = process.env) {
   const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
   return {
@@ -104,6 +117,9 @@ export function createChangedCheckPlan(result, options = {}) {
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
+  if (result.paths.some((changedPath) => KYSELY_CODEGEN_PATHS.has(changedPath))) {
+    add("Kysely generated database types", ["db:kysely:check"]);
+  }
 
   if (result.docsOnly) {
     return {

@@ -276,7 +276,6 @@ function createRuntimeCore(cfg: OpenClawConfig) {
         }),
       },
       session: {
-        resolveStorePath: () => "/tmp/openclaw-test-sessions.json",
         recordInboundSession: vi.fn(async () => {}),
         updateLastRoute: vi.fn(async () => {}),
       },

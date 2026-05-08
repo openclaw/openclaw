@@ -1,6 +1,8 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { loadSqliteSessionTranscriptEvents } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import {
@@ -58,9 +60,6 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
           sessionKey: `msteams:${peer.kind}:${peer.id}`,
           agentId: "default",
         }),
-      },
-      session: {
-        resolveStorePath: (storePath?: string) => storePath ?? tmpdir(),
       },
     },
   } as unknown as PluginRuntime;
@@ -133,12 +132,37 @@ async function expectFileMissing(filePath: string) {
   await expect(access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
+function readFeedbackTranscriptMessage(params: {
+  stateDir: string;
+  sessionId: string;
+}): Record<string, unknown> | undefined {
+  const events = loadSqliteSessionTranscriptEvents({
+    env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+    agentId: "default",
+    sessionId: params.sessionId,
+  });
+  const messageEvent = events
+    .map((entry) => entry.event)
+    .find((entry) => {
+      return Boolean(
+        entry &&
+        typeof entry === "object" &&
+        !Array.isArray(entry) &&
+        (entry as { type?: unknown }).type === "message" &&
+        (entry as { message?: { event?: unknown } }).message?.event === "feedback",
+      );
+    }) as { message?: Record<string, unknown> } | undefined;
+  return messageEvent?.message;
+}
+
 async function withFeedbackHandler(params: {
   cfg: OpenClawConfig;
   context: Parameters<typeof createFeedbackInvokeContext>[0];
   assertResult: (args: { tmpDir: string; originalRun: ReturnType<typeof vi.fn> }) => Promise<void>;
 }) {
   const tmpDir = await mkdtemp(path.join(tmpdir(), "openclaw-msteams-feedback-"));
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = tmpDir;
   try {
     const originalRun = vi.fn(async () => undefined);
     const handler = registerMSTeamsHandlers(
@@ -146,7 +170,7 @@ async function withFeedbackHandler(params: {
       createDeps({
         cfg: {
           ...params.cfg,
-          session: { store: tmpDir },
+          session: {},
         },
       }),
     ) as MSTeamsActivityHandler & {
@@ -156,12 +180,19 @@ async function withFeedbackHandler(params: {
     await handler.run(createFeedbackInvokeContext(params.context));
     await params.assertResult({ tmpDir, originalRun });
   } finally {
+    resetPluginStateStoreForTests();
+    if (previousStateDir == null) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     await rm(tmpDir, { recursive: true, force: true });
   }
 }
 
 describe("msteams feedback invoke authz", () => {
   beforeEach(() => {
+    resetPluginStateStoreForTests();
     feedbackReflectionMockState.runFeedbackReflection.mockReset();
     feedbackReflectionMockState.runFeedbackReflection.mockResolvedValue(undefined);
   });
@@ -185,11 +216,12 @@ describe("msteams feedback invoke authz", () => {
         comment: "allowed feedback",
       },
       assertResult: async ({ tmpDir, originalRun }) => {
-        const transcript = await readFile(
-          path.join(tmpDir, "msteams_direct_owner-aad.jsonl"),
-          "utf-8",
-        );
-        expect(JSON.parse(transcript.trim())).toMatchObject({
+        expect(
+          readFeedbackTranscriptMessage({
+            stateDir: tmpDir,
+            sessionId: "msteams:direct:owner-aad",
+          }),
+        ).toMatchObject({
           event: "feedback",
           messageId: "bot-msg-1",
           value: "positive",
@@ -228,11 +260,12 @@ describe("msteams feedback invoke authz", () => {
         comment: "allowed dm feedback",
       },
       assertResult: async ({ tmpDir, originalRun }) => {
-        const transcript = await readFile(
-          path.join(tmpDir, "msteams_direct_owner-aad.jsonl"),
-          "utf-8",
-        );
-        expect(JSON.parse(transcript.trim())).toMatchObject({
+        expect(
+          readFeedbackTranscriptMessage({
+            stateDir: tmpDir,
+            sessionId: "msteams:direct:owner-aad",
+          }),
+        ).toMatchObject({
           event: "feedback",
           value: "positive",
           comment: "allowed dm feedback",
@@ -271,13 +304,15 @@ describe("msteams feedback invoke authz", () => {
 
   it("does not trigger reflection for a group sender outside groupAllowFrom", async () => {
     const tmpDir = await mkdtemp(path.join(tmpdir(), "openclaw-msteams-feedback-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
     try {
       const originalRun = vi.fn(async () => undefined);
       const handler = registerMSTeamsHandlers(
         createActivityHandler(originalRun),
         createDeps({
           cfg: {
-            session: { store: tmpDir },
+            session: {},
             channels: {
               msteams: {
                 groupPolicy: "allowlist",
@@ -308,6 +343,12 @@ describe("msteams feedback invoke authz", () => {
       expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
       expect(originalRun).not.toHaveBeenCalled();
     } finally {
+      resetPluginStateStoreForTests();
+      if (previousStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       await rm(tmpDir, { recursive: true, force: true });
     }
   });

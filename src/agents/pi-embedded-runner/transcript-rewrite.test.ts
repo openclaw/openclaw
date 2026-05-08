@@ -3,22 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
 import { SessionManager } from "../transcript/session-transcript-contract.js";
 
-const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
-const acquireSessionWriteLockMock = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown) => ({ release: acquireSessionWriteLockReleaseMock })),
-);
-
-vi.mock("../session-write-lock.js", () =>
-  buildSessionWriteLockModuleMock(
-    () => vi.importActual<typeof import("../session-write-lock.js")>("../session-write-lock.js"),
-    (params) => acquireSessionWriteLockMock(params),
-  ),
-);
-
-let rewriteTranscriptEntriesInSessionFile: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionFile;
+let rewriteTranscriptEntriesInSqliteTranscript: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSqliteTranscript;
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let installSessionToolResultGuard: typeof import("../session-tool-result-guard.js").installSessionToolResultGuard;
@@ -149,14 +136,11 @@ function requireString(value: string | undefined, label: string): string {
 beforeAll(async () => {
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
-  ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =
+  ({ rewriteTranscriptEntriesInSqliteTranscript, rewriteTranscriptEntriesInSessionManager } =
     await import("./transcript-rewrite.js"));
 });
 
-beforeEach(() => {
-  acquireSessionWriteLockMock.mockClear();
-  acquireSessionWriteLockReleaseMock.mockClear();
-});
+beforeEach(() => {});
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {
   it("branches from the first replaced message and re-appends the remaining suffix", () => {
@@ -293,8 +277,8 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   });
 });
 
-describe("rewriteTranscriptEntriesInSessionFile", () => {
-  it("emits transcript updates when the active branch changes without opening a manager", async () => {
+describe("rewriteTranscriptEntriesInSqliteTranscript", () => {
+  it("emits transcript updates when the active SQLite branch changes without opening a manager", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
     const sessionManager = SessionManager.create(dir, dir);
     const entryIds = appendSessionMessages(sessionManager, [
@@ -321,14 +305,14 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
     const toolResultEntryId = entryIds[1];
 
     const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
-      throw new Error("SessionManager.open should not be used for file rewrites");
+      throw new Error("SessionManager.open should not be used for SQLite transcript rewrites");
     });
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);
 
     try {
-      const result = await rewriteTranscriptEntriesInSessionFile({
-        sessionFile,
+      const result = await rewriteTranscriptEntriesInSqliteTranscript({
+        transcriptPath: sessionFile,
         sessionKey: "agent:main:test",
         request: {
           replacements: [
@@ -341,11 +325,6 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       });
 
       expect(result.changed).toBe(true);
-      expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({
-        sessionFile,
-        timeoutMs: 60_000,
-      });
-      expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({ sessionFile, sessionKey: "agent:main:test" });
 
       openSpy.mockRestore();

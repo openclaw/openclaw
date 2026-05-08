@@ -1,4 +1,3 @@
-import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
 import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { resolveSqliteSessionTranscriptScopeForPath } from "../../config/sessions/transcript-store.sqlite.js";
@@ -56,7 +55,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: unknown;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {

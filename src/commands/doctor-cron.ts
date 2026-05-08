@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
 import { promisify } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -9,7 +10,9 @@ import {
 } from "../cron/run-log.js";
 import {
   importLegacyCronStateFileToSqlite,
+  legacyCronStoreFileExists,
   legacyCronStateFileExists,
+  loadLegacyCronStoreForMigration,
   resolveCronStorePath,
   loadCronStore,
   saveCronStore,
@@ -206,11 +209,14 @@ export async function maybeRepairLegacyCronStore(params: {
   prompter: Pick<DoctorPrompter, "confirm">;
 }) {
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
+  const hasLegacyStoreFile = legacyCronStoreFileExists(storePath);
   const hasLegacyStateSidecar = legacyCronStateFileExists(storePath);
   const hasLegacyRunLogs = await legacyCronRunLogFilesExist(storePath);
-  const store = await loadCronStore(storePath);
+  const store =
+    (hasLegacyStoreFile ? await loadLegacyCronStoreForMigration(storePath) : null) ??
+    (await loadCronStore(storePath));
   const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
-  if (rawJobs.length === 0 && !hasLegacyStateSidecar && !hasLegacyRunLogs) {
+  if (rawJobs.length === 0 && !hasLegacyStoreFile && !hasLegacyStateSidecar && !hasLegacyRunLogs) {
     return;
   }
 
@@ -228,6 +234,9 @@ export async function maybeRepairLegacyCronStore(params: {
     previewLines.push(
       `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
     );
+  }
+  if (hasLegacyStoreFile) {
+    previewLines.push("- Job definitions still live in legacy `cron/jobs.json`");
   }
   if (hasLegacyStateSidecar) {
     previewLines.push("- Runtime state still lives in the legacy `jobs-state.json` sidecar");
@@ -261,7 +270,11 @@ export async function maybeRepairLegacyCronStore(params: {
     legacyWebhook,
   });
   const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
-  const changed = normalized.mutated || notifyMigration.changed || dreamingMigration.changed;
+  const changed =
+    normalized.mutated ||
+    notifyMigration.changed ||
+    dreamingMigration.changed ||
+    hasLegacyStoreFile;
   if (!changed && notifyMigration.warnings.length === 0) {
     return;
   }
@@ -271,6 +284,9 @@ export async function maybeRepairLegacyCronStore(params: {
       version: 1,
       jobs: rawJobs as unknown as CronJob[],
     });
+    if (hasLegacyStoreFile) {
+      await fs.rm(storePath, { force: true }).catch(() => undefined);
+    }
     note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
     if (dreamingMigration.rewrittenCount > 0) {
       note(

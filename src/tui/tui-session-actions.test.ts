@@ -107,7 +107,7 @@ describe("tui session actions", () => {
 
     resolveFirst?.({
       ts: Date.now(),
-      path: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       count: 1,
       defaults: {},
       sessions: [
@@ -126,7 +126,7 @@ describe("tui session actions", () => {
 
     resolveSecond?.({
       ts: Date.now(),
-      path: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       count: 1,
       defaults: {},
       sessions: [
@@ -149,7 +149,7 @@ describe("tui session actions", () => {
   it("keeps patched model selection when a refresh returns an older snapshot", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      path: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       count: 1,
       defaults: {},
       sessions: [
@@ -177,7 +177,7 @@ describe("tui session actions", () => {
 
     applySessionInfoFromPatch({
       ok: true,
-      path: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       key: "agent:main:main",
       entry: {
         sessionId: "session-1",
@@ -200,7 +200,7 @@ describe("tui session actions", () => {
   it("accepts older session snapshots after switching session keys", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      path: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       count: 1,
       defaults: {},
       sessions: [
@@ -255,7 +255,7 @@ describe("tui session actions", () => {
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      path: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       count: 0,
       defaults: {
         model: "gpt-5.4",
@@ -314,7 +314,7 @@ describe("tui session actions", () => {
   it("resets activity status to idle when switching sessions after streaming", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      path: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       count: 0,
       defaults: {},
       sessions: [],
@@ -389,7 +389,7 @@ describe("tui session actions", () => {
   it("remembers the selected session after history loads", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      path: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       count: 1,
       defaults: {},
       sessions: [{ key: "agent:main:main", sessionId: "session-main" }],

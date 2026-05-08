@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadCronStore } from "../cron/store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } from "./doctor-cron.js";
 
@@ -116,12 +117,13 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.jobId).toBeUndefined();
-    expect(job.id).toBe("legacy-job");
-    expect(job.notify).toBeUndefined();
-    expect(job.schedule).toMatchObject({
+    const persisted = await loadCronStore(storePath);
+    const [job] = persisted.jobs;
+    const legacyJob = job as Record<string, unknown> | undefined;
+    expect(legacyJob?.jobId).toBeUndefined();
+    expect(job?.id).toBe("legacy-job");
+    expect(legacyJob?.notify).toBeUndefined();
+    expect(job?.schedule).toMatchObject({
       kind: "cron",
       expr: "0 7 * * *",
       tz: "UTC",
@@ -143,6 +145,7 @@ describe("maybeRepairLegacyCronStore", () => {
       expect.stringContaining("Cron store normalized"),
       "Doctor changes",
     );
+    await expect(fs.stat(storePath)).rejects.toThrow();
   });
 
   it("imports legacy cron runtime state sidecars into SQLite", async () => {
@@ -185,7 +188,6 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const { loadCronStore } = await import("../cron/store.js");
     const loaded = await loadCronStore(storePath);
     expect(loaded.jobs[0]?.updatedAtMs).toBe(Date.parse("2026-02-01T00:01:00.000Z"));
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(Date.parse("2026-02-01T00:02:00.000Z"));
@@ -258,12 +260,10 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const firstJob = requirePersistedJob(jobs, 0);
-    const secondJob = requirePersistedJob(jobs, 1);
-    expect(firstJob.id).toBe("42");
-    expect(typeof secondJob.id).toBe("string");
-    expect(String(secondJob.id)).toMatch(/^cron-/);
+    const persisted = await loadCronStore(storePath);
+    expect(persisted.jobs[0]?.id).toBe("42");
+    expect(typeof persisted.jobs[1]?.id).toBe("string");
+    expect(persisted.jobs[1]?.id).toMatch(/^cron-/);
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("stores `id` as a non-string value"),
       "Cron",
@@ -317,9 +317,8 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.notify).toBe(true);
+    const persisted = await loadCronStore(storePath);
+    expect((persisted.jobs[0] as Record<string, unknown> | undefined)?.notify).toBe(true);
     expect(noteSpy).toHaveBeenCalledWith(
       expect.stringContaining('uses legacy notify fallback alongside delivery mode "announce"'),
       "Doctor warnings",
@@ -395,10 +394,9 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.notify).toBeUndefined();
-    expect(job.delivery).toMatchObject({
+    const persisted = await loadCronStore(storePath);
+    expect((persisted.jobs[0] as Record<string, unknown> | undefined)?.notify).toBeUndefined();
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
       mode: "webhook",
       to: "https://example.invalid/cron-finished",
     });
@@ -433,12 +431,12 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
-    expect(job.channel).toBeUndefined();
-    expect(job.to).toBeUndefined();
-    expect(job.threadId).toBeUndefined();
-    expect(job.delivery).toMatchObject({
+    const persisted = await loadCronStore(storePath);
+    const legacyJob = persisted.jobs[0] as Record<string, unknown> | undefined;
+    expect(legacyJob?.channel).toBeUndefined();
+    expect(legacyJob?.to).toBeUndefined();
+    expect(legacyJob?.threadId).toBeUndefined();
+    expect(persisted.jobs[0]?.delivery).toMatchObject({
       mode: "announce",
       channel: "telegram",
       to: "-1001234567890",
@@ -476,9 +474,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
+    const persisted = await loadCronStore(storePath);
     const [job] = persisted.jobs;
     expect(job).toMatchObject({
       sessionTarget: "isolated",

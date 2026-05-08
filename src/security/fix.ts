@@ -8,6 +8,8 @@ import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/p
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runExec } from "../process/exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
 export type SecurityFixChmodAction = {
@@ -45,6 +47,13 @@ export type SecurityPermissionTarget = {
   mode: number;
   require: "dir" | "file";
 };
+
+function addSqlitePermissionTargets(targets: SecurityPermissionTarget[], sqlitePath: string): void {
+  targets.push({ path: path.dirname(sqlitePath), mode: 0o700, require: "dir" });
+  targets.push({ path: sqlitePath, mode: 0o600, require: "file" });
+  targets.push({ path: `${sqlitePath}-wal`, mode: 0o600, require: "file" });
+  targets.push({ path: `${sqlitePath}-shm`, mode: 0o600, require: "file" });
+}
 
 async function safeChmod(params: {
   path: string;
@@ -324,6 +333,7 @@ export async function collectSecurityPermissionTargets(params: {
       require: "file" as const,
     })),
   ];
+  addSqlitePermissionTargets(targets, resolveOpenClawStateSqlitePath(params.env));
   const credsDir = resolveOAuthDir(params.env, params.stateDir);
   targets.push({ path: credsDir, mode: 0o700, require: "dir" });
 
@@ -357,31 +367,16 @@ export async function collectSecurityPermissionTargets(params: {
     const normalizedAgentId = normalizeAgentId(agentId);
     const agentRoot = path.join(params.stateDir, "agents", normalizedAgentId);
     const agentDir = path.join(agentRoot, "agent");
-    const sessionsDir = path.join(agentRoot, "sessions");
 
     targets.push({ path: agentRoot, mode: 0o700, require: "dir" });
     targets.push({ path: agentDir, mode: 0o700, require: "dir" });
 
     const authPath = path.join(agentDir, "auth-profiles.json");
     targets.push({ path: authPath, mode: 0o600, require: "file" });
-
-    targets.push({ path: sessionsDir, mode: 0o700, require: "dir" });
-
-    const storePath = path.join(sessionsDir, "sessions.json");
-    targets.push({ path: storePath, mode: 0o600, require: "file" });
-
-    // Fix permissions on session transcript files (*.jsonl)
-    const sessionEntries = await fs.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-    for (const entry of sessionEntries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      if (!entry.name.endsWith(".jsonl")) {
-        continue;
-      }
-      const p = path.join(sessionsDir, entry.name);
-      targets.push({ path: p, mode: 0o600, require: "file" });
-    }
+    addSqlitePermissionTargets(
+      targets,
+      resolveOpenClawAgentSqlitePath({ agentId: normalizedAgentId, env: params.env }),
+    );
   }
   return targets;
 }

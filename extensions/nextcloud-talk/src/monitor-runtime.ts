@@ -1,4 +1,3 @@
-import os from "node:os";
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -61,10 +60,10 @@ export async function monitorNextcloudTalkProvider(
   });
   const expectedBackendOrigin = normalizeOrigin(account.baseUrl);
   const replayGuard = createNextcloudTalkReplayGuard({
-    stateDir: core.state.resolveStateDir(process.env, os.homedir),
-    onDiskError: (error) => {
+    scopeKey: "nextcloud-talk:runtime-replay",
+    onStorageError: (error) => {
       logger.warn(
-        `[nextcloud-talk:${account.accountId}] replay guard disk error: ${String(error)}`,
+        `[nextcloud-talk:${account.accountId}] replay guard storage error: ${String(error)}`,
       );
     },
   });

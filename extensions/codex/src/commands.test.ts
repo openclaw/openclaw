@@ -1239,26 +1239,33 @@ describe("codex command", () => {
       firstConfirmBindingReadStarted = resolve;
     });
     let bindingReadCount = 0;
-    const readCodexAppServerBinding = vi.fn(async (bindingSessionFile: string) => {
-      bindingReadCount += 1;
-      if (bindingReadCount === 2) {
-        firstConfirmBindingReadStarted();
-        await firstConfirmBindingRead;
-      }
-      return {
-        schemaVersion: 1 as const,
-        threadId: "thread-race",
-        cwd: "/repo",
-        sessionFile: bindingSessionFile,
-        createdAt: "2026-04-28T00:00:00.000Z",
-        updatedAt: "2026-04-28T00:00:00.000Z",
-      };
-    });
+    const readCodexAppServerBindingMock = vi.fn(
+      async (identity: Parameters<typeof readCodexAppServerBinding>[0]) => {
+        const bindingSessionFile =
+          typeof identity === "string" ? identity : (identity.sessionFile ?? "");
+        bindingReadCount += 1;
+        if (bindingReadCount === 2) {
+          firstConfirmBindingReadStarted();
+          await firstConfirmBindingRead;
+        }
+        return {
+          schemaVersion: 1 as const,
+          threadId: "thread-race",
+          cwd: "/repo",
+          sessionFile: bindingSessionFile,
+          createdAt: "2026-04-28T00:00:00.000Z",
+          updatedAt: "2026-04-28T00:00:00.000Z",
+        };
+      },
+    );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: { threadId: "thread-race" },
     }));
-    const deps = createDeps({ readCodexAppServerBinding, safeCodexControlRequest });
+    const deps = createDeps({
+      readCodexAppServerBinding: readCodexAppServerBindingMock,
+      safeCodexControlRequest,
+    });
 
     const request = await handleCodexCommand(
       createContext("diagnostics", sessionFile, { senderId: "user-1" }),
@@ -2168,7 +2175,7 @@ describe("codex command", () => {
     expect(requestConversationBinding).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed bind arguments before requiring a session file", async () => {
+  it("rejects malformed bind arguments before requiring a session identity", async () => {
     const startCodexConversationThread = vi.fn();
 
     await expect(
@@ -2213,11 +2220,13 @@ describe("codex command", () => {
 
   it("clears the Codex app-server thread binding when conversation bind fails", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionKey = "agent:main:codex-bind-failed";
     const clearCodexAppServerBinding = vi.fn(async () => {});
 
     await expect(
       handleCodexCommand(
         createContext("bind", sessionFile, {
+          sessionKey,
           requestConversationBinding: async () => ({
             status: "error",
             message: "binding unsupported <@U123> [trusted](https://evil)",
@@ -2229,6 +2238,7 @@ describe("codex command", () => {
             startCodexConversationThread: vi.fn(async () => ({
               kind: "codex-app-server-session" as const,
               version: 1 as const,
+              sessionKey,
               sessionFile,
               workspaceDir: "/default",
             })),
@@ -2239,17 +2249,19 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "binding unsupported &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09",
     });
-    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile);
+    expect(clearCodexAppServerBinding).toHaveBeenCalledWith({ sessionKey, sessionFile });
   });
 
   it("detaches the current conversation and clears the Codex app-server thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionKey = "agent:main:codex-detach";
     const clearCodexAppServerBinding = vi.fn(async () => {});
     const detachConversationBinding = vi.fn(async () => ({ removed: true }));
 
     await expect(
       handleCodexCommand(
         createContext("detach", sessionFile, {
+          sessionKey,
           detachConversationBinding,
           getCurrentConversationBinding: async () => ({
             bindingId: "binding-1",
@@ -2262,6 +2274,7 @@ describe("codex command", () => {
             data: {
               kind: "codex-app-server-session",
               version: 1,
+              sessionKey,
               sessionFile,
               workspaceDir: "/repo",
             },
@@ -2273,7 +2286,9 @@ describe("codex command", () => {
       text: "Detached this conversation from Codex.",
     });
     expect(detachConversationBinding).toHaveBeenCalled();
-    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile);
+    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey, sessionFile }),
+    );
   });
 
   it("rejects malformed detach commands before clearing bindings", async () => {
@@ -2436,7 +2451,7 @@ describe("codex command", () => {
     expect(setCodexConversationPermissions).not.toHaveBeenCalled();
   });
 
-  it("rejects malformed control arguments before requiring a session file", async () => {
+  it("rejects malformed control arguments before requiring a session identity", async () => {
     const deps = createDeps({
       setCodexConversationModel: vi.fn(),
       setCodexConversationFastMode: vi.fn(),
@@ -2502,6 +2517,7 @@ describe("codex command", () => {
 
   it("describes active binding preferences", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionKey = "agent:main:codex-binding";
     await seedCodexBinding(sessionFile, {
       schemaVersion: 1,
       threadId: "thread-123",
@@ -2515,6 +2531,7 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(
         createContext("binding", sessionFile, {
+          sessionKey,
           getCurrentConversationBinding: async () => ({
             bindingId: "binding-1",
             pluginId: "codex",
@@ -2526,6 +2543,7 @@ describe("codex command", () => {
             data: {
               kind: "codex-app-server-session",
               version: 1,
+              sessionKey,
               sessionFile,
               workspaceDir: "/repo",
             },
@@ -2534,6 +2552,7 @@ describe("codex command", () => {
         {
           deps: createDeps({
             readCodexConversationActiveTurn: vi.fn(() => ({
+              sessionKey,
               sessionFile,
               threadId: "thread-123",
               turnId: "turn-1",
@@ -2550,7 +2569,7 @@ describe("codex command", () => {
         "- Fast: on",
         "- Permissions: full access",
         "- Active run: turn-1",
-        `- Session: ${sessionFile.replaceAll("_", "\uff3f")}`,
+        `- Session key: ${sessionKey}`,
       ].join("\n"),
     });
   });

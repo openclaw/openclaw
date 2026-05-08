@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +13,10 @@ vi.mock("./legacy-crypto-inspector-availability.js", () => ({
   isMatrixLegacyCryptoInspectorAvailable: () => legacyCryptoInspectorAvailability.available,
 }));
 
+import {
+  MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
+  readMatrixLegacyCryptoMigrationState,
+} from "./legacy-crypto-migration-state.js";
 import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import { resolveMatrixAccountStorageRoot } from "./storage-paths.js";
 import {
@@ -85,6 +90,7 @@ function createOpsLegacyCryptoFixture(params: {
 describe("matrix legacy encrypted-state migration", () => {
   afterEach(() => {
     legacyCryptoInspectorAvailability.available = true;
+    resetPluginStateStoreForTests();
   });
 
   it("extracts a saved backup key into the new recovery-key path", async () => {
@@ -160,10 +166,10 @@ describe("matrix legacy encrypted-state migration", () => {
       expect(result.warnings).toContain(
         'Legacy Matrix encrypted state for account "default" cannot be fully converted automatically because the old rust crypto store does not expose all local room keys for export.',
       );
-      const state = JSON.parse(
-        fs.readFileSync(path.join(rootDir, "legacy-crypto-migration.json"), "utf8"),
-      ) as { restoreStatus: string };
-      expect(state.restoreStatus).toBe("manual-action-required");
+      const state = await readMatrixLegacyCryptoMigrationState(
+        path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
+      );
+      expect(state?.restoreStatus).toBe("manual-action-required");
     });
   });
 

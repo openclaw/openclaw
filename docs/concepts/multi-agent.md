@@ -8,15 +8,15 @@ status: active
 
 Run multiple _isolated_ agents — each with its own workspace, state directory (`agentDir`), and session history — plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound messages are routed to the right agent through bindings.
 
-An **agent** here is the full per-persona scope: workspace files, auth profiles, model registry, and session store. `agentDir` is the on-disk state directory that holds this per-agent config at `~/.openclaw/agents/<agentId>/`. A **binding** maps a channel account (e.g. a Slack workspace or a WhatsApp number) to one of those agents.
+An **agent** here is the full per-persona scope: workspace files, auth profiles, model registry, and per-agent database state. `agentDir` is the on-disk state directory that holds this per-agent config and database at `~/.openclaw/agents/<agentId>/agent/`. A **binding** maps a channel account (e.g. a Slack workspace or a WhatsApp number) to one of those agents.
 
 ## What is "one agent"?
 
 An **agent** is a fully scoped brain with its own:
 
 - **Workspace** (files, AGENTS.md/SOUL.md/USER.md, local notes, persona rules).
-- **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
-- **Session store** (chat history + routing state) under `~/.openclaw/agents/<agentId>/sessions`.
+- **State directory** (`agentDir`) for auth profiles, model registry, per-agent config, and the per-agent SQLite database.
+- **Session and transcript state** (chat history + routing state) in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
 
 Auth profiles are **per-agent**. Each agent reads from its own:
 
@@ -51,7 +51,7 @@ The Gateway can host **one agent** (default) or **many agents** side-by-side.
 - State dir: `~/.openclaw` (or `OPENCLAW_STATE_DIR`)
 - Workspace: `~/.openclaw/workspace` (or `~/.openclaw/workspace-<agentId>`)
 - Agent dir: `~/.openclaw/agents/<agentId>/agent` (or `agents.list[].agentDir`)
-- Sessions: `~/.openclaw/agents/<agentId>/sessions`
+- Agent database: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
 ### Single-agent mode (default)
 
@@ -89,7 +89,7 @@ openclaw agents list --bindings
     openclaw agents add social
     ```
 
-    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store under `~/.openclaw/agents/<agentId>`.
+    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and per-agent SQLite database under `~/.openclaw/agents/<agentId>`.
 
   </Step>
   <Step title="Create channel accounts">
@@ -266,7 +266,7 @@ Common channels supporting this pattern include:
 
 ## Concepts
 
-- `agentId`: one "brain" (workspace, per-agent auth, per-agent session store).
+- `agentId`: one "brain" (workspace, per-agent auth, per-agent database).
 - `accountId`: one channel account instance (e.g. WhatsApp account `"personal"` vs `"biz"`).
 - `binding`: routes inbound messages to an `agentId` by `(channel, accountId, peer)` and optionally guild/team ids.
 - Direct chats collapse to `agent:<agentId>:<mainKey>` (per-agent "main"; `session.mainKey`).

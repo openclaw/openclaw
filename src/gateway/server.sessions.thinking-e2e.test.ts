@@ -8,7 +8,7 @@
  */
 import { expect, test, vi } from "vitest";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { testState, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
@@ -72,7 +72,7 @@ test("e2e #76482: session with different model gets its own thinking levels thro
   testState.agentConfig = {
     model: { primary: "openai/gpt-5.5" },
   };
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: "test-extended",
@@ -130,7 +130,7 @@ test("e2e #76482: Anthropic session does not leak DeepSeek thinking levels from 
   testState.agentConfig = {
     model: { primary: "deepseek/deepseek-v4-pro" },
   };
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: "anthropic",
@@ -173,7 +173,7 @@ test("e2e #76482: session matching default model inherits default thinking level
   testState.agentConfig = {
     model: { primary: "openai/gpt-5.5" },
   };
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: "openai",

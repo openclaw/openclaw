@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { respondToMSTeamsFileConsentInvoke } from "./file-consent-invoke.js";
-import { getPendingUploadFs, storePendingUploadFs } from "./pending-uploads-fs.js";
+import { getPendingUploadState, storePendingUploadState } from "./pending-uploads-state.js";
 import { clearPendingUploads, getPendingUpload, storePendingUpload } from "./pending-uploads.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -337,7 +337,7 @@ describe("msteams file consent invoke FS fallback", () => {
     // in-memory store in this (monitor) process is empty.
     const uploadId = "cli-upload-id-123";
     const conversationId = "19:victim@thread.v2";
-    await storePendingUploadFs({
+    await storePendingUploadState({
       id: uploadId,
       buffer: Buffer.from("CLI PAYLOAD"),
       filename: "cli.bin",
@@ -383,13 +383,13 @@ describe("msteams file consent invoke FS fallback", () => {
     );
 
     // FS entry should have been cleaned up after successful upload
-    expect(await getPendingUploadFs(uploadId)).toBeUndefined();
+    expect(await getPendingUploadState(uploadId)).toBeUndefined();
   });
 
   it("cleans up FS entry on decline even when in-memory store is empty", async () => {
     const uploadId = "cli-decline-id";
     const conversationId = "19:victim@thread.v2";
-    await storePendingUploadFs({
+    await storePendingUploadState({
       id: uploadId,
       buffer: Buffer.from("DECLINED"),
       filename: "decline.txt",
@@ -418,6 +418,6 @@ describe("msteams file consent invoke FS fallback", () => {
     await respondToMSTeamsFileConsentInvoke(context, log);
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(await getPendingUploadFs(uploadId)).toBeUndefined();
+    expect(await getPendingUploadState(uploadId)).toBeUndefined();
   });
 });

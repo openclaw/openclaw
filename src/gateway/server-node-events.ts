@@ -19,12 +19,12 @@ import {
   createOutboundSendDeps,
   defaultRuntime,
   deleteMediaBuffer,
+  deliverOutboundPayloads,
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
   loadOrCreateDeviceIdentity,
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
   normalizeChannelId,
   normalizeMainKey,
   normalizeRpcAttachmentsToChatAttachments,
@@ -38,8 +38,7 @@ import {
   resolveSessionModelRef,
   sanitizeInboundSystemTags,
   scopedHeartbeatWakeOptions,
-  sendDurableMessageBatch,
-  updateSessionStore,
+  patchSessionEntry,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -234,27 +233,25 @@ function compactNotificationEventText(raw: string) {
 
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 
-async function touchSessionStore(params: {
+async function touchSessionRow(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  storePath: LoadedSessionEntry["storePath"];
+  agentId: LoadedSessionEntry["agentId"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
 }) {
-  const { storePath } = params;
-  if (!storePath) {
-    return;
-  }
-  await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-      cfg: params.cfg,
-      key: params.sessionKey,
-      store,
-    });
-    store[primaryKey] = {
-      ...store[primaryKey],
+  void params.cfg;
+  void params.sessionKey;
+  await patchSessionEntry({
+    agentId: params.agentId,
+    sessionKey: params.canonicalKey,
+    fallbackEntry: params.entry ?? {
+      sessionId: params.sessionId,
+      updatedAt: params.now,
+    },
+    update: () => ({
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
@@ -267,30 +264,30 @@ async function touchSessionStore(params: {
       lastTo: params.entry?.lastTo,
       lastAccountId: params.entry?.lastAccountId,
       lastThreadId: params.entry?.lastThreadId,
-    };
+    }),
   });
 }
 
-function queueSessionStoreTouch(params: {
+function queueSessionRowTouch(params: {
   ctx: NodeEventContext;
   cfg: OpenClawConfig;
   sessionKey: string;
-  storePath: LoadedSessionEntry["storePath"];
+  agentId: LoadedSessionEntry["agentId"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
 }) {
-  void touchSessionStore({
+  void touchSessionRow({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
-    storePath: params.storePath,
+    agentId: params.agentId,
     canonicalKey: params.canonicalKey,
     entry: params.entry,
     sessionId: params.sessionId,
     now: params.now,
   }).catch((err) => {
-    params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
+    params.ctx.logGateway.warn("voice session row update failed: " + formatForLog(err));
   });
 }
 
@@ -345,19 +342,15 @@ async function sendReceiptAck(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
-  const send = await sendDurableMessageBatch({
+  await deliverOutboundPayloads({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
     payloads: [{ text: params.text }],
     session,
     bestEffort: true,
-    durability: "best_effort",
     deps: createOutboundSendDeps(params.deps),
   });
-  if (send.status === "failed") {
-    throw send.error;
-  }
 }
 
 export const handleNodeEvent = async (
@@ -383,18 +376,18 @@ export const handleNodeEvent = async (
       const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { agentId, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
       if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
         return undefined;
       }
       const sessionId = entry?.sessionId ?? randomUUID();
-      queueSessionStoreTouch({
+      queueSessionRowTouch({
         ctx,
         cfg,
         sessionKey,
-        storePath,
+        agentId,
         canonicalKey,
         entry,
         sessionId,
@@ -466,7 +459,7 @@ export const handleNodeEvent = async (
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { agentId, entry, canonicalKey } = loadSessionEntry(sessionKey);
 
       let message = (link?.message ?? "").trim();
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
@@ -539,7 +532,15 @@ export const handleNodeEvent = async (
 
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
+      await touchSessionRow({
+        cfg,
+        sessionKey,
+        agentId,
+        canonicalKey,
+        entry,
+        sessionId,
+        now,
+      });
 
       if (deliverRequested && (!channel || !to)) {
         const entryChannel =

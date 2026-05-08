@@ -1,7 +1,3 @@
-import syncFs from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearTopicNameCache,
@@ -105,36 +101,23 @@ describe("topic-name-cache", () => {
     expect(topicNameCacheSize()).toBe(2048);
   });
 
-  it("reloads persisted entries from disk", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-topic-cache-"));
-    const persistedPath = path.join(tempDir, "topic-names.json");
-    try {
-      updateTopicName(-100123, 42, { name: "Deployments" }, persistedPath);
-      resetTopicNameCacheForTest();
-      expect(getTopicName(-100123, 42, persistedPath)).toBe("Deployments");
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-      resetTopicNameCacheForTest();
-    }
+  it("reloads persisted entries from plugin state", () => {
+    const scopeKey = "telegram-topic-names:test-account";
+    updateTopicName(-100123, 42, { name: "Deployments" }, scopeKey);
+
+    resetTopicNameCacheForTest();
+
+    expect(getTopicName(-100123, 42, scopeKey)).toBe("Deployments");
   });
 
-  it("keeps separate in-memory stores for separate persisted paths", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-topic-cache-"));
-    const firstPath = path.join(tempDir, "first-topic-names.json");
-    const secondPath = path.join(tempDir, "second-topic-names.json");
-    try {
-      updateTopicName(-100123, 42, { name: "Deployments" }, firstPath);
-      updateTopicName(-200456, 84, { name: "Incidents" }, secondPath);
+  it("keeps separate stores for separate SQLite scope keys", () => {
+    const firstScope = "telegram-topic-names:first";
+    const secondScope = "telegram-topic-names:second";
 
-      const readFileSpy = vi.spyOn(syncFs, "readFileSync");
+    updateTopicName(-100123, 42, { name: "Deployments" }, firstScope);
+    updateTopicName(-200456, 84, { name: "Incidents" }, secondScope);
 
-      expect(getTopicName(-100123, 42, firstPath)).toBe("Deployments");
-      expect(getTopicName(-200456, 84, secondPath)).toBe("Incidents");
-      expect(readFileSpy).not.toHaveBeenCalled();
-    } finally {
-      vi.restoreAllMocks();
-      await fs.rm(tempDir, { recursive: true, force: true });
-      resetTopicNameCacheForTest();
-    }
+    expect(getTopicName(-100123, 42, firstScope)).toBe("Deployments");
+    expect(getTopicName(-200456, 84, secondScope)).toBe("Incidents");
   });
 });

@@ -59,7 +59,7 @@ export type QaScenarioRuntimeDeps = {
   createSession: QaScenarioRuntimeFunction;
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
-  readRawQaSessionStore: QaScenarioRuntimeFunction;
+  readRawQaSessionEntries: QaScenarioRuntimeFunction;
   runQaCli: QaScenarioRuntimeFunction;
   extractMediaPathFromText: QaScenarioRuntimeFunction;
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
@@ -144,7 +144,7 @@ type QaScenarioRuntimeApi<
   createSession: TDeps["createSession"];
   readEffectiveTools: TDeps["readEffectiveTools"];
   readSkillStatus: TDeps["readSkillStatus"];
-  readRawQaSessionStore: TDeps["readRawQaSessionStore"];
+  readRawQaSessionEntries: TDeps["readRawQaSessionEntries"];
   runQaCli: TDeps["runQaCli"];
   extractMediaPathFromText: TDeps["extractMediaPathFromText"];
   resolveGeneratedImagePath: TDeps["resolveGeneratedImagePath"];
@@ -244,7 +244,7 @@ export function createQaScenarioRuntimeApi<
     createSession: params.deps.createSession,
     readEffectiveTools: params.deps.readEffectiveTools,
     readSkillStatus: params.deps.readSkillStatus,
-    readRawQaSessionStore: params.deps.readRawQaSessionStore,
+    readRawQaSessionEntries: params.deps.readRawQaSessionEntries,
     runQaCli: params.deps.runQaCli,
     extractMediaPathFromText: params.deps.extractMediaPathFromText,
     resolveGeneratedImagePath: params.deps.resolveGeneratedImagePath,

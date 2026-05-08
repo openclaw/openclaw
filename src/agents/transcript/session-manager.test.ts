@@ -6,6 +6,7 @@ import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScopeForPath,
 } from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { openTranscriptSessionManager } from "./session-manager.js";
 import { SessionManager } from "./session-transcript-contract.js";
@@ -25,6 +26,7 @@ function readSessionEntries(sessionFile: string) {
 }
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
@@ -68,7 +70,6 @@ describe("TranscriptSessionManager", () => {
 
   it("creates a valid header for an empty explicit session file", async () => {
     const sessionFile = await makeTempSessionFile();
-    await fs.writeFile(sessionFile, "", "utf8");
 
     const sessionManager = openTranscriptSessionManager({
       sessionFile,
@@ -137,6 +138,50 @@ describe("TranscriptSessionManager", () => {
     expect(reopened.buildSessionContext().messages.map((message) => message.role)).toEqual([
       "user",
       "assistant",
+    ]);
+  });
+
+  it("removes persisted tail entries through SQLite instead of rewriting JSONL", async () => {
+    const sessionFile = await makeTempSessionFile();
+    const sessionManager = openTranscriptSessionManager({
+      sessionFile,
+      sessionId: "session-tail",
+      cwd: "/tmp/workspace",
+    });
+
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    const assistantId = sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "synthetic" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error",
+      timestamp: 2,
+    });
+
+    expect(
+      sessionManager.removeTailEntries((entry) => (entry as { id?: string }).id === assistantId),
+    ).toBe(1);
+
+    const reopened = openTranscriptSessionManager({ sessionFile });
+    expect(reopened.getEntry(assistantId)).toBeUndefined();
+    expect(reopened.getLeafId()).toBe(userId);
+    expect(readSessionEntries(sessionFile).map((entry) => (entry as { id?: string }).id)).toEqual([
+      "session-tail",
+      userId,
     ]);
   });
 

@@ -26,7 +26,9 @@ import {
   createRawInputNotifyFn,
   accountToCreds,
 } from "../messaging/sender.js";
-import { setRefIndex } from "../ref/store.js";
+import { configureRefIndexStore, setRefIndex } from "../ref/store.js";
+import { configureKnownUsersStore } from "../session/known-users.js";
+import { configureSessionStore } from "../session/session-store.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
 import { runWithRequestContext } from "../utils/request-context.js";
 import { GatewayConnection } from "./gateway-connection.js";
@@ -56,6 +58,8 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   // ---- 1. Initialize adapters ----
   setOutboundAudioPort(adapters.outboundAudio);
   initCommands(adapters.commands);
+  configureSessionStore(runtime);
+  await Promise.all([configureKnownUsersStore(runtime), configureRefIndexStore(runtime)]);
 
   // ---- 2. Validate ----
   if (!account.appId || !account.clientSecret) {

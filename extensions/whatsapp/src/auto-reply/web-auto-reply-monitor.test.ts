@@ -10,7 +10,7 @@ import { buildInboundLine, formatReplyContext } from "./monitor/message-line.js"
 import type { WebInboundMsg } from "./types.js";
 
 let sessionDir: string | undefined;
-let sessionStorePath: string;
+const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
   return {
@@ -23,11 +23,15 @@ function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendRes
 
 beforeEach(async () => {
   sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-group-gating-"));
-  sessionStorePath = path.join(sessionDir, "sessions.json");
-  await fs.writeFile(sessionStorePath, "{}");
+  process.env.OPENCLAW_STATE_DIR = sessionDir;
 });
 
 afterEach(async () => {
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
   if (sessionDir) {
     await fs.rm(sessionDir, { recursive: true, force: true });
     sessionDir = undefined;
@@ -42,7 +46,7 @@ const makeConfig = (overrides: Record<string, unknown>) =>
         groups: { "*": { requireMention: true } },
       },
     },
-    session: { store: sessionStorePath },
+    session: {},
     ...overrides,
   }) as unknown as import("openclaw/plugin-sdk/config-types").OpenClawConfig;
 

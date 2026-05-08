@@ -1,12 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import { resolveStateDir } from "../../config/paths.js";
-import { loadJsonFile } from "../../infra/json-file.js";
-import { saveJsonFile } from "../../plugin-sdk/json-store.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import {
+  deleteOpenClawStateKvJson,
+  listOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+} from "../../state/openclaw-state-kv.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
   ConversationRef,
@@ -16,12 +16,13 @@ import type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
-type PersistedCurrentConversationBindingsFile = {
+type PersistedCurrentConversationBindingEntry = {
   version: 1;
-  bindings: SessionBindingRecord[];
+  binding: SessionBindingRecord;
 };
 
 const CURRENT_BINDINGS_FILE_VERSION = 1;
+const CURRENT_BINDINGS_KV_SCOPE = "current-conversation-bindings";
 const CURRENT_BINDINGS_ID_PREFIX = "generic:";
 
 let bindingsLoaded = false;
@@ -41,24 +42,25 @@ function buildBindingId(ref: ConversationRef): string {
   return `${CURRENT_BINDINGS_ID_PREFIX}${buildConversationKey(ref)}`;
 }
 
-function resolveBindingsFilePath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "bindings", "current-conversations.json");
-}
-
 function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boolean {
   return typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt)
     ? record.expiresAt <= now
     : false;
 }
 
-function toPersistedFile(): PersistedCurrentConversationBindingsFile {
-  const bindings = [...bindingsByConversationKey.values()]
-    .filter((record) => !isBindingExpired(record))
-    .toSorted((a, b) => a.bindingId.localeCompare(b.bindingId));
+function toPersistedEntry(record: SessionBindingRecord): PersistedCurrentConversationBindingEntry {
   return {
     version: CURRENT_BINDINGS_FILE_VERSION,
-    bindings,
+    binding: record,
   };
+}
+
+function parsePersistedBindingEntry(value: unknown): SessionBindingRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as PersistedCurrentConversationBindingEntry;
+  return record.version === CURRENT_BINDINGS_FILE_VERSION ? record.binding : null;
 }
 
 function loadBindingsIntoMemory(): void {
@@ -67,12 +69,12 @@ function loadBindingsIntoMemory(): void {
   }
   bindingsLoaded = true;
   bindingsByConversationKey.clear();
-  const parsed = loadJsonFile(resolveBindingsFilePath()) as
-    | PersistedCurrentConversationBindingsFile
-    | undefined;
-  const bindings = parsed?.version === CURRENT_BINDINGS_FILE_VERSION ? parsed.bindings : [];
-  for (const record of bindings ?? []) {
+  const entries =
+    listOpenClawStateKvJson<PersistedCurrentConversationBindingEntry>(CURRENT_BINDINGS_KV_SCOPE);
+  for (const entry of entries) {
+    const record = parsePersistedBindingEntry(entry.value);
     if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
+      deleteOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, entry.key);
       continue;
     }
     const conversation = normalizeConversationRef(record.conversation);
@@ -89,8 +91,13 @@ function loadBindingsIntoMemory(): void {
   }
 }
 
-function persistBindingsToDisk(): void {
-  saveJsonFile(resolveBindingsFilePath(), toPersistedFile());
+function persistBinding(record: SessionBindingRecord): void {
+  const key = buildConversationKey(record.conversation);
+  writeOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, key, toPersistedEntry(record));
+}
+
+function deletePersistedBinding(key: string): void {
+  deleteOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, key);
 }
 
 function pruneExpiredBinding(key: string): SessionBindingRecord | null {
@@ -103,7 +110,7 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
     return record;
   }
   bindingsByConversationKey.delete(key);
-  persistBindingsToDisk();
+  deletePersistedBinding(key);
   return null;
 }
 
@@ -181,7 +188,7 @@ export async function bindGenericCurrentConversation(
     },
   };
   bindingsByConversationKey.set(key, record);
-  persistBindingsToDisk();
+  persistBinding(record);
   return record;
 }
 
@@ -223,7 +230,7 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
       lastActivityAt: at,
     },
   });
-  persistBindingsToDisk();
+  persistBinding(bindingsByConversationKey.get(key)!);
 }
 
 export async function unbindGenericCurrentConversationBindings(
@@ -239,7 +246,7 @@ export async function unbindGenericCurrentConversationBindings(
     if (record) {
       bindingsByConversationKey.delete(key);
       removed.push(record);
-      persistBindingsToDisk();
+      deletePersistedBinding(key);
     }
     return removed;
   }
@@ -252,10 +259,8 @@ export async function unbindGenericCurrentConversationBindings(
       continue;
     }
     bindingsByConversationKey.delete(key);
+    deletePersistedBinding(key);
     removed.push(record);
-  }
-  if (removed.length > 0) {
-    persistBindingsToDisk();
   }
   return removed;
 }
@@ -268,13 +273,29 @@ export const __testing = {
     bindingsLoaded = false;
     bindingsByConversationKey.clear();
     if (params?.deletePersistedFile) {
-      const filePath = resolveBindingsFilePath(params.env);
-      try {
-        fs.rmSync(filePath, { force: true });
-      } catch {
-        // ignore test cleanup failures
+      for (const entry of listOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, {
+        env: params.env,
+      })) {
+        deleteOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, entry.key, { env: params.env });
       }
     }
   },
-  resolveBindingsFilePath,
+  persistBindingForTests(record: SessionBindingRecord, env?: NodeJS.ProcessEnv) {
+    const conversation = normalizeConversationRef(record.conversation);
+    const normalized: SessionBindingRecord = {
+      ...record,
+      bindingId: buildBindingId(conversation),
+      conversation,
+    };
+    writeOpenClawStateKvJson(
+      CURRENT_BINDINGS_KV_SCOPE,
+      buildConversationKey(conversation),
+      {
+        version: CURRENT_BINDINGS_FILE_VERSION,
+        binding: normalized,
+      },
+      { env },
+    );
+  },
+  currentBindingsKvScope: CURRENT_BINDINGS_KV_SCOPE,
 };

@@ -123,7 +123,6 @@ const { dispatchResult } = await runtime.channel.turn.runPrepared({
   channel: "matrix",
   accountId,
   routeSessionKey,
-  storePath,
   ctxPayload,
   recordInboundSession,
   record: {

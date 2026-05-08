@@ -1,11 +1,11 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronEvent } from "./service/state.js";
 import { createCronServiceState } from "./service/state.js";
 import { runMissedJobs } from "./service/timer.js";
+import { saveCronStore } from "./store.js";
+import type { CronJob } from "./types.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-",
@@ -14,8 +14,7 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 
 describe("CronService restart catch-up", () => {
   async function writeStoreJobs(storePath: string, jobs: unknown[]) {
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf-8");
+    await saveCronStore(storePath, { version: 1, jobs: jobs as CronJob[] });
   }
 
   function createRestartCronService(params: {

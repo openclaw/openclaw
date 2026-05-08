@@ -75,7 +75,6 @@ export type SessionListRow = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
-  transcriptPath?: string;
   messages?: unknown[];
 };
 

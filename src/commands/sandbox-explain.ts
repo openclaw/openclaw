@@ -4,10 +4,9 @@ import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  loadSessionStore,
+  getSessionEntry,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
-  resolveStorePath,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -93,11 +92,7 @@ function resolveActiveChannel(params: {
   agentId: string;
   sessionKey: string;
 }): string | undefined {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: params.agentId,
-  });
-  const store = loadSessionStore(storePath);
-  const entry = store[params.sessionKey] as
+  let entry:
     | {
         lastChannel?: string;
         channel?: string;
@@ -106,6 +101,14 @@ function resolveActiveChannel(params: {
         provider?: string;
       }
     | undefined;
+  try {
+    entry = getSessionEntry({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    }) as typeof entry;
+  } catch {
+    entry = undefined;
+  }
   const candidate = (
     entry?.lastChannel ??
     entry?.channel ??

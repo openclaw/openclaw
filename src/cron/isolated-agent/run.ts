@@ -6,9 +6,11 @@ import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
+import { upsertSessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
@@ -70,9 +72,6 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
-);
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
 const cronExternalContentRuntimeLoader = createLazyImportLoader(
   () => import("./run-external-content.runtime.js"),
@@ -88,10 +87,6 @@ const cronDeliveryRuntimeLoader = createLazyImportLoader(() => import("./run-del
 const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
-
-async function loadSessionStoreRuntime() {
-  return await sessionStoreRuntimeLoader.load();
-}
 
 async function loadCronExecutorRuntime() {
   return await cronExecutorRuntimeLoader.load();
@@ -543,9 +538,12 @@ async function prepareCronRunContext(params: {
     isFastTestEnv: params.isFastTestEnv,
     cronSession,
     agentSessionKey,
-    updateSessionStore: async (storePath, update) => {
-      const { updateSessionStore } = await loadSessionStoreRuntime();
-      await updateSessionStore(storePath, update);
+    persistSessionRow: async (sessionKey, entry) => {
+      upsertSessionEntry({
+        agentId: resolveAgentIdFromSessionKey(sessionKey),
+        sessionKey,
+        entry,
+      });
     },
   });
   const withRunSession: WithRunSession = (result) => ({
@@ -751,7 +749,6 @@ async function prepareCronRunContext(params: {
           sessionEntry: cronSession.sessionEntry,
           sessionStore: cronSession.store,
           sessionKey: agentSessionKey,
-          storePath: cronSession.storePath,
           isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
         });
   const liveSelection: CronLiveSelection = {

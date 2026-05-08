@@ -16,9 +16,8 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
-import { hasTrustedToolPolicies, runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
+import { runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -27,8 +26,8 @@ import {
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import type { AgentToolArtifactStore } from "./filesystem/agent-filesystem.js";
 import { adjustedParamsByToolCallId } from "./pi-tools.before-tool-call.state.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -54,8 +53,6 @@ export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): b
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
-  /** Tool execution cwd for host-derived path facts. */
-  cwd?: string;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
@@ -64,10 +61,7 @@ export type HookContext = {
   channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
-  sandbox?: {
-    root: string;
-    bridge: SandboxFsBridge;
-  };
+  artifactStore?: AgentToolArtifactStore;
 };
 
 type HookBlockedKind = "veto" | "failure";
@@ -90,6 +84,7 @@ const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const MAX_TOOL_MEDIA_ARTIFACT_URLS = 64;
 
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
@@ -420,6 +415,96 @@ async function recordLoopOutcome(args: {
   if (recordedOutcome) {
     args.ctx.onToolOutcome?.(recordedOutcome);
   }
+  recordToolMediaArtifact({
+    ctx: args.ctx,
+    toolName: args.toolName,
+    toolCallId: args.toolCallId,
+    outcome: recordedOutcome,
+    result: args.result,
+  });
+}
+
+function recordToolMediaArtifact(params: {
+  ctx?: HookContext;
+  toolName: string;
+  toolCallId?: string;
+  outcome?: ToolOutcomeObservation;
+  result?: unknown;
+}): void {
+  const artifactStore = params.ctx?.artifactStore;
+  if (!artifactStore || params.result === undefined) {
+    return;
+  }
+  const mediaUrls = extractToolResultMediaUrls(params.result);
+  if (mediaUrls.length === 0) {
+    return;
+  }
+  const artifactId = normalizeToolArtifactId({
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    resultHash: params.outcome?.resultHash,
+  });
+  const metadata = {
+    traceSchema: "openclaw-tool-artifact",
+    schemaVersion: 1,
+    toolName: params.toolName,
+    ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+    ...(params.ctx?.sessionKey ? { sessionKey: params.ctx.sessionKey } : {}),
+    ...(params.ctx?.sessionId ? { sessionId: params.ctx.sessionId } : {}),
+    ...(params.ctx?.runId ? { runId: params.ctx.runId } : {}),
+    ...(params.outcome?.argsHash ? { argsHash: params.outcome.argsHash } : {}),
+    ...(params.outcome?.resultHash ? { resultHash: params.outcome.resultHash } : {}),
+    mediaUrls: mediaUrls.slice(0, MAX_TOOL_MEDIA_ARTIFACT_URLS),
+    mediaUrlCount: mediaUrls.length,
+    truncated: mediaUrls.length > MAX_TOOL_MEDIA_ARTIFACT_URLS,
+  };
+  try {
+    artifactStore.write({
+      artifactId,
+      kind: "tool/media-manifest",
+      metadata,
+      blob: `${JSON.stringify(metadata)}\n`,
+    });
+  } catch (err) {
+    log.warn(`tool media artifact recording failed: tool=${params.toolName} error=${String(err)}`);
+  }
+}
+
+function normalizeToolArtifactId(params: {
+  toolName: string;
+  toolCallId?: string;
+  resultHash?: string;
+}): string {
+  const source = `${params.toolName}-${params.toolCallId ?? params.resultHash ?? "result"}`;
+  const normalized = source.replaceAll(/[^A-Za-z0-9._:-]+/g, "-").slice(0, 160);
+  return normalized && /[A-Za-z0-9]/u.test(normalized) ? normalized : "tool-result";
+}
+
+function extractToolResultMediaUrls(result: unknown): string[] {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return [];
+  }
+  const record = result as Record<string, unknown>;
+  const details = record.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return [];
+  }
+  const detailRecord = details as Record<string, unknown>;
+  const media = detailRecord.media;
+  const values: unknown[] = [];
+  if (media && typeof media === "object" && !Array.isArray(media)) {
+    const mediaRecord = media as Record<string, unknown>;
+    values.push(mediaRecord.mediaUrl, mediaRecord.mediaUrls);
+  }
+  values.push(detailRecord.mediaUrl, detailRecord.mediaUrls);
+  return Array.from(
+    new Set(
+      values
+        .flatMap((value) => (Array.isArray(value) ? value : [value]))
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((value) => value.trim()),
+    ),
+  );
 }
 
 export async function runBeforeToolCallHook(args: {
@@ -502,24 +587,7 @@ export async function runBeforeToolCallHook(args: {
 
   const hookRunner = getGlobalHookRunner();
   try {
-    const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
-    const shouldRunTrustedPolicies = hasTrustedToolPolicies();
-    if (!shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
-      return { blocked: false, params };
-    }
     const normalizedParams = isPlainObject(params) ? params : {};
-    const deriveOptions =
-      args.ctx?.cwd || args.ctx?.sandbox
-        ? {
-            ...(args.ctx.cwd ? { cwd: args.ctx.cwd } : {}),
-            ...(args.ctx.sandbox ? { sandbox: args.ctx.sandbox } : {}),
-          }
-        : undefined;
-    const derivedToolParams = deriveToolParams(toolName, normalizedParams, deriveOptions);
-    const deriveToolEventParams = (candidateParams: Record<string, unknown>) => {
-      const derived = deriveToolParams(toolName, candidateParams, deriveOptions);
-      return derived.derivedPaths ? { derivedPaths: derived.derivedPaths } : {};
-    };
     const toolContext = {
       toolName,
       ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
@@ -530,24 +598,16 @@ export async function runBeforeToolCallHook(args: {
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
     };
-    const trustedPolicyResult = shouldRunTrustedPolicies
-      ? await runTrustedToolPolicies(
-          {
-            toolName,
-            params: normalizedParams,
-            ...(args.ctx?.runId && { runId: args.ctx.runId }),
-            ...(args.toolCallId && { toolCallId: args.toolCallId }),
-            ...(derivedToolParams.derivedPaths
-              ? { derivedPaths: derivedToolParams.derivedPaths }
-              : {}),
-          },
-          toolContext,
-          {
-            ...(args.ctx?.config ? { config: args.ctx.config } : {}),
-            deriveEvent: deriveToolEventParams,
-          },
-        )
-      : undefined;
+    const trustedPolicyResult = await runTrustedToolPolicies(
+      {
+        toolName,
+        params: normalizedParams,
+        ...(args.ctx?.runId && { runId: args.ctx.runId }),
+        ...(args.toolCallId && { toolCallId: args.toolCallId }),
+      },
+      toolContext,
+      args.ctx?.config ? { config: args.ctx.config } : undefined,
+    );
     if (trustedPolicyResult?.block) {
       return {
         blocked: true,
@@ -581,11 +641,7 @@ export async function runBeforeToolCallHook(args: {
       });
     }
     const policyAdjustedParams = trustedPolicyResult?.params ?? params;
-    const policyAdjustedDerivedToolParams =
-      trustedPolicyResult?.params && isPlainObject(policyAdjustedParams)
-        ? deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
-        : derivedToolParams;
-    if (!hasBeforeToolCallHooks) {
+    if (!hookRunner?.hasHooks("before_tool_call")) {
       return { blocked: false, params: policyAdjustedParams };
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
@@ -595,9 +651,6 @@ export async function runBeforeToolCallHook(args: {
         params: hookEventParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
-        ...(policyAdjustedDerivedToolParams.derivedPaths
-          ? { derivedPaths: policyAdjustedDerivedToolParams.derivedPaths }
-          : {}),
       },
       toolContext,
     );

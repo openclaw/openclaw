@@ -13,7 +13,7 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("./polls.js", () => ({
-  createMSTeamsPollStoreFs: () => ({
+  createMSTeamsPollStoreState: () => ({
     createPoll: mocks.createPoll,
   }),
 }));

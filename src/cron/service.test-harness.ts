@@ -7,6 +7,7 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
+import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 type NoopLogger = {
@@ -62,19 +63,7 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
 }
 
 export async function writeCronStoreSnapshot(params: { storePath: string; jobs: CronJob[] }) {
-  await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-  await fs.writeFile(
-    params.storePath,
-    JSON.stringify(
-      {
-        version: 1,
-        jobs: params.jobs,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  await saveCronStore(params.storePath, { version: 1, jobs: params.jobs });
 }
 
 export function installCronTestHooks(options: {
@@ -252,7 +241,6 @@ export function createMockCronStateForJobs(params: {
     running: false,
     timer: null,
     storeLoadedAtMs: nowMs,
-    storeFileMtimeMs: null,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedMissingSessionTargetJobIds: new Set<string>(),

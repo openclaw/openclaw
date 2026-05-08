@@ -1,14 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  abortAgentHarnessRun,
-  queueAgentHarnessMessage,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness";
+import { abortAgentHarnessRun } from "openclaw/plugin-sdk/agent-harness";
 import { SessionManager } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  buildAgentRuntimePlan,
   embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
@@ -23,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import {
   buildCodexAppInventoryCacheKey,
@@ -38,7 +34,11 @@ import * as elicitationBridge from "./elicitation-bridge.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
-import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
+import {
+  clearCodexAppServerBinding,
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding,
+} from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildTurnCollaborationMode,
@@ -50,10 +50,11 @@ import {
 let tempDir: string;
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+  const sessionKey = `agent:main:${path.basename(path.dirname(sessionFile)) || "session-1"}`;
   return {
     prompt: "hello",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey,
     sessionFile,
     workspaceDir,
     runId: "run-1",
@@ -532,6 +533,12 @@ function extractRelayIdFromThreadRequest(params: unknown): string {
 describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
     resetAgentEventsForTest();
+    await clearCodexAppServerBinding({ sessionKey: "agent:main:session-1" });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "session-1",
+      events: [],
+    });
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -539,6 +546,12 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   afterEach(async () => {
+    await clearCodexAppServerBinding({ sessionKey: "agent:main:session-1" });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "session-1",
+      events: [],
+    });
     __testing.resetCodexAppServerClientFactoryForTests();
     __testing.resetOpenClawCodingToolsFactoryForTests();
     resetCodexRateLimitCacheForTests();
@@ -640,6 +653,36 @@ describe("runCodexAppServerAttempt", () => {
         "update_plan",
       ]),
     );
+  });
+
+  it("keys new app-server thread bindings by OpenClaw session key", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-keyed");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+
+    await expect(
+      readCodexAppServerBinding({ sessionKey: params.sessionKey }),
+    ).resolves.toMatchObject({
+      sessionKey: params.sessionKey,
+      sessionFile,
+      threadId: "thread-keyed",
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
@@ -996,7 +1039,7 @@ describe("runCodexAppServerAttempt", () => {
       expect.arrayContaining([
         expect.objectContaining({
           runId: "run-1",
-          sessionKey: "agent:main:session-1",
+          sessionKey: params.sessionKey,
           stream: "tool",
           data: expect.objectContaining({ phase: "start", name: "message" }),
         }),
@@ -1534,7 +1577,7 @@ describe("runCodexAppServerAttempt", () => {
           expect.objectContaining({
             runId: "run-1",
             sessionId: "session-1",
-            sessionKey: "agent:main:session-1",
+            sessionKey: params.sessionKey,
           }),
         ],
       ]),
@@ -1593,13 +1636,13 @@ describe("runCodexAppServerAttempt", () => {
       expect.arrayContaining([
         expect.objectContaining({
           runId: "run-1",
-          sessionKey: "agent:main:session-1",
+          sessionKey: params.sessionKey,
           stream: "assistant",
           data: { text: "hello back" },
         }),
         expect.objectContaining({
           runId: "run-1",
-          sessionKey: "agent:main:session-1",
+          sessionKey: params.sessionKey,
           stream: "lifecycle",
           data: expect.objectContaining({ phase: "end" }),
         }),
@@ -3421,6 +3464,33 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("resumes app-server thread bindings stored under the OpenClaw session key", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    await writeCodexAppServerBinding(
+      { sessionKey: params.sessionKey, sessionFile },
+      {
+        threadId: "thread-existing",
+        cwd: workspaceDir,
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+        dynamicToolsFingerprint: "[]",
+      },
+    );
+    const { requests, waitForMethod, completeTurn } = createResumeHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expectResumeRequest(requests, {
+      threadId: "thread-existing",
+      persistExtendedHistory: true,
+    });
+  });
+
   it("resumes a bound Codex thread when only dynamic tool descriptions change", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -3516,7 +3586,8 @@ describe("runCodexAppServerAttempt", () => {
       dynamicTools: [createMessageDynamicTool("Send and manage messages.")],
       appServer,
     });
-    const fingerprint = (await readCodexAppServerBinding(sessionFile))?.dynamicToolsFingerprint;
+    const fingerprint = (await readCodexAppServerBinding({ sessionKey: params.sessionKey }))
+      ?.dynamicToolsFingerprint;
     await startOrResumeThread({
       client: { request } as never,
       params,
@@ -3532,7 +3603,9 @@ describe("runCodexAppServerAttempt", () => {
       appServer,
     });
 
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+    await expect(
+      readCodexAppServerBinding({ sessionKey: params.sessionKey }),
+    ).resolves.toMatchObject({
       dynamicToolsFingerprint: fingerprint,
       threadId: "thread-1",
     });
@@ -3566,7 +3639,12 @@ describe("runCodexAppServerAttempt", () => {
     ).rejects.toThrow("codex app-server client is closed");
 
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+    await expect(
+      readCodexAppServerBinding({
+        sessionKey: createParams(sessionFile, workspaceDir).sessionKey,
+        sessionFile,
+      }),
+    ).resolves.toMatchObject({
       threadId: "thread-existing",
     });
   });

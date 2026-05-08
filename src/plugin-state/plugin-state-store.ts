@@ -1,3 +1,4 @@
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   closePluginStateSqliteStore,
   MAX_PLUGIN_STATE_VALUE_BYTES,
@@ -13,6 +14,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateEntry,
   PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
   PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
@@ -21,6 +23,7 @@ export type {
   OpenKeyedStoreOptions,
   PluginStateEntry,
   PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
   PluginStateStoreErrorCode,
   PluginStateStoreOperation,
   PluginStateStoreProbeResult,
@@ -29,7 +32,9 @@ export type {
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
   closePluginStateSqliteStore,
+  importLegacyPluginStateSidecarToSqlite,
   isPluginStateDatabaseOpen,
+  legacyPluginStateSidecarExists,
   probePluginStateStore,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
@@ -42,6 +47,12 @@ const MAX_JSON_DEPTH = 64;
 type StoreOptionSignature = {
   maxEntries: number;
   defaultTtlMs?: number;
+};
+
+type PreparedRegisterParams = {
+  key: string;
+  valueJson: string;
+  ttlMs?: number;
 };
 
 const namespaceOptionSignatures = new Map<string, StoreOptionSignature>();
@@ -209,6 +220,24 @@ function assertConsistentOptions(
   }
 }
 
+function prepareRegisterParams(
+  key: string,
+  value: unknown,
+  defaultTtlMs?: number,
+  opts?: { ttlMs?: number },
+): PreparedRegisterParams {
+  const normalizedKey = validateKey(key, "register");
+  assertJsonSerializable(value);
+  const json = JSON.stringify(value);
+  assertValueSize(json);
+  const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
+  return {
+    key: normalizedKey,
+    valueJson: json,
+    ...(ttlMs != null ? { ttlMs } : {}),
+  };
+}
+
 function createKeyedStoreForPluginId<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -218,26 +247,9 @@ function createKeyedStoreForPluginId<T>(
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
   assertConsistentOptions(pluginId, namespace, { maxEntries, defaultTtlMs });
 
-  const prepareRegisterParams = (
-    key: string,
-    value: T,
-    opts?: { ttlMs?: number },
-  ): { key: string; valueJson: string; ttlMs?: number } => {
-    const normalizedKey = validateKey(key, "register");
-    assertJsonSerializable(value);
-    const json = JSON.stringify(value);
-    assertValueSize(json);
-    const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
-    return {
-      key: normalizedKey,
-      valueJson: json,
-      ...(ttlMs != null ? { ttlMs } : {}),
-    };
-  };
-
   return {
     async register(key, value, opts) {
-      const params = prepareRegisterParams(key, value, opts);
+      const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
       pluginStateRegister({
         pluginId,
         namespace,
@@ -248,7 +260,7 @@ function createKeyedStoreForPluginId<T>(
       });
     },
     async registerIfAbsent(key, value, opts) {
-      const params = prepareRegisterParams(key, value, opts);
+      const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
       return pluginStateRegisterIfAbsent({
         pluginId,
         namespace,
@@ -279,6 +291,59 @@ function createKeyedStoreForPluginId<T>(
   };
 }
 
+function createSyncKeyedStoreForPluginId<T>(
+  pluginId: string,
+  options: OpenKeyedStoreOptions,
+): PluginStateSyncKeyedStore<T> {
+  const namespace = validateNamespace(options.namespace);
+  const maxEntries = validateMaxEntries(options.maxEntries);
+  const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
+  assertConsistentOptions(pluginId, namespace, { maxEntries, defaultTtlMs });
+
+  return {
+    register(key, value, opts) {
+      const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
+      pluginStateRegister({
+        pluginId,
+        namespace,
+        key: params.key,
+        valueJson: params.valueJson,
+        maxEntries,
+        ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+      });
+    },
+    registerIfAbsent(key, value, opts) {
+      const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
+      return pluginStateRegisterIfAbsent({
+        pluginId,
+        namespace,
+        key: params.key,
+        valueJson: params.valueJson,
+        maxEntries,
+        ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+      });
+    },
+    lookup(key) {
+      const normalizedKey = validateKey(key, "lookup");
+      return pluginStateLookup({ pluginId, namespace, key: normalizedKey }) as T | undefined;
+    },
+    consume(key) {
+      const normalizedKey = validateKey(key, "consume");
+      return pluginStateConsume({ pluginId, namespace, key: normalizedKey }) as T | undefined;
+    },
+    delete(key) {
+      const normalizedKey = validateKey(key, "delete");
+      return pluginStateDelete({ pluginId, namespace, key: normalizedKey });
+    },
+    entries() {
+      return pluginStateEntries({ pluginId, namespace }) as PluginStateEntry<T>[];
+    },
+    clear() {
+      pluginStateClear({ pluginId, namespace });
+    },
+  };
+}
+
 export function createPluginStateKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
@@ -289,6 +354,16 @@ export function createPluginStateKeyedStore<T>(
   return createKeyedStoreForPluginId<T>(pluginId, options);
 }
 
+export function createPluginStateSyncKeyedStore<T>(
+  pluginId: string,
+  options: OpenKeyedStoreOptions,
+): PluginStateSyncKeyedStore<T> {
+  if (pluginId.startsWith("core:")) {
+    throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
+  }
+  return createSyncKeyedStoreForPluginId<T>(pluginId, options);
+}
+
 export function createCorePluginStateKeyedStore<T>(
   options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
 ): PluginStateKeyedStore<T> {
@@ -297,5 +372,6 @@ export function createCorePluginStateKeyedStore<T>(
 
 export function resetPluginStateStoreForTests(): void {
   closePluginStateSqliteStore();
+  closeOpenClawStateDatabaseForTest();
   namespaceOptionSignatures.clear();
 }

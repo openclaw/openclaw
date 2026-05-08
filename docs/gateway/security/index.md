@@ -978,8 +978,9 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 - `agents/<agentId>/agent/codex-home/**`: per-agent Codex app-server account, config, skills, plugins, native thread state, and diagnostics.
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
-- `state/openclaw.sqlite`: canonical session metadata, transcript events, VFS scratch state, tool artifacts, device/pairing tokens, and push registration state.
-- `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) plus legacy/custom JSON routing metadata (`sessions.json`) that can contain private messages and tool output.
+- `state/openclaw.sqlite`: shared gateway state, plugin state, device/pairing tokens, push registration state, and the registry of per-agent databases.
+- `agents/<agentId>/agent/openclaw-agent.sqlite`: canonical session metadata, transcript events, VFS scratch state, tool artifacts, and agent-local runtime/cache data.
+- `agents/<agentId>/sessions/**`: legacy JSON/JSONL session imports or explicit debug/export artifacts only; old files can contain private messages and tool output until doctor migrates them.
 - bundled plugin packages: installed plugins (plus their `node_modules/`).
 - `sandboxes/**`: tool sandbox workspaces; can accumulate copies of files you read/write inside the sandbox.
 

@@ -24,7 +24,11 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: () => ({ entries: [] }),
+  getSessionEntry: () => ({
+    sessionId: "session-1",
+    sessionFile: "/tmp/session-1.jsonl",
+  }),
+  listSessionEntries: () => [],
 }));
 
 vi.mock("../sessions/transcript-events.js", () => ({
@@ -81,8 +85,8 @@ vi.mock("./http-utils.js", () => ({
 }));
 
 vi.mock("./session-utils.js", () => ({
-  resolveGatewaySessionStoreTarget: () => ({
-    storePath: "/tmp",
+  resolveGatewaySessionDatabaseTarget: () => ({
+    databasePath: "/tmp/openclaw-agent.sqlite",
     storeKeys: ["agent:main"],
     canonicalKey: "agent:main",
     agentId: "main",

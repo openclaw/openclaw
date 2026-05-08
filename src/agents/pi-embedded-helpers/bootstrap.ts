@@ -1,8 +1,16 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  appendSqliteSessionTranscriptEvent,
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { AgentMessage } from "../agent-core-contract.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
@@ -245,26 +253,45 @@ export async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
   cwd: string;
+  agentId?: string;
+  env?: OpenClawStateDatabaseOptions["env"];
 }) {
-  const file = params.sessionFile;
-  try {
-    await fs.stat(file);
+  const transcriptPath = path.resolve(params.sessionFile);
+  const existingScope = resolveSqliteSessionTranscriptScopeForPath({
+    transcriptPath,
+    env: params.env,
+  });
+  const agentId = normalizeAgentId(params.agentId ?? existingScope?.agentId ?? DEFAULT_AGENT_ID);
+  const sessionId = existingScope?.sessionId ?? params.sessionId;
+  const existingEventsScope = {
+    agentId,
+    sessionId,
+    env: params.env,
+  };
+  if (hasSqliteSessionTranscriptEvents(existingEventsScope)) {
+    if (!existingScope) {
+      replaceSqliteSessionTranscriptEvents({
+        ...existingEventsScope,
+        transcriptPath,
+        events: loadSqliteSessionTranscriptEvents(existingEventsScope).map((entry) => entry.event),
+      });
+    }
     return;
-  } catch {
-    // create
   }
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const sessionVersion = 2;
   const entry = {
-    type: "session",
+    type: "session" as const,
     version: sessionVersion,
     id: params.sessionId,
     timestamp: new Date().toISOString(),
     cwd: params.cwd,
   };
-  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
+  appendSqliteSessionTranscriptEvent({
+    agentId,
+    sessionId,
+    transcriptPath,
+    event: entry,
+    env: params.env,
   });
 }
 

@@ -42,6 +42,7 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
+import { writeSessionEntryRow } from "./session-row-patch.js";
 import { initSessionState } from "./session.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
@@ -353,7 +354,6 @@ export async function getReplyFromConfig(
     resetTriggered,
     systemSent,
     abortedLastRun,
-    storePath,
     sessionScope,
     groupResolution,
     isGroup,
@@ -377,11 +377,11 @@ export async function getReplyFromConfig(
       if (sessionKey && sessionStore) {
         sessionStore[sessionKey] = sessionEntry;
       }
-      if (sessionKey && storePath) {
-        const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-        await updateSessionStoreEntry({
-          storePath,
+      if (sessionKey) {
+        await writeSessionEntryRow({
           sessionKey,
+          fallbackEntry: sessionEntry,
+          sessionStore,
           update: async () => ({
             pendingFinalDeliveryLastAttemptAt: updatedAt,
             pendingFinalDeliveryAttemptCount: attemptCount,
@@ -406,7 +406,6 @@ export async function getReplyFromConfig(
       sessionEntry,
       sessionStore,
       sessionKey,
-      storePath,
       defaultProvider,
       defaultModel,
       aliasIndex,
@@ -532,7 +531,6 @@ export async function getReplyFromConfig(
         sessionStore,
         sessionKey,
         sessionId,
-        storePath,
         workspaceDir,
         abortedLastRun,
       }),
@@ -551,7 +549,6 @@ export async function getReplyFromConfig(
       sessionEntry,
       sessionStore,
       sessionKey,
-      storePath,
       sessionScope,
       groupResolution,
       isGroup,
@@ -637,7 +634,6 @@ export async function getReplyFromConfig(
       previousSessionEntry,
       sessionStore,
       sessionKey,
-      storePath,
       sessionScope,
       workspaceDir,
       isGroup,
@@ -769,7 +765,6 @@ export async function getReplyFromConfig(
       sessionStore,
       sessionKey,
       sessionId,
-      storePath,
       workspaceDir,
       abortedLastRun,
     }),

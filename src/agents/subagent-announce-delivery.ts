@@ -32,9 +32,9 @@ import {
   createBoundDeliveryRouter,
   getGlobalHookRunner,
   isEmbeddedPiRunActive,
+  getSessionEntry,
   getRuntimeConfig,
   isSteeringQueueMode,
-  loadSessionStore,
   queueEmbeddedPiMessage,
   resolvePiSteeringModeForQueueMode,
   resolveActiveEmbeddedRunSessionId,
@@ -42,7 +42,7 @@ import {
   resolveConversationIdFromTargets,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
-  resolveStorePath,
+  sendMessage,
 } from "./subagent-announce-delivery.runtime.js";
 import {
   runSubagentAnnounceDispatch,
@@ -50,7 +50,7 @@ import {
 } from "./subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin, type DeliveryContext } from "./subagent-announce-origin.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { getSubagentDepthFromSessionEntries } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
@@ -66,6 +66,7 @@ type SubagentAnnounceDeliveryDeps = {
     isActive: boolean;
   };
   queueEmbeddedPiMessage: typeof queueEmbeddedPiMessage;
+  sendMessage: typeof sendMessage;
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
@@ -81,6 +82,7 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
     };
   },
   queueEmbeddedPiMessage,
+  sendMessage,
 };
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
@@ -173,7 +175,7 @@ export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
 }
 
 export function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {
-  return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
+  return getSubagentDepthFromSessionEntries(sessionKey) >= 1 || isCronSessionKey(sessionKey);
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -228,13 +230,6 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return false;
   }
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
-}
-
-function isPermanentAnnounceDeliveryError(error: unknown): boolean {
-  const message = summarizeDeliveryError(error);
-  return Boolean(
-    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
-  );
 }
 
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -435,18 +430,13 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[canonicalKey];
+  const entry = getSessionEntry({ agentId, sessionKey: canonicalKey });
   return { cfg, entry, canonicalKey };
 }
 
 export function loadSessionEntryByKey(sessionKey: string) {
-  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  return store[sessionKey];
+  return getSessionEntry({ agentId, sessionKey });
 }
 
 function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): string {
@@ -747,9 +737,6 @@ async function sendSubagentAnnounceDirectly(params: {
         };
       }
       if (requesterActivity.isActive) {
-        // Active requester sessions should receive completion data through their
-        // running agent turn. If wake fails, let the dispatch layer queue/retry;
-        // do not bypass the requester agent with raw child output.
         return {
           delivered: false,
           path: "direct",
@@ -808,12 +795,6 @@ async function sendSubagentAnnounceDirectly(params: {
           }),
       });
     } catch (err) {
-      if (isPermanentAnnounceDeliveryError(err)) {
-        throw err;
-      }
-      // The requester-agent handoff is the delivery contract for background
-      // completions. A failed handoff should retry/queue/fail visibly instead
-      // of sending the child result directly to the external channel.
       throw err;
     }
 

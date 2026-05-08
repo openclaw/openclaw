@@ -4,6 +4,7 @@ import { memoryWikiConfigSchema, resolveMemoryWikiConfig } from "./src/config.js
 import { createWikiCorpusSupplement } from "./src/corpus-supplement.js";
 import { registerMemoryWikiGatewayMethods } from "./src/gateway.js";
 import { createWikiPromptSectionBuilder } from "./src/prompt-section.js";
+import { createMemoryWikiSourceSyncMigrationProvider } from "./src/source-sync-migration.js";
 import {
   createWikiApplyTool,
   createWikiGetTool,
@@ -20,6 +21,7 @@ export default definePluginEntry({
   register(api) {
     const config = resolveMemoryWikiConfig(api.pluginConfig);
 
+    api.registerMigrationProvider(createMemoryWikiSourceSyncMigrationProvider(config));
     api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder(config));
     api.registerMemoryCorpusSupplement(
       createWikiCorpusSupplement({ config, appConfig: api.config }),

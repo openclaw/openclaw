@@ -32,7 +32,7 @@ import {
 } from "../../tts/tts.js";
 import { isSilentReplyPayloadText } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-import { persistSessionEntry } from "./commands-session-store.js";
+import { persistSessionEntry } from "./commands-session-entry.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type ParsedTtsCommand = {

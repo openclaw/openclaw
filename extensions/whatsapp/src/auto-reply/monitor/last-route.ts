@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { formatError } from "../../session.js";
-import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
+import { updateLastRoute } from "../config.runtime.js";
 
 export function trackBackgroundTask(
   backgroundTasks: Set<Promise<unknown>>,
@@ -25,11 +25,8 @@ export function updateLastRouteInBackground(params: {
   ctx?: MsgContext;
   warn: (obj: unknown, msg: string) => void;
 }) {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: params.storeAgentId,
-  });
   const task = updateLastRoute({
-    storePath,
+    agentId: params.storeAgentId,
     sessionKey: params.sessionKey,
     deliveryContext: {
       channel: params.channel,
@@ -41,7 +38,7 @@ export function updateLastRouteInBackground(params: {
     params.warn(
       {
         error: formatError(err),
-        storePath,
+        agentId: params.storeAgentId,
         sessionKey: params.sessionKey,
         to: params.to,
       },

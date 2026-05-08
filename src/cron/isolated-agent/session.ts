@@ -1,12 +1,11 @@
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { getSessionEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -109,11 +108,10 @@ export function resolveCronSession(params: {
   store?: Record<string, SessionEntry>;
 }) {
   const sessionCfg = params.cfg.session;
-  const storePath = resolveStorePath(sessionCfg?.store, {
-    agentId: params.agentId,
-  });
-  const store = params.store ?? loadSessionStore(storePath);
-  const entry = store[params.sessionKey];
+  const entry =
+    params.store?.[params.sessionKey] ??
+    getSessionEntry({ agentId: params.agentId, sessionKey: params.sessionKey });
+  const store = params.store ?? (entry ? { [params.sessionKey]: entry } : {});
 
   // Check if we can reuse an existing session
   let sessionId: string;
@@ -132,7 +130,6 @@ export function resolveCronSession(params: {
       ...resolveSessionLifecycleTimestamps({
         entry,
         agentId: params.agentId,
-        storePath,
       }),
       now: params.nowMs,
       policy: resetPolicy,
@@ -180,10 +177,9 @@ export function resolveCronSession(params: {
         resolveSessionLifecycleTimestamps({
           entry,
           agentId: params.agentId,
-          storePath,
         }).sessionStartedAt),
     lastInteractionAt: isNewSession ? params.nowMs : baseEntry?.lastInteractionAt,
     systemSent,
   };
-  return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionId };
+  return { store, sessionEntry, systemSent, isNewSession, previousSessionId };
 }

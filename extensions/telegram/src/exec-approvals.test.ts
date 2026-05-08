@@ -6,7 +6,8 @@ import type {
   TelegramAccountConfig,
   TelegramExecApprovalConfig,
 } from "openclaw/plugin-sdk/config-types";
-import { afterEach, describe, expect, it } from "vitest";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalAuthorizedSender,
@@ -26,6 +27,7 @@ type TelegramExecApprovalRequest = Parameters<
 >[0]["request"];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -65,14 +67,12 @@ function telegramAccount(
 }
 
 function buildMultiAccountTelegramConfig(params: {
-  sessionStorePath?: string;
   defaultExecApprovals?: TelegramExecApprovalConfig;
   opsExecApprovals?: TelegramExecApprovalConfig;
   defaultOverrides?: Partial<TelegramAccountConfig>;
   opsOverrides?: Partial<TelegramAccountConfig>;
 }): OpenClawConfig {
   return {
-    ...(params.sessionStorePath ? { session: { store: params.sessionStorePath } } : {}),
     channels: {
       telegram: {
         accounts: {
@@ -230,25 +230,23 @@ describe("telegram exec approvals", () => {
 
   it("scopes non-telegram turn sources to the stored telegram account", () => {
     const tmpDir = createTempDir();
-    const storePath = path.join(tmpDir, "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:ops:telegram:direct:123": {
-          sessionId: "main",
-          updatedAt: 1,
-          origin: {
-            provider: "telegram",
-            accountId: "ops",
-          },
-          lastChannel: "slack",
-          lastTo: "channel:C999",
-          lastAccountId: "work",
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+    upsertSessionEntry({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:123",
+      entry: {
+        sessionId: "main",
+        updatedAt: 1,
+        origin: {
+          provider: "telegram",
+          accountId: "ops",
         },
-      }),
-      "utf-8",
-    );
-    const cfg = buildMultiAccountTelegramConfig({ sessionStorePath: storePath });
+        lastChannel: "slack",
+        lastTo: "channel:C999",
+        lastAccountId: "work",
+      },
+    });
+    const cfg = buildMultiAccountTelegramConfig({});
     const request = makeForeignChannelApprovalRequest({
       id: "req-2",
       sessionKey: "agent:ops:telegram:direct:123",

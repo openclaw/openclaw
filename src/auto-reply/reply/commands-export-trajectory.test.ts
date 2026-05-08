@@ -22,6 +22,7 @@ const hoisted = await vi.hoisted(async () => {
     resolveDefaultTrajectoryExportDirMock: vi.fn(
       () => "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
     ),
+    hasSqliteSessionTranscriptEventsMock: vi.fn(() => true),
     accessMock: vi.fn(
       async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
         await actualAccess(file);
@@ -36,13 +37,21 @@ const hoisted = await vi.hoisted(async () => {
 });
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,
   resolveSessionFilePath: hoisted.resolveSessionFilePathMock,
   resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
 }));
 
 vi.mock("../../config/sessions/store.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
+  getSessionEntry: (params: { sessionKey: string }) => hoisted.sessionRowsMock()[params.sessionKey],
+  listSessionEntries: () =>
+    Object.entries(hoisted.sessionRowsMock()).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    })),
+}));
+
+vi.mock("../../config/sessions/transcript-store.sqlite.js", () => ({
+  hasSqliteSessionTranscriptEvents: hoisted.hasSqliteSessionTranscriptEventsMock,
 }));
 
 vi.mock("../../trajectory/export.js", () => ({
@@ -78,7 +87,6 @@ import {
 } from "./commands-export-trajectory.js";
 
 const tempDirs: string[] = [];
-const mockedSessionFile = "/tmp/target-store/session.jsonl";
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-export-command-"));
@@ -193,12 +201,10 @@ describe("buildExportTrajectoryReply", () => {
         return await actualStat(file);
       },
     );
-    fs.mkdirSync(path.dirname(mockedSessionFile), { recursive: true });
-    fs.writeFileSync(mockedSessionFile, "{}\n");
+    hoisted.hasSqliteSessionTranscriptEventsMock.mockReturnValue(true);
   });
 
   afterEach(() => {
-    fs.rmSync(mockedSessionFile, { force: true });
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -211,7 +217,6 @@ describe("buildExportTrajectoryReply", () => {
     expect(reply.text).toContain("session-branch.json");
     expect(reply.text).not.toContain("session.jsonl");
     expect(reply.text).not.toContain("runtime.jsonl");
-    expect(hoisted.resolveDefaultSessionStorePathMock).toHaveBeenCalledWith("target");
     expect(hoisted.exportTrajectoryBundleMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
@@ -255,27 +260,13 @@ describe("buildExportTrajectoryReply", () => {
   });
 
   it("does not echo absolute session paths when the transcript is missing", async () => {
-    fs.rmSync(mockedSessionFile, { force: true });
-    hoisted.accessMock.mockImplementation(
-      async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
-        if (file.toString() === "/tmp/target-store/session.jsonl") {
-          throw Object.assign(new Error("missing"), { code: "ENOENT" });
-        }
-        await actualAccess(file);
-      },
-    );
-    hoisted.statMock.mockImplementation(
-      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
-        if (file.toString() === "/tmp/target-store/session.jsonl") {
-          throw Object.assign(new Error("missing"), { code: "ENOENT" });
-        }
-        return await actualStat(file);
-      },
-    );
+    hoisted.hasSqliteSessionTranscriptEventsMock.mockReturnValue(false);
 
     const reply = await buildExportTrajectoryReply(makeParams());
 
-    expect(reply.text).toBe("❌ Session file not found.");
+    expect(reply.text).toBe(
+      "❌ Session transcript has not been migrated into SQLite. Run `openclaw doctor --fix` and try again.",
+    );
     expect(reply.text).not.toContain("/tmp/target-store/session.jsonl");
     expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
   });
@@ -363,6 +354,7 @@ describe("buildExportTrajectoryCommandReply", () => {
       sessionKey: "agent:target:session",
       workspace: expect.stringContaining("openclaw-export-command-"),
     });
+    expect(request).not.toHaveProperty("store");
   });
 
   it("uses the originating Telegram route for native trajectory export followups", async () => {

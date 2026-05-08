@@ -19,13 +19,11 @@ export function resolveBtwSessionTranscriptPath(params: {
   sessionId: string;
   sessionEntry?: StoredSessionEntry;
   sessionKey?: string;
-  storePath?: string;
 }): string | undefined {
   try {
     const agentId = params.sessionKey?.split(":")[1];
     const pathOpts = resolveSessionFilePathOptions({
       agentId,
-      storePath: params.storePath,
     });
     return resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
   } catch (error) {

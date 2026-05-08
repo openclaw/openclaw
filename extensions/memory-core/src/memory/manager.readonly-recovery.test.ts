@@ -14,7 +14,7 @@ import {
 
 type ReadonlyRecoveryHarness = MemoryReadonlyRecoveryState & {
   syncing: Promise<void> | null;
-  queuedSessionFiles: Set<string>;
+  queuedSessionTranscripts: Set<string>;
   queuedSessionSync: Promise<void> | null;
   vectorDegradedWriteWarningShown: boolean;
   ensureProviderInitialized: ReturnType<typeof vi.fn>;
@@ -32,11 +32,11 @@ describe("memory manager readonly recovery", () => {
   let indexPath = "";
 
   function createQueuedSyncHarness(syncing: Promise<void>) {
-    const queuedSessionFiles = new Set<string>();
+    const queuedSessionTranscripts = new Set<string>();
     let queuedSessionSync: Promise<void> | null = null;
     const sync = vi.fn(async () => {});
     return {
-      queuedSessionFiles,
+      queuedSessionTranscripts,
       get queuedSessionSync() {
         return queuedSessionSync;
       },
@@ -44,7 +44,7 @@ describe("memory manager readonly recovery", () => {
       state: {
         isClosed: () => false,
         getSyncing: () => syncing,
-        getQueuedSessionFiles: () => queuedSessionFiles,
+        getQueuedSessionTranscripts: () => queuedSessionTranscripts,
         getQueuedSessionSync: () => queuedSessionSync,
         setQueuedSessionSync: (value: Promise<void> | null) => {
           queuedSessionSync = value;
@@ -66,7 +66,7 @@ describe("memory manager readonly recovery", () => {
     const harness: ReadonlyRecoveryHarness = {
       closed: false,
       syncing: null,
-      queuedSessionFiles: new Set<string>(),
+      queuedSessionTranscripts: new Set<string>(),
       queuedSessionSync: null,
       db: initialDb,
       vector: {
@@ -102,7 +102,7 @@ describe("memory manager readonly recovery", () => {
 
   async function runSyncWithReadonlyRecovery(
     harness: ReadonlyRecoveryHarness,
-    params?: { reason?: string; force?: boolean; sessionFiles?: string[] },
+    params?: { reason?: string; force?: boolean; sessionTranscripts?: string[] },
   ) {
     return await runMemorySyncWithReadonlyRecovery(harness, params);
   }
@@ -223,7 +223,7 @@ describe("memory manager readonly recovery", () => {
     db.close();
   });
 
-  it("queues targeted session files behind an in-flight sync", async () => {
+  it("queues targeted session transcripts behind an in-flight sync", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
@@ -243,8 +243,8 @@ describe("memory manager readonly recovery", () => {
 
     expect(harness.sync).toHaveBeenCalledTimes(1);
     expect(harness.sync).toHaveBeenCalledWith({
-      reason: "queued-session-files",
-      sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
+      reason: "queued-session-transcripts",
+      sessionTranscripts: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
     });
     expect(harness.queuedSessionSync).toBeNull();
   });
@@ -272,12 +272,12 @@ describe("memory manager readonly recovery", () => {
 
     expect(harness.sync).toHaveBeenCalledTimes(1);
     expect(harness.sync).toHaveBeenCalledWith({
-      reason: "queued-session-files",
-      sessionFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
+      reason: "queued-session-transcripts",
+      sessionTranscripts: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
     });
   });
 
-  it("falls back to the active sync when no usable session files were queued", async () => {
+  it("falls back to the active sync when no usable session transcripts were queued", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();

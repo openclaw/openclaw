@@ -9,6 +9,9 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
@@ -176,6 +179,8 @@ describe("memory index", () => {
     vi.useRealTimers();
     await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
     await closeAllMemorySearchManagers();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     clearRegistry();
     managersForCleanup.clear();
   });
@@ -329,6 +334,25 @@ describe("memory index", () => {
     managersForCleanup.add(manager);
     resetManagerForTest(manager);
     return manager.status().fts?.available ? manager : null;
+  }
+
+  function seedSessionTranscript(params: {
+    sessionId: string;
+    events: unknown[];
+    now?: number;
+  }): string {
+    const transcriptPath = path.join(
+      resolveSessionTranscriptsDirForAgent("main"),
+      `${params.sessionId}.jsonl`,
+    );
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: params.sessionId,
+      transcriptPath,
+      events: params.events,
+      now: () => params.now ?? Date.now(),
+    });
+    return transcriptPath;
   }
 
   it("indexes memory files and searches", async () => {
@@ -593,37 +617,34 @@ describe("memory index", () => {
       const staleAt = new Date("2020-01-01T00:00:00.000Z");
       await fs.utimes(memoryPath, staleAt, staleAt);
 
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "session-ranking.jsonl");
       const now = Date.parse("2026-04-07T15:25:04.113Z");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
+      seedSessionTranscript({
+        sessionId: "session-ranking",
+        now,
+        events: [
+          {
             type: "session",
             id: "session-ranking",
             timestamp: new Date(now - 60_000).toISOString(),
-          }),
-          JSON.stringify({
+          },
+          {
             type: "message",
             message: {
               role: "user",
               timestamp: new Date(now - 30_000).toISOString(),
               content: [{ type: "text", text: "What is the current Project Nebula codename?" }],
             },
-          }),
-          JSON.stringify({
+          },
+          {
             type: "message",
             message: {
               role: "assistant",
               timestamp: new Date(now).toISOString(),
               content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
             },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+          },
+        ],
+      });
 
       await manager.sync({ reason: "test", force: true });
       const results = await manager.search("current Project Nebula codename ORBIT-10", {
@@ -648,28 +669,25 @@ describe("memory index", () => {
         return;
       }
 
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "session-bootstrap.jsonl");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
+      seedSessionTranscript({
+        sessionId: "session-bootstrap",
+        now: Date.parse("2026-04-07T15:25:04.113Z"),
+        events: [
+          {
             type: "session",
             id: "session-bootstrap",
             timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
+          },
+          {
             type: "message",
             message: {
               role: "assistant",
               timestamp: "2026-04-07T15:25:04.113Z",
               content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
             },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+          },
+        ],
+      });
 
       const results = await manager.search("current Project Nebula codename ORBIT-10", {
         minScore: 0,

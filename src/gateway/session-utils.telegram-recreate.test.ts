@@ -1,15 +1,15 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
+  deleteSessionEntry,
+  getSessionEntry,
+  listSessionEntries,
   recordSessionMetaFromInbound,
   updateLastRoute,
-  updateSessionStore,
+  upsertSessionEntry,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { listSessionsFromStore } from "./session-utils.js";
 
@@ -49,14 +49,14 @@ describe("Telegram direct session recreation after delete", () => {
     prefix: "openclaw-telegram-session-recreate-",
   });
   let tempDir = "";
-  let storePath = "";
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
   });
 
   afterEach(() => {
-    clearSessionStoreCacheForTest();
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllEnvs();
   });
 
   afterAll(async () => {
@@ -65,37 +65,29 @@ describe("Telegram direct session recreation after delete", () => {
 
   it("surfaces a deleted Telegram direct session again after the next inbound message", async () => {
     tempDir = await suiteRootTracker.make("direct");
-    storePath = path.join(tempDir, "sessions.json");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [TELEGRAM_DIRECT_KEY]: {
-            sessionId: "old-session",
-            updatedAt: 1_700_000_000_000,
-            chatType: "direct",
-            channel: "telegram",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-
-    await updateSessionStore(storePath, (store) => {
-      delete store[TELEGRAM_DIRECT_KEY];
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey: TELEGRAM_DIRECT_KEY,
+      entry: {
+        sessionId: "old-session",
+        updatedAt: 1_700_000_000_000,
+        chatType: "direct",
+        channel: "telegram",
+      },
     });
-    expect(loadSessionStore(storePath)[TELEGRAM_DIRECT_KEY]).toBeUndefined();
+
+    deleteSessionEntry({ agentId: "main", sessionKey: TELEGRAM_DIRECT_KEY });
+    expect(getSessionEntry({ agentId: "main", sessionKey: TELEGRAM_DIRECT_KEY })).toBeUndefined();
 
     const ctx = createTelegramDirectContext();
     await recordSessionMetaFromInbound({
-      storePath,
+      agentId: "main",
       sessionKey: TELEGRAM_DIRECT_KEY,
       ctx,
     });
     await updateLastRoute({
-      storePath,
+      agentId: "main",
       sessionKey: TELEGRAM_DIRECT_KEY,
       channel: "telegram",
       to: "telegram:7463849194",
@@ -103,10 +95,11 @@ describe("Telegram direct session recreation after delete", () => {
       ctx,
     });
 
-    const store = loadSessionStore(storePath);
+    const store = Object.fromEntries(
+      listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
     const listed = listSessionsFromStore({
       cfg,
-      storePath,
       store,
       opts: {},
     });

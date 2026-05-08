@@ -7,16 +7,8 @@ const storeState = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
 }));
 
-vi.mock("../io.js", () => ({
-  getRuntimeConfig: () => ({}),
-}));
-
-vi.mock("./paths.js", () => ({
-  resolveStorePath: () => "/tmp/sessions.json",
-}));
-
 vi.mock("./store.js", () => ({
-  loadSessionStore: () => storeState.store,
+  getSessionEntry: ({ sessionKey }: { sessionKey: string }) => storeState.store[sessionKey],
 }));
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;

@@ -31,7 +31,7 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: vi.fn(() => ({
     cfg: {},
-    storePath: "/tmp/sessions.json",
+    agentId: "main",
     store: {},
     entry: undefined,
     canonicalKey: "session-1",
@@ -58,14 +58,16 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
-    vi.mocked(loadSessionEntry).mockReset().mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      store: {},
-      entry: undefined,
-      canonicalKey: "session-1",
-      legacyKey: undefined,
-    });
+    vi.mocked(loadSessionEntry)
+      .mockReset()
+      .mockReturnValue({
+        cfg: {},
+        agentId: "main",
+        store: {},
+        entry: undefined,
+        canonicalKey: "session-1",
+        legacyKey: undefined,
+      } as unknown as ReturnType<typeof loadSessionEntry>);
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
@@ -794,7 +796,7 @@ describe("agent event handler", () => {
     });
     vi.mocked(loadSessionEntry).mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      agentId: "main",
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 },
       canonicalKey: "session-1",
@@ -835,7 +837,7 @@ describe("agent event handler", () => {
     });
     vi.mocked(loadSessionEntry).mockReturnValue({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      agentId: "main",
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "off", updatedAt: 1_500 },
       canonicalKey: "session-1",

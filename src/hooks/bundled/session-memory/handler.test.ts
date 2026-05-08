@@ -8,7 +8,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousSessionFile, getRecentSessionContent } from "./transcript.js";
+import { findPreviousTranscriptPath, getRecentTranscriptContent } from "./transcript.js";
 
 // Avoid calling the embedded Pi agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -55,7 +55,7 @@ afterAll(async () => {
 });
 
 /**
- * Create a mock session JSONL file with various entry types
+ * Create mock transcript events with various entry types.
  */
 function createMockSessionContent(
   entries: Array<{ role: string; content: string } | ({ type: string } & Record<string, unknown>)>,
@@ -214,7 +214,7 @@ async function readSessionTranscript(params: {
     name: "test-session.jsonl",
     content: params.sessionContent,
   });
-  return getRecentSessionContent(sessionFile, params.messageCount);
+  return getRecentTranscriptContent(sessionFile, params.messageCount);
 }
 
 function expectMemoryConversation(params: {
@@ -644,13 +644,13 @@ describe("session-memory hook", () => {
       ]),
     });
 
-    const previousSessionFile = await findPreviousSessionFile({
+    const previousTranscriptPath = await findPreviousTranscriptPath({
       sessionsDir,
       sessionId,
     });
-    expect(previousSessionFile).toBe(path.join(sessionsDir, `${sessionId}.jsonl`));
+    expect(previousTranscriptPath).toBe(path.join(sessionsDir, `${sessionId}.jsonl`));
 
-    const memoryContent = await getRecentSessionContent(previousSessionFile!);
+    const memoryContent = await getRecentTranscriptContent(previousTranscriptPath!);
     expect(memoryContent).toContain("user: Recovered with missing sessionFile pointer");
     expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
   });

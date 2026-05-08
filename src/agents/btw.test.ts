@@ -112,7 +112,6 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_PROVIDER = "anthropic";
 const DEFAULT_REASONING_LEVEL = "off";
 const DEFAULT_SESSION_KEY = "agent:main:main";
-const DEFAULT_STORE_PATH = "/tmp/sessions.json";
 const DEFAULT_QUESTION = "What changed?";
 const MATH_QUESTION = "What is 17 * 19?";
 const MATH_ANSWER = "323";
@@ -409,7 +408,6 @@ describe("runBtwSideQuestion", () => {
       sessionEntry: createSessionEntry(),
       sessionStore: {},
       sessionKey: DEFAULT_SESSION_KEY,
-      storePath: DEFAULT_STORE_PATH,
       resolvedThinkLevel: "low",
       resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
       blockReplyChunking: {

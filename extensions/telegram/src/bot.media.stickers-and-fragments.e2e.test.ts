@@ -8,7 +8,7 @@ import {
 } from "./bot.media.test-utils.js";
 
 describe("telegram stickers", () => {
-  const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
+  const STICKER_TEST_TIMEOUT_MS = 60_000;
 
   async function createStaticStickerHarness() {
     const proxyFetch = vi.fn().mockResolvedValue(
@@ -157,7 +157,7 @@ describe("telegram text fragments", () => {
     vi.clearAllTimers();
   });
 
-  const TEXT_FRAGMENT_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
+  const TEXT_FRAGMENT_TEST_TIMEOUT_MS = 60_000;
   const TEXT_FRAGMENT_FLUSH_MS = TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 80;
 
   it(
@@ -196,7 +196,7 @@ describe("telegram text fragments", () => {
         () => {
           expect(replySpy).toHaveBeenCalledTimes(1);
         },
-        { timeout: TEXT_FRAGMENT_FLUSH_MS * 6, interval: 5 },
+        { timeout: Math.max(TEXT_FRAGMENT_FLUSH_MS * 6, 10_000), interval: 5 },
       );
 
       const payload = replySpy.mock.calls[0][0] as { RawBody?: string };

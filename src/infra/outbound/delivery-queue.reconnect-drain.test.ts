@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -16,6 +14,10 @@ import {
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
+  readFailedQueuedEntry,
+  readPendingQueuedEntries,
+  readQueuedEntry,
+  setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
 const stubCfg = {} as OpenClawConfig;
@@ -135,9 +137,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     const deliver = createTransientFailureDeliver();
 
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
-    const queueDir = path.join(tmpDir, "delivery-queue");
-    const filePath = path.join(queueDir, `${id}.json`);
-    const before = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
+    const before = readQueuedEntry(tmpDir, id) as {
       retryCount: number;
       lastAttemptAt?: number;
       lastError?: string;
@@ -147,7 +147,7 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    const after = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
+    const after = readQueuedEntry(tmpDir, id) as {
       retryCount: number;
       lastAttemptAt?: number;
       lastError?: string;
@@ -178,8 +178,8 @@ describe("drainPendingDeliveries for reconnect", () => {
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(tmpDir, "delivery-queue", `${id}.json`))).toBe(false);
-    expect(fs.existsSync(path.join(tmpDir, "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(readPendingQueuedEntries(tmpDir).map((entry) => entry.id)).not.toContain(id);
+    expect(readFailedQueuedEntry(tmpDir, id)).toMatchObject({ id });
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining("refusing blind replay without adapter reconciliation"),
     );
@@ -203,9 +203,7 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     // Should have moved to failed, not delivered
     expect(deliver).not.toHaveBeenCalled();
-    const failedDir = path.join(tmpDir, "delivery-queue", "failed");
-    const failedFiles = fs.readdirSync(failedDir).filter((f) => f.endsWith(".json"));
-    expect(failedFiles).toHaveLength(1);
+    expect(readFailedQueuedEntry(tmpDir, id)).toMatchObject({ id });
   });
 
   it("second concurrent call is skipped (concurrency guard)", async () => {
@@ -218,22 +216,15 @@ describe("drainPendingDeliveries for reconnect", () => {
       await deliverPromise;
     });
 
-    await enqueueDelivery(
+    const id = await enqueueDelivery(
       { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
       tmpDir,
     );
-    // Fail it so it matches the "no listener" filter
-    const pending = fs
-      .readdirSync(path.join(tmpDir, "delivery-queue"))
-      .find((f) => f.endsWith(".json"));
-    if (!pending) {
-      throw new Error("Missing pending delivery entry");
-    }
-    const entryPath = path.join(tmpDir, "delivery-queue", pending);
-    const entry = JSON.parse(fs.readFileSync(entryPath, "utf-8"));
-    entry.lastError = NO_LISTENER_ERROR;
-    entry.retryCount = 1;
-    fs.writeFileSync(entryPath, JSON.stringify(entry, null, 2));
+    setQueuedEntryState(tmpDir, id, {
+      retryCount: 1,
+      lastAttemptAt: Date.now(),
+      lastError: NO_LISTENER_ERROR,
+    });
 
     const opts = { accountId: "acct1", log, stateDir: tmpDir, deliver };
 
@@ -265,19 +256,10 @@ describe("drainPendingDeliveries for reconnect", () => {
       { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
       tmpDir,
     );
-    const queuePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
-    const entry = JSON.parse(fs.readFileSync(queuePath, "utf-8")) as {
-      id: string;
-      enqueuedAt: number;
-      channel: string;
-      to: string;
-      accountId?: string;
-      payloads: Array<{ text: string }>;
-      retryCount: number;
-      lastError?: string;
-    };
-    entry.lastError = NO_LISTENER_ERROR;
-    fs.writeFileSync(queuePath, JSON.stringify(entry, null, 2));
+    setQueuedEntryState(tmpDir, id, {
+      retryCount: 0,
+      lastError: NO_LISTENER_ERROR,
+    });
 
     const startupRecovery = recoverPendingDeliveries({
       cfg: stubCfg,
@@ -324,19 +306,8 @@ describe("drainPendingDeliveries for reconnect", () => {
       { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
       tmpDir,
     );
-    const queueDir = path.join(tmpDir, "delivery-queue");
-    const blockerPath = path.join(queueDir, `${blockerId}.json`);
-    const directChatPath = path.join(queueDir, `${directChatId}.json`);
-    const blockerEntry = JSON.parse(fs.readFileSync(blockerPath, "utf-8")) as {
-      enqueuedAt: number;
-    };
-    const directChatEntry = JSON.parse(fs.readFileSync(directChatPath, "utf-8")) as {
-      enqueuedAt: number;
-    };
-    blockerEntry.enqueuedAt = 1;
-    directChatEntry.enqueuedAt = 2;
-    fs.writeFileSync(blockerPath, JSON.stringify(blockerEntry, null, 2));
-    fs.writeFileSync(directChatPath, JSON.stringify(directChatEntry, null, 2));
+    setQueuedEntryState(tmpDir, blockerId, { retryCount: 0, enqueuedAt: 1 });
+    setQueuedEntryState(tmpDir, directChatId, { retryCount: 0, enqueuedAt: 2 });
 
     const startupRecovery = recoverPendingDeliveries({
       cfg: stubCfg,
@@ -374,9 +345,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(
-      fs.readdirSync(path.join(tmpDir, "delivery-queue")).filter((f) => f.endsWith(".json")),
-    ).toStrictEqual([]);
+    expect(readPendingQueuedEntries(tmpDir)).toEqual([]);
   });
 
   it("drains backoff-eligible retries on reconnect", async () => {
@@ -388,12 +357,11 @@ describe("drainPendingDeliveries for reconnect", () => {
       tmpDir,
     );
     await failDelivery(id, "network down", tmpDir);
-    const entryPath = path.join(tmpDir, "delivery-queue", `${id}.json`);
-    const entry = JSON.parse(fs.readFileSync(entryPath, "utf-8")) as {
-      lastAttemptAt?: number;
-    };
-    entry.lastAttemptAt = Date.now() - 30_000;
-    fs.writeFileSync(entryPath, JSON.stringify(entry, null, 2));
+    setQueuedEntryState(tmpDir, id, {
+      retryCount: 1,
+      lastAttemptAt: Date.now() - 30_000,
+      lastError: "network down",
+    });
 
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
@@ -445,7 +413,6 @@ describe("drainPendingDeliveries for reconnect", () => {
     const log = createRecoveryLog();
     const deliver = vi.fn<DeliverFn>(async () => {});
     const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
-    const entryPath = path.join(tmpDir, "delivery-queue", `${id}.json`);
     let mutated = false;
 
     await drainPendingDeliveries({
@@ -458,11 +425,11 @@ describe("drainPendingDeliveries for reconnect", () => {
       selectEntry: (entry) => {
         if (entry.id === id && !mutated) {
           mutated = true;
-          const nextEntry = JSON.parse(fs.readFileSync(entryPath, "utf-8")) as {
-            lastError?: string;
-          };
-          nextEntry.lastError = "network down";
-          fs.writeFileSync(entryPath, JSON.stringify(nextEntry, null, 2));
+          setQueuedEntryState(tmpDir, id, {
+            retryCount: entry.retryCount,
+            lastAttemptAt: entry.lastAttemptAt,
+            lastError: "network down",
+          });
         }
         return {
           match:

@@ -41,7 +41,7 @@ import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/security-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionUpdatedAt } from "openclaw/plugin-sdk/session-store-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -144,12 +144,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId: entry.groupId,
       senderPeerId: entry.senderPeerId,
     });
-    const storePath = resolveStorePath(deps.cfg.session?.store, {
-      agentId: route.agentId,
-    });
     const envelopeOptions = resolveEnvelopeFormatOptions(deps.cfg);
     const previousTimestamp = readSessionUpdatedAt({
-      storePath,
+      agentId: route.agentId,
       sessionKey: route.sessionKey,
     });
     const body = formatInboundEnvelope({
@@ -303,8 +300,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         resolveTurn: () => ({
           channel: "signal",
           accountId: route.accountId,
+          agentId: route.agentId,
           routeSessionKey: route.sessionKey,
-          storePath,
           ctxPayload,
           recordInboundSession,
           record: {

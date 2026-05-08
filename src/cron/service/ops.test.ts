@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
-import { importLegacyCronStateFileToSqlite, loadCronStore } from "../store.js";
+import { importLegacyCronStoreToSqlite, loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
@@ -235,8 +235,7 @@ describe("cron service ops seam coverage", () => {
       ),
       "utf-8",
     );
-    await importLegacyCronStateFileToSqlite(storePath);
-    const configBefore = await fs.readFile(storePath, "utf-8");
+    await importLegacyCronStoreToSqlite(storePath);
 
     const state = createCronServiceState({
       storePath,
@@ -251,12 +250,11 @@ describe("cron service ops seam coverage", () => {
     try {
       await start(state);
 
-      const configAfter = await fs.readFile(storePath, "utf-8");
       const persisted = await loadCronStore(storePath);
 
-      expect(configAfter).toBe(configBefore);
       expect(persisted.jobs[0]?.updatedAtMs).toBe(createdAtMs);
       expect(persisted.jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
+      await expect(fs.stat(storePath)).rejects.toThrow();
     } finally {
       stop(state);
     }

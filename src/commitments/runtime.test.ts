@@ -159,7 +159,7 @@ describe("commitment extraction runtime", () => {
     expect(firstBatchItem.itemId).not.toContain("telegram");
     expect(firstBatchItem.itemId).not.toContain("15551234567");
     expect(firstBatchItem.itemId).not.toContain("m1");
-    expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual([
+    expect(store.commitments.map((commitment) => commitment.dedupeKey).toSorted()).toEqual([
       "event:1",
       "event:2",
     ]);

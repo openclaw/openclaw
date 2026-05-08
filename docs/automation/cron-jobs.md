@@ -40,10 +40,9 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 ## How cron works
 
 - Cron runs **inside the Gateway** process (not inside the model).
-- Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
-- Runtime execution state persists in the shared SQLite state database at `~/.openclaw/state/openclaw.sqlite`. Legacy `jobs-state.json` sidecars are imported by `openclaw doctor --fix`.
-- If you track cron definitions in git, track `jobs.json` only. Runtime fields no longer belong beside the cron definition file.
-- When `jobs.json` is edited while the Gateway is running or stopped, OpenClaw compares the changed schedule fields with pending runtime slot metadata and clears stale `nextRunAtMs` values. Pure formatting or key-order-only rewrites preserve the pending slot.
+- Job definitions and runtime execution state persist in the shared SQLite state database at `~/.openclaw/state/openclaw.sqlite`.
+- Legacy `jobs.json` and `jobs-state.json` files are imported and removed by `openclaw doctor --fix`.
+- The optional `cron.store` path is now a legacy import namespace and display hint, not a runtime JSON writer.
 - All cron executions create [background task](/automation/tasks) records.
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled out of the channel-connect window instead of replaying immediately, so Discord/Telegram startup and native-command setup stay responsive after restarts.
 - One-shot jobs (`--at`) auto-delete after success by default.
@@ -399,7 +398,7 @@ Model override note:
 {
   cron: {
     enabled: true,
-    store: "~/.openclaw/cron/jobs.json",
+    store: "~/.openclaw/cron/jobs.json", // optional legacy import namespace
     maxConcurrentRuns: 1,
     retry: {
       maxAttempts: 3,
@@ -414,9 +413,9 @@ Model override note:
 
 `maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
 
-Runtime state is keyed by the resolved `cron.store` path inside the shared SQLite state database. It stores pending slots, active markers, last-run metadata, and the schedule identity that tells the scheduler when an externally edited job needs a fresh `nextRunAtMs`.
+Cron data is keyed by the resolved `cron.store` value inside the shared SQLite state database. It stores job definitions, pending slots, active markers, last-run metadata, and the schedule identity used to invalidate stale pending slots after a job update.
 
-If you hand-edit `jobs.json`, do not create or edit `jobs-state.json`. Run `openclaw doctor --fix` once after upgrading from an older version so doctor can import and remove the legacy sidecar.
+Run `openclaw doctor --fix` once after upgrading from an older version so doctor can import and remove legacy `jobs.json` and `jobs-state.json` files.
 
 Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
@@ -428,7 +427,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `openclaw sessions cleanup` maintains isolated run-session entries. `cron.runLog.maxBytes` / `cron.runLog.keepLines` auto-prune SQLite run-log rows.
+    `cron.runLog.maxBytes` / `cron.runLog.keepLines` auto-prune SQLite run-log rows. Session rows are SQLite-backed and are not age/count-pruned.
   </Accordion>
 </AccordionGroup>
 

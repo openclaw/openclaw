@@ -6,17 +6,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { maybeCompactCodexAppServerSession, __testing } from "./compact.js";
 import type { CodexServerNotification } from "./protocol.js";
-import { writeCodexAppServerBinding } from "./session-binding.js";
+import {
+  clearCodexAppServerBinding,
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding,
+} from "./session-binding.js";
 
 let tempDir: string;
 
 async function writeTestBinding(options: { authProfileId?: string } = {}): Promise<string> {
   const sessionFile = path.join(tempDir, "session.jsonl");
-  await writeCodexAppServerBinding(sessionFile, {
-    threadId: "thread-1",
-    cwd: tempDir,
-    ...options,
-  });
+  await writeCodexAppServerBinding(
+    { sessionKey: "agent:main:session-1", sessionFile },
+    {
+      threadId: "thread-1",
+      cwd: tempDir,
+      ...options,
+    },
+  );
   return sessionFile;
 }
 
@@ -32,10 +39,12 @@ function startCompaction(sessionFile: string, options: { currentTokenCount?: num
 
 describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(async () => {
+    await clearCodexAppServerBinding({ sessionKey: "agent:main:session-1" });
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-compact-"));
   });
 
   afterEach(async () => {
+    await clearCodexAppServerBinding({ sessionKey: "agent:main:session-1" });
     __testing.resetCodexAppServerClientFactoryForTests();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -128,6 +137,27 @@ describe("maybeCompactCodexAppServerSession", () => {
     await pendingResult;
 
     expect(seenAuthProfileId).toBe("openai-codex:work");
+  });
+
+  it("looks up native compaction bindings by OpenClaw session key", async () => {
+    const fake = createFakeCodexClient();
+    __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+
+    const pendingResult = startCompaction(sessionFile);
+    await vi.waitFor(() => {
+      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    });
+    fake.emit({
+      method: "thread/compacted",
+      params: { threadId: "thread-1", turnId: "turn-1" },
+    });
+
+    await expect(pendingResult).resolves.toMatchObject({
+      ok: true,
+      compacted: true,
+    });
   });
 
   it("fails closed when the persisted binding auth profile disagrees with the runtime request", async () => {

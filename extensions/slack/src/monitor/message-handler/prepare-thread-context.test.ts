@@ -1,26 +1,12 @@
 import type { App } from "@slack/bolt";
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
-import {
-  createInboundSlackTestContext,
-  createSlackSessionStoreFixture,
-  createSlackTestAccount,
-} from "./prepare.test-helpers.js";
+import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
 
 describe("resolveSlackThreadContextData", () => {
-  const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-context-");
-
-  beforeAll(() => {
-    storeFixture.setup();
-  });
-
-  afterAll(() => {
-    storeFixture.cleanup();
-  });
-
   function createThreadContext(params: { replies: unknown }) {
     return createInboundSlackTestContext({
       cfg: {
@@ -50,7 +36,6 @@ describe("resolveSlackThreadContextData", () => {
     allowFromLower: string[];
     allowNameMatching: boolean;
   }) {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
       messages: params.repliesMessages,
       response_metadata: { next_cursor: "" },
@@ -70,7 +55,7 @@ describe("resolveSlackThreadContextData", () => {
       threadTs: "100.000",
       threadStarter: params.threadStarter,
       roomLabel: "#general",
-      storePath,
+      agentId: "main",
       sessionKey: "thread-session",
       allowFromLower: params.allowFromLower,
       allowNameMatching: params.allowNameMatching,

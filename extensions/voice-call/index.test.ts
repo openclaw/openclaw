@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
@@ -99,6 +98,13 @@ function createCallRecord(overrides: Partial<CallRecord> = {}): CallRecord {
   };
 }
 
+function createOpenKeyedStoreStub() {
+  return vi.fn(() => ({
+    register: vi.fn(async () => {}),
+    entries: vi.fn(async () => []),
+  }));
+}
+
 function createServiceContext(): Parameters<NonNullable<Registered["service"]>["start"]>[0] {
   return {
     config: {},
@@ -112,6 +118,7 @@ function setup(config: Record<string, unknown>): Registered {
   const methodScopes = new Map<string, string | undefined>();
   const tools: unknown[] = [];
   let service: Registered["service"];
+  const openKeyedStore = createOpenKeyedStoreStub();
   const api = createTestPluginApi({
     id: "voice-call",
     name: "Voice Call",
@@ -120,7 +127,10 @@ function setup(config: Record<string, unknown>): Registered {
     source: "test",
     config: {},
     pluginConfig: config,
-    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
+    runtime: {
+      state: { openKeyedStore },
+      tts: { textToSpeechTelephony: vi.fn() },
+    } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
     registerGatewayMethod: (method: string, handler: unknown, opts?: { scope?: string }) => {
       methods.set(method, handler);
@@ -156,7 +166,10 @@ async function registerVoiceCallCli(
     source: "test",
     config: {},
     pluginConfig,
-    runtime: { tts: { textToSpeechTelephony: vi.fn() } },
+    runtime: {
+      state: { openKeyedStore: createOpenKeyedStoreStub() },
+      tts: { textToSpeechTelephony: vi.fn() },
+    },
     logger: noopLogger,
     registerGatewayMethod: () => {},
     registerTool: () => {},
@@ -634,24 +647,25 @@ describe("voice-call plugin", () => {
     expect(String(result.details.error)).toContain("sid required");
   });
 
-  it("CLI latency summarizes turn metrics from JSONL", async () => {
+  it("CLI latency summarizes turn metrics from SQLite-backed call records", async () => {
     const program = new Command();
-    const tmpFile = path.join(os.tmpdir(), `voicecall-latency-${Date.now()}.jsonl`);
-    fs.writeFileSync(
-      tmpFile,
-      [
-        JSON.stringify({ metadata: { lastTurnLatencyMs: 100, lastTurnListenWaitMs: 70 } }),
-        JSON.stringify({ metadata: { lastTurnLatencyMs: 200, lastTurnListenWaitMs: 110 } }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+    vi.mocked(runtimeStub.manager.getCallHistory).mockResolvedValueOnce([
+      createCallRecord({
+        callId: "call-latency-1",
+        metadata: { lastTurnLatencyMs: 100, lastTurnListenWaitMs: 70 },
+      }),
+      createCallRecord({
+        callId: "call-latency-2",
+        metadata: { lastTurnLatencyMs: 200, lastTurnListenWaitMs: 110 },
+      }),
+    ]);
 
     const stdout = captureStdout();
 
     try {
       await registerVoiceCallCli(program);
 
-      await program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "10"], {
+      await program.parseAsync(["voicecall", "latency", "--last", "10"], {
         from: "user",
       });
 
@@ -661,7 +675,6 @@ describe("voice-call plugin", () => {
       expect(printed).toContain('"p95Ms": 200');
     } finally {
       stdout.restore();
-      fs.unlinkSync(tmpFile);
     }
   });
 

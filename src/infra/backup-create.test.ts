@@ -2,12 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  __test as backupCreateInternals,
   buildExtensionsNodeModulesFilter,
   createBackupArchive,
   formatBackupCreateSummary,
@@ -25,7 +28,6 @@ function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateRe
     verified: false,
     assets: [],
     skipped: [],
-    skippedVolatileCount: 0,
     ...overrides,
   };
 }
@@ -42,6 +44,10 @@ async function listArchiveEntries(archivePath: string): Promise<string[]> {
   });
   return entries;
 }
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+});
 
 describe("formatBackupCreateSummary", () => {
   const backupArchiveLine = "Backup archive: /tmp/openclaw-backup.tar.gz";
@@ -109,159 +115,6 @@ describe("formatBackupCreateSummary", () => {
   ])("$name", ({ result, expected }) => {
     expect(formatBackupCreateSummary(result)).toEqual(expected);
   });
-
-  it("surfaces the volatile skip count in the summary", () => {
-    expect(
-      formatBackupCreateSummary(
-        makeResult({
-          assets: [
-            {
-              kind: "state",
-              sourcePath: "/state",
-              archivePath: "archive/state",
-              displayPath: "~/.openclaw",
-            },
-          ],
-          skippedVolatileCount: 3,
-        }),
-      ),
-    ).toEqual([
-      "Backup archive: /tmp/openclaw-backup.tar.gz",
-      "Included 1 path:",
-      "- state: ~/.openclaw",
-      "Created /tmp/openclaw-backup.tar.gz",
-      "Skipped 3 volatile files (live sessions, cron logs, queues, sockets, pid/tmp).",
-    ]);
-  });
-});
-
-describe("isTarEofRaceError", () => {
-  const { isTarEofRaceError } = backupCreateInternals;
-
-  it.each([
-    "did not encounter expected EOF",
-    "encountered unexpected EOF",
-    "TAR_BAD_ARCHIVE: Unrecognized archive format",
-    "Truncated input (needed 512 more bytes, only 0 available) (TAR_BAD_ARCHIVE)",
-  ])("matches tar-specific EOF-class error: %s", (message) => {
-    expect(isTarEofRaceError(new Error(message))).toBe(true);
-  });
-
-  it("matches errors by code even when the message is empty", () => {
-    expect(isTarEofRaceError(Object.assign(new Error(""), { code: "EOF" }))).toBe(true);
-  });
-
-  it.each([
-    "EOF occurred in violation of protocol",
-    "unexpected eof while reading",
-    "ran out of EOF markers",
-    "permission denied",
-    "",
-  ])("does not match unrelated errors: %s", (message) => {
-    expect(isTarEofRaceError(new Error(message))).toBe(false);
-  });
-
-  it("rejects non-object inputs", () => {
-    expect(isTarEofRaceError(null)).toBe(false);
-    expect(isTarEofRaceError(undefined)).toBe(false);
-    expect(isTarEofRaceError("did not encounter expected EOF")).toBe(false);
-  });
-});
-
-describe("writeTarArchiveWithRetry", () => {
-  it("retries on EOF-class errors and eventually succeeds", async () => {
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
-      path: "/state/sessions/s-abc/transcript.jsonl",
-    });
-    const runTar = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(eofErr)
-      .mockRejectedValueOnce(eofErr)
-      .mockResolvedValueOnce(undefined);
-    const log = vi.fn();
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-    await backupCreateInternals.writeTarArchiveWithRetry({
-      tempArchivePath: "/tmp/backup.tar.gz.tmp",
-      runTar,
-      log,
-      sleepMs: sleep,
-    });
-
-    expect(runTar).toHaveBeenCalledTimes(3);
-    expect(sleep).toHaveBeenNthCalledWith(1, 10_000);
-    expect(sleep).toHaveBeenNthCalledWith(2, 20_000);
-    expect(log).toHaveBeenCalledTimes(2);
-  });
-
-  it("surfaces the offending path and attempt count after exhausting retries", async () => {
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
-      path: "/state/logs/gateway.jsonl",
-    });
-    const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(eofErr);
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-    await expect(
-      backupCreateInternals.writeTarArchiveWithRetry({
-        tempArchivePath: "/tmp/backup.tar.gz.tmp",
-        runTar,
-        sleepMs: sleep,
-      }),
-    ).rejects.toThrow(/last offending path: \/state\/logs\/gateway\.jsonl, after 3 attempts/);
-    expect(runTar).toHaveBeenCalledTimes(3);
-  });
-
-  it("lets callers reset per-attempt counters so retries report the final attempt's count, not a running sum", async () => {
-    // Simulate the caller's pattern: a closure counter populated by a filter
-    // that tar.c invokes while walking the tree. Each attempt re-walks the
-    // same tree, so the runTar closure must reset the counter before calling
-    // tar.c -- otherwise the reported count accumulates across attempts.
-    let skippedVolatileCount = 0;
-    const volatileFilesSeenPerAttempt = 5;
-    let attempt = 0;
-
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
-      path: "/state/sessions/s-abc/transcript.jsonl",
-    });
-
-    const runTar = vi.fn<() => Promise<void>>().mockImplementation(async () => {
-      attempt += 1;
-      skippedVolatileCount = 0;
-      for (let i = 0; i < volatileFilesSeenPerAttempt; i += 1) {
-        skippedVolatileCount += 1;
-      }
-      if (attempt < 3) {
-        throw eofErr;
-      }
-    });
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-    await backupCreateInternals.writeTarArchiveWithRetry({
-      tempArchivePath: "/tmp/backup.tar.gz.tmp",
-      runTar,
-      sleepMs: sleep,
-    });
-
-    expect(runTar).toHaveBeenCalledTimes(3);
-    // Without the reset, this would be 15 (5 * 3 attempts). With the reset,
-    // it equals the count from the final (successful) attempt.
-    expect(skippedVolatileCount).toBe(volatileFilesSeenPerAttempt);
-  });
-
-  it("does not retry on non-EOF errors", async () => {
-    const runTar = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("permission denied"));
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-    await expect(
-      backupCreateInternals.writeTarArchiveWithRetry({
-        tempArchivePath: "/tmp/backup.tar.gz.tmp",
-        runTar,
-        sleepMs: sleep,
-      }),
-    ).rejects.toThrow(/permission denied/);
-    expect(runTar).toHaveBeenCalledTimes(1);
-    expect(sleep).not.toHaveBeenCalled();
-  });
 });
 
 describe("buildExtensionsNodeModulesFilter", () => {
@@ -287,65 +140,6 @@ describe("buildExtensionsNodeModulesFilter", () => {
 });
 
 describe("createBackupArchive", () => {
-  it("skips current live volatile state files while preserving workspace locks", async () => {
-    await withOpenClawTestState(
-      {
-        layout: "split",
-        prefix: "openclaw-backup-volatile-",
-        scenario: "minimal",
-      },
-      async (state) => {
-        const outputDir = state.path("backups");
-        await state.writeConfig({
-          agents: {
-            list: [{ id: "main", default: true, workspace: state.workspaceDir }],
-          },
-        });
-        await fs.mkdir(outputDir, { recursive: true });
-        await fs.writeFile(path.join(state.workspaceDir, "Cargo.lock"), "workspace lock\n", "utf8");
-        await fs.writeFile(
-          path.join(state.workspaceDir, "pending.tmp"),
-          "workspace temp fixture\n",
-          "utf8",
-        );
-        await state.writeText("agents/main/sessions/live-session.jsonl", "session\n");
-        await state.writeText("sessions/legacy-session.jsonl", "legacy session\n");
-        await state.writeText("cron/runs/nightly.jsonl", "cron\n");
-        await state.writeText("logs/gateway.log", "log\n");
-        await state.writeJson("delivery-queue/message.json", { id: "delivery" });
-        await state.writeJson("session-delivery-queue/message.json", { id: "session-delivery" });
-        await state.writeText("tmp/staged.tmp", "tmp\n");
-        await state.writeText("gateway.pid", "123\n");
-
-        const result = await createBackupArchive({
-          output: outputDir,
-          includeWorkspace: true,
-          nowMs: Date.UTC(2026, 4, 9, 8, 0, 0),
-        });
-        const entries = await listArchiveEntries(result.archivePath);
-
-        expect(entries.some((entry) => entry.endsWith("/workspace/Cargo.lock"))).toBe(true);
-        expect(entries.some((entry) => entry.endsWith("/workspace/pending.tmp"))).toBe(true);
-        for (const suffix of [
-          "/state/agents/main/sessions/live-session.jsonl",
-          "/state/sessions/legacy-session.jsonl",
-          "/state/cron/runs/nightly.jsonl",
-          "/state/logs/gateway.log",
-          "/state/delivery-queue/message.json",
-          "/state/session-delivery-queue/message.json",
-          "/state/tmp/staged.tmp",
-          "/state/gateway.pid",
-        ]) {
-          expect(
-            entries.some((entry) => entry.endsWith(suffix)),
-            suffix,
-          ).toBe(false);
-        }
-        expect(result.skippedVolatileCount).toBe(8);
-      },
-    );
-  });
-
   it("omits installed plugin node_modules from the real archive while keeping plugin files", async () => {
     await withOpenClawTestState(
       {
@@ -382,6 +176,15 @@ describe("createBackupArchive", () => {
           "utf8",
         );
         await fs.mkdir(outputDir, { recursive: true });
+        const database = openOpenClawStateDatabase();
+        database.db
+          .prepare(
+            `
+              INSERT INTO kv (scope, key, value_json, updated_at)
+              VALUES ('backup-test', 'seed', '{}', 1)
+            `,
+          )
+          .run();
 
         const result = await createBackupArchive({
           output: outputDir,
@@ -401,7 +204,36 @@ describe("createBackupArchive", () => {
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
         );
-        expect(pluginNodeModuleEntries).toStrictEqual([]);
+        expect(pluginNodeModuleEntries).toEqual([]);
+        expect(
+          entries.some((entry) => entry.endsWith("/state/node_modules/root-dep/index.js")),
+        ).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/state/state/openclaw.sqlite"))).toBe(true);
+
+        const backupRuns = database.db.prepare("SELECT * FROM backup_runs").all() as Array<{
+          archive_path: string;
+          status: string;
+          manifest_json: string;
+        }>;
+        expect(backupRuns).toHaveLength(1);
+        expect(backupRuns[0]?.archive_path).toBe(result.archivePath);
+        expect(backupRuns[0]?.status).toBe("completed");
+        const manifest = JSON.parse(backupRuns[0]?.manifest_json ?? "{}") as {
+          databaseSnapshots?: Array<{
+            role?: string;
+            archivePath?: string;
+            integrity?: string;
+          }>;
+        };
+        expect(manifest.databaseSnapshots).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "global",
+              integrity: "ok",
+              archivePath: expect.stringContaining("/state/state/openclaw.sqlite"),
+            }),
+          ]),
+        );
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         await expect(

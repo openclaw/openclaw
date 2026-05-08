@@ -2,9 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
-import * as jsonStore from "openclaw/plugin-sdk/json-store";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FileBackedMatrixSyncStore } from "./file-sync-store.js";
+import { FileBackedMatrixSyncStore, parsePersistedMatrixSyncStore } from "./file-sync-store.js";
+import { readMatrixStorageMetadata, writeMatrixStorageMetadata } from "./storage-meta-state.js";
 
 function createSyncResponse(nextBatch: string): ISyncResponse {
   return {
@@ -51,29 +52,21 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
   };
 }
 
-function createDeferred() {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
-
 describe("FileBackedMatrixSyncStore", () => {
   const tempDirs: string[] = [];
 
   function createStoragePath(): string {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-store-"));
     tempDirs.push(tempDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "state"));
     return path.join(tempDir, "bot-storage.json");
   }
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
+    resetPluginStateStoreForTests();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -116,25 +109,19 @@ describe("FileBackedMatrixSyncStore", () => {
   it("claims current-token storage ownership when sync state is persisted", async () => {
     const storagePath = createStoragePath();
     const rootDir = path.dirname(storagePath);
-    fs.writeFileSync(
-      path.join(rootDir, "storage-meta.json"),
-      JSON.stringify({
-        homeserver: "https://matrix.example.org",
-        userId: "@bot:example.org",
-        accountId: "default",
-        accessTokenHash: "token-hash",
-        deviceId: null,
-      }),
-      "utf8",
-    );
+    writeMatrixStorageMetadata(rootDir, {
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accountId: "default",
+      accessTokenHash: "token-hash",
+      deviceId: null,
+    });
 
     const store = new FileBackedMatrixSyncStore(storagePath);
     await store.setSyncData(createSyncResponse("claimed-token"));
     await store.flush();
 
-    const meta = JSON.parse(fs.readFileSync(path.join(rootDir, "storage-meta.json"), "utf8")) as {
-      currentTokenStateClaimed?: boolean;
-    };
+    const meta = readMatrixStorageMetadata(rootDir);
     expect(meta.currentTokenStateClaimed).toBe(true);
   });
 
@@ -180,60 +167,36 @@ describe("FileBackedMatrixSyncStore", () => {
   it("coalesces background persistence until the debounce window elapses", async () => {
     vi.useFakeTimers();
     const storagePath = createStoragePath();
-    const writeSpy = vi.spyOn(jsonStore, "writeJsonFileAtomically").mockResolvedValue();
 
     const store = new FileBackedMatrixSyncStore(storagePath);
     await store.setSyncData(createSyncResponse("s111"));
     await store.setSyncData(createSyncResponse("s222"));
     await store.storeClientOptions({ lazyLoadMembers: true });
 
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(new FileBackedMatrixSyncStore(storagePath).hasSavedSync()).toBe(false);
 
     await vi.advanceTimersByTimeAsync(249);
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(new FileBackedMatrixSyncStore(storagePath).hasSavedSync()).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
     await Promise.resolve();
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(writeSpy).toHaveBeenCalledWith(
-      storagePath,
-      expect.objectContaining({
-        savedSync: expect.objectContaining({
-          nextBatch: "s222",
-        }),
-        clientOptions: {
-          lazyLoadMembers: true,
-        },
-      }),
-    );
+    const persisted = new FileBackedMatrixSyncStore(storagePath);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("s222");
+    await expect(persisted.getClientOptions()).resolves.toEqual({ lazyLoadMembers: true });
 
     await store.flush();
   });
 
-  it("waits for an in-flight persist when shutdown flush runs", async () => {
+  it("flushes a scheduled persist before shutdown returns", async () => {
     vi.useFakeTimers();
     const storagePath = createStoragePath();
-    const writeDeferred = createDeferred();
-    const writeSpy = vi
-      .spyOn(jsonStore, "writeJsonFileAtomically")
-      .mockImplementation(async () => writeDeferred.promise);
 
     const store = new FileBackedMatrixSyncStore(storagePath);
     await store.setSyncData(createSyncResponse("s777"));
-    await vi.advanceTimersByTimeAsync(250);
+    await store.flush();
 
-    let flushCompleted = false;
-    const flushPromise = store.flush().then(() => {
-      flushCompleted = true;
-    });
-
-    await Promise.resolve();
-    expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(flushCompleted).toBe(false);
-
-    writeDeferred.resolve();
-    await flushPromise;
-    expect(flushCompleted).toBe(true);
+    const persisted = new FileBackedMatrixSyncStore(storagePath);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("s777");
   });
 
   it("persists client options alongside sync state", async () => {
@@ -247,11 +210,8 @@ describe("FileBackedMatrixSyncStore", () => {
     await expect(secondStore.getClientOptions()).resolves.toEqual({ lazyLoadMembers: true });
   });
 
-  it("loads legacy raw sync payloads from bot-storage.json", async () => {
-    const storagePath = createStoragePath();
-
-    fs.writeFileSync(
-      storagePath,
+  it("parses legacy raw sync payloads for doctor migration", () => {
+    const parsed = parsePersistedMatrixSyncStore(
       JSON.stringify({
         next_batch: "legacy-token",
         rooms: {
@@ -261,18 +221,16 @@ describe("FileBackedMatrixSyncStore", () => {
           events: [],
         },
       }),
-      "utf8",
     );
 
-    const store = new FileBackedMatrixSyncStore(storagePath);
-    expect(store.hasSavedSync()).toBe(true);
-    await expect(store.getSavedSyncToken()).resolves.toBe("legacy-token");
-    await expect(store.getSavedSync()).resolves.toMatchObject({
-      nextBatch: "legacy-token",
-      roomsData: {
-        join: {},
+    expect(parsed).toMatchObject({
+      savedSync: {
+        nextBatch: "legacy-token",
+        roomsData: {
+          join: {},
+        },
+        accountData: [],
       },
-      accountData: [],
     });
   });
 });

@@ -32,6 +32,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "legacyStateMigrations": true
+    },
     "channel": {
       "id": "qqbot",
       "label": "QQ Bot",

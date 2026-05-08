@@ -567,10 +567,10 @@ lives on the [First-run FAQ](/help/faq-first-run).
     | `$OPENCLAW_STATE_DIR/secrets.json`                              | Optional file-backed secret payload for `file` SecretRef providers |
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`          | Legacy compatibility file (static `api_key` entries scrubbed)      |
     | `$OPENCLAW_STATE_DIR/credentials/`                              | Provider state (e.g. `whatsapp/<accountId>/creds.json`)            |
-    | `$OPENCLAW_STATE_DIR/agents/`                                   | Per-agent state (agentDir + sessions)                              |
-    | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`                     | Canonical session metadata and shared agent state                   |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Conversation transcripts and legacy/custom JSON session exports     |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/sessions.json`   | Legacy/custom JSON session metadata compatibility file              |
+    | `$OPENCLAW_STATE_DIR/agents/`                                   | Per-agent state (agentDir + per-agent databases)                   |
+    | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`                     | Shared gateway state and per-agent database registry                |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite` | Agent sessions, transcript events, VFS scratch state, artifacts, and agent-local caches |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Legacy JSON/JSONL imports or explicit debug/export artifacts only   |
 
     Legacy single-agent path: `~/.openclaw/agent/*` (migrated by `openclaw doctor`).
 
@@ -647,8 +647,8 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
   </Accordion>
 
-  <Accordion title="Remote mode: where is the session store?">
-    Session state is owned by the **gateway host**. If you're in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
+  <Accordion title="Remote mode: where is session state?">
+    Session state is owned by the **gateway host**. If you're in remote mode, the global and per-agent databases you care about are on the remote machine, not your local laptop. See [Session management](/concepts/session).
   </Accordion>
 </AccordionGroup>
 
@@ -1344,14 +1344,14 @@ lives on the [First-run FAQ](/help/faq-first-run).
   <Accordion title="How many workspaces and agents can I create?">
     No hard limits. Dozens (even hundreds) are fine, but watch for:
 
-    - **Disk growth:** sessions + transcripts live under `~/.openclaw/agents/<agentId>/sessions/`.
+    - **Disk growth:** sessions, transcripts, artifacts, and agent-local caches live in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
     - **Token cost:** more agents means more concurrent model usage.
     - **Ops overhead:** per-agent auth profiles, workspaces, and channel routing.
 
     Tips:
 
     - Keep one **active** workspace per agent (`agents.defaults.workspace`).
-    - Prune old sessions (delete JSONL or store entries) if disk grows.
+    - Use backup/export tools for support bundles, then remove old sessions through the session management UI or CLI when disk grows.
     - Use `openclaw doctor` to spot stray workspaces and profile mismatches.
 
   </Accordion>

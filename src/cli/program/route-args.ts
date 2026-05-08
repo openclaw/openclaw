@@ -136,10 +136,6 @@ export function parseSessionsRouteArgs(argv: string[]) {
   if (!agent.ok) {
     return null;
   }
-  const store = parseOptionalFlagValue(argv, "--store");
-  if (!store.ok) {
-    return null;
-  }
   const active = parseOptionalFlagValue(argv, "--active");
   if (!active.ok) {
     return null;
@@ -152,7 +148,6 @@ export function parseSessionsRouteArgs(argv: string[]) {
     json: hasFlag(argv, "--json"),
     allAgents: hasFlag(argv, "--all-agents"),
     agent: agent.value,
-    store: store.value,
     active: active.value,
     limit: limit.value,
   };

@@ -103,11 +103,6 @@ describe("dreaming artifact repair", () => {
     const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
     await fs.mkdir(sessionCorpusDir, { recursive: true });
     await fs.writeFile(path.join(sessionCorpusDir, "2026-04-11.txt"), "corpus\n", "utf-8");
-    await fs.writeFile(
-      path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
-      JSON.stringify({ version: 3, files: {}, seenMessages: {} }, null, 2),
-      "utf-8",
-    );
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
     await fs.writeFile(dreamsPath, "# Dream Diary\n", "utf-8");
 
@@ -118,19 +113,14 @@ describe("dreaming artifact repair", () => {
 
     expect(repair.changed).toBe(true);
     expect(repair.archivedSessionCorpus).toBe(true);
-    expect(repair.archivedSessionIngestion).toBe(true);
     expect(repair.archivedDreamsDiary).toBe(false);
     const archiveDir = requireArchiveDir(repair.archiveDir);
     expect(archiveDir).toBe(
       path.join(workspaceDir, ".openclaw-repair", "dreaming", "2026-04-11T21-30-00-000Z"),
     );
     await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toContain("# Dream Diary");
-    const archivedEntries = await fs.readdir(archiveDir);
-    expect(archivedEntries).toContainEqual(expect.stringMatching(/^session-corpus\./));
-    expect(archivedEntries).toContainEqual(expect.stringMatching(/^session-ingestion\.json\./));
+    const archivedEntries = await fs.readdir(repair.archiveDir!);
+    expect(archivedEntries.some((entry) => entry.startsWith("session-corpus."))).toBe(true);
   });
 });

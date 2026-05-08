@@ -9,4 +9,4 @@ export {
   filterSupplementalContextItems,
   normalizeAgentId,
 } from "../runtime-api.js";
-export { loadSessionStore, resolveSessionStoreEntry } from "../runtime-api.js";
+export { getSessionEntry, resolveAgentIdFromSessionKey } from "../runtime-api.js";

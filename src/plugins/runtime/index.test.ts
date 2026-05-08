@@ -308,8 +308,10 @@ describe("plugin runtime command execution", () => {
           "resolveAgentDir",
         ]);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
-          "updateSessionStore",
-          "updateSessionStoreEntry",
+          "getSessionEntry",
+          "listSessionEntries",
+          "patchSessionEntry",
+          "upsertSessionEntry",
           "resolveSessionFilePath",
         ]);
       },

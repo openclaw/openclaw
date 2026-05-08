@@ -155,8 +155,9 @@ Example:
 
 ## Sessions and memory
 
-- Session files: `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
-- Session metadata (token usage, last route, etc): `~/.openclaw/state/openclaw.sqlite` by default. Legacy/custom JSON stores use `~/.openclaw/agents/<agentId>/sessions/sessions.json` (legacy single-agent path: `~/.openclaw/sessions/sessions.json`).
+- Session data: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Shared session routing/registry state: `~/.openclaw/state/openclaw.sqlite`
+- Legacy JSON/JSONL files under `agents/<agentId>/sessions/` are doctor migration inputs or explicit debug/export artifacts, not runtime stores.
 - `/new` or `/reset` starts a fresh session for that chat (configurable via `resetTriggers`). If sent alone, OpenClaw acknowledges the reset without invoking the model.
 - `/compact [instructions]` compacts the session context and reports the remaining context budget.
 

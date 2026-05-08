@@ -127,6 +127,8 @@
   "logging-core",
   "migration",
   "migration-runtime",
+  "plugin-state-runtime",
+  "sqlite-state-lock",
   "markdown-table-runtime",
   "account-helpers",
   "account-core",

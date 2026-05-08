@@ -15,9 +15,11 @@ import {
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
+  getSessionEntry,
+  listSessionEntries,
   snapshotSessionOrigin,
   type SessionEntry,
-  updateSessionStore,
+  upsertSessionEntry,
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
@@ -42,12 +44,11 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
-import { resolveStableSessionEndTranscript } from "./session-transcript-files.fs.js";
+import { resolveStableSessionEndTranscript } from "./session-transcript-paths.js";
 import {
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
   readSessionMessagesAsync,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionDatabaseTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
 
@@ -70,7 +71,6 @@ export function emitGatewaySessionEndPluginHook(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
-  storePath: string;
   sessionFile?: string;
   agentId?: string;
   reason: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
@@ -86,7 +86,6 @@ export function emitGatewaySessionEndPluginHook(params: {
   }
   const transcript = resolveStableSessionEndTranscript({
     sessionId: params.sessionId,
-    storePath: params.storePath,
     sessionFile: params.sessionFile,
     agentId: params.agentId,
   });
@@ -164,7 +163,7 @@ export async function emitSessionUnboundLifecycleEvent(params: {
 async function ensureSessionRuntimeCleanup(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: ReturnType<typeof resolveGatewaySessionDatabaseTarget>;
   sessionId?: string;
 }) {
   const closeTrackedBrowserTabs = async () => {
@@ -201,7 +200,7 @@ async function ensureSessionRuntimeCleanup(params: {
       reason: "gateway-session-cleanup",
       onError: (error, sessionId) => {
         logVerbose(
-          `sessions cleanup: failed to dispose bundle MCP runtime for ${sessionId}: ${String(error)}`,
+          `session runtime cleanup: failed to dispose bundle MCP runtime for ${sessionId}: ${String(error)}`,
         );
       },
     });
@@ -367,7 +366,7 @@ async function ensureFreshAcpResetState(params: {
 export async function cleanupSessionBeforeMutation(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: ReturnType<typeof resolveGatewaySessionDatabaseTarget>;
   entry: SessionEntry | undefined;
   legacyKey?: string;
   canonicalKey?: string;
@@ -404,8 +403,7 @@ export async function cleanupSessionBeforeMutation(params: {
 export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
-  storePath: string;
+  target: ReturnType<typeof resolveGatewaySessionDatabaseTarget>;
   entry?: SessionEntry;
   reason: "new" | "reset";
 }): Promise<void> {
@@ -426,7 +424,6 @@ export async function emitGatewayBeforeResetPluginHook(params: {
         agentId,
         sessionFile,
         sessionId,
-        storePath: params.storePath,
       });
     }
   } catch (err) {
@@ -458,13 +455,12 @@ async function readGatewayBeforeResetMessages(params: {
   agentId: string;
   sessionFile?: string;
   sessionId: string;
-  storePath: string;
 }): Promise<unknown[]> {
   const scopedMessages = loadScopedGatewayBeforeResetMessages(params);
   if (scopedMessages) {
     return scopedMessages;
   }
-  return await readSessionMessagesAsync(params.sessionId, params.storePath, params.sessionFile, {
+  return await readSessionMessagesAsync(params.sessionId, params.sessionFile, {
     mode: "full",
     reason: "before_reset hook payload",
   });
@@ -495,10 +491,10 @@ export async function performGatewaySessionReset(params: {
   | { ok: true; key: string; entry: SessionEntry }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const { cfg, target, storePath } = (() => {
+  const { cfg, target } = (() => {
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
-    return { cfg, target, storePath: target.storePath };
+    const target = resolveGatewaySessionDatabaseTarget({ cfg, key: params.key });
+    return { cfg, target };
   })();
   const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
   const hadExistingEntry = Boolean(entry);
@@ -534,14 +530,20 @@ export async function performGatewaySessionReset(params: {
   let oldSessionFile: string | undefined;
   let resetSourceEntry: SessionEntry | undefined;
   let deleteOldTranscript = false;
-  const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-      cfg,
-      key: params.key,
-      store,
-    });
-    const currentEntry = store[primaryKey];
-    resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
+  const matches = target.storeKeys
+    .map((storeKey) => {
+      const matchedEntry = getSessionEntry({
+        agentId: target.agentId,
+        sessionKey: storeKey,
+      });
+      return matchedEntry ? { storeKey, entry: matchedEntry } : undefined;
+    })
+    .filter((match): match is { storeKey: string; entry: SessionEntry } => Boolean(match))
+    .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0));
+  const currentEntry = matches[0]?.entry;
+  resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
+  const next = (() => {
+    const primaryKey = target.canonicalKey;
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resetPreservedSelection = resolveResetPreservedSelection({
@@ -566,7 +568,6 @@ export async function performGatewaySessionReset(params: {
       nextSessionId,
       currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
       resolveSessionFilePathOptions({
-        storePath,
         agentId: sessionAgentId,
       }),
     );
@@ -637,19 +638,24 @@ export async function performGatewaySessionReset(params: {
       totalTokens: 0,
       totalTokensFresh: true,
     };
-    store[primaryKey] = nextEntry;
+    upsertSessionEntry({
+      agentId: target.agentId,
+      sessionKey: primaryKey,
+      entry: nextEntry,
+    });
     deleteOldTranscript = Boolean(
       oldSessionId &&
       oldSessionId !== nextSessionId &&
-      !Object.values(store).some((candidate) => candidate?.sessionId === oldSessionId),
+      !listSessionEntries({ agentId: target.agentId }).some(
+        ({ entry }) => entry.sessionId === oldSessionId,
+      ),
     );
     return nextEntry;
-  });
+  })();
   await emitGatewayBeforeResetPluginHook({
     cfg,
     key: params.key,
     target,
-    storePath,
     entry: resetSourceEntry,
     reason: params.reason,
   });
@@ -673,7 +679,6 @@ export async function performGatewaySessionReset(params: {
     cfg,
     sessionKey: target.canonicalKey ?? params.key,
     sessionId: oldSessionId,
-    storePath,
     sessionFile: oldSessionFile,
     agentId: target.agentId,
     reason: params.reason,

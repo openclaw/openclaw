@@ -8,8 +8,8 @@ import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
   makeJob,
+  seedMainRouteSession,
   withTempCronHome,
-  writeSessionStore,
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
@@ -24,7 +24,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
 
   it("passes authProfileId to runEmbeddedPiAgent when auth profiles exist", async () => {
     await withTempCronHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      await seedMainRouteSession(home, { lastProvider: "webchat", lastTo: "" });
 
       // 2. Write auth-profiles.json in the agent directory
       //    resolveAgentDir returns <stateDir>/agents/main/agent
@@ -59,7 +59,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
       });
 
       // 4. Run cron isolated agent turn with openrouter model
-      const cfg = makeCfg(home, storePath, {
+      const cfg = makeCfg(home, {
         agents: {
           defaults: {
             model: { primary: "openrouter/moonshotai/kimi-k2.5" },

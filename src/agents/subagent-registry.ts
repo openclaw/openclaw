@@ -1,9 +1,9 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  loadSessionStore,
+  getSessionEntry,
+  listSessionEntries,
   resolveAgentIdFromSessionKey,
-  resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -202,36 +202,47 @@ const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
 
-function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
-  const direct = store[sessionKey];
+type SessionEntryCache = Map<string, SessionEntry | undefined>;
+
+function findSessionEntryByKey(params: {
+  agentId: string;
+  sessionKey: string;
+  cache: SessionEntryCache;
+}) {
+  const normalized = params.sessionKey.trim().toLowerCase();
+  const cacheKey = `${params.agentId}\0${normalized}`;
+  if (params.cache.has(cacheKey)) {
+    return params.cache.get(cacheKey);
+  }
+  const direct = getSessionEntry({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
   if (direct) {
+    params.cache.set(cacheKey, direct);
     return direct;
   }
-  const normalized = sessionKey.trim().toLowerCase();
-  for (const [key, entry] of Object.entries(store)) {
+  for (const { sessionKey, entry } of listSessionEntries({ agentId: params.agentId })) {
+    const key = sessionKey;
     if (key.trim().toLowerCase() === normalized) {
+      params.cache.set(cacheKey, entry);
       return entry;
     }
   }
+  params.cache.set(cacheKey, undefined);
   return undefined;
 }
 
 function loadSubagentSessionEntry(
   childSessionKey: string,
-  storeCache: Map<string, Record<string, SessionEntry>>,
+  storeCache: SessionEntryCache,
 ): SessionEntry | undefined {
   const key = childSessionKey.trim();
   if (!key) {
     return undefined;
   }
   const agentId = resolveAgentIdFromSessionKey(key);
-  const storePath = resolveStorePath(getRuntimeConfig().session?.store, { agentId });
-  let store = storeCache.get(storePath);
-  if (!store) {
-    store = loadSessionStore(storePath);
-    storeCache.set(storePath, store);
-  }
-  return findSessionEntryByKey(store, key);
+  return findSessionEntryByKey({ agentId, sessionKey: key, cache: storeCache });
 }
 
 function resolveCompletionFromSessionEntry(
@@ -749,7 +760,7 @@ async function sweepSubagentRuns() {
   sweepInProgress = true;
   try {
     const now = Date.now();
-    const storeCache = new Map<string, Record<string, SessionEntry>>();
+    const storeCache: SessionEntryCache = new Map();
     let mutated = false;
     for (const [runId, entry] of subagentRuns.entries()) {
       if (typeof entry.endedAt !== "number") {

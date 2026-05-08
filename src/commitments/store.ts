@@ -3,15 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
-import { privateFileStore } from "../infra/private-file-store.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { deleteOpenClawStateKvJson, readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
@@ -42,14 +42,8 @@ function defaultCommitmentStorePath(env: NodeJS.ProcessEnv = process.env): strin
 }
 
 export function resolveCommitmentStorePath(storePath?: string): string {
-  const trimmed = storePath?.trim();
-  if (!trimmed) {
-    return resolveOpenClawStateSqlitePath();
-  }
-  if (trimmed.startsWith("~")) {
-    return path.resolve(expandHomePrefix(trimmed));
-  }
-  return path.resolve(trimmed);
+  void storePath;
+  return resolveOpenClawStateSqlitePath();
 }
 
 function emptyStore(): CommitmentStoreFile {
@@ -59,6 +53,13 @@ function emptyStore(): CommitmentStoreFile {
 function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
   return { env };
 }
+
+type CommitmentRow = {
+  id: string;
+  record_json: string;
+};
+
+type CommitmentsDatabase = Pick<OpenClawStateKyselyDatabase, "commitments">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -143,9 +144,8 @@ function coerceCommitmentStore(parsed: unknown): LoadedCommitmentStore {
 
 async function loadCommitmentStoreFromFile(resolved: string): Promise<LoadedCommitmentStore> {
   try {
-    const parsed = await privateFileStore(path.dirname(resolved)).readJsonIfExists(
-      path.basename(resolved),
-    );
+    const raw = await fs.readFile(resolved, "utf-8");
+    const parsed = JSON.parse(raw) as unknown;
     return coerceCommitmentStore(parsed);
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
@@ -158,39 +158,108 @@ async function loadCommitmentStoreFromFile(resolved: string): Promise<LoadedComm
 function loadCommitmentStoreFromSqlite(
   env: NodeJS.ProcessEnv = process.env,
 ): LoadedCommitmentStore {
-  return coerceCommitmentStore(
-    readOpenClawStateKvJson(COMMITMENT_STORE_SCOPE, COMMITMENT_STORE_KEY, sqliteOptionsForEnv(env)),
-  );
+  const database = openOpenClawStateDatabase(sqliteOptionsForEnv(env));
+  const db = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
+  const rows = executeSqliteQuerySync<CommitmentRow>(
+    database.db,
+    db
+      .selectFrom("commitments")
+      .select(["id", "record_json"])
+      .orderBy("due_earliest_ms", "asc")
+      .orderBy("id", "asc"),
+  ).rows;
+  if (rows.length === 0) {
+    migrateLegacyCommitmentsKvToRows(env);
+    return loadCommitmentStoreFromSqliteRows(env);
+  }
+  return coerceCommitmentStore({
+    version: STORE_VERSION,
+    commitments: rows.map((row) => parseCommitmentRow(row)),
+  });
 }
 
-async function loadCommitmentStoreInternal(storePath?: string): Promise<LoadedCommitmentStore> {
-  if (!storePath?.trim()) {
-    return loadCommitmentStoreFromSqlite();
+function loadCommitmentStoreFromSqliteRows(
+  env: NodeJS.ProcessEnv = process.env,
+): LoadedCommitmentStore {
+  const database = openOpenClawStateDatabase(sqliteOptionsForEnv(env));
+  const db = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
+  const rows = executeSqliteQuerySync<CommitmentRow>(
+    database.db,
+    db
+      .selectFrom("commitments")
+      .select(["id", "record_json"])
+      .orderBy("due_earliest_ms", "asc")
+      .orderBy("id", "asc"),
+  ).rows;
+  return coerceCommitmentStore({
+    version: STORE_VERSION,
+    commitments: rows.map((row) => parseCommitmentRow(row)),
+  });
+}
+
+function parseCommitmentRow(row: CommitmentRow): unknown {
+  try {
+    return JSON.parse(row.record_json) as unknown;
+  } catch {
+    return undefined;
   }
-  return await loadCommitmentStoreFromFile(resolveCommitmentStorePath(storePath));
+}
+
+function migrateLegacyCommitmentsKvToRows(env: NodeJS.ProcessEnv): void {
+  const legacy = readOpenClawStateKvJson(
+    COMMITMENT_STORE_SCOPE,
+    COMMITMENT_STORE_KEY,
+    sqliteOptionsForEnv(env),
+  );
+  if (legacy === undefined) {
+    return;
+  }
+  const { store } = coerceCommitmentStore(legacy);
+  replaceCommitmentRows(store, env);
+  deleteOpenClawStateKvJson(COMMITMENT_STORE_SCOPE, COMMITMENT_STORE_KEY, sqliteOptionsForEnv(env));
+}
+
+function loadCommitmentStoreInternal(): LoadedCommitmentStore {
+  return loadCommitmentStoreFromSqlite();
 }
 
 export async function loadCommitmentStore(storePath?: string): Promise<CommitmentStoreFile> {
-  return (await loadCommitmentStoreInternal(storePath)).store;
+  void storePath;
+  return loadCommitmentStoreInternal().store;
+}
+
+function replaceCommitmentRows(
+  store: CommitmentStoreFile,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const sanitized = sanitizeStoreForWrite(store);
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
+    executeSqliteQuerySync(database.db, db.deleteFrom("commitments"));
+    const rows = sanitized.commitments.map((commitment) => ({
+      id: commitment.id,
+      agent_id: commitment.agentId,
+      session_key: commitment.sessionKey,
+      channel: commitment.channel,
+      status: commitment.status,
+      due_earliest_ms: commitment.dueWindow.earliestMs,
+      due_latest_ms: commitment.dueWindow.latestMs,
+      updated_at_ms: commitment.updatedAtMs,
+      record_json: JSON.stringify(commitment),
+    }));
+    if (rows.length === 0) {
+      return;
+    }
+    executeSqliteQuerySync(database.db, db.insertInto("commitments").values(rows));
+  }, sqliteOptionsForEnv(env));
 }
 
 export async function saveCommitmentStore(
   storePath: string | undefined,
   store: CommitmentStoreFile,
 ): Promise<void> {
-  if (!storePath?.trim()) {
-    writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-      COMMITMENT_STORE_SCOPE,
-      COMMITMENT_STORE_KEY,
-      sanitizeStoreForWrite(store) as unknown as OpenClawStateJsonValue,
-    );
-    return;
-  }
-  const resolved = resolveCommitmentStorePath(storePath);
-  await privateFileStore(path.dirname(resolved)).writeJson(
-    path.basename(resolved),
-    sanitizeStoreForWrite(store),
-  );
+  void storePath;
+  replaceCommitmentRows(store);
 }
 
 export async function legacyCommitmentStoreFileExists(
@@ -209,12 +278,7 @@ export async function importLegacyCommitmentStoreFileToSqlite(
 ): Promise<{ imported: boolean; commitments: number }> {
   const filePath = defaultCommitmentStorePath(env);
   const { store } = await loadCommitmentStoreFromFile(filePath);
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    COMMITMENT_STORE_SCOPE,
-    COMMITMENT_STORE_KEY,
-    sanitizeStoreForWrite(store) as unknown as OpenClawStateJsonValue,
-    sqliteOptionsForEnv(env),
-  );
+  replaceCommitmentRows(store, env);
   await fs.rm(filePath, { force: true }).catch(() => undefined);
   return { imported: true, commitments: store.commitments.length };
 }
@@ -307,7 +371,7 @@ function expireStaleCommitmentsInStore(store: CommitmentStoreFile, nowMs: number
 }
 
 async function loadCommitmentStoreWithExpiredMarked(nowMs: number): Promise<CommitmentStoreFile> {
-  const { store, hadLegacySourceText } = await loadCommitmentStoreInternal();
+  const { store, hadLegacySourceText } = loadCommitmentStoreInternal();
   if (expireStaleCommitmentsInStore(store, nowMs) || hadLegacySourceText) {
     await saveCommitmentStore(undefined, store);
   }

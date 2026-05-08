@@ -1,22 +1,7 @@
-import os from "node:os";
-import path from "node:path";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
-import { withFileLock } from "openclaw/plugin-sdk/file-lock";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-
-const MODEL_PICKER_PREFERENCES_LOCK_OPTIONS = {
-  retries: {
-    retries: 8,
-    factor: 2,
-    minTimeout: 50,
-    maxTimeout: 5_000,
-    randomize: true,
-  },
-  stale: 15_000,
-} as const;
 
 const DEFAULT_RECENT_LIMIT = 5;
 
@@ -25,43 +10,16 @@ type ModelPickerPreferencesEntry = {
   updatedAt: string;
 };
 
-type ModelPickerPreferencesStore = {
-  version: 1;
-  entries: Record<string, ModelPickerPreferencesEntry>;
-};
-
-function sanitizePreferenceEntries(entries: unknown): Record<string, ModelPickerPreferencesEntry> {
-  if (!entries || typeof entries !== "object") {
-    return {};
-  }
-  const normalizedEntries: Record<string, ModelPickerPreferencesEntry> = {};
-  for (const [key, value] of Object.entries(entries)) {
-    if (!value || typeof value !== "object") {
-      continue;
-    }
-    const typedValue = value as {
-      recent?: unknown;
-      updatedAt?: unknown;
-    };
-    const recent = Array.isArray(typedValue.recent)
-      ? typedValue.recent.filter((item: unknown): item is string => typeof item === "string")
-      : [];
-    const updatedAt = typeof typedValue.updatedAt === "string" ? typedValue.updatedAt : "";
-    normalizedEntries[key] = { recent, updatedAt };
-  }
-  return normalizedEntries;
-}
+const preferenceStore = createPluginStateKeyedStore<ModelPickerPreferencesEntry>("discord", {
+  namespace: "model-picker-preferences",
+  maxEntries: 10_000,
+});
 
 export type DiscordModelPickerPreferenceScope = {
   accountId?: string;
   guildId?: string;
   userId: string;
 };
-
-function resolvePreferencesStorePath(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = resolveStateDir(env, os.homedir);
-  return path.join(stateDir, "discord", "model-picker-preferences.json");
-}
 
 function normalizeId(value?: string): string {
   return normalizeOptionalString(value) ?? "";
@@ -116,18 +74,19 @@ function sanitizeRecentModels(models: string[] | undefined, limit: number): stri
   return deduped;
 }
 
-async function readPreferencesStore(filePath: string): Promise<ModelPickerPreferencesStore> {
-  const { value } = await readJsonFileWithFallback(filePath, {
-    version: 1,
-    entries: {} as Record<string, ModelPickerPreferencesEntry>,
-  });
-  if (!value || typeof value !== "object" || value.version !== 1) {
-    return { version: 1, entries: {} };
+function sanitizePreferenceEntry(value: unknown): ModelPickerPreferencesEntry | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
   }
-  return {
-    version: 1,
-    entries: sanitizePreferenceEntries(value.entries),
+  const typedValue = value as {
+    recent?: unknown;
+    updatedAt?: unknown;
   };
+  const recent = Array.isArray(typedValue.recent)
+    ? typedValue.recent.filter((item: unknown): item is string => typeof item === "string")
+    : [];
+  const updatedAt = typeof typedValue.updatedAt === "string" ? typedValue.updatedAt : "";
+  return { recent, updatedAt };
 }
 
 export async function readDiscordModelPickerRecentModels(params: {
@@ -141,9 +100,8 @@ export async function readDiscordModelPickerRecentModels(params: {
     return [];
   }
   const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
-  const filePath = resolvePreferencesStorePath(params.env);
-  const store = await readPreferencesStore(filePath);
-  const entry = store.entries[key];
+  void params.env;
+  const entry = sanitizePreferenceEntry(await preferenceStore.lookup(key));
   const recent = sanitizeRecentModels(entry?.recent, limit);
   if (!params.allowedModelRefs || params.allowedModelRefs.size === 0) {
     return recent;
@@ -164,21 +122,16 @@ export async function recordDiscordModelPickerRecentModel(params: {
   }
 
   const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
-  const filePath = resolvePreferencesStorePath(params.env);
+  void params.env;
+  const existingEntry = sanitizePreferenceEntry(await preferenceStore.lookup(key));
+  const existing = sanitizeRecentModels(existingEntry?.recent, limit);
+  const next = [
+    normalizedModelRef,
+    ...existing.filter((entry) => entry !== normalizedModelRef),
+  ].slice(0, limit);
 
-  await withFileLock(filePath, MODEL_PICKER_PREFERENCES_LOCK_OPTIONS, async () => {
-    const store = await readPreferencesStore(filePath);
-    const existing = sanitizeRecentModels(store.entries[key]?.recent, limit);
-    const next = [
-      normalizedModelRef,
-      ...existing.filter((entry) => entry !== normalizedModelRef),
-    ].slice(0, limit);
-
-    store.entries[key] = {
-      recent: next,
-      updatedAt: new Date().toISOString(),
-    };
-
-    await writeJsonFileAtomically(filePath, store);
+  await preferenceStore.register(key, {
+    recent: next,
+    updatedAt: new Date().toISOString(),
   });
 }

@@ -19,7 +19,7 @@ function createHealthSummary(): HealthSummary {
     defaultAgentId: "main",
     agents: [],
     sessions: {
-      path: "/tmp/sessions.json",
+      databasePath: "/tmp/openclaw-agent.sqlite",
       count: 0,
       recent: [],
     },

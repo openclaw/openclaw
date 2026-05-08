@@ -1402,11 +1402,11 @@ function extractTranscriptMessageText(message: unknown): string {
 }
 
 async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
-  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const { entry } = loadSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
   }
-  const messages = await readSessionMessagesAsync(entry.sessionId, storePath, entry.sessionFile, {
+  const messages = await readSessionMessagesAsync(entry.sessionId, entry.sessionFile, {
     mode: "full",
     reason: "live model assistant text verification",
   });
@@ -1513,11 +1513,6 @@ type LiveModelRegistry = {
   getAll(): Array<Model<Api>>;
 };
 
-function resolveKnownProvider(provider: string): KnownProvider | undefined {
-  const normalized = provider.trim();
-  return getProviders().find((knownProvider) => knownProvider === normalized);
-}
-
 function toGatewayLiveModel(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
@@ -1594,19 +1589,24 @@ async function loadProviderScopedConfiguredModels(params: {
   return models;
 }
 
-function loadProviderScopedBuiltInModels(providerList: readonly string[]): Array<Model<Api>> {
+function loadProviderScopedBuiltInModels(params: {
+  agentDir: string;
+  providerList: readonly string[];
+}): Array<Model<Api>> {
+  const registryModels = discoverModels(discoverAuthStorage(params.agentDir), params.agentDir, {
+    normalizeModels: false,
+  }).getAll();
   const models: Array<Model<Api>> = [];
   const seen = new Set<string>();
-  for (const rawProvider of providerList) {
+  for (const rawProvider of params.providerList) {
     const provider = normalizeProviderId(rawProvider);
     if (!provider) {
       continue;
     }
-    const knownProvider = resolveKnownProvider(provider);
-    if (!knownProvider) {
-      continue;
-    }
-    for (const model of getModels(knownProvider)) {
+    for (const model of registryModels) {
+      if (normalizeProviderId(model.provider) !== provider) {
+        continue;
+      }
       const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
       if (seen.has(key)) {
         continue;
@@ -1626,7 +1626,7 @@ async function loadProviderScopedModels(params: {
   if (configured.length > 0) {
     return configured;
   }
-  return loadProviderScopedBuiltInModels(params.providerList);
+  return loadProviderScopedBuiltInModels(params);
 }
 
 function createStaticLiveModelRegistry(models: Array<Model<Api>>): LiveModelRegistry {

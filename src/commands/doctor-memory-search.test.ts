@@ -101,8 +101,7 @@ import { detectLegacyWorkspaceDirs, formatRootMemoryFilesWarning } from "./docto
 function resetMemoryRecallMocks() {
   auditShortTermPromotionArtifacts.mockReset();
   auditShortTermPromotionArtifacts.mockResolvedValue({
-    storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
-    lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
+    storePath: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
     exists: true,
     entryCount: 1,
     promotedCount: 0,
@@ -117,8 +116,6 @@ function resetMemoryRecallMocks() {
     sessionCorpusFileCount: 0,
     suspiciousSessionCorpusFileCount: 0,
     suspiciousSessionCorpusLineCount: 0,
-    sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
-    sessionIngestionExists: false,
     issues: [],
   });
   repairDreamingArtifacts.mockReset();
@@ -126,7 +123,6 @@ function resetMemoryRecallMocks() {
     changed: false,
     archivedDreamsDiary: false,
     archivedSessionCorpus: false,
-    archivedSessionIngestion: false,
     archivedPaths: [],
     warnings: [],
   });
@@ -135,7 +131,6 @@ function resetMemoryRecallMocks() {
     changed: false,
     removedInvalidEntries: 0,
     rewroteStore: false,
-    removedStaleLock: false,
   });
   noteWorkspaceMemoryHealth.mockClear();
   maybeRepairWorkspaceMemoryHealth.mockClear();
@@ -740,8 +735,7 @@ describe("memory recall doctor integration", () => {
 
   it("notes recall-store audit problems with doctor guidance", async () => {
     auditShortTermPromotionArtifacts.mockResolvedValueOnce({
-      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
-      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
+      storePath: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
       exists: true,
       entryCount: 12,
       promotedCount: 4,
@@ -753,12 +747,6 @@ describe("memory recall doctor integration", () => {
           severity: "warn",
           code: "recall-store-invalid",
           message: "Short-term recall store contains 1 invalid entry.",
-          fixable: true,
-        },
-        {
-          severity: "warn",
-          code: "recall-lock-stale",
-          message: "Short-term promotion lock appears stale.",
           fixable: true,
         },
       ],
@@ -779,8 +767,7 @@ describe("memory recall doctor integration", () => {
 
   it("runs memory recall repair during doctor --fix", async () => {
     auditShortTermPromotionArtifacts.mockResolvedValueOnce({
-      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
-      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
+      storePath: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
       exists: true,
       entryCount: 12,
       promotedCount: 4,
@@ -800,7 +787,6 @@ describe("memory recall doctor integration", () => {
       changed: true,
       removedInvalidEntries: 1,
       rewroteStore: true,
-      removedStaleLock: true,
     });
     const prompter = createPrompter();
 
@@ -815,7 +801,6 @@ describe("memory recall doctor integration", () => {
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain("Memory recall artifacts repaired:");
     expect(message).toContain("rewrote recall store");
-    expect(message).toContain("removed stale promotion lock");
   });
 
   it("runs dreaming artifact repair during doctor --fix", async () => {
@@ -824,8 +809,6 @@ describe("memory recall doctor integration", () => {
       sessionCorpusFileCount: 2,
       suspiciousSessionCorpusFileCount: 1,
       suspiciousSessionCorpusLineCount: 3,
-      sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
-      sessionIngestionExists: true,
       issues: [
         {
           severity: "warn",
@@ -841,7 +824,6 @@ describe("memory recall doctor integration", () => {
       archiveDir: "/tmp/agent-default/workspace/.openclaw-repair/dreaming/2026-04-11T21-35-00-000Z",
       archivedDreamsDiary: false,
       archivedSessionCorpus: true,
-      archivedSessionIngestion: true,
       archivedPaths: [],
       warnings: [],
     });
@@ -857,7 +839,6 @@ describe("memory recall doctor integration", () => {
     const message = String(note.mock.calls.at(-1)?.[0] ?? "");
     expect(message).toContain("Dreaming artifacts repaired:");
     expect(message).toContain("archived session corpus");
-    expect(message).toContain("archived session-ingestion state");
   });
 });
 

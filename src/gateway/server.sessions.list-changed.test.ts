@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import { rpcReq, testState, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
@@ -52,7 +53,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
     ].join("\n"),
     "utf-8",
   );
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-parent"),
       "dashboard:child": sessionStoreEntry("sess-child", {
@@ -107,7 +108,7 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   testState.agentConfig = {
     model: { primary: "test-provider/reasoner" },
   };
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: "test-provider",
@@ -163,7 +164,7 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
 
 test("sessions.list marks sessions with active abortable runs", async () => {
   await createSessionStoreDir();
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
     },
@@ -211,17 +212,17 @@ test("sessions.list yields before responding during bulk transcript hydration", 
   for (let i = 0; i < 11; i += 1) {
     const sessionId = `sess-list-yield-${i}`;
     entries[`bulk-${i}`] = sessionStoreEntry(sessionId, { updatedAt: now - i });
-    await fs.writeFile(
-      path.join(dir, `${sessionId}.jsonl`),
-      [
-        JSON.stringify({ type: "session", version: 1, id: sessionId }),
-        JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
-        JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
-      ].join("\n"),
-      "utf-8",
-    );
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId,
+      transcriptPath: path.join(dir, `${sessionId}.jsonl`),
+      events: [
+        { type: "message", message: { role: "user", content: `title ${i}` } },
+        { type: "message", message: { role: "assistant", content: `last ${i}` } },
+      ],
+    });
   }
-  await writeSessionStore({ entries });
+  await seedGatewaySessionEntries({ entries });
 
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
@@ -276,7 +277,7 @@ test("sessions.list yields before responding during bulk transcript hydration", 
 
 test("sessions.list does not block on slow model catalog discovery", async () => {
   await createSessionStoreDir();
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
     },
@@ -325,11 +326,13 @@ test("sessions.list does not block on slow model catalog discovery", async () =>
 
 test("sessions.changed mutation events include live usage metadata", async () => {
   const { dir } = await createSessionStoreDir();
-  await fs.writeFile(
-    path.join(dir, "sess-main.jsonl"),
-    [
-      JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-      JSON.stringify({
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "sess-main",
+    transcriptPath: path.join(dir, "sess-main.jsonl"),
+    events: [
+      {
+        type: "message",
         id: "msg-usage-zero",
         message: {
           role: "assistant",
@@ -344,11 +347,10 @@ test("sessions.changed mutation events include live usage metadata", async () =>
           },
           timestamp: Date.now(),
         },
-      }),
-    ].join("\n"),
-    "utf-8",
-  );
-  await writeSessionStore({
+      },
+    ],
+  });
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: "openai-codex",
@@ -405,7 +407,7 @@ test("sessions.changed mutation events include live usage metadata", async () =>
 
 test("sessions.changed mutation events include live session setting metadata", async () => {
   await createSessionStoreDir();
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         verboseLevel: "on",
@@ -465,7 +467,7 @@ test("sessions.changed mutation events include live session setting metadata", a
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {
   await createSessionStoreDir();
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         sendPolicy: "deny",
@@ -513,7 +515,7 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
 
 test("sessions.changed mutation events include subagent ownership metadata", async () => {
   await createSessionStoreDir();
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       "subagent:child": sessionStoreEntry("sess-child", {
         spawnedBy: "agent:main:main",

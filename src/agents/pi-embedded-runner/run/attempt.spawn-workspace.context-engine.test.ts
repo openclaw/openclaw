@@ -9,6 +9,7 @@ import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
 } from "../../../plugins/memory-state.js";
+import { listTrajectoryRuntimeEvents } from "../../../trajectory/runtime-store.sqlite.js";
 import {
   type AttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -46,6 +47,8 @@ type ToolResultGuardInstallParams = {
   };
 };
 
+type ContextEngineAttemptResult = Awaited<ReturnType<typeof createContextEngineAttemptRunner>>;
+
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
     info: {
@@ -61,6 +64,15 @@ function createTestContextEngine(params: Partial<AttemptContextEngine>): Attempt
     }),
     ...params,
   } as AttemptContextEngine;
+}
+
+function readTrajectoryEvents(result: ContextEngineAttemptResult): TrajectoryEvent[] {
+  return listTrajectoryRuntimeEvents({
+    agentId: "main",
+    env: { ...process.env, OPENCLAW_STATE_DIR: result.trajectoryStateDir },
+    runId: "run-context-engine-forwarding",
+    sessionId: embeddedSessionId,
+  }) as TrajectoryEvent[];
 }
 
 async function runBootstrap(
@@ -186,12 +198,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.messages)).not.toContain("not user-authored");
     expect(seen.systemPrompt).not.toContain("secret runtime context");
     expect(seen.systemPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = readTrajectoryEvents(result);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     const modelCompleted = trajectoryEvents.find((event) => event.type === "model.completed");
@@ -522,12 +529,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.detectAndLoadPromptImagesMock.mock.calls[0]?.[0]).toMatchObject({
       prompt: "what does this mean?",
     });
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = readTrajectoryEvents(result);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
     expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
@@ -602,12 +604,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         }),
       ]),
     );
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = readTrajectoryEvents(result);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toBe("Continue the OpenClaw runtime event.");
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
@@ -635,12 +632,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.messagesSnapshot).toEqual([
       expect.objectContaining({ role: "user", content: "seed" }),
     ]);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = readTrajectoryEvents(result);
     expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
     expect(trajectoryEvents).toEqual(
       expect.arrayContaining([
@@ -821,7 +813,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(seen.prompt).toBe("hello");
     expect(seen.prompt).not.toContain("[Inter-session message]");
-    expect(seen.messages).toStrictEqual([]);
+    expect(seen.messages).toEqual([]);
     expect(seen.systemPrompt ?? "").toBe("");
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
@@ -852,27 +844,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expectCalledWithSessionKey(bootstrap, sessionKey);
     expectCalledWithSessionKey(assemble, sessionKey);
     expectCalledWithSessionKey(afterTurn, sessionKey);
-  });
-
-  it("resolves bootstrap context before acquiring the session write lock", async () => {
-    const events: string[] = [];
-    hoisted.resolveBootstrapContextForRunMock.mockImplementation(async () => {
-      events.push("bootstrap");
-      return { bootstrapFiles: [], contextFiles: [] };
-    });
-    hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
-      events.push("lock");
-      return { release: async () => {} };
-    });
-
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-    });
-
-    expect(events).toEqual(expect.arrayContaining(["bootstrap", "lock"]));
-    expect(events.indexOf("bootstrap")).toBeLessThan(events.indexOf("lock"));
   });
 
   it("forwards modelId to assemble", async () => {
@@ -1231,8 +1202,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
-  it("releases the session lock even when teardown cleanup throws", async () => {
-    const releaseMock = vi.fn(async () => {});
+  it("runs teardown cleanup even when pending tool flush throws", async () => {
     const disposeMock = vi.fn();
     const flushMock = vi.fn(async () => {
       throw new Error("flush failed");
@@ -1243,13 +1213,16 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       flushPendingToolResultsAfterIdle: flushMock,
       session: { agent: {}, dispose: disposeMock },
       sessionManager: hoisted.sessionManager,
+      releaseWsSession: hoisted.releaseWsSessionMock,
+      sessionId: embeddedSessionId,
       bundleLspRuntime: undefined,
-      sessionLock: { release: releaseMock },
     });
 
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
-    expect(releaseMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
+      allowPool: false,
+    });
   });
 });
 

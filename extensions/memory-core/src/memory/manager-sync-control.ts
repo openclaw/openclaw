@@ -21,7 +21,7 @@ export type MemoryReadonlyRecoveryState = {
   runSync: (params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
   openDatabase: () => DatabaseSync;
@@ -85,7 +85,7 @@ export async function runMemorySyncWithReadonlyRecovery(
   params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   },
 ): Promise<void> {
@@ -123,26 +123,26 @@ export function enqueueMemoryTargetedSessionSync(
   state: {
     isClosed: () => boolean;
     getSyncing: () => Promise<void> | null;
-    getQueuedSessionFiles: () => Set<string>;
+    getQueuedSessionTranscripts: () => Set<string>;
     getQueuedSessionSync: () => Promise<void> | null;
     setQueuedSessionSync: (value: Promise<void> | null) => void;
     sync: (params?: {
       reason?: string;
       force?: boolean;
-      sessionFiles?: string[];
+      sessionTranscripts?: string[];
       progress?: (update: MemorySyncProgressUpdate) => void;
     }) => Promise<void>;
   },
-  sessionFiles?: string[],
+  sessionTranscripts?: string[],
 ): Promise<void> {
-  const queuedSessionFiles = state.getQueuedSessionFiles();
-  for (const sessionFile of sessionFiles ?? []) {
-    const trimmed = sessionFile.trim();
+  const queuedSessionTranscripts = state.getQueuedSessionTranscripts();
+  for (const sessionTranscript of sessionTranscripts ?? []) {
+    const trimmed = sessionTranscript.trim();
     if (trimmed) {
-      queuedSessionFiles.add(trimmed);
+      queuedSessionTranscripts.add(trimmed);
     }
   }
-  if (queuedSessionFiles.size === 0) {
+  if (queuedSessionTranscripts.size === 0) {
     return state.getSyncing() ?? Promise.resolve();
   }
   if (!state.getQueuedSessionSync()) {
@@ -150,12 +150,12 @@ export function enqueueMemoryTargetedSessionSync(
       (async () => {
         try {
           await state.getSyncing()?.catch(() => undefined);
-          while (!state.isClosed() && state.getQueuedSessionFiles().size > 0) {
-            const pendingSessionFiles = Array.from(state.getQueuedSessionFiles());
-            state.getQueuedSessionFiles().clear();
+          while (!state.isClosed() && state.getQueuedSessionTranscripts().size > 0) {
+            const pendingSessionTranscripts = Array.from(state.getQueuedSessionTranscripts());
+            state.getQueuedSessionTranscripts().clear();
             await state.sync({
-              reason: "queued-session-files",
-              sessionFiles: pendingSessionFiles,
+              reason: "queued-session-transcripts",
+              sessionTranscripts: pendingSessionTranscripts,
             });
           }
         } finally {

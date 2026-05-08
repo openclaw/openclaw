@@ -30,12 +30,12 @@ vi.mock("../../config/sessions/paths.js", () => ({
 }));
 
 const storeRuntimeLoads = vi.hoisted(() => vi.fn());
-const updateSessionStore = vi.hoisted(() => vi.fn());
+const upsertSessionEntry = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/sessions/store.runtime.js", () => {
   storeRuntimeLoads();
   return {
-    updateSessionStore,
+    upsertSessionEntry,
   };
 });
 
@@ -259,7 +259,7 @@ describe("runPreparedReply media-only handling", () => {
 
   beforeEach(async () => {
     storeRuntimeLoads.mockClear();
-    updateSessionStore.mockReset();
+    upsertSessionEntry.mockReset();
     vi.clearAllMocks();
     replyRunTesting.resetReplyRunRegistry();
   });

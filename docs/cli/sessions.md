@@ -10,23 +10,18 @@ title: "Sessions"
 List stored conversation sessions.
 
 Session lists are not channel/provider liveness checks. They show persisted
-conversation rows from session stores. A quiet Discord, Slack, Telegram, or
-other channel can reconnect successfully without creating a new session row
-until a message is processed. Use `openclaw channels status --probe`,
-`openclaw status --deep`, or `openclaw health --verbose` when you need live
-channel connectivity.
+conversation rows from the per-agent SQLite databases. A quiet Discord, Slack,
+Telegram, or other channel can reconnect successfully without creating a new
+session row until a message is processed. Use `openclaw channels status
+--probe`, `openclaw status --deep`, or `openclaw health --verbose` when you need
+live channel connectivity.
 
 `openclaw sessions` and Gateway `sessions.list` responses are bounded by
-default so large long-lived stores cannot monopolize the CLI process or Gateway
-event loop. The CLI returns the newest 100 sessions by default; pass
+default so large long-lived databases cannot monopolize the CLI process or
+Gateway event loop. The CLI returns the newest 100 sessions by default; pass
 `--limit <n>` for a smaller/larger window or `--limit all` when you intentionally
 need the full store. JSON responses include `totalCount`, `limitApplied`, and
 `hasMore` when callers need to show that more rows exist.
-
-RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
-discovery source but return only rows for agents currently present in config.
-Control UI uses that mode by default so deleted or disk-only agent stores do
-not reappear in the Sessions view.
 
 ```bash
 openclaw sessions
@@ -40,14 +35,13 @@ openclaw sessions --json
 
 Scope selection:
 
-- default: configured default agent store
+- default: configured default agent database
 - `--verbose`: verbose logging
-- `--agent <id>`: one configured agent store
-- `--all-agents`: aggregate all configured agent stores
-- `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
+- `--agent <id>`: one configured agent database
+- `--all-agents`: aggregate all configured agent databases
 
-Canonical per-agent session stores use OpenClaw's shared SQLite state database by
-default. Existing `sessions.json` indexes are imported by the `openclaw doctor`
+Canonical per-agent session rows live in `openclaw-agent.sqlite` under each
+agent. Existing `sessions.json` indexes are imported by the `openclaw doctor`
 fix mode, then removed after SQLite has the rows. Gateway startup does not
 import or rewrite legacy session indexes; run doctor when you intentionally want
 that migration.
@@ -65,14 +59,9 @@ This is the command path used by the `/export-trajectory` slash command after
 the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
 
-`openclaw sessions --all-agents` reads configured agent stores. Gateway and ACP
-session discovery are broader: they also include disk-only stores found under
-the default `agents/` root or a templated `session.store` root. Those
-discovered stores are keyed by the per-agent `sessions/` directory, so
-SQLite-backed agents remain discoverable after doctor removes the legacy
-`sessions.json` import file. If a legacy `sessions.json` still exists, it must
-be a regular file inside the agent root; symlinks and out-of-root paths are
-skipped.
+`openclaw sessions --all-agents` reads configured agent databases plus
+registered agent databases. Legacy `sessions.json` files are migration inputs
+only and should disappear after doctor imports them.
 
 JSON examples:
 
@@ -80,10 +69,10 @@ JSON examples:
 
 ```json
 {
-  "path": null,
-  "stores": [
-    { "agentId": "main", "path": "/home/user/.openclaw/agents/main/sessions/sessions.json" },
-    { "agentId": "work", "path": "/home/user/.openclaw/agents/work/sessions/sessions.json" }
+  "databasePath": null,
+  "databases": [
+    { "agentId": "main", "path": "/home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite" },
+    { "agentId": "work", "path": "/home/user/.openclaw/agents/work/agent/openclaw-agent.sqlite" }
   ],
   "allAgents": true,
   "count": 2,
@@ -98,70 +87,13 @@ JSON examples:
 }
 ```
 
-## Cleanup maintenance
+## Repair
 
-Run maintenance explicitly:
-
-```bash
-openclaw sessions cleanup --dry-run
-openclaw sessions cleanup --agent work --dry-run
-openclaw sessions cleanup --all-agents --dry-run
-openclaw sessions cleanup --enforce
-openclaw sessions cleanup --enforce --active-key "agent:main:telegram:direct:123"
-openclaw sessions cleanup --dry-run --fix-dm-scope
-openclaw sessions cleanup --json
-```
-
-`openclaw sessions cleanup` uses `session.maintenance` settings from config:
-
-- Scope note: `openclaw sessions cleanup` maintains SQLite session rows only. It does not prune trajectory sidecars or cron run history, which are managed by their owning runtimes.
-- Legacy JSON import belongs to `openclaw doctor --fix`; cleanup no longer imports or rewrites `sessions.json`.
-
-- `--dry-run`: preview how many entries would be pruned/capped without writing.
-  - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
-- `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
-- `--fix-missing`: remove entries whose SQLite transcript events are missing, even if they would not normally age/count out yet.
-- `--active-key <key>`: protect a specific active key from enforce-mode age/count retention.
-- `--agent <id>`: run cleanup for one configured agent store.
-- `--all-agents`: run cleanup for all configured agent stores.
-- `--store <path>`: run against a specific `sessions.json` file.
-- `--json`: print a JSON summary. With `--all-agents`, output includes one summary per store.
-
-When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
-sent through the Gateway so it shares the same session-store writer as runtime
-traffic.
-
-`openclaw sessions cleanup --all-agents --dry-run --json`:
-
-```json
-{
-  "allAgents": true,
-  "mode": "warn",
-  "dryRun": true,
-  "stores": [
-    {
-      "agentId": "main",
-      "storePath": "/home/user/.openclaw/agents/main/sessions/sessions.json",
-      "beforeCount": 120,
-      "afterCount": 80,
-      "missing": 0,
-      "dmScopeRetired": 0,
-      "pruned": 40,
-      "capped": 0
-    },
-    {
-      "agentId": "work",
-      "storePath": "/home/user/.openclaw/agents/work/sessions/sessions.json",
-      "beforeCount": 18,
-      "afterCount": 18,
-      "missing": 0,
-      "dmScopeRetired": 0,
-      "pruned": 0,
-      "capped": 0
-    }
-  ]
-}
-```
+Legacy JSON import belongs to `openclaw doctor --fix`. Runtime commands do not
+prune, cap, import, or rewrite session databases. If doctor reports session rows
+whose transcript events are missing, rerun doctor to import any remaining legacy
+sources; if the source transcript is gone, reset or delete the affected session
+explicitly.
 
 Related:
 

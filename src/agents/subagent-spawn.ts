@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -25,7 +24,7 @@ import {
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { getSubagentDepthFromSessionEntries } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
@@ -51,20 +50,20 @@ import {
   forkSessionFromParent,
   getGlobalHookRunner,
   getRuntimeConfig,
+  listSessionEntries,
   mergeSessionEntry,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  pruneLegacyStoreKeys,
   ensureContextEnginesInitialized,
   resolveParentForkDecision,
   resolveAgentConfig,
   resolveContextEngine,
   resolveDisplaySessionKey,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionDatabaseTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   resolveSandboxRuntimeStatus,
-  updateSessionStore,
+  upsertSessionEntry,
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
 import {
@@ -94,7 +93,8 @@ type SubagentSpawnDeps = {
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
   resolveParentForkDecision: typeof resolveParentForkDecision;
-  updateSessionStore: typeof updateSessionStore;
+  listSessionEntries: typeof listSessionEntries;
+  upsertSessionEntry: (options: Parameters<typeof upsertSessionEntry>[0]) => void | Promise<void>;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
@@ -105,7 +105,8 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   ensureContextEnginesInitialized,
   resolveContextEngine,
   resolveParentForkDecision,
-  updateSessionStore,
+  listSessionEntries,
+  upsertSessionEntry,
 };
 
 let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
@@ -169,11 +170,10 @@ export type SpawnSubagentResult = {
 
 export { splitModelRef } from "./subagent-spawn-plan.js";
 
-async function updateSubagentSessionStore(
-  storePath: string,
-  mutator: Parameters<typeof updateSessionStore>[1],
-) {
-  return await subagentSpawnDeps.updateSessionStore(storePath, mutator);
+function loadSubagentSessionRows(agentId: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    subagentSpawnDeps.listSessionEntries({ agentId }).map((row) => [row.sessionKey, row.entry]),
+  );
 }
 
 async function callSubagentGateway(
@@ -268,20 +268,18 @@ async function persistInitialChildSessionRuntimeModel(params: {
     return undefined;
   }
   try {
-    const target = resolveGatewaySessionStoreTarget({
+    const target = resolveGatewaySessionDatabaseTarget({
       cfg: params.cfg,
       key: params.childSessionKey,
     });
-    await updateSubagentSessionStore(target.storePath, (store) => {
-      pruneLegacyStoreKeys({
-        store,
-        canonicalKey: target.canonicalKey,
-        candidates: target.storeKeys,
-      });
-      store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
+    const store = loadSubagentSessionRows(target.agentId);
+    await subagentSpawnDeps.upsertSessionEntry({
+      agentId: target.agentId,
+      sessionKey: target.canonicalKey,
+      entry: mergeSessionEntry(resolveStoreEntryByKeys(store, target.storeKeys), {
         model,
         ...(provider ? { modelProvider: provider } : {}),
-      });
+      }),
     });
     return undefined;
   } catch (err) {
@@ -331,11 +329,11 @@ async function prepareSubagentSessionContext(params: {
   if (params.contextMode === "isolated") {
     return { status: "ok", mode: "isolated" };
   }
-  const childTarget = resolveGatewaySessionStoreTarget({
+  const childTarget = resolveGatewaySessionDatabaseTarget({
     cfg: params.cfg,
     key: params.childSessionKey,
   });
-  const parentTarget = resolveGatewaySessionStoreTarget({
+  const parentTarget = resolveGatewaySessionDatabaseTarget({
     cfg: params.cfg,
     key: params.requesterInternalKey,
   });
@@ -343,55 +341,50 @@ async function prepareSubagentSessionContext(params: {
   let parentEntry: SessionEntry | undefined;
   let childEntry: SessionEntry | undefined;
   let forkFallbackNote: string | undefined;
-  const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
-    const forked = (await updateSubagentSessionStore(childTarget.storePath, async (store) => {
-      parentEntry = resolveStoreEntryByKeys(store, parentTarget.storeKeys);
-      childEntry = resolveStoreEntryByKeys(store, childTarget.storeKeys);
-
-      if (params.targetAgentId !== params.requesterAgentId) {
-        throw new Error(
-          'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
-        );
-      }
-      if (!parentEntry?.sessionId) {
-        throw new Error(
-          'context="fork" requested but the requester session transcript is not available.',
-        );
-      }
-      const forkDecision = await subagentSpawnDeps.resolveParentForkDecision({
-        parentEntry,
-        storePath: parentTarget.storePath,
-      });
-      if (forkDecision.status === "skip") {
-        forkFallbackNote = forkDecision.message;
-        return null;
-      }
-
-      const fork = await subagentSpawnDeps.forkSessionFromParent({
+    if (params.targetAgentId !== params.requesterAgentId) {
+      throw new Error(
+        'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
+      );
+    }
+    const store = loadSubagentSessionRows(childTarget.agentId);
+    parentEntry = resolveStoreEntryByKeys(store, parentTarget.storeKeys);
+    childEntry = resolveStoreEntryByKeys(store, childTarget.storeKeys);
+    if (!parentEntry?.sessionId) {
+      throw new Error(
+        'context="fork" requested but the requester session transcript is not available.',
+      );
+    }
+    const forkDecision = await subagentSpawnDeps.resolveParentForkDecision({
+      parentEntry,
+      agentId: params.requesterAgentId,
+    });
+    let forked: { sessionId: string; sessionFile: string } | null = null;
+    if (forkDecision.status === "skip") {
+      forkFallbackNote = forkDecision.message;
+    } else {
+      forked = await subagentSpawnDeps.forkSessionFromParent({
         parentEntry,
         agentId: params.requesterAgentId,
-        sessionsDir,
       });
-      if (!fork) {
+      if (!forked) {
         throw new Error(
           'context="fork" requested but OpenClaw could not fork the requester transcript.',
         );
       }
-      pruneLegacyStoreKeys({
-        store,
-        canonicalKey: childTarget.canonicalKey,
-        candidates: childTarget.storeKeys,
-      });
-      store[childTarget.canonicalKey] = mergeSessionEntry(store[childTarget.canonicalKey], {
-        sessionId: fork.sessionId,
-        sessionFile: fork.sessionFile,
+      const nextChildEntry = mergeSessionEntry(childEntry, {
+        sessionId: forked.sessionId,
+        sessionFile: forked.sessionFile,
         forkedFromParent: true,
       });
-      childEntry = store[childTarget.canonicalKey];
-      return fork;
-    })) as { sessionId: string; sessionFile: string } | null;
+      await subagentSpawnDeps.upsertSessionEntry({
+        agentId: childTarget.agentId,
+        sessionKey: childTarget.canonicalKey,
+        entry: nextChildEntry,
+      });
+      childEntry = nextChildEntry;
+    }
 
     if (params.contextMode === "fork") {
       if (!parentEntry || !forked) {
@@ -747,7 +740,7 @@ export async function spawnSubagentDirect(
     mainKey,
   });
 
-  const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
+  const callerDepth = getSubagentDepthFromSessionEntries(requesterInternalKey, { cfg });
   const maxSpawnDepth =
     cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxSpawnDepth) {
@@ -862,20 +855,18 @@ export async function spawnSubagentDirect(
   const { resolvedModel, thinkingOverride } = plan;
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
-      const target = resolveGatewaySessionStoreTarget({
+      const target = resolveGatewaySessionDatabaseTarget({
         cfg,
         key: childSessionKey,
       });
-      await updateSubagentSessionStore(target.storePath, (store) => {
-        pruneLegacyStoreKeys({
-          store,
-          canonicalKey: target.canonicalKey,
-          candidates: target.storeKeys,
-        });
-        store[target.canonicalKey] = mergeSessionEntry(
-          store[target.canonicalKey],
+      const store = loadSubagentSessionRows(target.agentId);
+      await subagentSpawnDeps.upsertSessionEntry({
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        entry: mergeSessionEntry(
+          resolveStoreEntryByKeys(store, target.storeKeys),
           buildDirectChildSessionPatch(patch),
-        );
+        ),
       });
       return undefined;
     } catch (err) {

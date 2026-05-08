@@ -40,7 +40,7 @@ vi.mock("../../agents/skills/refresh.js", () => ({
 }));
 
 vi.mock("../../config/sessions.js", () => ({
-  updateSessionStore: vi.fn(),
+  upsertSessionEntry: vi.fn(),
   resolveSessionFilePath: vi.fn(),
   resolveSessionFilePathOptions: vi.fn(),
 }));

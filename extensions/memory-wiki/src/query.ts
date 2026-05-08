@@ -5,7 +5,7 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-host-files";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import {
   extractTranscriptStemFromSessionsMemoryHit,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionEntriesForGateway,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -1248,14 +1248,14 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     return () => false;
   }
 
-  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(params.cfg);
+  const { entries: combinedSessionEntries } = loadCombinedSessionEntriesForGateway(params.cfg);
   return (relPath) => {
     const stem = extractTranscriptStemFromSessionsMemoryHit(relPath);
     if (!stem) {
       return false;
     }
     const keys = resolveTranscriptStemToSessionKeys({
-      store: combinedSessionStore,
+      store: combinedSessionEntries,
       stem,
     });
     return keys.some((key) => guard.check(key).allowed);

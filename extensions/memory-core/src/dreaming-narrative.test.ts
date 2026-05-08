@@ -6,10 +6,6 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
-import * as sessionStoreRuntimeModule from "openclaw/plugin-sdk/session-store-runtime";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendNarrativeEntry,
@@ -920,59 +916,6 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     expect(subagent.deleteSession).toHaveBeenCalled();
-  });
-
-  it("scrubs stale dreaming entries after cleanup", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const stateDir = await createTempWorkspace("openclaw-dreaming-state-");
-    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await saveSessionStore(storePath, {
-      "agent:main:dreaming-narrative-light-1": {
-        sessionId: "missing",
-        updatedAt: Date.now(),
-      },
-      "agent:main:kept-session": {
-        sessionId: "still-live",
-        updatedAt: Date.now(),
-      },
-      "agent:main:telegram:group:dreaming-narrative-room": {
-        sessionId: "still-missing-non-dreaming",
-        updatedAt: Date.now(),
-      },
-    });
-
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
-      session: {},
-    } as never);
-    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(((
-      _store: string | undefined,
-      { agentId }: { agentId: string },
-    ) => {
-      expect(agentId).toBe("main");
-      return storePath;
-    }) as typeof sessionStoreRuntimeModule.resolveStorePath);
-    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
-
-    const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: { phase: "light", snippets: ["memory fragment"] },
-      logger,
-    });
-
-    const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath) as Record<
-      string,
-      unknown
-    >;
-    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
-    expect(updatedStore).toHaveProperty("agent:main:kept-session");
-    expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("dreaming cleanup scrubbed"));
   });
 
   it("isolates narrative sessions across workspaces even at the same timestamp", async () => {

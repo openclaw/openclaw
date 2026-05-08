@@ -10,9 +10,11 @@ import {
   appendMemoryHostEvent,
   resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
+import { readMemoryWikiLogEntries } from "./log.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -34,6 +36,7 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   afterEach(() => {
     clearMemoryPluginState();
+    resetPluginStateStoreForTests();
   });
 
   function nextCaseRoot(name: string): string {
@@ -131,6 +134,9 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(
       sourcePages.reduce((count, name) => count + (name.startsWith("bridge-") ? 1 : 0), 0),
     ).toBe(3);
+    await expect(
+      fs.stat(path.join(vaultDir, ".openclaw-wiki", "source-sync.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
 
     const memoryPage = await fs.readFile(path.join(vaultDir, first.pagePaths[0] ?? ""), "utf8");
     expect(memoryPage).toContain("sourceType: memory-bridge");
@@ -143,10 +149,7 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(second.skippedCount).toBe(3);
     expect(second.removedCount).toBe(0);
 
-    const logLines = (await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8"))
-      .trim()
-      .split("\n");
-    expect(logLines).toHaveLength(2);
+    await expect(readMemoryWikiLogEntries(vaultDir)).resolves.toHaveLength(2);
   });
 
   it("returns a no-op result outside bridge mode", async () => {

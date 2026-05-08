@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
@@ -16,14 +15,14 @@ import {
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntry,
-  listSessionFilesForAgent,
-  sessionPathForFile,
+  buildSessionTranscriptEntry,
+  listSessionTranscriptsForAgent,
+  readSessionTranscriptDeltaStats,
+  sessionPathForTranscript,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildFileEntry,
   ensureMemoryIndexSchema,
-  isFileMissingError,
   listMemoryFiles,
   loadSqliteVecExtension,
   normalizeExtraMemoryPaths,
@@ -79,7 +78,6 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
-const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
@@ -182,7 +180,7 @@ export abstract class MemoryManagerSyncOps {
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<
     string,
-    { lastSize: number; pendingBytes: number; pendingMessages: number }
+    { lastSize: number; lastMessages: number; pendingBytes: number; pendingMessages: number }
   >();
   protected vectorDegradedWriteWarningShown = false;
   private lastMetaSerialized: string | null = null;
@@ -194,7 +192,7 @@ export abstract class MemoryManagerSyncOps {
     reason?: string;
     force?: boolean;
     forceSessions?: boolean;
-    sessionFile?: string;
+    sessionTranscript?: string;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
   protected abstract withTimeout<T>(
@@ -464,16 +462,16 @@ export abstract class MemoryManagerSyncOps {
       if (this.closed) {
         return;
       }
-      const sessionFile = update.sessionFile;
-      if (!this.isSessionFileForAgent(sessionFile)) {
+      const sessionTranscript = update.sessionFile;
+      if (!this.isSessionTranscriptForAgent(sessionTranscript)) {
         return;
       }
-      this.scheduleSessionDirty(sessionFile);
+      this.scheduleSessionDirty(sessionTranscript);
     });
   }
 
-  private scheduleSessionDirty(sessionFile: string) {
-    this.sessionPendingFiles.add(sessionFile);
+  private scheduleSessionDirty(sessionTranscript: string) {
+    this.sessionPendingFiles.add(sessionTranscript);
     if (this.sessionWatchTimer) {
       return;
     }
@@ -492,8 +490,8 @@ export abstract class MemoryManagerSyncOps {
     const pending = Array.from(this.sessionPendingFiles);
     this.sessionPendingFiles.clear();
     let shouldSync = false;
-    for (const sessionFile of pending) {
-      const delta = await this.updateSessionDelta(sessionFile);
+    for (const sessionTranscript of pending) {
+      const delta = await this.updateSessionDelta(sessionTranscript);
       if (!delta) {
         continue;
       }
@@ -508,7 +506,7 @@ export abstract class MemoryManagerSyncOps {
       if (!bytesHit && !messagesHit) {
         continue;
       }
-      this.sessionsDirtyFiles.add(sessionFile);
+      this.sessionsDirtyFiles.add(sessionTranscript);
       this.sessionsDirty = true;
       delta.pendingBytes =
         bytesThreshold > 0 ? Math.max(0, delta.pendingBytes - bytesThreshold) : 0;
@@ -523,7 +521,7 @@ export abstract class MemoryManagerSyncOps {
     }
   }
 
-  private async updateSessionDelta(sessionFile: string): Promise<{
+  private async updateSessionDelta(sessionTranscript: string): Promise<{
     deltaBytes: number;
     deltaMessages: number;
     pendingBytes: number;
@@ -533,20 +531,20 @@ export abstract class MemoryManagerSyncOps {
     if (!thresholds) {
       return null;
     }
-    let stat: { size: number };
-    try {
-      stat = await fs.stat(sessionFile);
-    } catch {
+    const stats = readSessionTranscriptDeltaStats(sessionTranscript);
+    if (!stats) {
       return null;
     }
-    const size = stat.size;
-    let state = this.sessionDeltas.get(sessionFile);
+    const size = stats.size;
+    const messageCount = stats.messageCount;
+    let state = this.sessionDeltas.get(sessionTranscript);
     if (!state) {
-      state = { lastSize: 0, pendingBytes: 0, pendingMessages: 0 };
-      this.sessionDeltas.set(sessionFile, state);
+      state = { lastSize: 0, lastMessages: 0, pendingBytes: 0, pendingMessages: 0 };
+      this.sessionDeltas.set(sessionTranscript, state);
     }
     const deltaBytes = Math.max(0, size - state.lastSize);
-    if (deltaBytes === 0 && size === state.lastSize) {
+    const deltaMessages = Math.max(0, messageCount - state.lastMessages);
+    if (deltaBytes === 0 && deltaMessages === 0) {
       return {
         deltaBytes: thresholds.deltaBytes,
         deltaMessages: thresholds.deltaMessages,
@@ -554,26 +552,16 @@ export abstract class MemoryManagerSyncOps {
         pendingMessages: state.pendingMessages,
       };
     }
-    if (size < state.lastSize) {
-      state.lastSize = size;
+    if (size < state.lastSize || messageCount < state.lastMessages) {
       state.pendingBytes += size;
-      const shouldCountMessages =
-        thresholds.deltaMessages > 0 &&
-        (thresholds.deltaBytes <= 0 || state.pendingBytes < thresholds.deltaBytes);
-      if (shouldCountMessages) {
-        state.pendingMessages += await this.countNewlines(sessionFile, 0, size);
-      }
+      state.pendingMessages += messageCount;
     } else {
       state.pendingBytes += deltaBytes;
-      const shouldCountMessages =
-        thresholds.deltaMessages > 0 &&
-        (thresholds.deltaBytes <= 0 || state.pendingBytes < thresholds.deltaBytes);
-      if (shouldCountMessages) {
-        state.pendingMessages += await this.countNewlines(sessionFile, state.lastSize, size);
-      }
-      state.lastSize = size;
+      state.pendingMessages += deltaMessages;
     }
-    this.sessionDeltas.set(sessionFile, state);
+    state.lastSize = size;
+    state.lastMessages = messageCount;
+    this.sessionDeltas.set(sessionTranscript, state);
     return {
       deltaBytes: thresholds.deltaBytes,
       deltaMessages: thresholds.deltaMessages,
@@ -582,74 +570,39 @@ export abstract class MemoryManagerSyncOps {
     };
   }
 
-  private async countNewlines(absPath: string, start: number, end: number): Promise<number> {
-    if (end <= start) {
-      return 0;
-    }
-    let handle;
-    try {
-      handle = await fs.open(absPath, "r");
-    } catch (err) {
-      if (isFileMissingError(err)) {
-        return 0;
-      }
-      throw err;
-    }
-    try {
-      let offset = start;
-      let count = 0;
-      const buffer = Buffer.alloc(SESSION_DELTA_READ_CHUNK_BYTES);
-      while (offset < end) {
-        const toRead = Math.min(buffer.length, end - offset);
-        const { bytesRead } = await handle.read(buffer, 0, toRead, offset);
-        if (bytesRead <= 0) {
-          break;
-        }
-        for (let i = 0; i < bytesRead; i += 1) {
-          if (buffer[i] === 10) {
-            count += 1;
-          }
-        }
-        offset += bytesRead;
-      }
-      return count;
-    } finally {
-      await handle.close();
-    }
-  }
-
-  private resetSessionDelta(absPath: string, size: number): void {
+  private resetSessionDelta(absPath: string, size: number, messageCount: number): void {
     const state = this.sessionDeltas.get(absPath);
     if (!state) {
       return;
     }
     state.lastSize = size;
+    state.lastMessages = messageCount;
     state.pendingBytes = 0;
     state.pendingMessages = 0;
   }
 
-  private isSessionFileForAgent(sessionFile: string): boolean {
-    if (!sessionFile) {
+  private isSessionTranscriptForAgent(sessionTranscript: string): boolean {
+    if (!sessionTranscript) {
       return false;
     }
     const sessionsDir = resolveSessionTranscriptsDirForAgent(this.agentId);
-    const resolvedFile = path.resolve(sessionFile);
+    const resolvedFile = path.resolve(sessionTranscript);
     const resolvedDir = path.resolve(sessionsDir);
     return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
   }
 
-  private normalizeTargetSessionFiles(sessionFiles?: string[]): Set<string> | null {
-    if (!sessionFiles || sessionFiles.length === 0) {
+  private normalizeTargetSessionTranscripts(sessionTranscripts?: string[]): Set<string> | null {
+    if (!sessionTranscripts || sessionTranscripts.length === 0) {
       return null;
     }
     const normalized = new Set<string>();
-    for (const sessionFile of sessionFiles) {
-      const trimmed = sessionFile.trim();
+    for (const sessionTranscript of sessionTranscripts) {
+      const trimmed = sessionTranscript.trim();
       if (!trimmed) {
         continue;
       }
       const resolved = path.resolve(trimmed);
-      if (this.isSessionFileForAgent(resolved)) {
+      if (this.isSessionTranscriptForAgent(resolved)) {
         normalized.add(resolved);
       }
     }
@@ -681,13 +634,13 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private shouldSyncSessions(
-    params?: { reason?: string; force?: boolean; sessionFiles?: string[] },
+    params?: { reason?: string; force?: boolean; sessionTranscripts?: string[] },
     needsFullReindex = false,
   ) {
     return shouldSyncSessionsForReindex({
       hasSessionSource: this.sources.has("sessions"),
       sessionsDirty: this.sessionsDirty,
-      dirtySessionFileCount: this.sessionsDirtyFiles.size,
+      dirtySessionTranscriptCount: this.sessionsDirtyFiles.size,
       sync: params,
       needsFullReindex,
     });
@@ -791,9 +744,9 @@ export abstract class MemoryManagerSyncOps {
     }
   }
 
-  private async syncSessionFiles(params: {
+  private async syncSessionTranscripts(params: {
     needsFullReindex: boolean;
-    targetSessionFiles?: string[];
+    targetSessionTranscripts?: string[];
     progress?: MemorySyncProgressState;
   }) {
     const deleteFileByPathAndSource = this.db.prepare(
@@ -813,31 +766,31 @@ export abstract class MemoryManagerSyncOps {
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
         : null;
 
-    const targetSessionFiles = params.needsFullReindex
+    const targetSessionTranscripts = params.needsFullReindex
       ? null
-      : this.normalizeTargetSessionFiles(params.targetSessionFiles);
-    const files = targetSessionFiles
-      ? Array.from(targetSessionFiles)
-      : await listSessionFilesForAgent(this.agentId);
+      : this.normalizeTargetSessionTranscripts(params.targetSessionTranscripts);
+    const files = targetSessionTranscripts
+      ? Array.from(targetSessionTranscripts)
+      : await listSessionTranscriptsForAgent(this.agentId);
     const sessionPlan = resolveMemorySessionSyncPlan({
       needsFullReindex: params.needsFullReindex,
       files,
-      targetSessionFiles,
+      targetSessionTranscripts,
       sessionsDirtyFiles: this.sessionsDirtyFiles,
-      existingRows: targetSessionFiles
+      existingRows: targetSessionTranscripts
         ? null
         : loadMemorySourceFileState({
             db: this.db,
             source: "sessions",
           }).rows,
-      sessionPathForFile,
+      sessionPathForTranscript,
     });
     const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
-    log.debug("memory sync: indexing session files", {
+    log.debug("memory sync: indexing session transcripts", {
       files: files.length,
       indexAll,
       dirtyFiles: this.sessionsDirtyFiles.size,
-      targetedFiles: targetSessionFiles?.size ?? 0,
+      targetedFiles: targetSessionTranscripts?.size ?? 0,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
@@ -846,7 +799,9 @@ export abstract class MemoryManagerSyncOps {
       params.progress.report({
         completed: params.progress.completed,
         total: params.progress.total,
-        label: this.batch.enabled ? "Indexing session files (batch)..." : "Indexing session files…",
+        label: this.batch.enabled
+          ? "Indexing session transcripts (batch)..."
+          : "Indexing session transcripts…",
       });
     }
 
@@ -861,7 +816,7 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      const entry = await buildSessionEntry(absPath);
+      const entry = await buildSessionTranscriptEntry(absPath);
       if (!entry) {
         if (params.progress) {
           params.progress.completed += 1;
@@ -886,11 +841,11 @@ export abstract class MemoryManagerSyncOps {
             total: params.progress.total,
           });
         }
-        this.resetSessionDelta(absPath, entry.size);
+        this.resetSessionDelta(absPath, entry.size, entry.messageCount);
         return;
       }
       await this.indexFile(entry, { source: "sessions", content: entry.content });
-      this.resetSessionDelta(absPath, entry.size);
+      this.resetSessionDelta(absPath, entry.size, entry.messageCount);
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -958,7 +913,7 @@ export abstract class MemoryManagerSyncOps {
   protected async runSync(params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscripts?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
@@ -981,19 +936,21 @@ export abstract class MemoryManagerSyncOps {
         maxFileBytes: this.settings.multimodal.maxFileBytes,
       },
     });
-    const targetSessionFiles = this.normalizeTargetSessionFiles(params?.sessionFiles);
-    const hasTargetSessionFiles = targetSessionFiles !== null;
+    const targetSessionTranscripts = this.normalizeTargetSessionTranscripts(
+      params?.sessionTranscripts,
+    );
+    const hasTargetSessionTranscripts = targetSessionTranscripts !== null;
     const targetedSessionSync = await runMemoryTargetedSessionSync({
       hasSessionSource: this.sources.has("sessions"),
-      targetSessionFiles,
+      targetSessionTranscripts,
       reason: params?.reason,
       progress: progress ?? undefined,
       useUnsafeReindex:
         process.env.OPENCLAW_TEST_FAST === "1" &&
         process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
       sessionsDirtyFiles: this.sessionsDirtyFiles,
-      syncSessionFiles: async (targetedParams) => {
-        await this.syncSessionFiles(targetedParams);
+      syncSessionTranscripts: async (targetedParams) => {
+        await this.syncSessionTranscripts(targetedParams);
       },
       shouldFallbackOnError: (message) => this.shouldFallbackOnError(message),
       activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
@@ -1009,7 +966,7 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
     const needsFullReindex =
-      (params?.force && !hasTargetSessionFiles) ||
+      (params?.force && !hasTargetSessionTranscripts) ||
       shouldRunFullMemoryReindex({
         meta,
         // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
@@ -1045,7 +1002,7 @@ export abstract class MemoryManagerSyncOps {
 
       const shouldSyncMemory =
         this.sources.has("memory") &&
-        ((!hasTargetSessionFiles && params?.force) || needsFullReindex || this.dirty);
+        ((!hasTargetSessionTranscripts && params?.force) || needsFullReindex || this.dirty);
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
       if (shouldSyncMemory) {
@@ -1054,9 +1011,11 @@ export abstract class MemoryManagerSyncOps {
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({
+        await this.syncSessionTranscripts({
           needsFullReindex,
-          targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
+          targetSessionTranscripts: targetSessionTranscripts
+            ? Array.from(targetSessionTranscripts)
+            : undefined,
           progress: progress ?? undefined,
         });
         this.sessionsDirty = false;
@@ -1217,7 +1176,10 @@ export abstract class MemoryManagerSyncOps {
           }
 
           if (shouldSyncSessions) {
-            await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+            await this.syncSessionTranscripts({
+              needsFullReindex: true,
+              progress: params.progress,
+            });
             this.sessionsDirty = false;
             this.sessionsDirtyFiles.clear();
           } else if (this.sessionsDirtyFiles.size > 0) {
@@ -1297,7 +1259,7 @@ export abstract class MemoryManagerSyncOps {
     }
 
     if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+      await this.syncSessionTranscripts({ needsFullReindex: true, progress: params.progress });
       this.sessionsDirty = false;
       this.sessionsDirtyFiles.clear();
     } else if (this.sessionsDirtyFiles.size > 0) {

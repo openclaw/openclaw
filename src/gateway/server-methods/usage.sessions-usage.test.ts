@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
@@ -19,7 +20,10 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+    loadCombinedSessionEntriesForGateway: vi.fn(() => ({
+      databasePath: "(multiple)",
+      entries: {},
+    })),
   };
 });
 
@@ -87,7 +91,7 @@ import {
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
-import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
+import { loadCombinedSessionEntriesForGateway } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
 const TEST_RUNTIME_CONFIG = {
@@ -173,16 +177,17 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
-        fs.mkdirSync(agentSessionsDir, { recursive: true });
-        const sessionFile = path.join(agentSessionsDir, "s-opus.jsonl");
-        fs.writeFileSync(sessionFile, "", "utf-8");
-
+        replaceSqliteSessionTranscriptEvents({
+          agentId: "opus",
+          sessionId: "s-opus",
+          transcriptPath: path.join(stateDir, "agents", "opus", "sessions", "s-opus.jsonl"),
+          events: [{ type: "session", id: "s-opus" }],
+        });
         // Swap the store mock for this test: the canonical key differs from the discovered key
         // but points at the same sessionId.
-        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
-          storePath: "(multiple)",
-          store: {
+        vi.mocked(loadCombinedSessionEntriesForGateway).mockReturnValue({
+          databasePath: "(multiple)",
+          entries: {
             [storeKey]: {
               sessionId: "s-opus",
               sessionFile: "s-opus.jsonl",
@@ -312,14 +317,15 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
-        fs.mkdirSync(agentSessionsDir, { recursive: true });
-        const sessionFile = path.join(agentSessionsDir, "run-dup.jsonl");
-        fs.writeFileSync(sessionFile, "", "utf-8");
-
-        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
-          storePath: "(multiple)",
-          store: {
+        replaceSqliteSessionTranscriptEvents({
+          agentId: "opus",
+          sessionId: "run-dup",
+          transcriptPath: path.join(stateDir, "agents", "opus", "sessions", "run-dup.jsonl"),
+          events: [{ type: "session", id: "run-dup" }],
+        });
+        vi.mocked(loadCombinedSessionEntriesForGateway).mockReturnValue({
+          databasePath: "(multiple)",
+          entries: {
             [preferredKey]: {
               sessionId: "run-dup",
               sessionFile: "run-dup.jsonl",
