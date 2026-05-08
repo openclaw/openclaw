@@ -157,8 +157,6 @@ Retention and pruning are controlled in config:
 
 <Note>
 If you have cron jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy cron fields (`jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, payload `provider` delivery aliases) and migrates simple `notify: true` webhook fallback jobs to explicit webhook delivery when `cron.webhook` is configured.
-
-Doctor also removes persisted cron `payload.model` sentinels such as `"default"`, `"null"`, blank strings, and JSON `null`. Cron runtime still treats any non-empty `payload.model` string as an explicit model override and validates it against `agents.defaults.models`; omit the model key when a job should use the agent/default model selection.
 </Note>
 
 ## Common edits
@@ -221,6 +219,8 @@ openclaw cron runs --id <job-id> --limit 50
 ```
 
 `openclaw cron list` shows all matching jobs by default. Pass `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
+
+`cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. This mirrors the human-readable status column so external tooling can read job state without re-deriving it.
 
 `cron runs` entries include delivery diagnostics with the intended cron target, the resolved target, message-tool sends, fallback use, and delivered state.
 

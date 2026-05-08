@@ -216,22 +216,6 @@ describe("normalizeAgentCommandReplyPayloads", () => {
   });
 
   it("reports successful requested delivery", async () => {
-    deliverOutboundPayloadsMock.mockResolvedValue([
-      {
-        channel: "slack",
-        messageId: "m1",
-      },
-    ]);
-
-    const delivered = await deliverMediaReplyForTest({
-      key: "agent:tester:slack:direct:alice",
-      agentId: "tester",
-    } as never);
-
-    expect(delivered.deliverySucceeded).toBe(true);
-  });
-
-  it("does not report success when delivery claims no adapter result", async () => {
     deliverOutboundPayloadsMock.mockResolvedValue([]);
 
     const delivered = await deliverMediaReplyForTest({
@@ -239,7 +223,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       agentId: "tester",
     } as never);
 
-    expect(delivered.deliverySucceeded).toBe(false);
+    expect(delivered.deliverySucceeded).toBe(true);
   });
 
   it("does not report success when best-effort delivery records an error", async () => {

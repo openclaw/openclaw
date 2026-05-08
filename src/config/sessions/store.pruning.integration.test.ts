@@ -20,6 +20,7 @@ import { runSessionsCleanup } from "./cleanup-service.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  runQuotaSuspensionMaintenance,
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -305,6 +306,92 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expect(fs.stat(referencedTranscript)).resolves.toBeDefined();
     await expect(fs.stat(referencedCheckpointPath)).resolves.toBeDefined();
     await expect(fs.stat(freshOrphanTranscript)).resolves.toBeDefined();
+  });
+
+  it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const directTranscript = path.join(testDir, "direct-session.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "main-session",
+            updatedAt: now,
+          },
+          "agent:main:telegram:direct:6101296751": {
+            sessionId: "direct-session",
+            updatedAt: now,
+            lastChannel: "telegram",
+            lastTo: "6101296751",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
+    await fs.writeFile(directTranscript, "direct", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: { session: { dmScope: "main" } },
+      opts: { store: storePath, dryRun: true, enforce: true, fixDmScope: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.dmScopeRetired).toBe(1);
+    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
+    expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
+    await expect(fs.stat(directTranscript)).resolves.toBeDefined();
+  });
+
+  it("sessions cleanup retires stale direct DM rows and archives their transcripts", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const directTranscript = path.join(testDir, "direct-session.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "main-session",
+            updatedAt: now,
+          },
+          "agent:main:telegram:direct:6101296751": {
+            sessionId: "direct-session",
+            updatedAt: now,
+            sessionFile: directTranscript,
+            lastChannel: "telegram",
+            lastTo: "6101296751",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
+    await fs.writeFile(directTranscript, "direct", "utf-8");
+
+    const applied = await runSessionsCleanup({
+      cfg: { session: { dmScope: "main" } },
+      opts: { store: storePath, enforce: true, fixDmScope: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(1);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted["agent:main:main"]).toBeDefined();
+    expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
+    await expect(fs.stat(directTranscript)).rejects.toThrow();
+    const files = await fs.readdir(testDir);
+    expect(files.some((name) => name.startsWith("direct-session.jsonl.deleted."))).toBe(true);
   });
 
   it("sessions cleanup dry-run does not double-count artifacts already covered by disk budget", async () => {
@@ -628,6 +715,57 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded[threadKey]).toBeDefined();
     expect(loaded[topicKey]).toBeDefined();
     expect(loaded["session-74"]).toBeUndefined();
+  });
+
+  it("persists quota suspension TTL transitions through writer maintenance", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      suspended: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 30_000,
+          expectedResumeBy: now - 1,
+          state: "suspended",
+          reason: "quota_exhausted",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+      active: {
+        ...makeEntry(now),
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now - 61_000,
+          expectedResumeBy: now - 31_000,
+          state: "active",
+          reason: "circuit_open",
+          failedProvider: "anthropic",
+          failedModel: "claude-opus-4-6",
+          laneId: "main",
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+
+    const result = await runQuotaSuspensionMaintenance({
+      storePath,
+      now,
+      ttlMs: 30_000,
+      log: false,
+    });
+
+    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded.suspended?.quotaSuspension?.state).toBe("resuming");
+    expect(loaded.active?.quotaSuspension).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted.suspended?.quotaSuspension?.state).toBe("resuming");
+    expect(persisted.active?.quotaSuspension).toBeUndefined();
   });
 
   it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {

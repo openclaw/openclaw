@@ -247,7 +247,10 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
   const context = {
     cfg: mocks.resolvedConfig,
     agentDir: "/tmp/openclaw-agent",
-    authIndex: { hasProviderAuth: (provider: string) => provider === "openai-codex" },
+    authIndex: {
+      hasProviderAuth: (provider: string) => provider === "openai-codex",
+      allowsProviderAuthAvailabilityFallback: () => false,
+    },
     availableKeys: loaded.availableKeys,
     configuredByKey: new Map(),
     discoveredKeys: new Set(
@@ -390,6 +393,40 @@ describe("modelsListCommand forward-compat", () => {
       expect(runtime.log).not.toHaveBeenCalledWith("No models found.");
       expect(lastPrintedRows<{ key: string }>()).toEqual([
         expect.objectContaining({ key: "google/gemini-2.5-pro" }),
+      ]);
+    });
+
+    it("keeps scoped provider fallback rows filtered by model suppression", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      const currentModel = {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text", "image"],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      };
+      const suppressedModel = {
+        ...currentModel,
+        id: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
+      };
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [currentModel],
+        availableKeys: undefined,
+        registry: {
+          getAll: () => [currentModel, suppressedModel],
+        },
+      });
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true, provider: "openai" }, runtime as never);
+
+      expect(lastPrintedRows<{ key: string }>()).toEqual([
+        expect.objectContaining({ key: "openai/gpt-5.5" }),
       ]);
     });
 
@@ -1180,7 +1217,10 @@ describe("modelsListCommand forward-compat", () => {
         ] as never,
         context: {
           cfg: mocks.resolvedConfig,
-          authIndex: { hasProviderAuth: () => false },
+          authIndex: {
+            hasProviderAuth: () => false,
+            allowsProviderAuthAvailabilityFallback: () => false,
+          },
           availableKeys: new Set(["openai-codex/gpt-5.4"]),
           configuredByKey: new Map(),
           discoveredKeys: new Set(),

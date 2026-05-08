@@ -16,6 +16,11 @@ import {
 } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
+  formatInheritedThinkingLabel,
+  formatThinkingOverrideLabel,
+  normalizeThinkingOptionValue,
+} from "../thinking-labels.ts";
+import {
   listThinkingLevelLabels,
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
@@ -150,7 +155,11 @@ function renderChatModelSelect(state: AppViewState) {
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
-    !state.connected || busy || (state.chatModelsLoading && options.length === 0) || !state.client;
+    !state.connected ||
+    busy ||
+    Boolean(state.chatModelSwitchPromises?.[state.sessionKey]) ||
+    (state.chatModelsLoading && options.length === 0) ||
+    !state.client;
   const selectedLabel =
     currentOverride === ""
       ? defaultLabel
@@ -211,18 +220,14 @@ function buildThinkingOptions(
   const options: ChatThinkingSelectOption[] = [];
 
   const addOption = (value: string, label?: string) => {
-    const resolvedLabel =
-      label ??
-      value
-        .split(/[-_]/g)
-        .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-        .join(" ");
-    pushUniqueTrimmedSelectOption(options, seen, value, () => resolvedLabel);
+    const normalizedValue = normalizeThinkingOptionValue(value);
+    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
+      formatThinkingOverrideLabel(normalizedValue, label),
+    );
   };
 
   for (const level of levels) {
-    const normalized = normalizeThinkLevel(level.id) ?? normalizeLowercaseStringOrEmpty(level.id);
-    addOption(normalized, level.label);
+    addOption(level.id, level.label);
   }
   if (currentOverride) {
     addOption(currentOverride);
@@ -257,7 +262,7 @@ function resolveThinkingLevelOptions(
   }));
 }
 
-function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
+export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
   const persisted = activeRow?.thinkingLevel;
   const currentOverride =
@@ -283,7 +288,7 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
       : "off");
   return {
     currentOverride,
-    defaultLabel: `Default (${defaultLevel})`,
+    defaultLabel: formatInheritedThinkingLabel(defaultLevel),
     options: buildThinkingOptions(levels, currentOverride),
   };
 }
@@ -325,13 +330,13 @@ export function renderChatThinkingSelect(state: AppViewState) {
   `;
 }
 
-async function switchChatModel(state: AppViewState, nextModel: string) {
+async function switchChatModel(state: AppViewState, nextModel: string): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   const currentOverride = resolveChatModelOverrideValue(state);
   if (currentOverride === nextModel) {
-    return;
+    return true;
   }
   const targetSessionKey = state.sessionKey;
   const prevOverride = state.chatModelOverrides[targetSessionKey];
@@ -341,18 +346,38 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     ...state.chatModelOverrides,
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
-  try {
-    await state.client.request("sessions.patch", {
-      key: targetSessionKey,
-      model: nextModel || null,
-    });
-    void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
-    await refreshSessionOptions(state);
-  } catch (err) {
-    // Roll back so the picker reflects the actual server model.
-    state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
-    state.lastError = `Failed to set model: ${String(err)}`;
-  }
+  const client = state.client;
+  let switchPromise: Promise<boolean>;
+  const clearPendingSwitch = () => {
+    if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromise) {
+      const nextSwitches = { ...state.chatModelSwitchPromises };
+      delete nextSwitches[targetSessionKey];
+      state.chatModelSwitchPromises = nextSwitches;
+    }
+  };
+  switchPromise = (async () => {
+    try {
+      await client.request("sessions.patch", {
+        key: targetSessionKey,
+        model: nextModel || null,
+      });
+      void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
+      await refreshSessionOptions(state);
+      return true;
+    } catch (err) {
+      // Roll back so the picker reflects the actual server model.
+      state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
+      state.lastError = `Failed to set model: ${String(err)}`;
+      return false;
+    } finally {
+      clearPendingSwitch();
+    }
+  })();
+  state.chatModelSwitchPromises = {
+    ...state.chatModelSwitchPromises,
+    [targetSessionKey]: switchPromise,
+  };
+  return switchPromise;
 }
 
 function patchSessionThinkingLevel(
@@ -406,7 +431,7 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
 
 /* Channel display labels. */
 const CHANNEL_LABELS: Record<string, string> = {
-  bluebubbles: "iMessage",
+  imessage: "iMessage",
   telegram: "Telegram",
   discord: "Discord",
   signal: "Signal",
@@ -470,7 +495,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
 
-  // Channel-prefixed legacy keys, for example "bluebubbles:g-...".
+  // Channel-prefixed legacy keys, for example "imessage:g-...".
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
       return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };

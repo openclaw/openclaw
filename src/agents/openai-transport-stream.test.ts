@@ -2752,6 +2752,47 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.strict).toBe(false);
   });
 
+  it("applies model compat unsupported schema keywords to completions tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        name: "Kimi K2.5 Turbo",
+        api: "openai-completions",
+        provider: "fireworks",
+        baseUrl: "https://api.fireworks.ai/inference/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 256000,
+        compat: {
+          unsupportedToolSchemaKeywords: ["not"],
+        } as never,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {
+              type: "object",
+              properties: {
+                forbidden: { not: {} },
+              },
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
+    };
+
+    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toEqual({});
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = {
       id: "gemini-3-flash-preview",
@@ -2901,7 +2942,7 @@ describe("openai transport stream", () => {
       );
     });
 
-    it("does not replay thought_signature across a different API surface", () => {
+    it("uses the Gemini skip-validator signature across a different API surface", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
         {
@@ -2938,12 +2979,14 @@ describe("openai transport stream", () => {
       ) as { messages: Array<Record<string, unknown>> };
 
       const assistant = params.messages.find((message) => message.role === "assistant") as
-        | { tool_calls?: Array<{ extra_content?: unknown }> }
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
         | undefined;
-      expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "skip_thought_signature_validator",
+      );
     });
 
-    it("does not emit extra_content when no thought_signature was captured", () => {
+    it("uses the Gemini skip-validator signature when no thought_signature was captured", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
         {
@@ -2964,6 +3007,55 @@ describe("openai transport stream", () => {
               stopReason: "toolUse",
               timestamp: 1,
               content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "skip_thought_signature_validator",
+      );
+    });
+
+    it("does not trust cross-route thought_signature for non-Gemini-3 Google compat models", () => {
+      const nonGemini3Model = {
+        ...geminiModel,
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+      };
+      const params = buildOpenAICompletionsParams(
+        nonGemini3Model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              api: "google-generative-ai",
+              provider: nonGemini3Model.provider,
+              model: nonGemini3Model.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "echo_value",
+                  arguments: { value: "repro" },
+                  thoughtSignature: "SIG-OPAQUE-ABC==",
+                },
+              ],
             },
           ],
           tools: [],
@@ -3386,6 +3478,85 @@ describe("openai transport stream", () => {
     expect(thinkingBlock.thinking).toBe("I need to think about this. Let me analyze.");
     expect(textBlock.type).toBe("text");
     expect(textBlock.text).toBe(" Hello! How can I help you?");
+  });
+
+  it("normalizes structured completions content blocks without stringifying objects (#78846)", async () => {
+    const model = {
+      id: "mistral-small-latest",
+      name: "Mistral Small",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+    const mockChunks = [
+      {
+        id: "chatcmpl-structured-content",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: [
+                { type: "thinking", thinking: [{ type: "text", text: "Need to think." }] },
+                { type: "text", content: "Visible answer." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-structured-content",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toEqual([
+      { type: "thinking", thinking: "Need to think.", thinkingSignature: "content" },
+      { type: "text", text: "Visible answer." },
+    ]);
   });
 
   it("keeps tool calls when reasoning_details and tool_calls share a chunk", async () => {

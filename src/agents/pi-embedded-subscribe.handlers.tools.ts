@@ -64,6 +64,8 @@ const mediaParseModuleLoader = createLazyImportLoader<MediaParseModule>(
 const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
   () => import("./pi-tools.before-tool-call.js"),
 );
+const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
+const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
   return execApprovalReplyModuleLoader.load();
@@ -88,48 +90,9 @@ type ToolStartRecord = {
 
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
-const EXEC_OUTPUT_DELTA_MIN_INTERVAL_MS = 250;
-const LIVE_COMMAND_OUTPUT_MAX_CHARS = 64 * 1024;
-type ExecOutputDeltaEmission = {
-  emittedAt: number;
-};
-const execOutputDeltaEmissions = new Map<string, ExecOutputDeltaEmission>();
 
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
-}
-
-function buildExecOutputDeltaKey(runId: string, toolCallId: string): string {
-  return `${runId}:${toolCallId}`;
-}
-
-function shouldEmitExecOutputDelta(params: {
-  runId: string;
-  toolCallId: string;
-  output: string;
-  now?: number;
-}): boolean {
-  const key = buildExecOutputDeltaKey(params.runId, params.toolCallId);
-  const now = params.now ?? Date.now();
-  const previous = execOutputDeltaEmissions.get(key);
-  if (!previous) {
-    execOutputDeltaEmissions.set(key, {
-      emittedAt: now,
-    });
-    return true;
-  }
-  const elapsedMs = now - previous.emittedAt;
-  if (elapsedMs < EXEC_OUTPUT_DELTA_MIN_INTERVAL_MS) {
-    return false;
-  }
-  execOutputDeltaEmissions.set(key, {
-    emittedAt: now,
-  });
-  return true;
-}
-
-function clearExecOutputDeltaEmission(runId: string, toolCallId: string): void {
-  execOutputDeltaEmissions.delete(buildExecOutputDeltaKey(runId, toolCallId));
 }
 
 export function countActiveToolExecutions(runId: string): number {
@@ -229,37 +192,63 @@ function readExecToolDetails(result: unknown): ExecToolDetails | null {
   return details as ExecToolDetails;
 }
 
-function readExecOutputText(result: unknown): string | undefined {
-  const details = readToolResultDetailsRecord(result);
-  if (typeof details?.aggregated === "string") {
-    return details.aggregated;
+function truncateLiveExecOutput(text: string): string {
+  if (text.length <= LIVE_EXEC_OUTPUT_MAX_CHARS) {
+    return text;
   }
-  return extractToolResultText(result);
+  return `${truncateUtf16Safe(text, LIVE_EXEC_OUTPUT_MAX_CHARS)}\n...(live output truncated)...`;
 }
 
-function limitLiveCommandOutput(output: string): string {
-  if (output.length <= LIVE_COMMAND_OUTPUT_MAX_CHARS) {
-    return output;
-  }
-  const tail = truncateUtf16Safe(
-    output.slice(-LIVE_COMMAND_OUTPUT_MAX_CHARS),
-    LIVE_COMMAND_OUTPUT_MAX_CHARS,
-  );
-  return `[openclaw: live command output truncated to last ${tail.length} of ${output.length} chars]\n${tail}`;
-}
-
-function limitExecToolResultForLiveEvent(result: unknown): unknown {
-  const details = readToolResultDetailsRecord(result);
-  if (!details || typeof details.aggregated !== "string") {
+function capLiveExecResult(result: unknown): unknown {
+  const execDetails = readExecToolDetails(result);
+  if (
+    !execDetails ||
+    !("aggregated" in execDetails) ||
+    typeof execDetails.aggregated !== "string"
+  ) {
     return result;
   }
+  const aggregated = truncateLiveExecOutput(execDetails.aggregated);
+  if (aggregated === execDetails.aggregated) {
+    return result;
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return result;
+  }
+  const details = readToolResultDetailsRecord(result);
   return {
     ...(result as Record<string, unknown>),
     details: {
       ...details,
-      aggregated: limitLiveCommandOutput(details.aggregated),
+      aggregated,
     },
   };
+}
+
+function extractExecOutput(result: unknown): string | undefined {
+  const execDetails = readExecToolDetails(result);
+  const output =
+    execDetails && "aggregated" in execDetails
+      ? execDetails.aggregated
+      : extractToolResultText(result);
+  return typeof output === "string" ? output : undefined;
+}
+
+function extractLiveExecOutput(result: unknown): string | undefined {
+  const output = extractExecOutput(result);
+  return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+}
+
+function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): boolean {
+  const now = Date.now();
+  const state = ctx.state.execLiveUpdateStateById ?? new Map<string, { lastEmittedAtMs: number }>();
+  ctx.state.execLiveUpdateStateById = state;
+  const previous = state.get(toolCallId);
+  if (previous && now - previous.lastEmittedAtMs < LIVE_EXEC_UPDATE_MIN_INTERVAL_MS) {
+    return false;
+  }
+  state.set(toolCallId, { lastEmittedAtMs: now });
+  return true;
 }
 
 function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
@@ -814,33 +803,22 @@ export function handleToolExecutionUpdate(
   const toolName = normalizeToolName(evt.toolName);
   const toolCallId = evt.toolCallId;
   const partial = evt.partialResult;
-  if (isExecToolName(toolName)) {
-    const output = readExecOutputText(partial);
-    if (
-      output &&
-      !shouldEmitExecOutputDelta({
-        runId: ctx.params.runId,
-        toolCallId,
-        output,
-      })
-    ) {
-      return;
-    }
-  }
   const sanitized = sanitizeToolResult(partial);
-  const liveEventPartial = isExecToolName(toolName)
-    ? limitExecToolResultForLiveEvent(sanitized)
-    : sanitized;
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "tool",
-    data: {
-      phase: "update",
-      name: toolName,
-      toolCallId,
-      partialResult: liveEventPartial,
-    },
-  });
+  const isExecTool = isExecToolName(toolName);
+  const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
+  const emitDetailedLiveUpdate = !isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId);
+  if (emitDetailedLiveUpdate) {
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "tool",
+      data: {
+        phase: "update",
+        name: toolName,
+        toolCallId,
+        partialResult: liveResult,
+      },
+    });
+  }
   const itemData: AgentItemEventData = {
     itemId: buildToolItemId(toolCallId),
     phase: "update",
@@ -860,9 +838,8 @@ export function handleToolExecutionUpdate(
       toolCallId,
     },
   });
-  if (isExecToolName(toolName)) {
-    const rawOutput = readExecOutputText(sanitized);
-    const output = rawOutput ? limitLiveCommandOutput(rawOutput) : undefined;
+  if (isExecTool) {
+    const output = extractLiveExecOutput(liveResult);
     const commandData: AgentItemEventData = {
       itemId: buildCommandItemId(toolCallId),
       phase: "update",
@@ -872,10 +849,10 @@ export function handleToolExecutionUpdate(
       name: toolName,
       meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
       toolCallId,
-      ...(output ? { progressText: output } : {}),
+      ...(emitDetailedLiveUpdate && output ? { progressText: output } : {}),
     };
     emitTrackedItemEvent(ctx, commandData);
-    if (output) {
+    if (emitDetailedLiveUpdate && output) {
       const outputData: AgentCommandOutputEventData = {
         itemId: commandData.itemId,
         phase: "delta",
@@ -915,13 +892,13 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
-  const liveEventResult = isExecToolName(toolName)
-    ? limitExecToolResultForLiveEvent(sanitizedResult)
+  const eventResult = isExecToolName(toolName)
+    ? capLiveExecResult(sanitizedResult)
     : sanitizedResult;
   const toolStartKey = buildToolStartKey(runId, toolCallId);
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
-  clearExecOutputDeltaEmission(runId, toolCallId);
+  ctx.state.execLiveUpdateStateById?.delete(toolCallId);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
@@ -1024,7 +1001,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
-      result: liveEventResult,
+      result: eventResult,
     },
   });
   const endedAt = Date.now();
@@ -1117,11 +1094,8 @@ export async function handleToolExecutionEnd(
             }),
       });
     } else {
-      const rawOutput =
-        execDetails && "aggregated" in execDetails
-          ? execDetails.aggregated
-          : extractToolResultText(sanitizedResult);
-      const output = rawOutput ? limitLiveCommandOutput(rawOutput) : undefined;
+      const output = extractLiveExecOutput(eventResult);
+      const rawOutput = extractExecOutput(sanitizedResult);
       const commandStatus =
         execDetails?.status === "failed" || isToolError ? "failed" : "completed";
       emitTrackedItemEvent(ctx, {

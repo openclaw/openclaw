@@ -113,6 +113,32 @@ describe("current plugin metadata snapshot", () => {
     ).toBeUndefined();
   });
 
+  it("rejects configless default-discovery reuse for snapshots created with load paths", () => {
+    const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts configless default-discovery reuse for snapshots created without load paths", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBe(snapshot);
+  });
+
   it("rejects a current snapshot when env-resolved plugin load paths change", () => {
     const config = { plugins: { load: { paths: ["~/plugins"] } } };
     const snapshot = createSnapshot({ config });

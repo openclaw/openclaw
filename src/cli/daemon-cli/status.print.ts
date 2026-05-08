@@ -62,6 +62,13 @@ function formatCapabilityLabel(capability?: string) {
   return capability.replaceAll("_", "-");
 }
 
+function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
+  if (!cli) {
+    return null;
+  }
+  return cli.entrypoint ? `${cli.version} (${shortenHomePath(cli.entrypoint)})` : cli.version;
+}
+
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (opts.json) {
     const sanitized = sanitizeDaemonStatusForJson(status);
@@ -172,6 +179,28 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     }
     if (status.gateway.probeNote) {
       defaultRuntime.log(`${label("Probe note:")} ${infoText(status.gateway.probeNote)}`);
+    }
+    spacer();
+  }
+
+  const gatewayVersion = rpc?.server?.version?.trim();
+  const cliVersionLine = formatCliVersionLine(status.cli);
+  if (gatewayVersion) {
+    if (cliVersionLine) {
+      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
+    }
+    defaultRuntime.log(`${label("Gateway version:")} ${infoText(gatewayVersion)}`);
+    if (status.cli?.version && status.cli.version !== gatewayVersion) {
+      defaultRuntime.error(
+        warnText(
+          `Warning: CLI/runtime version skew detected. CLI is ${status.cli.version}; gateway is ${gatewayVersion}.`,
+        ),
+      );
+      defaultRuntime.error(
+        warnText(
+          `Fix: check for stale PATH/global wrappers with \`command -v openclaw\`, \`readlink -f "$(command -v openclaw)"\`, and \`openclaw --version\`; reinstall the gateway service from the intended binary if needed.`,
+        ),
+      );
     }
     spacer();
   }

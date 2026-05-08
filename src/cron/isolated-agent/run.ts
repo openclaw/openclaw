@@ -1,4 +1,6 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
@@ -323,43 +325,6 @@ function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
   return Boolean(
     (plan.channel && plan.channel !== "last") || plan.to || plan.threadId || plan.accountId,
   );
-}
-
-function shouldFailImplicitAnnounceDeliveryBeforeExecution(params: {
-  deliveryPlan: CronDeliveryPlan;
-  deliveryRequested: boolean;
-  resolvedDelivery: ResolvedCronDeliveryTarget;
-}): boolean {
-  return (
-    params.deliveryRequested &&
-    params.deliveryPlan.mode === "announce" &&
-    !hasExplicitCronDeliveryTarget(params.deliveryPlan) &&
-    !params.resolvedDelivery.ok
-  );
-}
-
-function failImplicitAnnounceDeliveryBeforeExecution(
-  prepared: PreparedCronRunContext,
-): RunCronAgentTurnResult {
-  const error = prepared.resolvedDelivery.ok
-    ? "Cron announce delivery target is unresolved."
-    : prepared.resolvedDelivery.error.message;
-  return prepared.withRunSession({
-    status: "error",
-    error,
-    errorKind: "delivery-target",
-    delivered: false,
-    deliveryAttempted: false,
-    delivery: buildCronDeliveryTrace({
-      deliveryPlan: prepared.deliveryPlan,
-      resolvedDelivery: prepared.resolvedDelivery,
-      messagingToolSentTargets: [],
-      matchesMessagingToolDeliveryTarget: () => false,
-      fallbackUsed: false,
-      delivered: false,
-    }),
-    diagnostics: createCronRunDiagnosticsFromError("delivery", error),
-  });
 }
 
 async function resolveCronDeliveryContext(params: {
@@ -772,6 +737,18 @@ async function prepareCronRunContext(params: {
         ).resolveSessionAuthProfileOverride({
           cfg: cfgWithAgentDefaults,
           provider,
+          acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+            provider,
+            harnessRuntime: resolveAgentHarnessPolicy({
+              provider,
+              modelId: model,
+              config: cfgWithAgentDefaults,
+              agentId,
+              sessionKey: agentSessionKey,
+            }).runtime,
+            sessionAgentHarnessId: cronSession.sessionEntry.agentHarnessId,
+            sessionAgentRuntimeOverride: cronSession.sessionEntry.agentRuntimeOverride,
+          }),
           agentDir,
           sessionEntry: cronSession.sessionEntry,
           sessionStore: cronSession.store,
@@ -1101,15 +1078,6 @@ export async function runCronIsolatedAgentTurn(params: {
   const prepared = await prepareCronRunContext({ input: params, isFastTestEnv });
   if (!prepared.ok) {
     return prepared.result;
-  }
-  if (
-    shouldFailImplicitAnnounceDeliveryBeforeExecution({
-      deliveryPlan: prepared.context.deliveryPlan,
-      deliveryRequested: prepared.context.deliveryRequested,
-      resolvedDelivery: prepared.context.resolvedDelivery,
-    })
-  ) {
-    return failImplicitAnnounceDeliveryBeforeExecution(prepared.context);
   }
   const notifyExecutionStarted = () =>
     params.onExecutionStarted?.({

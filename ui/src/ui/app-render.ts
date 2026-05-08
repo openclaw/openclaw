@@ -981,7 +981,9 @@ export function renderApp(state: AppViewState) {
       "config",
       {
         tab: state.tab,
+        formMode: overrides.formMode,
         activeSection: overrides.activeSection,
+        activeSubsection: overrides.activeSubsection,
         schemaSectionCount: countTopLevelSchemaProperties(commonConfigProps.schema),
         hasSearch: Boolean(overrides.searchQuery?.trim()),
       },
@@ -2456,7 +2458,7 @@ export function renderApp(state: AppViewState) {
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
-                    return refreshChat(state, { scheduleScroll: false });
+                    return refreshChat(state, { awaitHistory: true, scheduleScroll: false });
                   },
                   onToggleFocusMode: () => {
                     if (state.onboarding) {
@@ -2529,7 +2531,7 @@ export function renderApp(state: AppViewState) {
                   sidebarContent: state.sidebarContent,
                   sidebarError: state.sidebarError,
                   splitRatio: state.splitRatio,
-                  canvasHostUrl: state.hello?.canvasHostUrl ?? null,
+                  canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
                   onOpenSidebar: (content) => state.handleOpenSidebar(content),
                   onCloseSidebar: () => state.handleCloseSidebar(),
                   onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),

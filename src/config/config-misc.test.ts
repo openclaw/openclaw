@@ -51,6 +51,29 @@ describe("$schema key in config (#14998)", () => {
   });
 });
 
+describe("legacy Canvas host config", () => {
+  it("keeps root canvasHost valid so doctor can migrate it", () => {
+    const result = validateConfigObjectRaw({
+      canvasHost: {
+        enabled: false,
+        root: "~/canvas",
+        port: 18790,
+        liveReload: false,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect((result.config as { canvasHost?: unknown }).canvasHost).toEqual({
+        enabled: false,
+        root: "~/canvas",
+        port: 18790,
+        liveReload: false,
+      });
+    }
+  });
+});
+
 describe("accessGroups config", () => {
   it("accepts Discord channel audience access groups", () => {
     const result = OpenClawSchema.safeParse({
@@ -469,6 +492,42 @@ describe("plugins.entries.*.subagent", () => {
             subagent: {
               allowModelOverride: "yes",
               allowedModels: [1],
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("plugins.entries.*.llm", () => {
+  it("accepts trusted llm override settings", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            llm: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+              allowAgentIdOverride: true,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid trusted llm override settings", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            llm: {
+              allowModelOverride: "yes",
+              allowedModels: [1],
+              allowAgentIdOverride: "yes",
             },
           },
         },
