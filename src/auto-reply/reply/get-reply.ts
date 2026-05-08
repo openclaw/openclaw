@@ -341,29 +341,68 @@ export async function getReplyFromConfig(
     // If it's a user message, we deliver the lost reply first, then continue.
     // For now, let's just return the lost reply if it's a heartbeat.
     if (opts?.isHeartbeat) {
-      const updatedAt = Date.now();
-      const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-      sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
-      sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
-      sessionEntry.pendingFinalDeliveryLastError = null;
-      sessionEntry.updatedAt = updatedAt;
-      if (sessionKey && sessionStore) {
-        sessionStore[sessionKey] = sessionEntry;
+      // #79258: If the pending text has been retried too many times without
+      // successful delivery, clear it and fall through to normal heartbeat
+      // processing. This breaks the death loop where a pseudo-target or
+      // missing channel causes infinite silent retries.
+      const MAX_HEARTBEAT_PENDING_RETRY_ATTEMPTS = 5;
+      const currentAttemptCount = sessionEntry.pendingFinalDeliveryAttemptCount ?? 0;
+      if (currentAttemptCount >= MAX_HEARTBEAT_PENDING_RETRY_ATTEMPTS) {
+        // Too many failed retries — clear the stuck pending state and
+        // proceed with a normal heartbeat run.
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              pendingFinalDelivery: undefined,
+              pendingFinalDeliveryText: undefined,
+              pendingFinalDeliveryCreatedAt: undefined,
+              pendingFinalDeliveryLastAttemptAt: undefined,
+              pendingFinalDeliveryAttemptCount: undefined,
+              pendingFinalDeliveryLastError: undefined,
+              pendingFinalDeliveryContext: undefined,
+              updatedAt: Date.now(),
+            }),
+          });
+        }
+        if (sessionKey && sessionStore && sessionEntry) {
+          sessionEntry.pendingFinalDelivery = undefined;
+          sessionEntry.pendingFinalDeliveryText = undefined;
+          sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
+          sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
+          sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
+          sessionEntry.pendingFinalDeliveryLastError = undefined;
+          sessionEntry.pendingFinalDeliveryContext = undefined;
+          sessionStore[sessionKey] = sessionEntry;
+        }
+        // Fall through to normal heartbeat processing below.
+      } else {
+        const updatedAt = Date.now();
+        const attemptCount = currentAttemptCount + 1;
+        sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
+        sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
+        sessionEntry.pendingFinalDeliveryLastError = null;
+        sessionEntry.updatedAt = updatedAt;
+        if (sessionKey && sessionStore) {
+          sessionStore[sessionKey] = sessionEntry;
+        }
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              pendingFinalDeliveryLastAttemptAt: updatedAt,
+              pendingFinalDeliveryAttemptCount: attemptCount,
+              pendingFinalDeliveryLastError: null,
+              updatedAt,
+            }),
+          });
+        }
+        return { text };
       }
-      if (sessionKey && storePath) {
-        const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({
-            pendingFinalDeliveryLastAttemptAt: updatedAt,
-            pendingFinalDeliveryAttemptCount: attemptCount,
-            pendingFinalDeliveryLastError: null,
-            updatedAt,
-          }),
-        });
-      }
-      return { text };
     }
   }
 

@@ -39,6 +39,7 @@ import {
   buildFallbackNotice,
   resolveFallbackTransition,
 } from "../fallback-state.js";
+import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
@@ -1899,7 +1900,16 @@ export async function runReplyAgent(params: {
       const pendingText = sourceReplyPolicy.suppressDelivery
         ? ""
         : buildPendingFinalDeliveryText(finalPayloads);
-      if (pendingText) {
+      // #79258: Skip writing pendingFinalDelivery when the text is a bare
+      // heartbeat ack token (e.g. "HEARTBEAT_OK"). The heartbeat runner
+      // strips these tokens after getReplyFromConfig returns, but by that
+      // point the pending write has already happened, leaving a stale entry
+      // that causes a permanent heartbeat death loop.
+      const isHeartbeatAckOnly =
+        isHeartbeat &&
+        pendingText &&
+        stripHeartbeatToken(pendingText, { mode: "heartbeat" }).shouldSkip;
+      if (pendingText && !isHeartbeatAckOnly) {
         await updateSessionStoreEntry({
           storePath,
           sessionKey,

@@ -58,7 +58,11 @@ import {
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
-import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
+import {
+  archiveRemovedSessionTranscripts,
+  updateSessionStore,
+  updateSessionStoreEntry,
+} from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -673,6 +677,39 @@ async function restoreHeartbeatUpdatedAt(params: {
       return;
     }
     nextStore[sessionKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
+  });
+}
+
+/**
+ * Clear stale pendingFinalDelivery state left behind by heartbeat runs.
+ * This prevents the death loop described in #79258 where heartbeat ack text
+ * (e.g. bare HEARTBEAT_OK) gets stuck in pendingFinalDeliveryText and causes
+ * every subsequent heartbeat tick to replay the stale text instead of running
+ * the actual heartbeat prompt.
+ */
+async function clearPendingFinalDeliveryForHeartbeat(params: {
+  storePath: string;
+  sessionKey: string;
+}): Promise<void> {
+  const { storePath, sessionKey } = params;
+  await updateSessionStoreEntry({
+    storePath,
+    sessionKey,
+    update: async (entry) => {
+      if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
+        return null;
+      }
+      return {
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        pendingFinalDeliveryLastAttemptAt: undefined,
+        pendingFinalDeliveryAttemptCount: undefined,
+        pendingFinalDeliveryLastError: undefined,
+        pendingFinalDeliveryContext: undefined,
+        updatedAt: Date.now(),
+      };
+    },
   });
 }
 
@@ -1630,6 +1667,9 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // #79258: Clear stale pendingFinalDelivery written by agent-runner
+      // before heartbeat token stripping could suppress it.
+      await clearPendingFinalDeliveryForHeartbeat({ storePath, sessionKey });
 
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
@@ -1659,6 +1699,8 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // #79258: Clear stale pendingFinalDelivery on empty heartbeat reply.
+      await clearPendingFinalDeliveryForHeartbeat({ storePath, sessionKey });
 
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
@@ -1709,6 +1751,9 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // #79258: Clear stale pendingFinalDelivery after heartbeat token stripping
+      // determines the reply is effectively empty (shouldSkip).
+      await clearPendingFinalDeliveryForHeartbeat({ storePath, sessionKey });
 
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
@@ -1756,6 +1801,9 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      // #79258: Duplicate suppression means this text won't be delivered.
+      // Clear pending to prevent replay on the next tick.
+      await clearPendingFinalDeliveryForHeartbeat({ storePath, sessionKey });
 
       emitHeartbeatEvent({
         status: "skipped",
@@ -1786,6 +1834,10 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (delivery.channel === "none" || !delivery.to) {
+      // #79258: No delivery channel means the pending text can never be delivered.
+      // Clear it to prevent the death loop where heartbeat replays stale pending
+      // text indefinitely against a pseudo-target that never resolves.
+      await clearPendingFinalDeliveryForHeartbeat({ storePath, sessionKey });
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
@@ -1800,6 +1852,9 @@ export async function runHeartbeatOnce(opts: {
     }
 
     if (!visibility.showAlerts) {
+      // #79258: Alerts disabled means pending text can never be delivered.
+      // Clear it to prevent useless replay cycles.
+      await clearPendingFinalDeliveryForHeartbeat({ storePath, sessionKey });
       await updateTaskTimestamps();
       await restoreHeartbeatUpdatedAt({
         storePath,
