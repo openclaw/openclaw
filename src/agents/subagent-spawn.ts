@@ -14,6 +14,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
+import { resolveSkillsPromptForRun, loadWorkspaceSkillEntries } from "./skills.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
@@ -997,6 +998,28 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
   });
+
+  // Inject workspace skills into sub-agent system prompt
+  try {
+    const skillsWorkspaceDir = spawnedMetadata.workspaceDir ?? resolveAgentDir(cfg, targetAgentId);
+    if (skillsWorkspaceDir) {
+      const skillEntries = loadWorkspaceSkillEntries(skillsWorkspaceDir, {
+        config: cfg,
+        agentId: targetAgentId,
+      });
+      const skillsPrompt = resolveSkillsPromptForRun({
+        entries: skillEntries,
+        config: cfg,
+        workspaceDir: skillsWorkspaceDir,
+        agentId: targetAgentId,
+      });
+      if (skillsPrompt) {
+        childSystemPrompt = `${childSystemPrompt}\n\n${skillsPrompt}`;
+      }
+    }
+  } catch {
+    // Skills injection failure must not block sub-agent spawn
+  }
 
   let retainOnSessionKeep = false;
   let attachmentsReceipt:
