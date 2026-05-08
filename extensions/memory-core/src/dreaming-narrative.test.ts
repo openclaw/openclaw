@@ -1021,10 +1021,13 @@ describe("generateAndAppendDreamNarrative", () => {
 describe("runDetachedDreamNarrative", () => {
   type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
   function deferred<T>(): Deferred<T> {
-    let resolve!: (v: T) => void;
+    let resolve: ((v: T) => void) | undefined;
     const promise = new Promise<T>((r) => {
       resolve = r;
     });
+    if (!resolve) {
+      throw new Error("Expected dream narrative deferred resolver to be initialized");
+    }
     return { promise, resolve };
   }
 
