@@ -2974,7 +2974,7 @@ describe("QmdMemoryManager", () => {
     await manager.search("hello again", { sessionKey: "agent:main:slack:dm:u123" });
 
     expect(selectors.length).toBeGreaterThanOrEqual(2);
-    expect(selectors.filter((selector) => selector !== "qmd.query")).toEqual([]);
+    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
     expect(logWarnMock).not.toHaveBeenCalledWith(
       expect.stringContaining("falling back to v1 tool names"),
     );
@@ -3043,7 +3043,7 @@ describe("QmdMemoryManager", () => {
 
     expect(runMcporterSpy).toHaveBeenCalled();
     expect(selectors.length).toBeGreaterThanOrEqual(1);
-    expect(selectors.filter((selector) => selector !== "qmd.query")).toEqual([]);
+    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
     expect(logWarnMock).not.toHaveBeenCalledWith(
       expect.stringContaining("falling back to v1 tool names"),
     );

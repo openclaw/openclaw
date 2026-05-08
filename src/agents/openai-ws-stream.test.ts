@@ -1458,7 +1458,7 @@ describe("buildAssistantMessageFromResponse", () => {
     };
 
     expect(msg.phase).toBeUndefined();
-    expect(msg.content.filter((part) => part.type === "text")).toEqual([]);
+    expect(msg.content.some((part) => part.type === "text")).toBe(false);
     expect(msg.content).toMatchObject([{ type: "toolCall", name: "exec" }]);
     expect(msg.stopReason).toBe("toolUse");
   });
@@ -2182,7 +2182,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
         }
       | undefined;
     expect(doneEvent?.message.phase).toBeUndefined();
-    expect(doneEvent?.message.content?.filter((part) => part.type === "text")).toEqual([]);
+    expect(doneEvent?.message.content?.some((part) => part.type === "text")).toBe(false);
     expect(doneEvent?.message.stopReason).toBe("toolUse");
   });
 
@@ -2752,7 +2752,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
     expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
     expect(events.filter((event) => event.type === "start")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "error")).toEqual([]);
+    expect(events.some((event) => event.type === "error")).toBe(false);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
   });
@@ -2786,7 +2786,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
     expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
     expect(events.filter((event) => event.type === "start")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "error")).toEqual([]);
+    expect(events.some((event) => event.type === "error")).toBe(false);
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
   });

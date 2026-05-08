@@ -607,7 +607,7 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(completedTasks).toHaveLength(2);
-        expect(completedTasks.filter((task) => task.status !== "succeeded")).toEqual([]);
+        expect(completedTasks.every((task) => task.status === "succeeded")).toBe(true);
 
         await foregroundTurn;
       } finally {
@@ -684,7 +684,7 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(2);
-        expect(tasks.filter((task) => task.status !== "succeeded")).toEqual([]);
+        expect(tasks.every((task) => task.status === "succeeded")).toBe(true);
       } finally {
         vi.useRealTimers();
       }

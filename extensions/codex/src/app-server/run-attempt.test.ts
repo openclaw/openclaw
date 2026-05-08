@@ -1882,7 +1882,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       ]),
     );
-    expect(agentEvents.filter((event) => event.stream === "assistant")).toEqual([]);
+    expect(agentEvents.some((event) => event.stream === "assistant")).toBe(false);
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         success: false,
