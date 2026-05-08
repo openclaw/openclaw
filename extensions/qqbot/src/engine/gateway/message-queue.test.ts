@@ -178,7 +178,7 @@ describe("engine/gateway/message-queue", () => {
 
     it("group overflow drops bot messages first (via processor)", async () => {
       const seen: QueuedMessage[] = [];
-      let gate!: (value?: unknown) => void;
+      let gate: ((value?: unknown) => void) | undefined;
       const blocker = new Promise((res) => {
         gate = res;
       });
@@ -205,6 +205,9 @@ describe("engine/gateway/message-queue", () => {
       const peerQueueIds = q.getSnapshot("group:G1");
       expect(peerQueueIds.senderPending).toBe(3);
       // Release the processor and drain.
+      if (!gate) {
+        throw new Error("Expected QQBot queue gate callback to be initialized");
+      }
       gate();
       await new Promise((res) => setTimeout(res, 0));
       const seenIds = seen.map((m) => m.messageId);
@@ -226,7 +229,7 @@ describe("engine/gateway/message-queue", () => {
       // Use a processor that never resolves so enqueued messages stay
       // buffered behind a single active worker — then clearUserQueue
       // should drop the rest.
-      let release!: () => void;
+      let release: (() => void) | undefined;
       const blocker = new Promise<void>((res) => {
         release = res;
       });
@@ -241,6 +244,9 @@ describe("engine/gateway/message-queue", () => {
       expect(q.getSnapshot("group:G1").senderPending).toBeGreaterThanOrEqual(0);
       const dropped = q.clearUserQueue("group:G1");
       expect(dropped).toBeGreaterThanOrEqual(0);
+      if (!release) {
+        throw new Error("Expected QQBot queue release callback to be initialized");
+      }
       release();
     });
   });
