@@ -64,9 +64,6 @@ steps:
       - set: stateDir
         value:
           expr: "path.join(env.gateway.tempRoot, 'state')"
-      - set: sessionsPath
-        value:
-          expr: "path.join(stateDir, 'agents', 'qa', 'sessions', 'sessions.json')"
       - set: commitmentStorePath
         value:
           expr: "path.join(stateDir, 'commitments', 'commitments.json')"
@@ -75,17 +72,23 @@ steps:
           expr: "Date.now()"
       - call: fs.mkdir
         args:
-          - expr: "path.dirname(sessionsPath)"
-          - recursive: true
-      - call: fs.mkdir
-        args:
           - expr: "path.dirname(commitmentStorePath)"
           - recursive: true
-      - call: fs.writeFile
+      - call: seedQaSessionTranscript
+        saveAs: seededSession
         args:
-          - ref: sessionsPath
-          - expr: "JSON.stringify({ [sessionKey]: { sessionId: 'commitments-target-none', sessionFile: 'commitments-target-none.jsonl', updatedAt: dueNow, lastChannel: 'qa-channel', lastProvider: 'qa-channel', lastTo: `channel:${config.conversationId}` } }, null, 2)"
-          - utf8
+          - ref: env
+          - agentId: qa
+            sessionId: commitments-target-none
+            sessionKey:
+              ref: sessionKey
+            now:
+              ref: dueNow
+            originLabel: QA seeded commitments heartbeat target-none session
+            lastChannel: qa-channel
+            lastProvider: qa-channel
+            lastTo:
+              expr: "`channel:${config.conversationId}`"
       - call: fs.writeFile
         args:
           - ref: commitmentStorePath

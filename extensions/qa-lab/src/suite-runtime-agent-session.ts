@@ -39,9 +39,12 @@ async function seedQaSessionTranscript(
     agentId?: string;
     sessionId: string;
     sessionKey?: string;
-    messages: Array<{ role: string; content: unknown; timestamp?: number | string }>;
+    messages?: Array<{ role: string; content: unknown; timestamp?: number | string }>;
     now?: number;
     originLabel?: string;
+    lastChannel?: string;
+    lastProvider?: string;
+    lastTo?: string;
   },
 ) {
   const agentId = params.agentId?.trim() || "qa";
@@ -52,10 +55,11 @@ async function seedQaSessionTranscript(
   }
   const sessionFile = createSqliteSessionTranscriptLocator({ agentId, sessionId });
   const sessionKey = params.sessionKey?.trim() || `agent:${agentId}:seed-${sessionId}`;
+  const messages = params.messages ?? [];
   let parentId: string | null = null;
-  const messageEvents = params.messages.map((message, index) => {
+  const messageEvents = messages.map((message, index) => {
     const id = `qa-seed-${index + 1}`;
-    const timestampMs = now - Math.max(1, params.messages.length - index) * 30_000;
+    const timestampMs = now - Math.max(1, messages.length - index) * 30_000;
     const event = {
       type: "message" as const,
       id,
@@ -97,6 +101,9 @@ async function seedQaSessionTranscript(
       sessionId,
       updatedAt: now,
       sessionFile,
+      ...(params.lastChannel ? { lastChannel: params.lastChannel } : {}),
+      ...(params.lastProvider ? { lastProvider: params.lastProvider } : {}),
+      ...(params.lastTo ? { lastTo: params.lastTo } : {}),
       origin: {
         label: params.originLabel ?? "QA seeded SQLite transcript",
       },
