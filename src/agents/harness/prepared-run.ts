@@ -41,6 +41,7 @@ type PreparedRunParamsShape = Pick<
   | "model"
   | "prompt"
   | "provider"
+  | "initialVfsEntries"
   | "replyOperation"
   | "runId"
   | "sessionFile"
@@ -105,6 +106,7 @@ function createPreparedAgentRun(
     model: source.modelId ?? source.model,
     timeoutMs: source.timeoutMs,
     filesystemMode: options.filesystemMode ?? "disk",
+    ...(source.initialVfsEntries?.length ? { initialVfsEntries: source.initialVfsEntries } : {}),
     deliveryPolicy: {
       emitToolResult: source.shouldEmitToolResult?.() ?? false,
       emitToolOutput: source.shouldEmitToolOutput?.() ?? false,

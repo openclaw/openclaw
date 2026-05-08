@@ -4,6 +4,12 @@ import type { AgentFilesystem } from "./filesystem/agent-filesystem.js";
 
 export type AgentFilesystemMode = "disk" | "vfs-only" | "vfs-scratch";
 
+export type PreparedAgentRunInitialVfsEntry = {
+  path: string;
+  contentBase64: string;
+  metadata?: Record<string, unknown>;
+};
+
 export type PreparedAgentRun = {
   runtimeId: string;
   runId: string;
@@ -18,6 +24,7 @@ export type PreparedAgentRun = {
   model?: string;
   timeoutMs: number;
   filesystemMode: AgentFilesystemMode;
+  initialVfsEntries?: PreparedAgentRunInitialVfsEntry[];
   deliveryPolicy: AgentRunDeliveryPolicy;
   runParams?: Record<string, unknown>;
   config?: OpenClawConfig;

@@ -50,9 +50,9 @@ session**:
 Use top-level [`/steer <message>`](/tools/steer) to steer the current requester session's active run. Use `/subagents steer <id|#> <message>` when the target is a child run.
 
 `/subagents info` shows run metadata (status, timestamps, session id,
-transcript path, cleanup). Use `sessions_history` for a bounded,
-safety-filtered recall view; inspect the transcript path on disk when you
-need the raw full transcript.
+transcript locator, cleanup). Use `sessions_history` for a bounded,
+safety-filtered recall view; inspect the SQLite transcript rows or export a
+debug bundle when you need the raw full transcript.
 
 ### Thread binding controls
 

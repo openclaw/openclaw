@@ -1143,6 +1143,9 @@ export async function spawnSubagentDirect(
           childSessionOrigin?.threadId != null
             ? stringifyRouteThreadId(childSessionOrigin.threadId)
             : undefined,
+        ...(materializedAttachments?.initialVfsEntries.length
+          ? { initialVfsEntries: materializedAttachments.initialVfsEntries }
+          : {}),
         idempotencyKey: childIdem,
         deliver: deliverInitialChildRunDirectly,
         lane: AGENT_LANE_SUBAGENT,
