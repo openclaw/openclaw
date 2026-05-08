@@ -701,11 +701,11 @@ export const th: TranslationMap = {
       all: "ทั้งหมด",
     },
     scope: {
-      instance: "Current instance",
-      instanceHint: "Show only the active session id for each logical session.",
-      family: "Historical lineage",
-      familyHint: "Roll up known rotated transcript-backed session ids.",
-      familyIncluded: "Historical lineage includes {count} session instances.",
+      instance: "อินสแตนซ์ปัจจุบัน",
+      instanceHint: "แสดงเฉพาะ ID เซสชันที่ใช้งานอยู่สำหรับแต่ละเซสชันเชิงตรรกะ",
+      family: "ลำดับสายประวัติ",
+      familyHint: "รวม ID เซสชันที่ทราบซึ่งอิงตามทรานสคริปต์และถูกหมุนเวียน",
+      familyIncluded: "ลำดับสายประวัติมีอินสแตนซ์เซสชัน {count} รายการ",
     },
     filters: {
       title: "ตัวกรอง",
