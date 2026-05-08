@@ -1161,7 +1161,7 @@ describe("exec approval handlers", () => {
       expect.objectContaining({ id, decision: "allow-once" }),
       undefined,
     );
-    expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+    expect(broadcasts.map((entry) => entry.event)).toContain("exec.approval.resolved");
   });
 
   it("treats duplicate same-decision exec resolves as idempotent during grace", async () => {
