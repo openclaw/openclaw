@@ -145,6 +145,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
+      trajectory: true,
       attemptOverrides: {
         prompt: [
           "visible ask",
@@ -389,6 +390,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             },
           },
         } as OpenClawConfig,
+        disableTools: false,
         prompt: "visible ask",
         transcriptPrompt: "visible ask",
         trigger: "user",
@@ -471,6 +473,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
+      trajectory: true,
       attemptOverrides: {
         prompt: [
           "what does this mean?",
@@ -565,6 +568,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
+      trajectory: true,
       attemptOverrides: {
         prompt: "internal heartbeat event",
         transcriptPrompt: "",
@@ -608,6 +612,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
       tempPaths,
+      trajectory: true,
       attemptOverrides: {
         prompt: "  \n\t  ",
       },
@@ -616,7 +621,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     expect(sessionPrompt).not.toHaveBeenCalled();
     expect(result.finalPromptText).toBeUndefined();
-    expect(result.promptError).toBeFalsy();
+    expect(result.promptError).toBeNull();
     expect(result.messagesSnapshot).toEqual([
       expect.objectContaining({ role: "user", content: "seed" }),
     ]);
@@ -626,7 +631,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line) as TrajectoryEvent);
-    expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
+    expect(trajectoryEvents.filter((event) => event.type === "prompt.submitted")).toEqual([]);
     expect(trajectoryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -639,7 +644,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
   it("uses assembled context as the default precheck authority", async () => {
     let sawPrompt = false;
-    const hugeHistory = "large raw history ".repeat(25_000);
+    const hugeHistory = "large raw history ".repeat(2_000);
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createTestContextEngine({
@@ -673,7 +678,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
   it("honors context engines that opt into preassembly overflow authority", async () => {
     let sawPrompt = false;
-    const hugeHistory = "large raw history ".repeat(25_000);
+    const hugeHistory = "large raw history ".repeat(2_000);
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createTestContextEngine({
@@ -707,7 +712,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("snapshots pre-assembly messages before assemble even when the engine windows in place", async () => {
-    const hugeHistory = "large raw history ".repeat(25_000);
+    const hugeHistory = "large raw history ".repeat(2_000);
     const preassemblyMarker = { role: "user", content: hugeHistory, timestamp: 1 } as AgentMessage;
 
     await createContextEngineAttemptRunner({
@@ -961,7 +966,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ).toBe(true);
   });
 
-  it("forwards silentExpected to the embedded subscription", async () => {
+  it("forwards silentExpected to the embedded subscription", () => {
     const params = buildEmbeddedSubscriptionParams({
       session: {} as never,
       runId: "run-context-engine-forwarding",

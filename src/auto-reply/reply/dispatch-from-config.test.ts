@@ -708,6 +708,24 @@ function firstToolResultPayload(dispatcher: ReplyDispatcher): ReplyPayload | und
     | undefined;
 }
 
+function requireToolResultHandler(
+  handler: GetReplyOptions["onToolResult"] | undefined,
+): NonNullable<GetReplyOptions["onToolResult"]> {
+  if (typeof handler !== "function") {
+    throw new Error("expected onToolResult handler");
+  }
+  return handler;
+}
+
+function requireBlockReplyHandler(
+  handler: GetReplyOptions["onBlockReply"] | undefined,
+): NonNullable<GetReplyOptions["onBlockReply"]> {
+  if (typeof handler !== "function") {
+    throw new Error("expected onBlockReply handler");
+  }
+  return handler;
+}
+
 async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs, "dispatcher">) {
   await dispatchReplyFromConfig({
     ...params,
@@ -1301,8 +1319,8 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeDefined();
-      await opts?.onToolResult?.({
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({
         text: "NO_REPLY",
         mediaUrls: ["https://example.com/tts-routed.opus"],
       });
@@ -1340,12 +1358,13 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeDefined();
-      expect(typeof opts?.onToolResult).toBe("function");
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "tool output" });
       return { text: "hi" } satisfies ReplyPayload;
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "tool output" });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
@@ -1363,9 +1382,9 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeDefined();
-      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
-      await opts?.onToolResult?.({
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 exec: ls" });
+      await onToolResult({
         text: "NO_REPLY",
         mediaUrls: ["https://example.com/tts-group.opus"],
       });
@@ -1536,9 +1555,9 @@ describe("dispatchReplyFromConfig", () => {
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      expect(opts?.onToolResult).toBeDefined();
-      await opts?.onToolResult?.({ text: "🔧 tools/sessions_send" });
-      await opts?.onToolResult?.({
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "🔧 tools/sessions_send" });
+      await onToolResult({
         mediaUrl: "https://example.com/tts-native.opus",
       });
       return { text: "hi" } satisfies ReplyPayload;
@@ -2031,7 +2050,7 @@ describe("dispatchReplyFromConfig", () => {
       acp: {
         enabled: true,
         dispatch: { enabled: true },
-        stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 128 },
       },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -2451,7 +2470,7 @@ describe("dispatchReplyFromConfig", () => {
       acp: {
         enabled: true,
         dispatch: { enabled: true },
-        stream: { coalesceIdleMs: 0, maxChunkChars: 256 },
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
       },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -2529,7 +2548,7 @@ describe("dispatchReplyFromConfig", () => {
       acp: {
         enabled: true,
         dispatch: { enabled: true },
-        stream: { coalesceIdleMs: 0, maxChunkChars: 256 },
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
       },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -2582,7 +2601,7 @@ describe("dispatchReplyFromConfig", () => {
       acp: {
         enabled: true,
         dispatch: { enabled: true },
-        stream: { coalesceIdleMs: 0, maxChunkChars: 256 },
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
       },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -3099,7 +3118,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("keeps diagnostic progress when source progress callbacks are suppressed", async () => {
+  it("forwards non-answer progress callbacks when source replies are suppressed", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -3131,6 +3150,7 @@ describe("dispatchReplyFromConfig", () => {
       dispatcher,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onToolStart: callbacks.toolStart,
         onItemEvent: callbacks.itemEvent,
         onCommandOutput: callbacks.commandOutput,
@@ -3138,9 +3158,9 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(callbacks.toolStart).not.toHaveBeenCalled();
-    expect(callbacks.itemEvent).not.toHaveBeenCalled();
-    expect(callbacks.commandOutput).not.toHaveBeenCalled();
+    expect(callbacks.toolStart).toHaveBeenCalledTimes(1);
+    expect(callbacks.itemEvent).toHaveBeenCalledTimes(1);
+    expect(callbacks.commandOutput).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(3);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
       sessionKey: "agent:main:discord:channel:C1",
@@ -4296,8 +4316,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     // Trigger a tool result — delivery should be suppressed
-    expect(capturedOnToolResult).toBeDefined();
-    await capturedOnToolResult!({ text: "tool output" });
+    await requireToolResultHandler(capturedOnToolResult)({ text: "tool output" });
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
@@ -4330,8 +4349,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     // Trigger a block reply — delivery should be suppressed
-    expect(capturedOnBlockReply).toBeDefined();
-    await capturedOnBlockReply!({ text: "streaming chunk" });
+    await requireBlockReplyHandler(capturedOnBlockReply)({ text: "streaming chunk" });
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
@@ -4580,6 +4598,38 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
   });
 
+  it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const blockedReply = setReplyPayloadMetadata(
+      { text: "Your message could not be sent: blocked by policy-plugin", isError: true },
+      { beforeAgentRunBlocked: true },
+    );
+    const replyResolver = vi.fn(async () => blockedReply satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.beforeAgentRunBlocked).toBe(true);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
   it("delivers marked runtime failure notices in message-tool-only mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -4658,6 +4708,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
+        CommandSource: undefined,
         SessionKey: "test:discord:channel:C1",
       }),
       cfg: emptyConfig,
@@ -4682,6 +4733,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "channel",
+        CommandSource: undefined,
         Provider: "discord",
         Surface: "discord",
         OriginatingChannel: "discord",
@@ -4748,6 +4800,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         ChatType: "direct",
+        CommandSource: undefined,
         SessionKey: "agent:main:main",
       }),
       cfg: emptyConfig,

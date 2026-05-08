@@ -71,13 +71,14 @@ describe("tui slash commands", () => {
 
   it("includes gateway text commands", () => {
     const commands = getSlashCommands({});
-    expect(commands.some((command) => command.name === "context")).toBe(true);
-    expect(commands.some((command) => command.name === "commands")).toBe(true);
+    expect(commands.map((command) => command.name)).toEqual(
+      expect.arrayContaining(["context", "commands"]),
+    );
   });
 
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
-    expect(commands.some((command) => command.name === "auth")).toBe(true);
+    expect(commands.map((command) => command.name)).toContain("auth");
   });
 });
 
@@ -393,8 +394,6 @@ describe("resolveCodexCliBin", () => {
   });
 
   it("returns null or a valid path (never throws)", () => {
-    // The function should never throw regardless of environment
-    expect(() => resolveCodexCliBin()).not.toThrow();
     const result = resolveCodexCliBin();
     expect(result === null || typeof result === "string").toBe(true);
   });

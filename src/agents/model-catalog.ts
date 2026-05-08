@@ -35,6 +35,7 @@ type DiscoveredModel = {
   name?: string;
   provider: string;
   contextWindow?: number;
+  contextTokens?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
   compat?: ModelCatalogEntry["compat"];
@@ -161,6 +162,9 @@ export function loadManifestModelCatalog(params: {
     if (contextWindow) {
       entry.contextWindow = contextWindow;
     }
+    if (row.contextTokens) {
+      entry.contextTokens = row.contextTokens;
+    }
     if (typeof row.reasoning === "boolean") {
       entry.reasoning = row.reasoning;
     }
@@ -189,6 +193,7 @@ function normalizePersistedModelCatalogEntry(
   entry: Record<string, unknown>,
   defaults?: {
     contextWindow?: number;
+    contextTokens?: number;
   },
 ): ModelCatalogEntry | undefined {
   const id = normalizeOptionalString(entry.id) ?? "";
@@ -206,6 +211,12 @@ function normalizePersistedModelCatalogEntry(
       : defaults?.contextWindow !== undefined
         ? defaults.contextWindow
         : PI_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW;
+  const contextTokens =
+    typeof entry?.contextTokens === "number" && entry.contextTokens > 0
+      ? entry.contextTokens
+      : defaults?.contextTokens !== undefined
+        ? defaults.contextTokens
+        : undefined;
   const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : false;
   const parsedInput = Array.isArray(entry?.input)
     ? entry.input.filter((value): value is ModelInputType =>
@@ -217,7 +228,16 @@ function normalizePersistedModelCatalogEntry(
     entry?.compat && typeof entry.compat === "object"
       ? (entry.compat as ModelCatalogEntry["compat"])
       : undefined;
-  return { id, name, provider, contextWindow, reasoning, input, compat };
+  return {
+    id,
+    name,
+    provider,
+    contextWindow,
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
+    reasoning,
+    input,
+    compat,
+  };
 }
 
 async function loadReadOnlyPersistedModelCatalog(params?: {
@@ -242,9 +262,14 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
       typeof providerConfig?.contextWindow === "number" && providerConfig.contextWindow > 0
         ? providerConfig.contextWindow
         : undefined;
+    const providerContextTokens =
+      typeof providerConfig?.contextTokens === "number" && providerConfig.contextTokens > 0
+        ? providerConfig.contextTokens
+        : undefined;
     for (const entry of providerConfig.models as Record<string, unknown>[]) {
       const normalized = normalizePersistedModelCatalogEntry(providerRaw, entry, {
         contextWindow: providerContextWindow,
+        contextTokens: providerContextTokens,
       });
       if (normalized && !shouldSuppressBuiltInModel(normalized)) {
         models.push(normalized);
@@ -370,10 +395,23 @@ export async function loadModelCatalog(params?: {
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
             : undefined;
+        const contextTokens =
+          typeof entry?.contextTokens === "number" && entry.contextTokens > 0
+            ? entry.contextTokens
+            : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
         const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning, input, compat });
+        models.push({
+          id,
+          name,
+          provider,
+          contextWindow,
+          ...(contextTokens !== undefined ? { contextTokens } : {}),
+          reasoning,
+          input,
+          compat,
+        });
       }
       if (!readOnly) {
         const supplemental = await augmentModelCatalogWithProviderPlugins({

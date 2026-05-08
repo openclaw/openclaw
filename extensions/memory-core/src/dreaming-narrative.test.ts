@@ -101,6 +101,16 @@ describe("extractNarrativeText", () => {
     expect(extractNarrativeText(messages)).toBe("First paragraph.\nSecond paragraph.");
   });
 
+  it("extracts from OpenAI output_text assistant parts", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "The light phase found a diary thread." }],
+      },
+    ];
+    expect(extractNarrativeText(messages)).toBe("The light phase found a diary thread.");
+  });
+
   it("returns null when no assistant message exists", () => {
     const messages = [{ role: "user", content: "hello" }];
     expect(extractNarrativeText(messages)).toBeNull();
@@ -969,7 +979,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     const sessionFiles = await fs.readdir(sessionsDir);
-    expect(sessionFiles.some((name) => name.startsWith("orphan.jsonl.deleted."))).toBe(true);
+    expect(sessionFiles).toContainEqual(expect.stringMatching(/^orphan\.jsonl\.deleted\./));
     expect(sessionFiles).toContain("still-live.jsonl");
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("dreaming cleanup scrubbed"));
   });

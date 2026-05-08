@@ -26,6 +26,7 @@
  */
 
 import fs from "node:fs";
+import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
 import { replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 import { getCredentialBackupFile, getLegacyCredentialBackupFile } from "../utils/data-paths.js";
 
@@ -70,17 +71,15 @@ export function loadCredentialBackup(accountId?: string): CredentialBackup | nul
   try {
     if (accountId) {
       const newPath = getCredentialBackupFile(accountId);
-      if (fs.existsSync(newPath)) {
-        const data = JSON.parse(fs.readFileSync(newPath, "utf8")) as CredentialBackup;
-        if (data?.appId && data.clientSecret) {
-          return data;
-        }
+      const data = loadJsonFile<CredentialBackup>(newPath);
+      if (data?.appId && data.clientSecret) {
+        return data;
       }
     }
 
     const legacy = getLegacyCredentialBackupFile();
-    if (fs.existsSync(legacy)) {
-      const data = JSON.parse(fs.readFileSync(legacy, "utf8")) as CredentialBackup;
+    const data = loadJsonFile<CredentialBackup>(legacy);
+    if (data) {
       if (!data?.appId || !data?.clientSecret) {
         return null;
       }

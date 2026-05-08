@@ -21,6 +21,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -322,8 +323,32 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     historyTextChars,
     toolResultChars,
     estTokens: tokenEstimationFailed ? undefined : estTokens,
-    contributors: contributors.toSorted((a, b) => b.chars - a.chars).slice(0, 3),
+    contributors: selectTopContributors(contributors),
   };
+}
+
+function selectTopContributors(
+  contributors: CompactionMessageMetrics["contributors"],
+): CompactionMessageMetrics["contributors"] {
+  const selected: CompactionMessageMetrics["contributors"] = [];
+  for (const contributor of contributors) {
+    let insertAt = selected.length;
+    for (let index = 0; index < selected.length; index += 1) {
+      if (contributor.chars > selected[index].chars) {
+        insertAt = index;
+        break;
+      }
+    }
+    if (insertAt < 3) {
+      selected.splice(insertAt, 0, contributor);
+      if (selected.length > 3) {
+        selected.pop();
+      }
+    } else if (selected.length < 3) {
+      selected.push(contributor);
+    }
+  }
+  return selected;
 }
 
 function containsRealConversationMessages(messages: AgentMessage[]): boolean {
@@ -962,6 +987,11 @@ async function compactEmbeddedPiSessionDirectOnce(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
+          config: params.config,
+          env: process.env,
+          workspaceDir: effectiveWorkspace,
+        }),
         contextTokenBudget: ctxInfo.tokens,
       });
       // Sets compaction/pruning runtime state and returns extension factories

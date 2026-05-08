@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
@@ -25,6 +30,10 @@ vi.mock("../infra/file-lock.js", () => ({
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
 const authSourceCheckMock = vi.hoisted(() => ({
@@ -140,6 +149,17 @@ vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
 let authTempCounter = 0;
+
+beforeAll(() => {
+  setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config: {}, env: process.env }), {
+    config: {},
+    env: process.env,
+  });
+});
+
+afterAll(() => {
+  clearCurrentPluginMetadataSnapshot();
+});
 
 function resetModelFallbackTestState(): void {
   authRuntimeMock.clear();
@@ -341,6 +361,21 @@ const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
 
 describe("runWithModelFallback", () => {
+  it("normalizes anthropic-cli refs to the Claude CLI provider before execution", async () => {
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithModelFallback({
+      cfg: {} as OpenClawConfig,
+      provider: "anthropic-cli",
+      model: "claude-opus-4-7",
+      run,
+    });
+
+    expect(run).toHaveBeenCalledWith("claude-cli", "claude-opus-4-7");
+    expect(result.provider).toBe("claude-cli");
+    expect(result.model).toBe("claude-opus-4-7");
+  });
+
   it("skips auth store bootstrap when no auth profile sources exist", async () => {
     authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReturnValue(false);
     const run = vi.fn().mockResolvedValueOnce("ok");
@@ -673,6 +708,28 @@ describe("runWithModelFallback", () => {
       classifyEmbeddedPiRunResultForModelFallback({
         provider: "openai-codex",
         model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps before_agent_run hook blocks out of empty-result fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [{ text: "Blocked by before-run policy.", isError: true }],
+      meta: {
+        durationMs: 1,
+        livenessState: "blocked",
+        error: {
+          kind: "hook_block",
+          message: "Blocked by before-run policy.",
+        },
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "atlassian-ai-gateway-openai",
+        model: "gpt-5.5-2026-04-23",
         result: runResult,
       }),
     ).toBeNull();
@@ -1359,7 +1416,7 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  it("uses fallbacksOverride instead of agents.defaults.model.fallbacks", async () => {
+  it("uses fallbacksOverride instead of agents.defaults.model.fallbacks", () => {
     const cfg = makeFallbacksOnlyCfg();
 
     const candidates = __testing.resolveFallbackCandidates({
@@ -1375,7 +1432,7 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("treats an empty fallbacksOverride as disabling global fallbacks", async () => {
+  it("treats an empty fallbacksOverride as disabling global fallbacks", () => {
     const cfg = makeFallbacksOnlyCfg();
 
     const candidates = __testing.resolveFallbackCandidates({
@@ -1388,7 +1445,7 @@ describe("runWithModelFallback", () => {
     expect(candidates).toEqual([{ provider: "anthropic", model: "claude-opus-4-5" }]);
   });
 
-  it("keeps explicit fallbacks reachable when models allowlist is present", async () => {
+  it("keeps explicit fallbacks reachable when models allowlist is present", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1415,7 +1472,7 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("defaults provider/model when missing (regression #946)", async () => {
+  it("defaults provider/model when missing (regression #946)", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1614,6 +1671,13 @@ describe("runWithModelFallback", () => {
       setAuthRuntimeStore(tmpDir, store);
       return { dir: tmpDir };
     }
+
+    it("maps non-quota cooldown suspensions to circuit-open session state", () => {
+      expect(__testing.resolveSessionSuspensionReason("rate_limit")).toBe("quota_exhausted");
+      expect(__testing.resolveSessionSuspensionReason("overloaded")).toBe("circuit_open");
+      expect(__testing.resolveSessionSuspensionReason("timeout")).toBe("circuit_open");
+      expect(__testing.resolveSessionSuspensionReason("billing")).toBe("manual");
+    });
 
     it("attempts same-provider fallbacks during transient cooldowns", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "timeout");

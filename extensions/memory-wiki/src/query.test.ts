@@ -638,8 +638,9 @@ describe("searchMemoryWiki", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results.some((result) => result.corpus === "wiki")).toBe(true);
-    expect(results.some((result) => result.corpus === "memory")).toBe(true);
+    expect(results.map((result) => result.corpus)).toEqual(
+      expect.arrayContaining(["wiki", "memory"]),
+    );
     expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 5 });
     expect(getActiveMemorySearchManagerMock).toHaveBeenCalledWith({
       cfg: createAppConfig(),
@@ -691,7 +692,7 @@ describe("searchMemoryWiki", () => {
     });
 
     expect(results).toHaveLength(5);
-    expect(results.some((result) => result.corpus === "memory")).toBe(true);
+    expect(results.map((result) => result.corpus)).toContain("memory");
     expect(
       results.filter((result) => result.corpus === "wiki").map((result) => result.path),
     ).toEqual([
@@ -754,7 +755,9 @@ describe("searchMemoryWiki", () => {
       "sessions/child-session.jsonl",
       "MEMORY.md",
     ]);
-    expect(results.some((result) => result.path.includes("sibling-session"))).toBe(false);
+    expect(results.map((result) => result.path)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("sibling-session")]),
+    );
   });
 
   it("filters session memory hits for session-bound non-sandboxed callers", async () => {
@@ -808,7 +811,9 @@ describe("searchMemoryWiki", () => {
       "sessions/child-session.jsonl",
       "MEMORY.md",
     ]);
-    expect(results.some((result) => result.path.includes("sibling-session"))).toBe(false);
+    expect(results.map((result) => result.path)).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("sibling-session")]),
+    );
   });
 
   it("requires appConfig for session-bound shared memory searches", async () => {

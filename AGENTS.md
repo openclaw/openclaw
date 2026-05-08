@@ -32,10 +32,16 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Owner boundary: fix owner-specific behavior in the owner module. Shared/core gets generic seams only; no owner ids, dependency strings, defaults, migrations, or recovery policy. If a bug names an extension or its dependency, start in that extension and add a generic core seam only when multiple owners need it.
 - Dependency ownership follows runtime ownership: extension-only deps stay plugin-local; root deps only for core imports or intentionally internalized bundled plugin runtime.
 - Legacy config repair: doctor/fix paths, not startup/load-time core migrations.
+- No legacy compatibility in core/runtime paths. When old config/store shapes need support, add an `openclaw doctor --fix` rewrite/repair rule with tests and keep runtime code on the canonical contract.
 - Core test asserting extension-specific behavior: move to owner extension or generic contract test.
 - New seams: backwards-compatible, documented, versioned. Third-party plugins exist.
 - Channels: `src/channels/**` is implementation; plugin authors get SDK seams.
 - Providers: core owns generic loop; provider plugins own auth/catalog/runtime hooks.
+- Request-time runtime resolution: when a path already knows the provider id, model ref, channel id, outbound target, capability family, or attachment class, carry that as a prepared runtime fact instead of rediscovering it later.
+- Prepared runtime facts should be small typed values produced once near startup, reply dispatch, model selection, tool planning, or channel resolution, then passed through context to consumers. Prefer `AgentRuntimePlan`, `ProviderRuntimePluginHandle`, scoped model/catalog helpers, active/runtime registries, manifest/public-artifact lookups, single-provider resolvers, and lazy registry construction.
+- Avoid broad request-time rediscovery: hot reply/tool/outbound/media paths should not call broad plugin/provider/channel/capability loaders such as `loadOpenClawPlugins`, `resolveProviderPluginsForHooks`, `resolvePluginCapabilityProviders`, `resolvePluginDiscoveryProvidersRuntime`, `getChannelPlugin`, or broad model/tool/media registry builders just to answer a question the caller already knows. Do not build multimodal/provider registries for document-only or otherwise non-participating paths.
+- Compatibility fallbacks are allowed only for startup/setup/admin/standalone/legacy callers that genuinely lack prepared facts. Keep them explicit, tested, and outside migrated hot reply/tool/outbound paths.
+- Do not fix repeated request-time discovery by adding scattered cache layers. Move the canonical fact earlier, reuse the existing prepared-runtime object, and delete duplicate lookup branches when the last migrated caller stops needing them.
 - Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
 - Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor.
 - Direction: manifest-first control plane; targeted runtime loaders; no hidden contract bypasses; broad mutable registries transitional.
@@ -57,8 +63,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Linting: use repo wrappers (`pnpm lint:*`, `scripts/run-oxlint.mjs`); do not invoke generic JS formatters/lints unless a repo script uses them.
 - Heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
 - Crabbox: preferred live scenario runner when available. It has Linux, Windows, and macOS workers/targets; pick the OS that matches the bug. If unavailable, use the local system, Docker, Parallels, or CI live lane that proves the same behavior.
-- Blacksmith/Testbox: on maintainer machines with Blacksmith access, broad/shared validation defaults to Testbox. This includes `pnpm check`, `pnpm check:changed`, `pnpm test`, `pnpm test:changed`, Docker/E2E/live/package/build gates, and any command likely to fan out across many Vitest projects. Do not start those broad gates locally unless the user explicitly asks for local proof or sets `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`.
-- Local validation: targeted edit loops only, such as `pnpm test <specific-file>`, targeted formatter checks, and small lint/type probes. If a local command expands beyond targeted proof, stop it and move the broad gate to Testbox.
+- Blacksmith/Testbox: use when the validation needs the remote environment, broad/shared suite capacity, cross-OS/package/Docker/E2E/live proof, or another end-to-end setup that is meaningfully better off-host. Broad fan-out commands such as `pnpm check`, full `pnpm test`, Docker/E2E/live/package/build gates, and wide changed gates belong in Testbox by default. Do not start those broad gates locally unless the user explicitly asks for local proof or sets `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`.
+- Local validation: targeted edit loops stay local, such as `pnpm test <specific-file>`, narrow `pnpm test:changed` selections, targeted formatter checks, and small lint/type probes. If a local command expands beyond targeted proof, stop it and move the broad gate to Testbox.
 - Testbox use: run from repo root, pre-warm early with `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90`, reuse the returned `tbx_...` id for all `run`/`download` commands, and stop boxes you created before handoff. Timeout bins: `90` minutes default, `240` multi-hour, `720` all-day, `1440` overnight; anything above `1440` needs explicit approval and cleanup.
 - Testbox full-suite profile: `blacksmith testbox run --id <ID> "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test"`. For installable package proof, prefer the GitHub `Package Acceptance` workflow over ad hoc Testbox commands.
 
@@ -98,8 +104,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   - extension tests: extension test typecheck/tests
   - public SDK/plugin contract: extension prod/test too
   - unknown root/config: all lanes
-- Before handoff/push for code/test/runtime/config changes: run `pnpm check:changed` in Testbox by default on maintainer machines. Tests-only: run `pnpm test:changed` in Testbox by default. Full prod sweep: run `pnpm check` in Testbox. Use local only for narrow targeted proof or when explicitly requested.
-- If `pnpm test:changed` or `pnpm check:changed` selects broad/shared lanes, it belongs in Testbox; do not let it continue locally after it fans out.
+- Before handoff/push for code/test/runtime/config changes: prove the touched surface. Use local targeted tests/checks for narrow changes; use Testbox when `pnpm check:changed`, `pnpm test:changed`, or other validation selects broad/shared lanes or needs a remote/end-to-end environment. Full prod sweeps (`pnpm check`, full `pnpm test`) belong in Testbox by default on maintainer machines.
+- If `pnpm test:changed` or `pnpm check:changed` stays narrowly scoped, it can run locally. If it fans out into broad/shared lanes, stop it and move the broad gate to Testbox.
 - Docs/changelog-only and CI/workflow metadata-only changes are not changed-gate work by default. Use `git diff --check` plus the relevant formatter/docs/workflow sanity check; escalate to `pnpm check:changed` only when scripts, test config, generated docs/API, package metadata, or runtime/build behavior changed.
 - Rebase sanity: after a green `pnpm check:changed`, a clean rebase onto current
   `origin/main` does not require rerunning the full changed gate when the rebase
@@ -189,7 +195,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Mac gateway: dev watch = `pnpm gateway:watch` (tmux `openclaw-gateway-watch-main`, auto-attach). Noninteractive: `OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch`; attach/stop: `tmux attach -t openclaw-gateway-watch-main` / `tmux kill-session -t openclaw-gateway-watch-main`. Managed installs: `openclaw gateway restart/status --deep`. No launchd/ad-hoc tmux. Logs: `./scripts/clawlog.sh`.
 - Version bump touches: `package.json`, `apps/android/app/build.gradle.kts`, `apps/ios/version.json` + `pnpm ios:version:sync`, macOS `Info.plist`, `docs/install/updating.md`. Appcast only for Sparkle release.
 - Mobile LAN pairing: plaintext `ws://` loopback-only. Private-network `ws://` needs `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; Tailscale/public use `wss://` or tunnel.
-- A2UI hash `src/canvas-host/a2ui/.bundle.hash`: generated; ignore unless running `pnpm canvas:a2ui:bundle`; commit separately.
+- A2UI hash `extensions/canvas/src/host/a2ui/.bundle.hash`: generated; ignore unless running `pnpm canvas:a2ui:bundle`; commit separately.
 
 ## Ops / Footguns
 

@@ -11,7 +11,7 @@ import {
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -41,6 +41,11 @@ vi.mock("./channel-runtime.js", () => {
     monitorIrcProvider: hoisted.monitorIrcProvider,
     sendMessageIrc: hoisted.sendMessageIrc,
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./channel-runtime.js");
+  vi.resetModules();
 });
 
 const ircSetupPlugin = {
@@ -415,10 +420,12 @@ describe("irc setup", () => {
       prompter,
       accountId: "work",
     });
-    expect(updated).toBeDefined();
+    if (!updated) {
+      throw new Error("expected IRC allowFrom setup to return updated config");
+    }
 
-    expect(updated?.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
-    expect(updated?.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
+    expect(updated.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
+    expect(updated.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
   });
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {

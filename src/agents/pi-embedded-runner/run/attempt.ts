@@ -8,8 +8,16 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
+import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import {
+  loadSessionStore,
+  runQuotaSuspensionMaintenance,
+  updateSessionStoreEntry,
+} from "../../../config/sessions/store.js";
+import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
@@ -23,7 +31,9 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
+import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
   extractModelCompat,
@@ -334,6 +344,7 @@ import {
 } from "./preemptive-compaction.js";
 import {
   buildCurrentTurnPromptContextSuffix,
+  buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -490,6 +501,29 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
   return stripHistoricalRuntimeContextCustomMessages(normalized);
+}
+
+function cloneHookMessages(messages: AgentMessage[]): AgentMessage[] {
+  return messages.map((message) => structuredClone(message));
+}
+
+function sessionMessagesContainIdempotencyKey(
+  messages: AgentMessage[],
+  idempotencyKey: string,
+): boolean {
+  return messages.some(
+    (message) =>
+      typeof (message as { idempotencyKey?: unknown }).idempotencyKey === "string" &&
+      (message as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey,
+  );
+}
+
+function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
+  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+}
+
+export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
+  return params.promptErrorSource !== "hook:before_agent_run";
 }
 
 function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
@@ -710,8 +744,14 @@ export async function runEmbeddedAttempt(
   let timedOutDuringToolExecution = false;
   let promptError: unknown = null;
   let emitDiagnosticRunCompleted:
-    | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
+    | ((
+        outcome: "completed" | "aborted" | "blocked" | "error",
+        err?: unknown,
+        extra?: { blockedBy?: string },
+      ) => void)
     | undefined;
+  let beforeAgentRunBlocked = false;
+  let beforeAgentRunBlockedBy: string | undefined;
   try {
     const skillsSnapshotForRun =
       sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
@@ -749,6 +789,7 @@ export async function runEmbeddedAttempt(
       );
     }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
+    const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
       createDiagnosticTraceContextFromActiveScope(),
@@ -774,7 +815,7 @@ export async function runEmbeddedAttempt(
     });
     const diagnosticRunStartedAt = Date.now();
     let diagnosticRunCompleted = false;
-    emitDiagnosticRunCompleted = (outcome, err) => {
+    emitDiagnosticRunCompleted = (outcome, err, extra) => {
       if (diagnosticRunCompleted) {
         return;
       }
@@ -784,7 +825,8 @@ export async function runEmbeddedAttempt(
         ...diagnosticRunBase,
         durationMs: Date.now() - diagnosticRunStartedAt,
         outcome,
-        ...(err ? { errorCategory: diagnosticErrorCategory(err) } : {}),
+        ...(extra?.blockedBy ? { blockedBy: extra.blockedBy } : {}),
+        ...(err && outcome !== "blocked" ? { errorCategory: diagnosticErrorCategory(err) } : {}),
       });
     };
     const corePluginToolStages = createEmbeddedRunStageTracker();
@@ -1422,6 +1464,8 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           agentDir,
           tokenBudget: params.contextTokenBudget,
+          activeAgentId: sessionAgentId,
+          contextEnginePluginId: activeContextEnginePluginId,
         }),
         runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
@@ -1433,6 +1477,7 @@ export async function runEmbeddedAttempt(
             sessionManager: contextParams.sessionManager as never,
             runtimeContext: contextParams.runtimeContext,
             config: params.config,
+            agentId: sessionAgentId,
           }),
         warn: (message) => log.warn(message),
       });
@@ -1449,6 +1494,11 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
+          config: params.config,
+          env: process.env,
+          workspaceDir: effectiveWorkspace,
+        }),
         contextTokenBudget: params.contextTokenBudget,
       });
       const piAutoCompactionGuardArgs = {
@@ -2180,6 +2230,43 @@ export async function runEmbeddedAttempt(
             sessionId: params.sessionId,
             policy: transcriptPolicy,
           });
+
+          if (params.sessionKey && !isRawModelRun) {
+            const storePath = resolveStorePath(params.config?.session?.store, {
+              agentId: sessionAgentId,
+            });
+            await runQuotaSuspensionMaintenance({ storePath });
+            const store = loadSessionStore(storePath, { skipCache: true });
+            const sessionEntry = store[params.sessionKey];
+            const suspension = sessionEntry?.quotaSuspension;
+            if (suspension?.state === "resuming") {
+              const subagents = Object.values(store)
+                .filter((s) => s.spawnedBy === sessionEntry.sessionId)
+                .map((s) => ({
+                  sessionId: s.sessionId,
+                  role: s.subagentRole,
+                  lastStatus: s.status,
+                }));
+              const handoffMsg = buildHierarchyReinforcementMessage({
+                summary: suspension.summary ?? "No recovery briefing was captured.",
+                activeSubagents: subagents,
+              });
+              validated.push(handoffMsg);
+              await updateSessionStoreEntry({
+                storePath,
+                sessionKey: params.sessionKey,
+                update: async (entry) => {
+                  if (entry.quotaSuspension?.state !== "resuming") {
+                    return null;
+                  }
+                  return {
+                    quotaSuspension: { ...entry.quotaSuspension, state: "active" },
+                  };
+                },
+              });
+            }
+          }
+
           const heartbeatSummary =
             params.config && sessionAgentId
               ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
@@ -2258,6 +2345,10 @@ export async function runEmbeddedAttempt(
           agent: activeSession?.agent,
           sessionManager,
           clearPendingOnTimeout: true,
+          // PERF: If the run was aborted during the setup,
+          // skip the idle wait and clear pending results synchronously so we can
+          // immediately dispose the session and throw the error without blocking.
+          ...(params.abortSignal?.aborted ? { timeoutMs: 0 } : {}),
         });
         activeSession.dispose();
         throw err;
@@ -2490,7 +2581,7 @@ export async function runEmbeddedAttempt(
 
       const activeSessionManager = sessionManager;
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
-      let promptErrorSource: "prompt" | "compaction" | "precheck" | null = null;
+      let promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
       const handleMidTurnPrecheckRequest = (request: MidTurnPrecheckRequest) => {
         const logMidTurnPrecheck = (route: string, extra?: string) => {
           log.warn(
@@ -2653,25 +2744,6 @@ export async function runEmbeddedAttempt(
           });
         }
 
-        const googlePromptCacheStreamFn = await prepareGooglePromptCacheStreamFn({
-          apiKey: await resolveEmbeddedAgentApiKey({
-            provider: params.provider,
-            resolvedApiKey: params.resolvedApiKey,
-            authStorage: params.authStorage,
-          }),
-          extraParams: effectiveExtraParams,
-          model: params.model,
-          modelId: params.modelId,
-          provider: params.provider,
-          sessionManager,
-          signal: runAbortController.signal,
-          streamFn: activeSession.agent.streamFn,
-          systemPrompt: systemPromptText,
-        });
-        if (googlePromptCacheStreamFn) {
-          activeSession.agent.streamFn = googlePromptCacheStreamFn;
-        }
-
         const routingSummary = describeProviderRequestRoutingSummary({
           provider: params.provider,
           api: params.model.api,
@@ -2683,11 +2755,6 @@ export async function runEmbeddedAttempt(
           `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId} ` +
             routingSummary,
         );
-        cacheTrace?.recordStage("prompt:before", {
-          prompt: effectivePrompt,
-          messages: activeSession.messages,
-        });
-
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
         const leafEntry = isRawModelRun ? null : sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
@@ -2770,40 +2837,182 @@ export async function runEmbeddedAttempt(
               systemPromptText = runtimeSystemPrompt;
             }
           }
+          const runtimeContextForHook = promptSubmission.runtimeOnly
+            ? undefined
+            : promptSubmission.runtimeContext?.trim();
+          const runtimeSystemPromptForHook = runtimeContextForHook
+            ? composeSystemPromptWithHookContext({
+                baseSystemPrompt: systemPromptText,
+                appendSystemContext: buildRuntimeContextSystemContext(runtimeContextForHook),
+              })
+            : undefined;
+          const systemPromptForHook = runtimeSystemPromptForHook ?? systemPromptText;
+
+          const persistBlockedBeforeAgentRun = async (block: {
+            message: string;
+            pluginId: string;
+          }): Promise<boolean> => {
+            const idempotencyKey = `hook-block:before_agent_run:user:${params.runId}`;
+            if (sessionMessagesContainIdempotencyKey(activeSession.messages, idempotencyKey)) {
+              return true;
+            }
+            const nowMs = Date.now();
+            const redactedUserMessage = {
+              role: "user" as const,
+              content: [{ type: "text" as const, text: block.message }],
+              timestamp: nowMs,
+              idempotencyKey,
+              __openclaw: {
+                beforeAgentRunBlocked: {
+                  blockedBy: block.pluginId,
+                  blockedAt: nowMs,
+                },
+              },
+            };
+            try {
+              activeSessionManager.appendMessage(
+                redactedUserMessage as Parameters<typeof activeSessionManager.appendMessage>[0],
+              );
+              flushSessionManagerFile(activeSessionManager);
+              activeSession.agent.state.messages =
+                activeSessionManager.buildSessionContext().messages;
+              return true;
+            } catch (err) {
+              log.warn(
+                `before_agent_run block: failed to persist redacted user message: ${
+                  (err as Error)?.message ?? String(err)
+                }`,
+              );
+              return false;
+            }
+          };
+
+          if (hookRunner?.hasHooks("before_agent_run")) {
+            const beforeRunMessages = cloneHookMessages(
+              normalizeMessagesForLlmBoundary(activeSession.messages),
+            );
+            let beforeRunResult:
+              | Awaited<ReturnType<NonNullable<typeof hookRunner>["runBeforeAgentRun"]>>
+              | undefined;
+            try {
+              beforeRunResult = await hookRunner.runBeforeAgentRun(
+                {
+                  prompt: promptForModel,
+                  systemPrompt: systemPromptForHook,
+                  messages: beforeRunMessages,
+                  channelId: hookCtx.channelId,
+                  accountId: params.agentAccountId ?? undefined,
+                  senderId: params.senderId ?? undefined,
+                  senderIsOwner: params.senderIsOwner ?? undefined,
+                },
+                hookCtx,
+              );
+            } catch {
+              log.warn("before_agent_run hook failed; blocking request");
+              beforeAgentRunBlocked = true;
+              beforeAgentRunBlockedBy = "before_agent_run";
+              await persistBlockedBeforeAgentRun({
+                message: resolveBlockMessage(
+                  { outcome: "block", reason: "before_agent_run hook failed" },
+                  { blockedBy: "before_agent_run" },
+                ),
+                pluginId: "before_agent_run",
+              });
+              promptError = new Error(
+                resolveBlockMessage(
+                  { outcome: "block", reason: "before_agent_run hook failed" },
+                  { blockedBy: "before_agent_run" },
+                ),
+              );
+              promptErrorSource = "hook:before_agent_run";
+              skipPromptSubmission = true;
+            }
+            const beforeRunDecision = beforeRunResult?.decision;
+            const beforeRunPluginId = beforeRunResult?.pluginId ?? "unknown";
+            if (beforeRunDecision?.outcome === "block") {
+              beforeAgentRunBlocked = true;
+              beforeAgentRunBlockedBy = beforeRunPluginId;
+              const blockReplacementMsg = resolveBlockMessage(beforeRunDecision, {
+                blockedBy: beforeRunPluginId,
+              });
+              log.warn(`before_agent_run hook blocked by ${beforeRunPluginId}`);
+              await persistBlockedBeforeAgentRun({
+                message: blockReplacementMsg,
+                pluginId: beforeRunPluginId,
+              });
+              promptError = new Error(blockReplacementMsg);
+              promptErrorSource = "hook:before_agent_run";
+              skipPromptSubmission = true;
+            }
+          }
+
+          if (!skipPromptSubmission) {
+            const googlePromptCacheStreamFn = await prepareGooglePromptCacheStreamFn({
+              apiKey: await resolveEmbeddedAgentApiKey({
+                provider: params.provider,
+                resolvedApiKey: params.resolvedApiKey,
+                authStorage: params.authStorage,
+              }),
+              extraParams: effectiveExtraParams,
+              model: params.model,
+              modelId: params.modelId,
+              provider: params.provider,
+              sessionManager,
+              signal: runAbortController.signal,
+              streamFn: activeSession.agent.streamFn,
+              systemPrompt: systemPromptText,
+            });
+            if (googlePromptCacheStreamFn) {
+              activeSession.agent.streamFn = googlePromptCacheStreamFn;
+            }
+          }
 
           // Detect and load images referenced in the visible prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
-          const imageResult = await detectAndLoadPromptImages({
-            prompt: promptSubmission.prompt,
-            workspaceDir: effectiveWorkspace,
-            model: params.model,
-            existingImages: params.images,
-            imageOrder: params.imageOrder,
-            maxBytes: MAX_IMAGE_BYTES,
-            maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
-            workspaceOnly: effectiveFsWorkspaceOnly,
-            // Enforce sandbox path restrictions when sandbox is enabled
-            sandbox:
-              sandbox?.enabled && sandbox?.fsBridge
-                ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
-                : undefined,
-          });
+          const imageResult = skipPromptSubmission
+            ? {
+                images: [],
+                detectedRefs: [],
+                loadedCount: 0,
+                skippedCount: 0,
+              }
+            : await detectAndLoadPromptImages({
+                prompt: promptSubmission.prompt,
+                workspaceDir: effectiveWorkspace,
+                model: params.model,
+                existingImages: params.images,
+                imageOrder: params.imageOrder,
+                maxBytes: MAX_IMAGE_BYTES,
+                maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+                workspaceOnly: effectiveFsWorkspaceOnly,
+                // Enforce sandbox path restrictions when sandbox is enabled
+                sandbox:
+                  sandbox?.enabled && sandbox?.fsBridge
+                    ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
+                    : undefined,
+              });
 
-          cacheTrace?.recordStage("prompt:images", {
-            prompt: promptForModel,
-            messages: activeSession.messages,
-            note: `images: prompt=${imageResult.images.length}`,
-          });
-          trajectoryRecorder?.recordEvent("context.compiled", {
-            systemPrompt: systemPromptText,
-            prompt: promptForModel,
-            messages: activeSession.messages,
-            tools: toTrajectoryToolDefinitions(effectiveTools),
-            imagesCount: imageResult.images.length,
-            streamStrategy,
-            transport: effectiveAgentTransport,
-            transcriptLeafId,
-          });
+          if (!skipPromptSubmission) {
+            cacheTrace?.recordStage("prompt:before", {
+              prompt: promptForModel,
+              messages: activeSession.messages,
+            });
+            cacheTrace?.recordStage("prompt:images", {
+              prompt: promptForModel,
+              messages: activeSession.messages,
+              note: `images: prompt=${imageResult.images.length}`,
+            });
+            trajectoryRecorder?.recordEvent("context.compiled", {
+              systemPrompt: systemPromptForHook,
+              prompt: promptForModel,
+              messages: activeSession.messages,
+              tools: toTrajectoryToolDefinitions(effectiveTools),
+              imagesCount: imageResult.images.length,
+              streamStrategy,
+              transport: effectiveAgentTransport,
+              transcriptLeafId,
+            });
+          }
 
           const promptSkipReason = skipPromptSubmission
             ? null
@@ -2874,7 +3083,7 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          if (!isRawModelRun && hookRunner?.hasHooks("llm_input")) {
+          if (!skipPromptSubmission && !isRawModelRun && hookRunner?.hasHooks("llm_input")) {
             hookRunner
               .runLlmInput(
                 {
@@ -2882,9 +3091,11 @@ export async function runEmbeddedAttempt(
                   sessionId: params.sessionId,
                   provider: params.provider,
                   model: params.modelId,
-                  systemPrompt: systemPromptText,
-                  prompt: effectivePrompt,
-                  historyMessages: activeSession.messages,
+                  systemPrompt: systemPromptForHook,
+                  prompt: promptForModel,
+                  historyMessages: cloneHookMessages(
+                    normalizeMessagesForLlmBoundary(activeSession.messages),
+                  ),
                   imagesCount: imageResult.images.length,
                 },
                 {
@@ -2903,22 +3114,24 @@ export async function runEmbeddedAttempt(
               });
           }
 
-          const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
-            messages: activeSession.messages,
-            ...(contextEnginePromptAuthority === "preassembly_may_overflow"
-              ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
-              : {}),
-            systemPrompt: systemPromptText,
-            prompt: effectivePrompt,
-            contextTokenBudget,
-            reserveTokens,
-            toolResultMaxChars: resolveLiveToolResultMaxChars({
-              contextWindowTokens: contextTokenBudget,
-              cfg: params.config,
-              agentId: sessionAgentId,
-            }),
-          });
-          if (preemptiveCompaction.route === "truncate_tool_results_only") {
+          const preemptiveCompaction = skipPromptSubmission
+            ? null
+            : shouldPreemptivelyCompactBeforePrompt({
+                messages: activeSession.messages,
+                ...(contextEnginePromptAuthority === "preassembly_may_overflow"
+                  ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
+                  : {}),
+                systemPrompt: systemPromptForHook,
+                prompt: promptForModel,
+                contextTokenBudget,
+                reserveTokens,
+                toolResultMaxChars: resolveLiveToolResultMaxChars({
+                  contextWindowTokens: contextTokenBudget,
+                  cfg: params.config,
+                  agentId: sessionAgentId,
+                }),
+              });
+          if (preemptiveCompaction?.route === "truncate_tool_results_only") {
             const toolResultMaxChars = resolveLiveToolResultMaxChars({
               contextWindowTokens: contextTokenBudget,
               cfg: params.config,
@@ -2963,7 +3176,7 @@ export async function runEmbeddedAttempt(
               skipPromptSubmission = true;
             }
           }
-          if (preemptiveCompaction.shouldCompact) {
+          if (preemptiveCompaction?.shouldCompact) {
             preflightRecovery =
               preemptiveCompaction.route === "compact_then_truncate"
                 ? { route: "compact_then_truncate" }
@@ -2995,7 +3208,7 @@ export async function runEmbeddedAttempt(
             finalPromptText = promptForModel;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
               prompt: promptForModel,
-              systemPrompt: systemPromptText,
+              systemPrompt: systemPromptForHook,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
             });
@@ -3008,10 +3221,9 @@ export async function runEmbeddedAttempt(
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptForModel));
             } else {
-              const runtimeContext = promptSubmission.runtimeContext?.trim();
               await queueRuntimeContextForNextTurn({
                 session: activeSession,
-                runtimeContext,
+                runtimeContext: runtimeContextForHook,
               });
 
               // Only pass images option if there are actually images to pass
@@ -3239,6 +3451,8 @@ export async function runEmbeddedAttempt(
             tokenBudget: params.contextTokenBudget,
             lastCallUsage,
             promptCache,
+            activeAgentId: sessionAgentId,
+            contextEnginePluginId: activeContextEnginePluginId,
           });
           await finalizeAttemptContextEngineTurn({
             contextEngine: activeContextEngine,
@@ -3262,6 +3476,7 @@ export async function runEmbeddedAttempt(
                 sessionManager: contextParams.sessionManager as never,
                 runtimeContext: contextParams.runtimeContext,
                 config: params.config,
+                agentId: sessionAgentId,
               }),
             sessionManager,
             config: params.config,
@@ -3429,7 +3644,10 @@ export async function runEmbeddedAttempt(
         }
       }
 
-      if (hookRunner?.hasHooks("llm_output")) {
+      if (
+        hookRunner?.hasHooks("llm_output") &&
+        shouldRunLlmOutputHooksForAttempt({ promptErrorSource })
+      ) {
         hookRunner
           .runLlmOutput(
             {
@@ -3631,17 +3849,32 @@ export async function runEmbeddedAttempt(
           bundleMcpRuntime,
           bundleLspRuntime,
           sessionLock,
+          // PERF: If the run was aborted (user stop, timeout, etc.), skip the idle wait
+          // and clear pending results synchronously so we can release the session lock ASAP.
+          aborted:
+            Boolean(params.abortSignal?.aborted) ||
+            aborted ||
+            timedOut ||
+            idleTimedOut ||
+            timedOutDuringCompaction,
         });
       } catch (err) {
         cleanupError = err;
       }
       emitDiagnosticRunCompleted?.(
-        cleanupError || promptError
+        cleanupError
           ? "error"
-          : aborted || timedOut || idleTimedOut || timedOutDuringCompaction
-            ? "aborted"
-            : "completed",
+          : beforeAgentRunBlocked
+            ? "blocked"
+            : promptError
+              ? "error"
+              : aborted || timedOut || idleTimedOut || timedOutDuringCompaction
+                ? "aborted"
+                : "completed",
         cleanupError ?? promptError,
+        beforeAgentRunBlocked
+          ? { blockedBy: beforeAgentRunBlockedBy ?? "before_agent_run" }
+          : undefined,
       );
       if (cleanupError) {
         await Promise.reject(cleanupError);

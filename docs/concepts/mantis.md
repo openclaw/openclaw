@@ -33,7 +33,7 @@ browser UI where humans can visually confirm what the transport showed.
 - Post concise status to an operator Discord channel when the run is blocked,
   needs manual VNC help, or finishes.
 
-## Non Goals
+## Non goals
 
 - Mantis is not a replacement for unit tests. A Mantis run should usually become
   a smaller regression test after the fix is understood.
@@ -62,7 +62,7 @@ Mantis lives in the OpenClaw QA stack.
 This boundary keeps transport knowledge in OpenClaw, machine scheduling in
 Crabbox, and maintainer workflow glue in ClawSweeper.
 
-## Command Shape
+## Command shape
 
 The first local command verifies the Discord bot, guild, channel, message send,
 reaction send, and artifact path:
@@ -317,7 +317,7 @@ The first command is explicit and scenario-focused. The second can later map a P
 or issue to recommended Mantis scenarios from labels, changed files, and
 ClawSweeper review findings.
 
-## Run Lifecycle
+## Run lifecycle
 
 1. Acquire credentials.
 2. Allocate or reuse a VM.
@@ -412,7 +412,7 @@ polls the real Discord triggering message and expects the observed sequence
 `discord-status-reactions-tool-only-timeline.html`, and
 `discord-status-reactions-tool-only-timeline.png`.
 
-## Existing QA Pieces
+## Existing QA pieces
 
 Mantis should build on the existing private QA stack instead of starting from
 zero:
@@ -430,7 +430,7 @@ zero:
 The first Mantis implementation can be a thin before/after runner over these
 pieces, plus one visual evidence layer.
 
-## Evidence Model
+## Evidence model
 
 Every run writes a stable artifact directory:
 
@@ -473,7 +473,7 @@ private channel names, user names, or message content may appear. For public PRs
 prefer GitHub Actions artifact links over inline images until the redaction story
 is stronger.
 
-## Browser And VNC
+## Browser and VNC
 
 The browser lane has two modes:
 
@@ -561,7 +561,7 @@ guild, channel, and message ids. The GitHub smoke workflow enables
 If a token is accidentally pasted into an issue, PR, chat, or log, rotate it
 after the new secret has been stored.
 
-## GitHub Artifacts And PR Comments
+## GitHub artifacts and PR comments
 
 Mantis workflows should upload the full evidence bundle as a short-lived Actions
 artifact. When the workflow is run for a bug report or fix PR, it should also
@@ -600,7 +600,7 @@ candidate showed the expected queued -> thinking -> done sequence.
 When the run fails because the harness failed, the comment must say that instead
 of implying the candidate failed.
 
-## Private Deployment Notes
+## Private deployment notes
 
 A private deployment may already have a Mantis Discord application. Reuse that
 application instead of creating another app when it has the right bot
@@ -614,7 +614,7 @@ Do not put guild ids, channel ids, bot tokens, browser cookies, or VNC passwords
 in this document. Store them in GitHub secrets, the credential broker, or the
 operator's local secret store.
 
-## Adding A Scenario
+## Adding a scenario
 
 A Mantis scenario should declare:
 
@@ -643,7 +643,7 @@ Scenarios should prefer small, typed oracles:
 Vision checks should be additive. If a platform API can prove the bug, use the
 API as the pass/fail oracle and keep screenshots for human confidence.
 
-## Provider Expansion
+## Provider expansion
 
 After Discord, the same runner can add:
 
@@ -657,7 +657,7 @@ After Discord, the same runner can add:
 Each transport should have one cheap smoke scenario and one or more bug-class
 scenarios. Expensive visual scenarios should stay opt-in.
 
-## Open Questions
+## Open questions
 
 - Which Discord bot should be the driver, and which should be the SUT, when the
   existing Mantis bot is reused?

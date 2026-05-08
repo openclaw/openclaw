@@ -4,6 +4,26 @@
     "target": "OpenClaw"
   },
   {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Coming from BlueBubbles",
+    "target": "Coming from BlueBubbles"
+  },
+  {
+    "source": "BlueBubbles",
+    "target": "BlueBubbles"
+  },
+  {
+    "source": "Pairing",
+    "target": "配对"
+  },
+  {
+    "source": "Channel Routing",
+    "target": "频道路由"
+  },
+  {
     "source": "ClawHub",
     "target": "ClawHub"
   },
@@ -30,6 +50,10 @@
   {
     "source": "Message lifecycle refactor",
     "target": "消息生命周期重构"
+  },
+  {
+    "source": "ACP lifecycle refactor",
+    "target": "ACP 生命周期重构"
   },
   {
     "source": "Channel message API",
@@ -582,6 +606,14 @@
   {
     "source": "Manage plugins",
     "target": "管理插件"
+  },
+  {
+    "source": "Plugin path ownership",
+    "target": "插件路径所有权"
+  },
+  {
+    "source": "Docker permissions",
+    "target": "Docker 权限"
   },
   {
     "source": "Plugin manifest",

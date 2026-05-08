@@ -469,7 +469,10 @@ describe("subscribeEmbeddedPiSession", () => {
         text: "Generated 1 image.",
       }),
     );
-    expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+    const earlyMediaPayloads = onBlockReply.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.mediaUrls?.length);
+    expect(earlyMediaPayloads).toEqual([]);
 
     emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
     emit({
@@ -611,7 +614,10 @@ describe("subscribeEmbeddedPiSession", () => {
           text: firstChunk.trim(),
         }),
       );
-      expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+      const earlyMediaPayloads = onBlockReply.mock.calls
+        .map(([payload]) => payload)
+        .filter((payload) => payload.mediaUrls?.length);
+      expect(earlyMediaPayloads).toEqual([]);
 
       emitAssistantTextDelta(emit, `MEDIA:${mediaUrl}`);
       emit({
@@ -968,7 +974,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getLastToolError()?.toolName).toBe("session_status");
   });
 
-  it("emits lifecycle:error event on agent_end when last assistant message was an error", async () => {
+  it("emits lifecycle:error event on agent_end when last assistant message was an error", () => {
     const { emit, onAgentEvent } = createAgentEventHarness({
       runId: "run-error",
       sessionKey: "test-session",
@@ -982,8 +988,9 @@ describe("subscribeEmbeddedPiSession", () => {
     // Look for lifecycle:error event
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
-    expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.data?.error).toContain("API rate limit reached");
+    expect(lifecycleError).toMatchObject({
+      data: { error: expect.stringContaining("API rate limit reached") },
+    });
   });
 
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {

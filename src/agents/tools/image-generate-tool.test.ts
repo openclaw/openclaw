@@ -1117,12 +1117,16 @@ describe("createImageGenerateTool", () => {
       workspaceDir: process.cwd(),
     });
 
-    await expect(
-      tool.execute("call-openai-edit", {
-        prompt: "Remove the subject but keep the rest unchanged.",
-        image: "./fixtures/reference.png",
-      }),
-    ).resolves.toBeDefined();
+    const result = await tool.execute("call-openai-edit", {
+      prompt: "Remove the subject but keep the rest unchanged.",
+      image: "./fixtures/reference.png",
+    });
+    expect(result).toMatchObject({
+      details: {
+        provider: "openai",
+        model: "gpt-image-1",
+      },
+    });
 
     expect(generateImage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1510,6 +1514,31 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-fal-edit", {
         prompt: "combine",
+        images: ["./fixtures/a.png", "./fixtures/b.png"],
+      }),
+    ).rejects.toThrow("fal edit supports at most 1 reference image");
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it("uses registered provider metadata for slash-containing model overrides", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider(),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
+      workspaceDir: process.cwd(),
+    });
+
+    await expect(
+      tool.execute("call-fal-model-only-edit", {
+        prompt: "combine",
+        model: "fal-ai/flux/dev",
         images: ["./fixtures/a.png", "./fixtures/b.png"],
       }),
     ).rejects.toThrow("fal edit supports at most 1 reference image");

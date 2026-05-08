@@ -99,7 +99,7 @@ function expectCrossContextPolicyResult(params: {
       },
     });
   if (params.expected === "allow") {
-    expect(run).not.toThrow();
+    expect(run()).toBeUndefined();
     return;
   }
   expect(run).toThrow(params.expected);

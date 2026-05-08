@@ -12,6 +12,14 @@ import {
   writeBuildAllStepCacheStamp,
 } from "../../scripts/build-all.mjs";
 
+function getBuildAllStep(label: string) {
+  const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
+  if (!step) {
+    throw new Error(`Missing build-all step ${label}`);
+  }
+  return step;
+}
+
 function withBuildCacheFixture(
   run: (fixture: {
     rootDir: string;
@@ -53,8 +61,7 @@ function withBuildCacheFixture(
 
 describe("resolveBuildAllStep", () => {
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
-    const step = BUILD_ALL_STEPS.find((entry) => entry.label === "canvas:a2ui:bundle");
-    expect(step).toBeTruthy();
+    const step = getBuildAllStep("plugins:assets:build");
 
     const result = resolveBuildAllStep(step, {
       platform: "win32",
@@ -65,7 +72,7 @@ describe("resolveBuildAllStep", () => {
 
     expect(result).toEqual({
       command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "canvas:a2ui:bundle"],
+      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "plugins:assets:build"],
       options: {
         stdio: "inherit",
         env: {},
@@ -76,8 +83,7 @@ describe("resolveBuildAllStep", () => {
   });
 
   it("keeps node steps on the current node binary", () => {
-    const step = BUILD_ALL_STEPS.find((entry) => entry.label === "runtime-postbuild");
-    expect(step).toBeTruthy();
+    const step = getBuildAllStep("runtime-postbuild");
 
     const result = resolveBuildAllStep(step, {
       nodeExecPath: "/custom/node",
@@ -95,8 +101,7 @@ describe("resolveBuildAllStep", () => {
   });
 
   it("adds heap headroom for plugin-sdk dts on Windows", () => {
-    const step = BUILD_ALL_STEPS.find((entry) => entry.label === "build:plugin-sdk:dts");
-    expect(step).toBeTruthy();
+    const step = getBuildAllStep("build:plugin-sdk:dts");
 
     const result = resolveBuildAllStep(step, {
       platform: "win32",
@@ -129,7 +134,7 @@ describe("resolveBuildAllSteps", () => {
 
   it("uses a runtime artifact plus plugin SDK export profile for ci artifacts", () => {
     expect(resolveBuildAllSteps("ciArtifacts").map((step) => step.label)).toEqual([
-      "canvas:a2ui:bundle",
+      "plugins:assets:build",
       "tsdown",
       "check-cli-bootstrap-imports",
       "runtime-postbuild",
@@ -138,7 +143,7 @@ describe("resolveBuildAllSteps", () => {
       "build:plugin-sdk:dts",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
-      "canvas-a2ui-copy",
+      "plugins:assets:copy",
       "copy-hook-metadata",
       "copy-export-html-templates",
       "write-build-info",
@@ -168,15 +173,13 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("does not cache plugin-sdk entry shims over compiled JS", () => {
-    const step = BUILD_ALL_STEPS.find((entry) => entry.label === "write-plugin-sdk-entry-dts");
-    expect(step).toBeTruthy();
-    expect(step?.cache).toBeUndefined();
+    const step = getBuildAllStep("write-plugin-sdk-entry-dts");
+    expect(step.cache).toBeUndefined();
   });
 
   it("does not cache hook metadata over compiled hook handlers", () => {
-    const step = BUILD_ALL_STEPS.find((entry) => entry.label === "copy-hook-metadata");
-    expect(step).toBeTruthy();
-    expect(step?.cache).toBeUndefined();
+    const step = getBuildAllStep("copy-hook-metadata");
+    expect(step.cache).toBeUndefined();
   });
 
   it("rejects unknown build profiles", () => {

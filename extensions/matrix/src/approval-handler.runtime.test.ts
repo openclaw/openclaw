@@ -335,6 +335,94 @@ describe("matrixApprovalNativeRuntime", () => {
     expect(reactMessage).toHaveBeenCalled();
   });
 
+  it("retries transient Matrix approval send failures", async () => {
+    const sendSingleTextMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient Matrix send failure"))
+      .mockResolvedValue({
+        messageId: "$approval",
+        primaryMessageId: "$approval",
+        receipt: buildMatrixReceipt(["$approval"]),
+        roomId: "!room:example.org",
+      });
+    const reactMessage = vi.fn().mockResolvedValue(undefined);
+    const view = buildExecApprovalView();
+    const pendingPayload = await buildPendingPayload(view);
+
+    const entry = await matrixApprovalNativeRuntime.transport.deliverPending({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        client: {} as never,
+        deps: {
+          sendSingleTextMessage,
+          reactMessage,
+        },
+      },
+      request: {} as never,
+      approvalKind: "exec",
+      plannedTarget: buildMatrixApprovalRoomTarget("!room:example.org"),
+      preparedTarget: {
+        to: "room:!room:example.org",
+        roomId: "!room:example.org",
+      },
+      view,
+      pendingPayload,
+    });
+
+    expect(sendSingleTextMessage).toHaveBeenCalledTimes(2);
+    expect(entry).toMatchObject({
+      roomId: "!room:example.org",
+      platformMessageIds: ["$approval"],
+    });
+  });
+
+  it("retries transient Matrix direct-room repair failures before preparing approval DMs", async () => {
+    const repairDirectRooms = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("direct account data not ready"))
+      .mockResolvedValue({
+        activeRoomId: "!dm:example.org",
+      });
+
+    const prepared = await matrixApprovalNativeRuntime.transport.prepareTarget({
+      cfg: {
+        channels: {
+          matrix: {
+            encryption: false,
+          },
+        },
+      } as never,
+      accountId: "default",
+      context: {
+        client: {} as never,
+        deps: {
+          repairDirectRooms,
+        },
+      },
+      request: {} as never,
+      approvalKind: "exec",
+      view: buildExecApprovalView(),
+      pendingPayload: {} as never,
+      plannedTarget: {
+        surface: "approver-dm",
+        target: {
+          to: "user:@owner:example.org",
+        },
+        reason: "preferred",
+      },
+    });
+
+    expect(repairDirectRooms).toHaveBeenCalledTimes(2);
+    expect(prepared).toMatchObject({
+      target: {
+        to: "room:!dm:example.org",
+        roomId: "!dm:example.org",
+        threadId: undefined,
+      },
+    });
+  });
+
   it("falls back to chunked Matrix delivery when approval content exceeds one event", async () => {
     const sendSingleTextMessage = vi
       .fn()

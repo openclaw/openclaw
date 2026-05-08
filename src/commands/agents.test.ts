@@ -9,6 +9,17 @@ import {
   removeAgentBindings,
 } from "./agents.js";
 
+function requireAgentSummary(
+  summaries: ReturnType<typeof buildAgentSummaries>,
+  id: string,
+): ReturnType<typeof buildAgentSummaries>[number] {
+  const summary = summaries.find((entry) => entry.id === id);
+  if (!summary) {
+    throw new Error(`expected agent summary ${id}`);
+  }
+  return summary;
+}
+
 describe("agents helpers", () => {
   it("buildAgentSummaries includes default + configured agents", () => {
     const cfg: OpenClawConfig = {
@@ -39,21 +50,19 @@ describe("agents helpers", () => {
     };
 
     const summaries = buildAgentSummaries(cfg);
-    const main = summaries.find((summary) => summary.id === "main");
-    const work = summaries.find((summary) => summary.id === "work");
+    const main = requireAgentSummary(summaries, "main");
+    const work = requireAgentSummary(summaries, "work");
 
-    expect(main).toBeTruthy();
-    expect(main?.workspace).toBe(path.resolve("/main-ws/main"));
-    expect(main?.bindings).toBe(1);
-    expect(main?.model).toBe("anthropic/claude");
-    expect(main?.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(true);
+    expect(main.workspace).toBe(path.resolve("/main-ws/main"));
+    expect(main.bindings).toBe(1);
+    expect(main.model).toBe("anthropic/claude");
+    expect(main.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(true);
 
-    expect(work).toBeTruthy();
-    expect(work?.name).toBe("Work");
-    expect(work?.workspace).toBe(path.resolve("/work-ws"));
-    expect(work?.agentDir).toBe(path.resolve("/state/agents/work/agent"));
-    expect(work?.bindings).toBe(1);
-    expect(work?.isDefault).toBe(true);
+    expect(work.name).toBe("Work");
+    expect(work.workspace).toBe(path.resolve("/work-ws"));
+    expect(work.agentDir).toBe(path.resolve("/state/agents/work/agent"));
+    expect(work.bindings).toBe(1);
+    expect(work.isDefault).toBe(true);
   });
 
   it("applyAgentConfig merges updates", () => {
@@ -296,8 +305,8 @@ describe("agents helpers", () => {
     };
 
     const result = pruneAgentConfig(cfg, "work");
-    expect(result.config.agents?.list?.some((agent) => agent.id === "work")).toBe(false);
-    expect(result.config.agents?.list?.some((agent) => agent.id === "home")).toBe(true);
+    expect(result.config.agents?.list?.map((agent) => agent.id)).not.toContain("work");
+    expect(result.config.agents?.list?.map((agent) => agent.id)).toContain("home");
     expect(result.config.bindings).toHaveLength(1);
     expect(result.config.bindings?.[0]?.agentId).toBe("home");
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);

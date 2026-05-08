@@ -21,7 +21,7 @@ resources.
   register providers, channels, tools, hooks, or trusted runtimes.
 </Note>
 
-## What Ships Today
+## What ships today
 
 `@openclaw/sdk` ships with:
 
@@ -54,7 +54,7 @@ The SDK also exports the core types used by those surfaces:
 `EnvironmentSelection`, `WorkspaceSelection`, `ApprovalMode`, and related
 result types.
 
-## Connect To A Gateway
+## Connect to a Gateway
 
 Create a client with an explicit Gateway URL, or inject a custom transport for
 tests and embedded app runtimes.
@@ -89,7 +89,7 @@ const oc = new OpenClaw({
 });
 ```
 
-## Run An Agent
+## Run an agent
 
 Use `oc.agents.get(id)` when the app wants an agent handle, then call
 `agent.run()`.
@@ -124,7 +124,7 @@ while the run is still active returns `status: "accepted"` instead of pretending
 the run itself timed out. Runtime timeouts, aborted runs, and cancelled runs are
 normalized into `timed_out` or `cancelled`.
 
-## Create And Reuse Sessions
+## Create and reuse sessions
 
 Use sessions when the app wants durable transcript state.
 
@@ -147,7 +147,7 @@ await session.patch({ label: "renamed-session" });
 await session.compact({ maxLines: 200 });
 ```
 
-## Stream Events
+## Stream events
 
 The SDK normalizes raw Gateway events into a stable `OpenClawEvent` envelope:
 
@@ -208,7 +208,7 @@ for await (const event of run.events()) {
 For app-wide streams, use `oc.events()`. For raw Gateway frames, use
 `oc.rawEvents()`.
 
-## Models, Tools, Artifacts, And Approvals
+## Models, tools, artifacts, and approvals
 
 Model helpers map to current Gateway methods:
 
@@ -261,7 +261,7 @@ const { environments } = await oc.environments.list();
 await oc.environments.status(environments[0].id);
 ```
 
-## Explicitly Unsupported Today
+## Explicitly unsupported today
 
 The SDK includes names for the product model we want, but it does not silently
 pretend Gateway RPCs exist. These calls currently throw explicit unsupported
@@ -282,7 +282,7 @@ the `agent` RPC. If callers pass them, the SDK throws before submitting the run
 so work does not accidentally execute with default workspace, runtime,
 environment, or approval behavior.
 
-## App SDK Versus Plugin SDK
+## App SDK vs Plugin SDK
 
 Use the App SDK when code lives outside OpenClaw:
 
@@ -304,7 +304,7 @@ Use the Plugin SDK when code runs inside OpenClaw:
 App SDK code should import from `@openclaw/sdk`. Plugin code should import from
 documented `openclaw/plugin-sdk/*` subpaths. Do not mix the two contracts.
 
-## Related Docs
+## Related
 
 - [OpenClaw App SDK API design](/reference/openclaw-sdk-api-design)
 - [Gateway RPC reference](/reference/rpc)

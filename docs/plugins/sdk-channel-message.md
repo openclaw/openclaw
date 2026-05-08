@@ -7,8 +7,6 @@ read_when:
   - You are migrating from legacy reply pipeline or inbound reply dispatch helpers
 ---
 
-# Channel Message API
-
 Channel plugins should expose one `message` adapter from
 `openclaw/plugin-sdk/channel-message`. The adapter describes the native message
 lifecycle that the platform supports:
@@ -33,7 +31,7 @@ Runtime delivery helpers are available from
 `openclaw/plugin-sdk/channel-message-runtime` for monitor/send code paths that
 are already doing asynchronous message I/O.
 
-## Minimal Adapter
+## Minimal adapter
 
 Most new channel plugins can start with a small adapter:
 
@@ -93,7 +91,7 @@ export const demoPlugin = createChatChannelPlugin({
 Only declare capabilities that the adapter really preserves. Every declared
 capability should have a contract test.
 
-## Outbound Bridge
+## Outbound bridge
 
 If the channel already has a compatible `outbound` adapter, prefer deriving the
 message adapter instead of duplicating send code:
@@ -116,7 +114,7 @@ uses `manual` receive acknowledgement policy. That makes plugin-owned platform
 acknowledgement explicit without changing channels that acknowledge webhooks,
 sockets, or polling offsets outside generic receive context.
 
-## Message Tool Sends
+## Message tool sends
 
 The shared `message(action="send")` path should use the same core delivery
 lifecycle as final replies. If a channel needs provider-specific shaping for the
@@ -167,7 +165,7 @@ keep the prepared send path best-effort; core will still try the write-ahead
 queue, but queue persistence or uncertain crash recovery is not part of the
 required delivery contract.
 
-## Durable Final Capabilities
+## Durable final capabilities
 
 Durable final delivery is opt in per side effect. Core will only use generic
 durable delivery when the adapter declares every capability needed by the
@@ -217,7 +215,7 @@ const requiredCapabilities = deriveDurableFinalDeliveryRequirements({
 `messageSendingHooks` is required by default. Set `messageSendingHooks: false`
 only for a path that intentionally cannot run global message-sending hooks.
 
-## Durable Send Contract
+## Durable send contract
 
 A durable final send has stricter semantics than legacy channel-owned delivery:
 
@@ -266,7 +264,7 @@ becomes the final receipt. Avoid adding new owner-local `messageIds` fields.
 Legacy `ChannelDeliveryResult.messageIds` is still produced at compatibility
 edges.
 
-## Live Preview
+## Live preview
 
 Channels that stream draft previews or progress updates should declare live
 capabilities:
@@ -300,7 +298,7 @@ finalizer decides whether the final reply edits the preview in place, sends a
 normal fallback, discards pending preview state, keeps an ambiguous failed edit
 without duplicating the message, and returns the final receipt.
 
-## Receive Ack Policy
+## Receive ack policy
 
 Inbound receivers that control platform acknowledgement timing should declare
 receive policy:
@@ -344,7 +342,7 @@ Use `createMessageReceiveContext(...)` in receivers that defer ack state, and
 `shouldAckMessageAfterStage(...)` when the receiver needs to test whether a
 stage has satisfied the configured policy.
 
-## Contract Tests
+## Contract tests
 
 Capability declarations are part of the plugin contract. Back them with tests:
 
@@ -387,7 +385,7 @@ Add live and receive proof suites when the adapter declares those features. A
 missing proof should fail the test rather than silently widening the durable
 surface.
 
-## Deprecated Compatibility APIs
+## Deprecated compatibility APIs
 
 These APIs remain importable for third-party compatibility. Do not use them for
 new channel code.
@@ -409,7 +407,7 @@ Compatibility dispatchers can still use `createReplyPrefixContext(...)`,
 message facade. New lifecycle code should avoid the old
 `channel-reply-pipeline` subpath.
 
-## Migration Checklist
+## Migration checklist
 
 1. Add `message: defineChannelMessageAdapter(...)` or
    `message: createChannelMessageAdapterFromOutbound(...)` to the channel plugin.

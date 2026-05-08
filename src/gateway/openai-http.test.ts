@@ -902,7 +902,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           body: JSON.stringify(body),
         });
         expect(second.status).toBe(429);
-        expect(second.headers.get("retry-after")).toBeTruthy();
+        expect(second.headers.get("retry-after")).toMatch(/^\d+$/);
       },
       {
         serverOptions: {
@@ -942,7 +942,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const jsonChunks = data
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
-        expect(jsonChunks.some((c) => c.object === "chat.completion.chunk")).toBe(true);
+        expect(jsonChunks.map((chunk) => chunk.object)).toContain("chat.completion.chunk");
         const allContent = jsonChunks
           .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
           .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)

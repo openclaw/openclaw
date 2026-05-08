@@ -11,6 +11,8 @@ import type {
   TtsResult,
   TtsRuntimeFacade,
   TtsSynthesisResult,
+  TtsSynthesisStreamResult,
+  TtsStreamResult,
   TtsTelephonyResult,
 } from "./tts-runtime.types.js";
 export {
@@ -29,6 +31,10 @@ function loadFacadeModule(): FacadeModule {
     dirName: "speech-core",
     artifactBasename: "runtime-api.js",
   });
+}
+
+export function prewarmTtsRuntimeFacade(): void {
+  loadFacadeModule();
 }
 
 export const _test: FacadeModule["_test"] = createLazyFacadeObjectValue(
@@ -116,9 +122,17 @@ export const synthesizeSpeech: FacadeModule["synthesizeSpeech"] = createLazyFaca
   loadFacadeModule,
   "synthesizeSpeech",
 );
+export const streamSpeech: FacadeModule["streamSpeech"] = createLazyFacadeRuntimeValue(
+  loadFacadeModule,
+  "streamSpeech",
+);
 export const textToSpeech: FacadeModule["textToSpeech"] = createLazyFacadeRuntimeValue(
   loadFacadeModule,
   "textToSpeech",
+);
+export const textToSpeechStream: FacadeModule["textToSpeechStream"] = createLazyFacadeRuntimeValue(
+  loadFacadeModule,
+  "textToSpeechStream",
 );
 export const textToSpeechTelephony: FacadeModule["textToSpeechTelephony"] =
   createLazyFacadeRuntimeValue(loadFacadeModule, "textToSpeechTelephony");
@@ -130,5 +144,7 @@ export type {
   TtsDirectiveParseResult,
   TtsResult,
   TtsSynthesisResult,
+  TtsSynthesisStreamResult,
+  TtsStreamResult,
   TtsTelephonyResult,
 } from "./tts-runtime.types.js";

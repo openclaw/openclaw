@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_FIRECRAWL_BASE_URL,
   DEFAULT_FIRECRAWL_MAX_AGE_MS,
@@ -65,6 +65,12 @@ describe("firecrawl tools", () => {
     ssrfMock?.mockRestore();
     ssrfMock = undefined;
     global.fetch = priorFetch;
+    vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./firecrawl-client.js");
+    vi.resetModules();
   });
 
   it("exposes selection metadata and enables the plugin in config", () => {
@@ -208,10 +214,10 @@ describe("firecrawl tools", () => {
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
-  it("blocks private and non-http scrape targets before Firecrawl requests", async () => {
-    expect(() =>
+  it("blocks private and non-http scrape targets before Firecrawl requests", () => {
+    expect(
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     for (const blockedUrl of [
       "http://localhost/admin",

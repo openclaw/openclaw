@@ -75,7 +75,7 @@ non-durable policy.
 - Structured OpenClaw-origin metadata for operational/system output so visible
   gateway failures do not re-enter shared bot-enabled rooms as fresh prompts.
 
-## Non Goals
+## Non goals
 
 - Do not remove `runtime.channel.turn.*` in the first phase.
 - Do not force every channel into the same native transport behavior.
@@ -84,7 +84,7 @@ non-durable policy.
 - Do not publish all internal migration helpers as stable SDK API.
 - Do not make retries replay completed non-idempotent platform operations.
 
-## Reference Model
+## Reference model
 
 Vercel Chat has a good public mental model:
 
@@ -114,7 +114,7 @@ What OpenClaw needs beyond that model:
 `thread.post()` style promises are not enough for OpenClaw. They hide the
 transaction boundary that decides whether a send is recoverable.
 
-## Core Model
+## Core model
 
 The new domain should live under an internal core namespace such as
 `src/channels/message/*`.
@@ -137,7 +137,7 @@ core.messages.state(...)
 `state` owns durable intent storage, receipts, idempotency, recovery, locks, and
 dedupe.
 
-## Message Terms
+## Message terms
 
 ### Message
 
@@ -284,7 +284,7 @@ A receipt can describe one platform message or a multi-part delivery. Chunked
 text, media plus text, voice plus text, and card fallbacks must preserve all
 platform ids while still exposing a primary id for threading and later edits.
 
-## Receive Context
+## Receive context
 
 Receiving should not be a bare helper call. The core needs a context that knows
 dedupe, routing, session recording, and platform ack policy.
@@ -382,7 +382,7 @@ source if we need platform-level redelivery beyond OpenClaw's restart
 watermark. Webhook platforms may need immediate HTTP ack, but they still need
 inbound dedupe and durable outbound send intents because webhooks can redeliver.
 
-## Send Context
+## Send context
 
 Sending is also context based:
 
@@ -504,7 +504,7 @@ fallback with no durable record for the remaining payloads. Recovery must know
 which units already have receipts and either replay only missing units or mark
 the batch `unknown_after_send` until the adapter reconciles it.
 
-## Live Context
+## Live context
 
 Preview, edit, progress, and stream behavior should be one opt-in lifecycle.
 
@@ -552,7 +552,7 @@ This should cover current behavior:
 - Teams native progress stream.
 - QQ Bot stream or accumulated fallback.
 
-## Adapter Surface
+## Adapter surface
 
 The public SDK target should be one subpath:
 
@@ -651,7 +651,7 @@ type MessageCapabilities = {
 };
 ```
 
-## Public SDK Reduction
+## Public SDK reduction
 
 The new public surface should absorb or deprecate these conceptual areas:
 
@@ -672,7 +672,7 @@ Bundled plugins may keep internal helper imports through reserved runtime
 subpaths while migrating. Public docs should steer plugin authors to
 `plugin-sdk/channel-message` once it exists.
 
-## Relationship To Channel Turn
+## Relationship to channel turn
 
 `runtime.channel.turn.*` should stay during migration.
 
@@ -699,7 +699,7 @@ After all bundled plugins and known third-party compatibility paths are bridged,
 published SDK migration path and contract tests proving old plugins still work
 or fail with a clear version error.
 
-## Compatibility Guardrails
+## Compatibility guardrails
 
 During migration, generic durable delivery is opt-in for any channel whose
 existing delivery callback has side effects beyond "send this payload".
@@ -763,7 +763,7 @@ Concrete migration hazards to preserve:
 - Telegram silent fallback delivery must deliver the full projected payload
   array. A single-payload shortcut can drop additional fallback payloads after
   projection.
-- LINE, BlueBubbles, Zalo, Nostr, and other existing assembled/helper paths may
+- LINE, Zalo, Nostr, and other existing assembled/helper paths may
   have reply-token handling, media proxying, sent-message caches, loading/status
   cleanup, or callback-only targets. They stay on channel-owned delivery until
   those semantics are represented by the send adapter and verified by tests.
@@ -775,7 +775,7 @@ Concrete migration hazards to preserve:
   Channels must not implement this with visible-text prefix filters except as a
   short emergency stopgap; the durable contract is structured origin metadata.
 
-## Internal Storage
+## Internal storage
 
 The durable queue should store message send intents, not reply payloads.
 
@@ -822,7 +822,7 @@ load pending or sending intents
 The queue should keep enough identity to replay through the same account,
 thread, target, formatting policy, and media rules after restart.
 
-## Failure Classes
+## Failure classes
 
 Channel adapters classify transport failures into closed categories:
 
@@ -852,34 +852,34 @@ Core policy:
   commit becomes `unknown_after_send` unless the adapter can prove the platform
   operation did not happen.
 
-## Channel Mapping
+## Channel mapping
 
-| Channel                  | Target migration                                                                                                                                                                                                                                                                                                                                               |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Telegram                 | Receive ack policy plus durable final sends. Live adapter owns send plus edit preview, stale preview final send, topics, quote-reply preview skip, media fallback, and retry-after handling.                                                                                                                                                                   |
-| Discord                  | Send adapter wraps existing durable payload delivery. Live adapter owns draft edit, progress draft, media/error preview cancel, reply target preservation, and message id receipts. Audit bot-authored gateway-failure echoes in shared rooms; use an outbound registry or other native equivalent if Discord cannot carry origin metadata on normal messages. |
-| Slack                    | Send adapter handles normal chat posts. Live adapter chooses native stream when thread shape supports it, otherwise draft preview. Receipts preserve thread timestamps. Origin adapter maps OpenClaw gateway failures to Slack `chat.postMessage.metadata` and drops tagged bot-room echoes before `allowBots` authorization.                                  |
-| WhatsApp                 | Send adapter owns text/media send with durable final intents. Receive adapter handles group mention and sender identity. Live can stay absent until WhatsApp has an editable transport.                                                                                                                                                                        |
-| Matrix                   | Live adapter owns draft event edits, finalization, redaction, encrypted media constraints, and reply-target mismatch fallback. Receive adapter owns encrypted event hydration and dedupe. Origin adapter should encode OpenClaw gateway-failure origin into Matrix event content and drop configured-bot room echoes before `allowBots` handling.              |
-| Mattermost               | Live adapter owns one draft post, progress/tool folding, finalization in place, and fresh-send fallback.                                                                                                                                                                                                                                                       |
-| Microsoft Teams          | Live adapter owns native progress and block stream behavior. Send adapter owns activities and attachment/card receipts.                                                                                                                                                                                                                                        |
-| Feishu                   | Render adapter owns text/card/raw rendering. Live adapter owns streaming cards and duplicate final suppression. Send adapter owns comments, topic sessions, media, and voice suppression.                                                                                                                                                                      |
-| QQ Bot                   | Live adapter owns C2C streaming, accumulator timeout, and fallback final send. Render adapter owns media tags and text-as-voice.                                                                                                                                                                                                                               |
-| Signal                   | Simple receive plus send adapter. No live adapter unless signal-cli adds reliable edit support.                                                                                                                                                                                                                                                                |
-| iMessage and BlueBubbles | Simple receive plus send adapter. iMessage send must preserve monitor echo-cache population before durable finals can bypass monitor delivery. BlueBubbles-specific typing, reactions, and attachments remain adapter capabilities.                                                                                                                            |
-| Google Chat              | Simple receive plus send adapter with thread relation mapped to spaces and thread ids. Audit `allowBots=true` room behavior for tagged OpenClaw gateway-failure echoes.                                                                                                                                                                                        |
-| LINE                     | Simple receive plus send adapter with reply-token constraints modeled as target/relation capability.                                                                                                                                                                                                                                                           |
-| Nextcloud Talk           | SDK receive bridge plus send adapter.                                                                                                                                                                                                                                                                                                                          |
-| IRC                      | Simple receive plus send adapter, no durable edit receipts.                                                                                                                                                                                                                                                                                                    |
-| Nostr                    | Receive plus send adapter for encrypted DMs; receipts are event ids.                                                                                                                                                                                                                                                                                           |
-| QA Channel               | Contract-test adapter for receive, send, live, retry, and recovery behavior.                                                                                                                                                                                                                                                                                   |
-| Synology Chat            | Simple receive plus send adapter.                                                                                                                                                                                                                                                                                                                              |
-| Tlon                     | Send adapter must preserve model-signature rendering and participated-thread tracking before generic durable final delivery is enabled.                                                                                                                                                                                                                        |
-| Twitch                   | Simple receive plus send adapter with rate-limit classification.                                                                                                                                                                                                                                                                                               |
-| Zalo                     | Simple receive plus send adapter.                                                                                                                                                                                                                                                                                                                              |
-| Zalo Personal            | Simple receive plus send adapter.                                                                                                                                                                                                                                                                                                                              |
+| Channel         | Target migration                                                                                                                                                                                                                                                                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Telegram        | Receive ack policy plus durable final sends. Live adapter owns send plus edit preview, stale preview final send, topics, quote-reply preview skip, media fallback, and retry-after handling.                                                                                                                                                                   |
+| Discord         | Send adapter wraps existing durable payload delivery. Live adapter owns draft edit, progress draft, media/error preview cancel, reply target preservation, and message id receipts. Audit bot-authored gateway-failure echoes in shared rooms; use an outbound registry or other native equivalent if Discord cannot carry origin metadata on normal messages. |
+| Slack           | Send adapter handles normal chat posts. Live adapter chooses native stream when thread shape supports it, otherwise draft preview. Receipts preserve thread timestamps. Origin adapter maps OpenClaw gateway failures to Slack `chat.postMessage.metadata` and drops tagged bot-room echoes before `allowBots` authorization.                                  |
+| WhatsApp        | Send adapter owns text/media send with durable final intents. Receive adapter handles group mention and sender identity. Live can stay absent until WhatsApp has an editable transport.                                                                                                                                                                        |
+| Matrix          | Live adapter owns draft event edits, finalization, redaction, encrypted media constraints, and reply-target mismatch fallback. Receive adapter owns encrypted event hydration and dedupe. Origin adapter should encode OpenClaw gateway-failure origin into Matrix event content and drop configured-bot room echoes before `allowBots` handling.              |
+| Mattermost      | Live adapter owns one draft post, progress/tool folding, finalization in place, and fresh-send fallback.                                                                                                                                                                                                                                                       |
+| Microsoft Teams | Live adapter owns native progress and block stream behavior. Send adapter owns activities and attachment/card receipts.                                                                                                                                                                                                                                        |
+| Feishu          | Render adapter owns text/card/raw rendering. Live adapter owns streaming cards and duplicate final suppression. Send adapter owns comments, topic sessions, media, and voice suppression.                                                                                                                                                                      |
+| QQ Bot          | Live adapter owns C2C streaming, accumulator timeout, and fallback final send. Render adapter owns media tags and text-as-voice.                                                                                                                                                                                                                               |
+| Signal          | Simple receive plus send adapter. No live adapter unless signal-cli adds reliable edit support.                                                                                                                                                                                                                                                                |
+| iMessage        | Simple receive plus send adapter. iMessage send must preserve monitor echo-cache population before durable finals can bypass monitor delivery.                                                                                                                                                                                                                 |
+| Google Chat     | Simple receive plus send adapter with thread relation mapped to spaces and thread ids. Audit `allowBots=true` room behavior for tagged OpenClaw gateway-failure echoes.                                                                                                                                                                                        |
+| LINE            | Simple receive plus send adapter with reply-token constraints modeled as target/relation capability.                                                                                                                                                                                                                                                           |
+| Nextcloud Talk  | SDK receive bridge plus send adapter.                                                                                                                                                                                                                                                                                                                          |
+| IRC             | Simple receive plus send adapter, no durable edit receipts.                                                                                                                                                                                                                                                                                                    |
+| Nostr           | Receive plus send adapter for encrypted DMs; receipts are event ids.                                                                                                                                                                                                                                                                                           |
+| QA Channel      | Contract-test adapter for receive, send, live, retry, and recovery behavior.                                                                                                                                                                                                                                                                                   |
+| Synology Chat   | Simple receive plus send adapter.                                                                                                                                                                                                                                                                                                                              |
+| Tlon            | Send adapter must preserve model-signature rendering and participated-thread tracking before generic durable final delivery is enabled.                                                                                                                                                                                                                        |
+| Twitch          | Simple receive plus send adapter with rate-limit classification.                                                                                                                                                                                                                                                                                               |
+| Zalo            | Simple receive plus send adapter.                                                                                                                                                                                                                                                                                                                              |
+| Zalo Personal   | Simple receive plus send adapter.                                                                                                                                                                                                                                                                                                                              |
 
-## Migration Plan
+## Migration plan
 
 ### Phase 1: Internal Message Domain
 
@@ -984,7 +984,7 @@ messages".
 - Remove or hide old internal helpers only after no bundled plugin needs them
   and third-party contracts have a stable replacement.
 
-## Test Plan
+## Test plan
 
 Unit tests:
 
@@ -1035,7 +1035,7 @@ Channel tests:
 - Discord prepared dispatcher finals route through the send context before docs
   or changelog claim Discord final-reply durability.
 - iMessage durable final sends populate the monitor sent-message echo cache.
-- LINE, BlueBubbles, Zalo, and Nostr legacy delivery paths are not bypassed by
+- LINE, Zalo, and Nostr legacy delivery paths are not bypassed by
   generic durable send until their adapter parity tests exist.
 - Direct-DM/Nostr callback delivery remains authoritative unless explicitly
   migrated to a complete message target and replay-safe send adapter.
@@ -1067,7 +1067,7 @@ Validation:
 - Live or qa-channel smoke for at least one edit-capable channel and one
   simple send-only channel before removing compatibility wrappers.
 
-## Open Questions
+## Open questions
 
 - Whether Telegram should eventually replace the grammY runner source with a
   fully durable polling source that can control platform-level redelivery, not
@@ -1086,7 +1086,7 @@ Validation:
 - Which channels have native origin metadata, which need persisted outbound
   registries, and which cannot offer reliable cross-bot echo suppression.
 
-## Acceptance Criteria
+## Acceptance criteria
 
 - Every bundled message channel sends final visible output through
   `messages.send`.

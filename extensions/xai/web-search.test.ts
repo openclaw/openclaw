@@ -126,7 +126,6 @@ describe("xai web search config resolution", () => {
           },
         },
       });
-      expect(maybeTool).toBeTruthy();
       if (!maybeTool) {
         throw new Error("expected xai web search tool");
       }
@@ -585,7 +584,14 @@ describe("xai provider models", () => {
       api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,
-      thinkingLevelMap: { off: null },
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: null,
+        xhigh: null,
+      },
       input: ["text", "image"],
       contextWindow: 1_000_000,
       maxTokens: 64_000,

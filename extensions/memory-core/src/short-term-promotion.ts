@@ -757,10 +757,9 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
 }
 
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
-  const storePath = resolveStorePath(workspaceDir);
   try {
     return normalizeStore(
-      await privateFileStore(workspaceDir).readJsonIfExists(path.relative(workspaceDir, storePath)),
+      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_STORE_RELATIVE_PATH),
       nowIso,
     );
   } catch (err) {
@@ -830,12 +829,9 @@ async function readPhaseSignalStore(
   workspaceDir: string,
   nowIso: string,
 ): Promise<ShortTermPhaseSignalStore> {
-  const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   try {
     return normalizePhaseSignalStore(
-      await privateFileStore(workspaceDir).readJsonIfExists(
-        path.relative(workspaceDir, phaseSignalPath),
-      ),
+      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
       nowIso,
     );
   } catch {
@@ -847,21 +843,15 @@ async function writePhaseSignalStore(
   workspaceDir: string,
   store: ShortTermPhaseSignalStore,
 ): Promise<void> {
-  const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(
-    path.relative(workspaceDir, phaseSignalPath),
-    store,
-    {
-      trailingNewline: true,
-    },
-  );
+  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH, store, {
+    trailingNewline: true,
+  });
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
-  const storePath = resolveStorePath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(path.relative(workspaceDir, storePath), store, {
+  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_STORE_RELATIVE_PATH, store, {
     trailingNewline: true,
   });
 }
