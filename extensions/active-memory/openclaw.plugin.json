@@ -171,11 +171,11 @@
     },
     "persistTranscripts": {
       "label": "Persist Transcripts",
-      "help": "Keep blocking memory sub-agent session transcripts on disk in a separate plugin-owned directory."
+      "help": "Log the blocking memory sub-agent SQLite transcript locator for debugging."
     },
     "transcriptDir": {
       "label": "Transcript Directory",
-      "help": "Relative directory under the agent sessions folder used when transcript persistence is enabled."
+      "help": "Legacy compatibility setting ignored by the SQLite-backed runtime."
     },
     "qmd.searchMode": {
       "label": "QMD Search Mode",

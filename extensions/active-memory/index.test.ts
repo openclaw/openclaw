@@ -7,14 +7,6 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import plugin, { __testing } from "./index.js";
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-}
-
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {
     "agent:main:main": {
@@ -2240,7 +2232,7 @@ describe("active-memory plugin", () => {
       prependContext: expect.stringContaining("temporary partial recall summary"),
     });
     await vi.waitFor(async () => {
-      await expectPathMissing(tempSessionFile);
+      await expect(fs.access(tempSessionFile)).rejects.toThrow();
     });
     expect(getActiveMemoryLines(sessionKey)).toEqual(
       expect.arrayContaining([
@@ -3703,7 +3695,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("keeps subagent transcripts off disk by default by using a temp session file", async () => {
+  it("keeps subagent transcripts in sqlite by default", async () => {
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
     const rmSpy = vi.spyOn(fs, "rm");
 
@@ -3717,16 +3709,15 @@ describe("active-memory plugin", () => {
       },
     );
 
-    expect(mkdtempSpy).toHaveBeenCalled();
     const sessionFile = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile;
-    expect(sessionFile).toMatch(/openclaw-active-memory-.*\/session\.jsonl$/);
-    expect(rmSpy).toHaveBeenCalledWith(path.dirname(sessionFile), {
-      recursive: true,
-      force: true,
-    });
+    expect(sessionFile).toMatch(
+      /^sqlite-transcript:\/\/main\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
+    );
+    expect(mkdtempSpy).not.toHaveBeenCalled();
+    expect(rmSpy).not.toHaveBeenCalled();
   });
 
-  it("persists subagent transcripts in a separate directory when enabled", async () => {
+  it("returns sqlite transcript locators when transcript persistence is enabled", async () => {
     api.pluginConfig = {
       agents: ["main"],
       persistTranscripts: true,
@@ -3744,31 +3735,23 @@ describe("active-memory plugin", () => {
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 
-    const expectedDir = path.join(
-      stateDir,
-      "plugins",
-      "active-memory",
-      "transcripts",
-      "agents",
-      "main",
-      "active-memory-subagents",
+    const sessionFile = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile;
+    expect(sessionFile).toMatch(
+      /^sqlite-transcript:\/\/main\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
     );
-    expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
+    expect(mkdirSpy).not.toHaveBeenCalled();
     expect(mkdtempSpy).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile).toMatch(
-      new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
-      ),
-    );
     expect(
-      vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0])),
-    ).toContainEqual(expect.stringContaining(`transcript=${expectedDir}${path.sep}`));
-    expect(rmSpy.mock.calls.filter(([target]) => String(target).startsWith(expectedDir))).toEqual(
-      [],
-    );
+      vi
+        .mocked(api.logger.info)
+        .mock.calls.some((call: unknown[]) =>
+          String(call[0]).includes(`transcript=${sessionFile}`),
+        ),
+    ).toBe(true);
+    expect(rmSpy).not.toHaveBeenCalled();
   });
 
-  it("falls back to the default transcript directory when transcriptDir is unsafe", async () => {
+  it("ignores unsafe transcript directories when using sqlite transcript locators", async () => {
     api.pluginConfig = {
       agents: ["main"],
       persistTranscripts: true,
@@ -3788,24 +3771,13 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const expectedDir = path.join(
-      stateDir,
-      "plugins",
-      "active-memory",
-      "transcripts",
-      "agents",
-      "main",
-      "active-memory",
-    );
-    expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
+    expect(mkdirSpy).not.toHaveBeenCalled();
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile).toMatch(
-      new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
-      ),
+      /^sqlite-transcript:\/\/main\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
     );
   });
 
-  it("scopes persisted subagent transcripts by agent", async () => {
+  it("scopes sqlite subagent transcript locators by agent", async () => {
     api.pluginConfig = {
       agents: ["main", "support/agent"],
       persistTranscripts: true,
@@ -3825,20 +3797,9 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const expectedDir = path.join(
-      stateDir,
-      "plugins",
-      "active-memory",
-      "transcripts",
-      "agents",
-      "support%2Fagent",
-      "active-memory-subagents",
-    );
-    expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
+    expect(mkdirSpy).not.toHaveBeenCalled();
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile).toMatch(
-      new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
-      ),
+      /^sqlite-transcript:\/\/support-agent\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
     );
   });
 
