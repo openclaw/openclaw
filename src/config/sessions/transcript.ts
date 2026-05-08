@@ -27,7 +27,7 @@ export type SessionTranscriptAppendResult =
   | { ok: true; sessionFile: string; messageId: string }
   | { ok: false; reason: string };
 
-export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
+export type SessionTranscriptUpdateMode = "inline" | "signal-only" | "none";
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -307,7 +307,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         messageId,
       });
       break;
-    case "file-only":
+    case "signal-only":
       emitSessionTranscriptUpdate({
         agentId,
         sessionId: entry.sessionId,
