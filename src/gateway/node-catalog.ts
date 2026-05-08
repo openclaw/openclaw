@@ -118,7 +118,12 @@ function resolveEffectiveLastSeen(params: {
       ? { atMs: params.devicePairing.lastSeenAtMs, reason: params.devicePairing.lastSeenReason }
       : undefined,
   ].filter((entry) => entry !== undefined);
-  const newest = candidates.toSorted((left, right) => right.atMs - left.atMs)[0];
+  let newest: { atMs: number; reason?: string } | undefined;
+  for (const candidate of candidates) {
+    if (!newest || candidate.atMs > newest.atMs) {
+      newest = candidate;
+    }
+  }
   if (!newest) {
     return {};
   }

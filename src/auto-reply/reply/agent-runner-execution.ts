@@ -339,10 +339,13 @@ function extractCodexUsageLimitMessage(text: string): string | undefined {
     "You've reached your Codex subscription usage limit.",
     "Codex usage limit reached.",
   ];
-  const markerIndex = markers
-    .map((marker) => text.indexOf(marker))
-    .filter((index) => index >= 0)
-    .toSorted((left, right) => left - right)[0];
+  let markerIndex: number | undefined;
+  for (const marker of markers) {
+    const index = text.indexOf(marker);
+    if (index >= 0 && (markerIndex === undefined || index < markerIndex)) {
+      markerIndex = index;
+    }
+  }
   if (markerIndex === undefined) {
     return undefined;
   }
