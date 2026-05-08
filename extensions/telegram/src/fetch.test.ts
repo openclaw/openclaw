@@ -571,7 +571,8 @@ describe("resolveTelegramFetch", () => {
     );
   });
 
-  it("exports fallback dispatcher attempts for Telegram media downloads", () => {
+  it("exports fallback dispatcher attempts for Telegram media downloads", async () => {
+    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
     const transport = resolveTelegramTransport(undefined, {
       network: {
         autoSelectFamily: true,
@@ -579,7 +580,13 @@ describe("resolveTelegramFetch", () => {
       },
     });
 
-    expect(transport.sourceFetch).toEqual(expect.any(Function));
+    await expect(
+      transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
+    ).resolves.toEqual({ ok: true });
+    expect(undiciFetch).toHaveBeenCalledWith(
+      "https://api.telegram.org/botTOKEN/getFile",
+      undefined,
+    );
     expect(transport.fetch).not.toBe(transport.sourceFetch);
     expect(transport.dispatcherAttempts).toHaveLength(3);
 
