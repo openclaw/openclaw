@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
+  createSqliteSessionTranscriptLocator,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
@@ -68,6 +69,14 @@ describe("session path safety", () => {
       sessionsDir: path.resolve("/tmp/openclaw/agents/worker/sessions"),
     });
     expect(resolveSessionFilePathOptions({})).toBeUndefined();
+  });
+
+  it("uses SQLite transcript locators instead of runtime JSONL paths by default", () => {
+    expect(
+      resolveSessionFilePath("sess-1", {
+        sessionFile: "/tmp/openclaw/agents/main/sessions/legacy.jsonl",
+      }),
+    ).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));
   });
 
   it("accepts symlink-alias session paths that resolve under the sessions dir", () => {
@@ -591,7 +600,7 @@ describe("resolveAndPersistSessionFile", () => {
     }
   }
 
-  it("persists fallback topic transcript paths for sessions without sessionFile", async () => {
+  it("persists fallback topic transcript locators for sessions without sessionFile", async () => {
     const sessionId = "topic-session-id";
     const sessionKey = "agent:main:telegram:group:123:topic:456";
     const store = {
@@ -602,11 +611,11 @@ describe("resolveAndPersistSessionFile", () => {
     };
     seedFixtureSessionEntries(store);
     const sessionStore = readFixtureSessionEntries();
-    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
+    const fallbackSessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
       sessionId,
-      fixture.sessionsDir(),
-      456,
-    );
+      topicId: 456,
+    });
 
     const result = await resolveAndPersistSessionFile({
       sessionId,
@@ -622,10 +631,14 @@ describe("resolveAndPersistSessionFile", () => {
     expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
   });
 
-  it("creates and persists entry when session is not yet present", async () => {
+  it("creates and persists a SQLite locator when session is not yet present", async () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
     const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const expectedSessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId,
+    });
 
     const result = await resolveAndPersistSessionFile({
       sessionId,
@@ -634,10 +647,39 @@ describe("resolveAndPersistSessionFile", () => {
       fallbackSessionFile,
     });
 
-    expect(result.sessionFile).toBe(fallbackSessionFile);
+    expect(result.sessionFile).toBe(expectedSessionFile);
     expect(result.sessionEntry.sessionId).toBe(sessionId);
     const saved = readFixtureSessionEntries();
-    expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
+    expect(saved[sessionKey]?.sessionFile).toBe(expectedSessionFile);
+  });
+
+  it("normalizes legacy stored transcript paths to SQLite locators", async () => {
+    const sessionId = "legacy-path-session-id";
+    const sessionKey = "agent:main:telegram:group:456";
+    const legacySessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const expectedSessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId,
+    });
+    seedFixtureSessionEntries({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        sessionFile: legacySessionFile,
+      },
+    });
+    const sessionStore = readFixtureSessionEntries();
+
+    const result = await resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey,
+      sessionEntry: sessionStore[sessionKey],
+      agentId: "main",
+    });
+
+    expect(result.sessionFile).toBe(expectedSessionFile);
+    expect(result.sessionEntry.sessionFile).toBe(expectedSessionFile);
+    expect(readFixtureSessionEntries()[sessionKey]?.sessionFile).toBe(expectedSessionFile);
   });
 
   it("rotates to a new transcript path when sessionId changes on the same session key", async () => {
