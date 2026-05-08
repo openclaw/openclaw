@@ -2,12 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const callGateway = vi.hoisted(() => vi.fn());
+const note = vi.hoisted(() => vi.fn());
 
 vi.mock("../gateway/call.js", () => ({
   buildGatewayConnectionDetails: vi.fn(() => ({
     message: "Gateway target: ws://127.0.0.1:18789",
   })),
   callGateway,
+}));
+
+vi.mock("../terminal/note.js", () => ({
+  note,
 }));
 
 vi.mock("./health.js", () => ({
@@ -21,6 +26,7 @@ describe("checkGatewayHealth", () => {
 
   beforeEach(() => {
     callGateway.mockReset();
+    note.mockReset();
   });
 
   it("uses a lightweight status RPC for the restart liveness gate", async () => {
@@ -43,6 +49,25 @@ describe("checkGatewayHealth", () => {
       timeoutMs: 6000,
     });
     expect(runtime.error).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalledWith(expect.any(String), "Gateway version skew");
+  });
+
+  it("notes CLI and gateway version skew when the gateway reports another runtime version", async () => {
+    callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ healthOk: true, status: { runtimeVersion: "2026.4.23" } });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway version: 2026.4.23"),
+      "Gateway version skew",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("stale global wrapper"),
+      "Gateway version skew",
+    );
   });
 
   it("does not run follow-up channel probes when liveness fails", async () => {
