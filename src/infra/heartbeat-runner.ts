@@ -165,6 +165,15 @@ function loadHeartbeatRunnerRuntime() {
   return heartbeatRunnerRuntimePromise;
 }
 
+/**
+ * Minimum gap between consecutive heartbeat scheduler fires when the next due
+ * time is in the past.  Prevents a tight setTimeout(0) loop when all agents are
+ * deferred by cooldown or flood guards but their nextDueMs values remain stale.
+ * The guard is intentionally generous (2 s) so it never masks a legitimate
+ * fast-recurring schedule but always breaks an infinite re-trigger cycle.
+ */
+const HEARTBEAT_MIN_REFIRE_GAP_MS = 2_000;
+
 const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
 
 function hasQueuedWorkInLanes(
@@ -2211,14 +2220,22 @@ export function startHeartbeatRunner(opts: {
       return;
     }
     const rawDelay = Math.max(0, nextDue - now);
-    if (rawDelay > MAX_SAFE_TIMEOUT_DELAY_MS && !heartbeatTimeoutOverflowWarned) {
+    // Floor: when the next due time is in the past (rawDelay === 0), enforce a
+    // minimum delay to prevent a tight setTimeout(0) loop.  This can happen when
+    // all agents are deferred by cooldown or flood guards but their nextDueMs
+    // values are not advanced — the finally block in run() re-invokes
+    // scheduleNext with rawDelay === 0, creating an infinite hot-loop that
+    // saturates the event loop.  The 2 s floor gives the event loop time to
+    // process I/O and allows cooldown windows to expire naturally.
+    const flooredDelay = rawDelay === 0 ? HEARTBEAT_MIN_REFIRE_GAP_MS : rawDelay;
+    if (flooredDelay > MAX_SAFE_TIMEOUT_DELAY_MS && !heartbeatTimeoutOverflowWarned) {
       heartbeatTimeoutOverflowWarned = true;
       log.warn("heartbeat: scheduled delay exceeds Node setTimeout cap; clamping to ~24.85d", {
         rawDelayMs: rawDelay,
         clampedMs: MAX_SAFE_TIMEOUT_DELAY_MS,
       });
     }
-    const delay = resolveSafeTimeoutDelayMs(rawDelay, { minMs: 0 });
+    const delay = resolveSafeTimeoutDelayMs(flooredDelay);
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeat({

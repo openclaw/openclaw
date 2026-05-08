@@ -833,4 +833,77 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("enforces a minimum refire gap when the next due time is in the past", async () => {
+    useFakeHeartbeatTime();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    // Return a non-retryable skip so advanceAgentSchedule is called but the
+    // agent's nextDueMs ends up in the past on the very first scheduled tick.
+    // Simulate by having runOnce return "disabled" — this records bookkeeping
+    // but does NOT advance the schedule (see the `res.reason !== "disabled"`
+    // guard in the broadcast loop).
+    const runSpy = vi.fn().mockResolvedValue({ status: "skipped", reason: "disabled" } as const);
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    const firstDueMs = resolveDueFromNow(0, 30 * 60_000, "main");
+
+    // Fire the first heartbeat — runOnce returns "disabled" so the schedule is
+    // not advanced. nextDueMs stays in the past.
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // The re-armed timer (from the finally→scheduleNext path) must NOT use
+    // delay=0.  The wake layer also creates setTimeout calls with small delays,
+    // so filter to delays >= 100 to isolate the scheduleNext timers.
+    const delays = timeoutSpy.mock.calls
+      .map((call) => call[1])
+      .filter((d): d is number => typeof d === "number" && d >= 100);
+
+    // The last scheduleNext delay must be >= 2 s (HEARTBEAT_MIN_REFIRE_GAP_MS).
+    const lastDelay = delays[delays.length - 1];
+    expect(lastDelay).toBeGreaterThanOrEqual(2_000);
+
+    timeoutSpy.mockRestore();
+    runner.stop();
+  });
+
+  it("does not add extra delay when the next due time is in the future", async () => {
+    useFakeHeartbeatTime();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 } as const);
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "10m" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    const intervalMs = 10 * 60_000;
+    const firstDueMs = resolveDueFromNow(0, intervalMs, "main");
+
+    // Advance to the first scheduled tick.
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // After a successful run, the next due time is in the future.
+    // The scheduleNext timer should use the natural delay, not the floor.
+    const delays = timeoutSpy.mock.calls
+      .map((call) => call[1])
+      .filter((d): d is number => typeof d === "number");
+
+    // There should be a delay close to the interval (within a small tolerance
+    // for phase alignment). It must NOT be capped to 2_000 ms.
+    const intervalDelays = delays.filter((d) => d > 5_000);
+    expect(intervalDelays.length).toBeGreaterThan(0);
+
+    timeoutSpy.mockRestore();
+    runner.stop();
+  });
 });
