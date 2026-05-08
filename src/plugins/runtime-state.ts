@@ -1,6 +1,7 @@
 import type { PluginRegistry } from "./registry-types.js";
+import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 
-export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+export { PLUGIN_REGISTRY_STATE };
 
 export type RuntimeTrackedPluginRegistry = PluginRegistry;
 

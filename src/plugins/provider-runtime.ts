@@ -26,6 +26,10 @@ import {
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  createProviderResolutionCacheKey,
+  type ProviderResolutionScope,
+} from "./provider-resolution-scope.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import {
@@ -70,6 +74,7 @@ import type {
   ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
   ProviderPlugin,
+  ProviderSyntheticAuthResult,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
@@ -109,6 +114,39 @@ function resolveProviderHookRefs(provider: string, providerConfig?: ModelProvide
 
 function matchesAnyProviderPluginRef(provider: ProviderPlugin, providerRefs: readonly string[]) {
   return providerRefs.some((providerRef) => matchesProviderPluginRef(provider, providerRef));
+}
+
+function resolveScopedPluginDiscoveryProviders(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  resolutionScope?: ProviderResolutionScope;
+  onlyPluginIds?: string[];
+  discoveryEntriesOnly?: boolean;
+}): ProviderPlugin[] {
+  const cacheKey = params.resolutionScope
+    ? createProviderResolutionCacheKey({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        onlyPluginIds: params.onlyPluginIds,
+        extra: {
+          kind: "plugin-discovery-providers",
+          discoveryEntriesOnly: params.discoveryEntriesOnly ?? null,
+        },
+      })
+    : undefined;
+  const cached = cacheKey
+    ? params.resolutionScope?.pluginDiscoveryProviders.get(cacheKey)
+    : undefined;
+  if (cached) {
+    return cached;
+  }
+  const resolved = resolvePluginDiscoveryProvidersRuntime(params);
+  if (cacheKey) {
+    params.resolutionScope?.pluginDiscoveryProviders.set(cacheKey, resolved);
+  }
+  return resolved;
 }
 
 function hasExplicitProviderRuntimePluginActivation(params: {
@@ -156,6 +194,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  resolutionScope?: ProviderResolutionScope;
 }): ProviderPlugin[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
@@ -163,6 +202,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
     config: params.config,
     workspaceDir,
     env,
+    resolutionScope: params.resolutionScope,
   });
   if (onlyPluginIds.length === 0) {
     return [];
@@ -172,6 +212,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
     workspaceDir,
     env,
     onlyPluginIds,
+    resolutionScope: params.resolutionScope,
   });
 }
 
@@ -844,9 +885,32 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  resolutionScope?: ProviderResolutionScope;
   context: ProviderResolveSyntheticAuthContext;
-}) {
+}): ProviderSyntheticAuthResult | undefined {
   const providerRefs = resolveProviderHookRefs(params.provider, params.context.providerConfig);
+  const cacheKey = params.resolutionScope
+    ? createProviderResolutionCacheKey({
+        provider: params.provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        providerRefs,
+        extra: {
+          kind: "synthetic-auth",
+          providerConfig: params.context.providerConfig ?? null,
+        },
+      })
+    : undefined;
+  if (cacheKey && params.resolutionScope?.syntheticAuth.has(cacheKey)) {
+    return params.resolutionScope.syntheticAuth.get(cacheKey);
+  }
+  const remember = (resolved: ProviderSyntheticAuthResult | undefined) => {
+    if (cacheKey) {
+      params.resolutionScope?.syntheticAuth.set(cacheKey, resolved);
+    }
+    return resolved;
+  };
   const discoveryPluginIds = [
     ...new Set(
       providerRefs.flatMap(
@@ -856,32 +920,35 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
             config: params.config,
             workspaceDir: params.workspaceDir,
             env: params.env,
+            resolutionScope: params.resolutionScope,
           }) ?? [],
       ),
     ),
   ];
   const discoveryProvider = (
     discoveryPluginIds.length > 0
-      ? resolvePluginDiscoveryProvidersRuntime({
+      ? resolveScopedPluginDiscoveryProviders({
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          resolutionScope: params.resolutionScope,
           onlyPluginIds: discoveryPluginIds,
           discoveryEntriesOnly: true,
         })
       : []
   ).find((provider) => matchesAnyProviderPluginRef(provider, providerRefs));
   if (typeof discoveryProvider?.resolveSyntheticAuth === "function") {
-    return discoveryProvider.resolveSyntheticAuth(params.context) ?? undefined;
+    return remember(discoveryProvider.resolveSyntheticAuth(params.context) ?? undefined);
   }
   const runtimeResolved = resolveProviderRuntimePlugin({
     ...params,
     applyAutoEnable: false,
     bundledProviderAllowlistCompat: false,
     bundledProviderVitestCompat: false,
+    resolutionScope: params.resolutionScope,
   })?.resolveSyntheticAuth?.(params.context);
   if (runtimeResolved) {
-    return runtimeResolved;
+    return remember(runtimeResolved);
   }
   for (const providerRef of providerRefs) {
     if (normalizeProviderId(providerRef) === normalizeProviderId(params.provider)) {
@@ -893,21 +960,24 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
       applyAutoEnable: false,
       bundledProviderAllowlistCompat: false,
       bundledProviderVitestCompat: false,
+      resolutionScope: params.resolutionScope,
     })?.resolveSyntheticAuth?.(params.context);
     if (runtimeProviderResolved) {
-      return runtimeProviderResolved;
+      return remember(runtimeProviderResolved);
     }
   }
   if (providerRefs.length === 1) {
-    return resolvePluginDiscoveryProvidersRuntime({
+    const resolved = resolveScopedPluginDiscoveryProviders({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      resolutionScope: params.resolutionScope,
     })
       .find((provider) => matchesAnyProviderPluginRef(provider, providerRefs))
       ?.resolveSyntheticAuth?.(params.context);
+    return remember(resolved ?? undefined);
   }
-  return undefined;
+  return remember(undefined);
 }
 
 export function resolveExternalAuthProfilesWithPlugins(params: {

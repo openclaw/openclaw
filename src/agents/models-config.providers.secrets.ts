@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderResolutionScope } from "../plugins/provider-resolution-scope.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -48,6 +49,7 @@ export function createProviderApiKeyResolver(
   env: NodeJS.ProcessEnv,
   authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
+  resolutionScope?: ProviderResolutionScope,
 ): ProviderApiKeyResolver {
   return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
     const authProvider = resolveProviderIdForAuth(provider, { config, env });
@@ -61,6 +63,7 @@ export function createProviderApiKeyResolver(
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
+      resolutionScope,
     });
     if (fromConfig?.apiKey) {
       return {
@@ -86,6 +89,7 @@ export function createProviderAuthResolver(
   env: NodeJS.ProcessEnv,
   authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
+  resolutionScope?: ProviderResolutionScope,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
     const authProvider = resolveProviderIdForAuth(provider, { config, env });
@@ -145,6 +149,7 @@ export function createProviderAuthResolver(
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
+      resolutionScope,
     });
     if (fromConfig) {
       return {
@@ -163,7 +168,11 @@ export function createProviderAuthResolver(
   };
 }
 
-function resolveConfigBackedProviderAuth(params: { provider: string; config?: OpenClawConfig }):
+function resolveConfigBackedProviderAuth(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  resolutionScope?: ProviderResolutionScope;
+}):
   | {
       apiKey: string;
       discoveryApiKey?: string;
@@ -175,6 +184,7 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
   const synthetic = resolveProviderSyntheticAuthWithPlugin({
     provider: authProvider,
     config: params.config,
+    resolutionScope: params.resolutionScope,
     context: {
       config: params.config,
       provider: authProvider,

@@ -8,6 +8,10 @@ import {
 } from "./plugin-cache-primitives.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
+import {
+  createProviderResolutionCacheKey,
+  type ProviderResolutionScope,
+} from "./provider-resolution-scope.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -32,6 +36,7 @@ export type ProviderRuntimePluginLookupParams = {
   applyAutoEnable?: boolean;
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
+  resolutionScope?: ProviderResolutionScope;
 };
 
 export type ProviderRuntimePluginHandle = ProviderRuntimePluginLookupParams & {
@@ -142,6 +147,7 @@ export function resolveProviderPluginsForHooks(params: {
   applyAutoEnable?: boolean;
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
+  resolutionScope?: ProviderResolutionScope;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -158,6 +164,24 @@ export function resolveProviderPluginsForHooks(params: {
   ) {
     return [];
   }
+  const cacheKey = params.resolutionScope
+    ? createProviderResolutionCacheKey({
+        config: params.config,
+        workspaceDir,
+        env,
+        onlyPluginIds: params.onlyPluginIds,
+        providerRefs: params.providerRefs,
+        applyAutoEnable: params.applyAutoEnable,
+        bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
+        bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
+      })
+    : undefined;
+  const cached = cacheKey
+    ? params.resolutionScope?.providerPluginsForHooks.get(cacheKey)
+    : undefined;
+  if (cached) {
+    return cached;
+  }
   const resolved = resolvePluginProviders({
     ...params,
     workspaceDir,
@@ -167,6 +191,9 @@ export function resolveProviderPluginsForHooks(params: {
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
   });
+  if (cacheKey) {
+    params.resolutionScope?.providerPluginsForHooks.set(cacheKey, resolved);
+  }
   return resolved;
 }
 
@@ -184,11 +211,16 @@ export function resolveProviderRuntimePlugin(
   if (loadedPlugin) {
     return loadedPlugin;
   }
+  const cacheKey = resolveProviderRuntimePluginCacheKey(params);
+  const scopedCached = params.resolutionScope?.providerRuntimePlugins.get(cacheKey);
+  if (scopedCached !== undefined) {
+    return scopedCached ?? undefined;
+  }
   const cacheConfig = params.env && params.env !== process.env ? undefined : params.config;
   const plugin = resolveConfigScopedRuntimeCacheValue({
     cache: providerRuntimePluginCache,
     config: cacheConfig,
-    key: resolveProviderRuntimePluginCacheKey(params),
+    key: cacheKey,
     load: () => {
       return (
         resolveProviderPluginsForHooks({
@@ -199,6 +231,7 @@ export function resolveProviderRuntimePlugin(
           applyAutoEnable: params.applyAutoEnable,
           bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
           bundledProviderVitestCompat: params.bundledProviderVitestCompat,
+          resolutionScope: params.resolutionScope,
         }).find((plugin) => {
           if (apiOwnerHint) {
             return (
@@ -211,6 +244,7 @@ export function resolveProviderRuntimePlugin(
       );
     },
   });
+  params.resolutionScope?.providerRuntimePlugins.set(cacheKey, plugin ?? null);
   return plugin ?? undefined;
 }
 
@@ -219,6 +253,7 @@ export function resolveProviderHookPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  resolutionScope?: ProviderResolutionScope;
 }): ProviderPlugin | undefined {
   return (
     resolveProviderRuntimePlugin(params) ??
@@ -226,6 +261,7 @@ export function resolveProviderHookPlugin(params: {
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      resolutionScope: params.resolutionScope,
     }).find((candidate) => matchesProviderId(candidate, params.provider))
   );
 }
