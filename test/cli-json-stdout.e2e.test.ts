@@ -23,10 +23,10 @@ describe("cli json stdout contract", () => {
         delete env.OPENCLAW_CONFIG_PATH;
         delete env.VITEST;
 
-        const entry = path.resolve(process.cwd(), "openclaw.mjs");
+        const entry = path.resolve(process.cwd(), "src/entry.ts");
         const result = spawnSync(
           process.execPath,
-          [entry, "update", "status", "--json", "--timeout", "1"],
+          ["--import", "tsx", entry, "update", "status", "--json", "--timeout", "1"],
           { cwd: process.cwd(), env, encoding: "utf8" },
         );
 
