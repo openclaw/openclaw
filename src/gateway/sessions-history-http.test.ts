@@ -1,12 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { AssistantMessage } from "../agents/pi-ai-contract.js";
+import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -14,53 +13,36 @@ import {
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
-  writeSessionStore,
+  seedGatewaySessionEntries,
 } from "./test-helpers.server.js";
 
 installGatewayTestHooks();
 
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
-const cleanupDirs: string[] = [];
+const AGENT_ID = "main";
 
-afterEach(async () => {
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
-
-async function createSessionStoreFile(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-history-"));
-  cleanupDirs.push(dir);
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-  await writeSessionStore({
-    entries: {},
-    storePath,
-  });
-  return storePath;
+async function configureSessionRowTarget(): Promise<void> {
+  await seedGatewaySessionEntries({ entries: {} });
 }
 
 async function seedSession(params?: { text?: string }) {
-  const storePath = await createSessionStoreFile();
-  await writeSessionStore({
+  await configureSessionRowTarget();
+  await seedGatewaySessionEntries({
     entries: {
       main: {
         sessionId: "sess-main",
         updatedAt: Date.now(),
       },
     },
-    storePath,
   });
   if (params?.text) {
     const appended = await appendAssistantMessageToSessionTranscript({
       sessionKey: "agent:main:main",
       text: params.text,
-      storePath,
     });
     expect(appended.ok).toBe(true);
   }
-  return { storePath };
 }
 
 function makeTranscriptAssistantMessage(params: {
@@ -96,11 +78,9 @@ async function appendTranscriptMessage(params: {
   sessionKey: string;
   message: AssistantMessage;
   emitInlineMessage?: boolean;
-  storePath?: string;
 }): Promise<string> {
   const appended = await appendExactAssistantMessageToSessionTranscript({
     sessionKey: params.sessionKey,
-    storePath: params.storePath ?? testState.sessionStorePath,
     updateMode: params.emitInlineMessage === false ? "file-only" : "inline",
     message: params.message,
   });
@@ -274,12 +254,10 @@ async function expectMessageEventMatch(
 
 async function openBoundedHistoryStreamWithSecondMessage(
   harnessPort: number,
-  storePath: string,
 ): Promise<SessionHistorySseStream> {
   const second = await appendAssistantMessageToSessionTranscript({
     sessionKey: "agent:main:main",
     text: "second message",
-    storePath,
   });
   expect(second.ok).toBe(true);
 
@@ -317,7 +295,7 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("returns 404 for unknown sessions", async () => {
-    await createSessionStoreFile();
+    await configureSessionRowTarget();
     await withGatewayHarness(async (harness) => {
       const res = await fetchSessionHistory(harness.port, "agent:main:missing");
       expect(res.status).toBe(404);
@@ -329,49 +307,54 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("prefers the freshest duplicate row for direct history reads", async () => {
-    const storePath = await createSessionStoreFile();
-    const dir = path.dirname(storePath);
-    const staleTranscriptPath = path.join(dir, "sess-stale-main.jsonl");
-    const freshTranscriptPath = path.join(dir, "sess-fresh-main.jsonl");
-    await fs.writeFile(
-      staleTranscriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-stale-main" }),
-        JSON.stringify({
-          message: { role: "assistant", content: [{ type: "text", text: "stale history" }] },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
-    await fs.writeFile(
-      freshTranscriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-fresh-main" }),
-        JSON.stringify({
-          message: { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
+    await configureSessionRowTarget();
+    replaceSqliteSessionTranscriptEvents({
+      agentId: AGENT_ID,
+      sessionId: "sess-stale-main",
+      events: [
+        { type: "session", version: 1, id: "sess-stale-main" },
         {
-          "agent:main:main": {
-            sessionId: "sess-stale-main",
-            sessionFile: staleTranscriptPath,
-            updatedAt: 1,
-          },
-          "agent:main:MAIN": {
-            sessionId: "sess-fresh-main",
-            sessionFile: freshTranscriptPath,
-            updatedAt: 2,
-          },
+          message: { role: "assistant", content: [{ type: "text", text: "stale history" }] },
         },
-        null,
-        2,
-      ),
-      "utf-8",
+      ],
+    });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: AGENT_ID,
+      sessionId: "sess-fresh-main",
+      events: [
+        { type: "session", version: 1, id: "sess-fresh-main" },
+        {
+          message: { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
+        },
+      ],
+    });
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        const insert = database.db.prepare(`
+        INSERT INTO session_entries (session_key, entry_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(session_key) DO UPDATE SET
+          entry_json = excluded.entry_json,
+          updated_at = excluded.updated_at
+      `);
+        insert.run(
+          "agent:main:main",
+          JSON.stringify({
+            sessionId: "sess-stale-main",
+            updatedAt: 1,
+          }),
+          1,
+        );
+        insert.run(
+          "agent:main:MAIN",
+          JSON.stringify({
+            sessionId: "sess-fresh-main",
+            updatedAt: 2,
+          }),
+          2,
+        );
+      },
+      { agentId: AGENT_ID },
     );
 
     await expectSessionHistoryText({
@@ -381,17 +364,15 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("supports cursor pagination over direct REST while preserving the messages field", async () => {
-    const { storePath } = await seedSession({ text: "first message" });
+    await seedSession({ text: "first message" });
     const second = await appendAssistantMessageToSessionTranscript({
       sessionKey: "agent:main:main",
       text: "second message",
-      storePath,
     });
     expect(second.ok).toBe(true);
     const third = await appendAssistantMessageToSessionTranscript({
       sessionKey: "agent:main:main",
       text: "third message",
-      storePath,
     });
     expect(third.ok).toBe(true);
 
@@ -436,14 +417,13 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("streams bounded history windows over SSE", async () => {
-    const { storePath } = await seedSession({ text: "first message" });
+    await seedSession({ text: "first message" });
 
     await withGatewayHarness(async (harness) => {
-      const stream = await openBoundedHistoryStreamWithSecondMessage(harness.port, storePath);
+      const stream = await openBoundedHistoryStreamWithSecondMessage(harness.port);
 
       const thirdMessageId = await appendTranscriptMessage({
         sessionKey: "agent:main:main",
-        storePath,
         emitInlineMessage: false,
         message: makeTranscriptAssistantMessage({ text: "third message" }),
       });
@@ -467,14 +447,13 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("seeds bounded SSE windows from visible history when transcript refreshes are silent", async () => {
-    const { storePath } = await seedSession({ text: "first message" });
+    await seedSession({ text: "first message" });
 
     await withGatewayHarness(async (harness) => {
-      const stream = await openBoundedHistoryStreamWithSecondMessage(harness.port, storePath);
+      const stream = await openBoundedHistoryStreamWithSecondMessage(harness.port);
 
       await appendTranscriptMessage({
         sessionKey: "agent:main:main",
-        storePath,
         emitInlineMessage: false,
         message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
       });
@@ -492,22 +471,20 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("sanitizes phased assistant history entries before returning them", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
+    await configureSessionRowTarget();
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-main",
           updatedAt: Date.now(),
         },
       },
-      storePath,
     });
 
     await withGatewayHarness(async (harness) => {
       const hidden = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "NO_REPLY",
-        storePath,
       });
       expect(hidden.ok).toBe(true);
 
@@ -516,7 +493,6 @@ describe("session history HTTP endpoints", () => {
       }
       const visibleMessageId = await appendTranscriptMessage({
         sessionKey: "agent:main:main",
-        storePath,
         message: makeTranscriptAssistantMessage({
           text: "Done.",
           content: [
@@ -555,7 +531,7 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("streams session history updates over SSE", async () => {
-    const { storePath } = await seedSession({ text: "first message" });
+    await seedSession({ text: "first message" });
 
     await withGatewayHarness(async (harness) => {
       const stream = await openSessionHistorySse(harness.port, "agent:main:main");
@@ -564,7 +540,6 @@ describe("session history HTTP endpoints", () => {
       const appended = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "second message",
-        storePath,
       });
       expect(appended.ok).toBe(true);
 
@@ -582,10 +557,9 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("seeds SSE raw sequence state from startup snapshots, not only visible history", async () => {
-    const { storePath } = await seedSession({ text: "first message" });
+    await seedSession({ text: "first message" });
     await appendTranscriptMessage({
       sessionKey: "agent:main:main",
-      storePath,
       message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
       emitInlineMessage: false,
     });
@@ -597,7 +571,6 @@ describe("session history HTTP endpoints", () => {
       const visible = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "third visible message",
-        storePath,
       });
       expect(visible.ok).toBe(true);
 
@@ -611,7 +584,7 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("suppresses NO_REPLY-only SSE fast-path updates while preserving raw sequence numbering", async () => {
-    const { storePath } = await seedSession({ text: "first message" });
+    await seedSession({ text: "first message" });
 
     await withGatewayHarness(async (harness) => {
       const stream = await openSessionHistorySse(harness.port, "agent:main:main");
@@ -620,14 +593,12 @@ describe("session history HTTP endpoints", () => {
       const silent = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "NO_REPLY",
-        storePath,
       });
       expect(silent.ok).toBe(true);
 
       const visible = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "third visible message",
-        storePath,
       });
       expect(visible.ok).toBe(true);
 
@@ -645,7 +616,7 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("resyncs raw sequence numbering after transcript-only SSE refreshes", async () => {
-    const { storePath } = await seedSession({ text: "first message" });
+    await seedSession({ text: "first message" });
 
     await withGatewayHarness(async (harness) => {
       const stream = await openSessionHistorySse(harness.port, "agent:main:main");
@@ -654,7 +625,6 @@ describe("session history HTTP endpoints", () => {
       const second = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "second visible message",
-        storePath,
       });
       expect(second.ok).toBe(true);
 
@@ -667,7 +637,6 @@ describe("session history HTTP endpoints", () => {
       });
       await appendTranscriptMessage({
         sessionKey: "agent:main:main",
-        storePath,
         message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
         emitInlineMessage: false,
       });
@@ -683,7 +652,6 @@ describe("session history HTTP endpoints", () => {
       const third = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "third visible message",
-        storePath,
       });
       expect(third.ok).toBe(true);
 
