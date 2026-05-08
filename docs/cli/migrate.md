@@ -172,9 +172,6 @@ manual review.
 For migrated source-installed curated plugins, apply writes:
 
 - `plugins.entries.codex.enabled: true`
-- `plugins.entries.codex.config.appServer.mode: "guardian"` when a usable
-  `openai-codex` auth profile is available and no app-server settings already
-  exist
 - `plugins.entries.codex.config.codexPlugins.enabled: true`
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions: false`
 - one explicit plugin entry with `marketplaceName: "openai-curated"` and

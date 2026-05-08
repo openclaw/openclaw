@@ -33,14 +33,13 @@ import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import {
-  buildCodexPluginsConfigValueForContext,
+  buildCodexPluginsConfigValue,
   CODEX_PLUGIN_CONFIG_ITEM_ID,
   CODEX_PLUGIN_CONFIG_PATH,
   hasCodexPluginConfigConflict,
   readCodexPluginMigrationConfigEntry,
   type CodexPluginMigrationConfigEntry,
 } from "./plan.js";
-import { resolveCodexMigrationTargets } from "./targets.js";
 
 const CODEX_PLUGIN_AUTH_REQUIRED_REASON = "auth_required";
 const CODEX_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
@@ -179,9 +178,7 @@ async function applyCodexPluginConfigItem(
     return markMigrationItemError(item, "config runtime unavailable");
   }
   const currentConfig = configApi.current() as MigrationProviderContext["config"];
-  const value = buildCodexPluginsConfigValueForContext({ ...ctx, config: currentConfig }, entries, {
-    agentDir: resolveCodexMigrationTargets({ ...ctx, config: currentConfig }).agentDir,
-  });
+  const value = buildCodexPluginsConfigValue(entries, { config: currentConfig });
   if (!ctx.overwrite && hasCodexPluginConfigConflict(currentConfig, value)) {
     return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
   }

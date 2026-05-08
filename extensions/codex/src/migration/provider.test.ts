@@ -428,7 +428,7 @@ describe("buildCodexMigrationProvider", () => {
     );
   });
 
-  it("migrates to guardian app-server mode when default Codex auth exists and app-server settings are unset", async () => {
+  it("does not change app-server mode when default Codex auth exists and app-server settings are unset", async () => {
     const fixture = await createCodexFixture();
     await writeDefaultCodexAuthProfile(fixture);
     const configState: MigrationProviderContext["config"] = {
@@ -470,20 +470,16 @@ describe("buildCodexMigrationProvider", () => {
         expect.objectContaining({
           id: "config:codex-plugins",
           status: "migrated",
-          details: expect.objectContaining({
-            value: expect.objectContaining({
-              config: expect.objectContaining({
-                appServer: { mode: "guardian" },
-              }),
-            }),
-          }),
         }),
       ]),
     );
+    const configItem = result.items.find((item) => item.id === "config:codex-plugins");
+    expect(
+      (configItem?.details?.value as { config?: Record<string, unknown> } | undefined)?.config,
+    ).not.toHaveProperty("appServer");
     expect(configState.plugins?.entries?.codex).toMatchObject({
       enabled: true,
       config: {
-        appServer: { mode: "guardian" },
         codexPlugins: {
           enabled: true,
           plugins: {
@@ -496,11 +492,11 @@ describe("buildCodexMigrationProvider", () => {
         },
       },
     });
+    expect(configState.plugins?.entries?.codex?.config).not.toHaveProperty("appServer");
   });
 
-  it("preserves explicit app-server settings instead of forcing guardian during plugin migration", async () => {
+  it("preserves explicit app-server settings during plugin migration", async () => {
     const fixture = await createCodexFixture();
-    await writeDefaultCodexAuthProfile(fixture);
     const configState: MigrationProviderContext["config"] = {
       plugins: {
         entries: {
