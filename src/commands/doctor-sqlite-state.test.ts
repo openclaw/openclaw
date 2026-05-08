@@ -22,9 +22,11 @@ import {
 import { readMemoryHostEvents } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { listChannelPairingRequests, readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { readTuiLastSessionKey } from "../tui/tui-last-session.js";
 
 const noteMock = vi.hoisted(() => vi.fn());
 
@@ -491,16 +493,17 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(fs.stat(path.join(legacyMediaDir, "legacy-media.txt"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        expect(readOpenClawStateKvJson("subagent_runs", "run-legacy", { env })).toMatchObject({
-          childSessionKey: "agent:main:subagent:legacy",
-        });
+        expect(
+          openOpenClawStateDatabase({ env })
+            .db.prepare("SELECT child_session_key FROM subagent_runs WHERE run_id = ?")
+            .get("run-legacy"),
+        ).toEqual({ child_session_key: "agent:main:subagent:legacy" });
         await expect(fs.stat(path.join(stateDir, "subagents", "runs.json"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        expect(readOpenClawStateKvJson("tui:last-session", "legacy-tui-scope", { env })).toEqual({
-          sessionKey: "agent:main:tui-legacy",
-          updatedAt: 1000,
-        });
+        await expect(
+          readTuiLastSessionKey({ scopeKey: "legacy-tui-scope", stateDir }),
+        ).resolves.toBe("agent:main:tui-legacy");
         await expect(
           fs.stat(path.join(stateDir, "tui", "last-session.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });

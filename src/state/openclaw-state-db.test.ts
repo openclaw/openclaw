@@ -157,7 +157,7 @@ describe("openclaw state database", () => {
 
     expect(columns.some((column) => column.name === "sort_order")).toBe(true);
     expect(index?.sql).toContain("sort_order ASC");
-    expect(version.user_version).toBe(21);
+    expect(version.user_version).toBe(22);
   });
 
   it("migrates legacy cron runtime state from kv into cron job columns", () => {
@@ -215,7 +215,7 @@ describe("openclaw state database", () => {
         .prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?")
         .get("cron.jobs.state"),
     ).toEqual({ count: 0 });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 22 });
   });
 
   it("migrates persisted subagent runs from kv into subagent run rows", () => {
@@ -264,7 +264,7 @@ describe("openclaw state database", () => {
     expect(
       database.db.prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?").get("subagent_runs"),
     ).toEqual({ count: 0 });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 22 });
   });
 
   it("migrates current conversation bindings from kv into binding rows", () => {
@@ -314,7 +314,55 @@ describe("openclaw state database", () => {
         .prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?")
         .get("current-conversation-bindings"),
     ).toEqual({ count: 0 });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 22 });
+  });
+
+  it("migrates TUI last-session pointers from kv into dedicated rows", () => {
+    const stateDir = createTempStateDir();
+    const dbPath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const sqlite = requireNodeSqlite();
+    const oldDb = new sqlite.DatabaseSync(dbPath);
+    oldDb.exec(`
+      CREATE TABLE kv (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      );
+      INSERT INTO kv (scope, key, value_json, updated_at)
+      VALUES (
+        'tui:last-session',
+        'scope-main',
+        '{"sessionKey":"agent:main:tui-legacy","updatedAt":1000}',
+        1001
+      );
+      PRAGMA user_version = 21;
+    `);
+    oldDb.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      database.db
+        .prepare(
+          "SELECT scope_key, session_key, updated_at FROM tui_last_sessions WHERE scope_key = ?",
+        )
+        .get("scope-main"),
+    ).toEqual({
+      scope_key: "scope-main",
+      session_key: "agent:main:tui-legacy",
+      updated_at: 1000,
+    });
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?")
+        .get("tui:last-session"),
+    ).toEqual({ count: 0 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 22 });
   });
 
   it("upgrades task delivery state with task-run cascade integrity", () => {

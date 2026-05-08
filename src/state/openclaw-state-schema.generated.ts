@@ -375,6 +375,15 @@ CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_expires
   ON current_conversation_bindings(expires_at, binding_key);
 
+CREATE TABLE IF NOT EXISTS tui_last_sessions (
+  scope_key TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tui_last_sessions_session_key
+  ON tui_last_sessions(session_key, updated_at DESC, scope_key);
+
 CREATE TABLE IF NOT EXISTS task_delivery_state (
   task_id TEXT NOT NULL PRIMARY KEY,
   requester_origin_json TEXT,
