@@ -514,6 +514,12 @@ export async function tryDispatchAcpReply(params: {
       return { queuedFinal, counts };
     }
     try {
+      const { readAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
+      const sessionStoreEntry =
+        readAcpSessionEntry({
+          sessionKey: canonicalSessionKey,
+          cfg: params.cfg,
+        }) ?? undefined;
       const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
       await persistAcpDispatchTranscript({
         cfg: params.cfg,
@@ -522,9 +528,13 @@ export async function tryDispatchAcpReply(params: {
         finalText: delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
         meta: acpResolution.meta,
         threadId: params.ctx.MessageThreadId,
+        sessionStoreEntry,
       });
     } catch (error) {
-      logVerbose(
+      // Use console.warn (not logVerbose) so transcript write failures are
+      // visible in operator logs without requiring verbose mode. This was a
+      // silent swallow before catalog #22 was fixed. Still non-fatal.
+      console.warn(
         `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
           error,
         )}`,
