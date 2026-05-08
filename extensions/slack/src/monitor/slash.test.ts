@@ -810,7 +810,7 @@ describe("Slack native command argument menus", () => {
       options?: Array<{ text?: { text?: string }; value?: string }>;
     };
     const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
-    expect(optionTexts.some((text) => text.includes("Period 12"))).toBe(true);
+    expect(optionTexts).toEqual(expect.arrayContaining([expect.stringContaining("Period 12")]));
   });
 
   it("tracks accepted external_select option requests", async () => {
