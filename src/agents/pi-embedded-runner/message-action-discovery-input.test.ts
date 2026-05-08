@@ -14,6 +14,7 @@ describe("buildEmbeddedMessageActionDiscoveryInput", () => {
         sessionId: "session-1",
         agentId: "main",
         senderId: "user-123",
+        senderIsOwner: false,
       }),
     ).toEqual({
       cfg: undefined,
@@ -26,6 +27,7 @@ describe("buildEmbeddedMessageActionDiscoveryInput", () => {
       sessionId: "session-1",
       agentId: "main",
       requesterSenderId: "user-123",
+      senderIsOwner: false,
     });
   });
 
@@ -41,6 +43,7 @@ describe("buildEmbeddedMessageActionDiscoveryInput", () => {
         sessionId: null,
         agentId: null,
         senderId: null,
+        senderIsOwner: false,
       }),
     ).toEqual({
       cfg: undefined,
@@ -53,6 +56,28 @@ describe("buildEmbeddedMessageActionDiscoveryInput", () => {
       sessionId: undefined,
       agentId: undefined,
       requesterSenderId: undefined,
+      senderIsOwner: false,
+    });
+  });
+
+  it("preserves owner authorization for downstream channel action gating", () => {
+    expect(
+      buildEmbeddedMessageActionDiscoveryInput({
+        channel: "matrix",
+        senderIsOwner: true,
+      }),
+    ).toEqual({
+      cfg: undefined,
+      channel: "matrix",
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      accountId: undefined,
+      sessionKey: undefined,
+      sessionId: undefined,
+      agentId: undefined,
+      requesterSenderId: undefined,
+      senderIsOwner: true,
     });
   });
 });

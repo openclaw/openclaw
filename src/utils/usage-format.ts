@@ -1,17 +1,50 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import type { NormalizedUsage } from "../agents/usage.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getGatewayModelPricingCacheFingerprint } from "../gateway/model-pricing-cache-state.js";
 import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
+/**
+ * A single tier in a tiered-pricing schedule.  Prices are expressed as
+ * USD per-million tokens, just like the flat `ModelCostConfig` fields.
+ *
+ * `range` is a half-open interval `[start, end)` expressed in *input*
+ * token counts.  The tiers MUST be sorted in ascending `range[0]` order
+ * with no gaps.
+ */
+export type PricingTier = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** [startTokens, endTokens) — half-open interval on the input token axis. */
+  range: [number, number];
+};
+
+type RawPricingTier = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  range: [number, number] | [number];
+};
 
 export type ModelCostConfig = {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Optional tiered pricing tiers.  When present, `estimateUsageCost`
+   *  uses them instead of the flat rates above.  The flat rates still
+   *  serve as the "default / first-tier" fallback for callers that are
+   *  unaware of tiered pricing. */
+  tieredPricing?: PricingTier[];
 };
 
 export type UsageTotals = {
@@ -69,8 +102,8 @@ function toResolvedModelKey(params: {
   model?: string;
   allowPluginNormalization?: boolean;
 }): string | null {
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
+  const provider = normalizeOptionalString(params.provider);
+  const model = normalizeOptionalString(params.model);
   if (!provider || !model) {
     return null;
   }
@@ -81,8 +114,8 @@ function toResolvedModelKey(params: {
 }
 
 function toDirectModelKey(params: { provider?: string; model?: string }): string | null {
-  const provider = normalizeProviderId(params.provider?.trim() ?? "");
-  const model = params.model?.trim();
+  const provider = normalizeProviderId(normalizeOptionalString(params.provider) ?? "");
+  const model = normalizeOptionalString(params.model);
   if (!provider || !model) {
     return null;
   }
@@ -90,12 +123,53 @@ function toDirectModelKey(params: { provider?: string; model?: string }): string
 }
 
 function shouldUseNormalizedCostLookup(params: { provider?: string; model?: string }): boolean {
-  const provider = normalizeProviderId(params.provider?.trim() ?? "");
-  const model = params.model?.trim() ?? "";
+  const provider = normalizeProviderId(normalizeOptionalString(params.provider) ?? "");
+  const model = normalizeOptionalString(params.model) ?? "";
   if (!provider || !model) {
     return false;
   }
   return provider === "anthropic" || provider === "openrouter" || provider === "vercel-ai-gateway";
+}
+
+/**
+ * Normalize a raw tieredPricing array from models.json / config.
+ * Supports open-ended ranges such as `[128000]` or `[128000, -1]`,
+ * which are converted to `[128000, Infinity]`.
+ */
+function normalizeTieredPricing(raw: RawPricingTier[] | undefined): PricingTier[] | undefined {
+  if (!raw || raw.length === 0) {
+    return undefined;
+  }
+  const result: PricingTier[] = [];
+  for (const tier of raw) {
+    const range = tier.range;
+    if (!Array.isArray(range) || range.length < 1) {
+      continue;
+    }
+    const start = typeof range[0] === "number" ? range[0] : Number.NaN;
+    if (!Number.isFinite(start)) {
+      continue;
+    }
+    const rawEnd = range.length >= 2 ? range[1] : null;
+    const end =
+      typeof rawEnd === "number" && Number.isFinite(rawEnd) && rawEnd > start ? rawEnd : Infinity;
+    if (
+      !Number.isFinite(tier.input) ||
+      !Number.isFinite(tier.output) ||
+      !Number.isFinite(tier.cacheRead) ||
+      !Number.isFinite(tier.cacheWrite)
+    ) {
+      continue;
+    }
+    result.push({
+      input: tier.input,
+      output: tier.output,
+      cacheRead: tier.cacheRead,
+      cacheWrite: tier.cacheWrite,
+      range: [start, end],
+    });
+  }
+  return result.length > 0 ? result.toSorted((a, b) => a.range[0] - b.range[0]) : undefined;
 }
 
 function buildProviderCostIndex(
@@ -112,7 +186,16 @@ function buildProviderCostIndex(
       const normalized = normalizeModelRef(normalizedProvider, model.id, {
         allowPluginNormalization: options?.allowPluginNormalization,
       });
-      entries.set(modelKey(normalized.provider, normalized.model), model.cost);
+      const cost = { ...model.cost };
+      const normalizedTiers = normalizeTieredPricing(cost.tieredPricing);
+      const costConfig: ModelCostConfig = {
+        input: cost.input,
+        output: cost.output,
+        cacheRead: cost.cacheRead,
+        cacheWrite: cost.cacheWrite,
+        ...(normalizedTiers ? { tieredPricing: normalizedTiers } : {}),
+      };
+      entries.set(modelKey(normalized.provider, normalized.model), costConfig);
     }
   }
   return entries;
@@ -122,7 +205,7 @@ function loadModelsJsonCostIndex(options?: {
   allowPluginNormalization?: boolean;
 }): Map<string, ModelCostConfig> {
   const useRawEntries = options?.allowPluginNormalization === false;
-  const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
+  const modelsPath = path.join(resolveDefaultAgentDir({}), "models.json");
   try {
     const stat = fs.statSync(modelsPath);
     if (
@@ -130,13 +213,13 @@ function loadModelsJsonCostIndex(options?: {
       modelsJsonCostCache.path !== modelsPath ||
       modelsJsonCostCache.mtimeMs !== stat.mtimeMs
     ) {
-      const parsed = JSON.parse(fs.readFileSync(modelsPath, "utf8")) as {
+      const parsed = tryReadJsonSync<{
         providers?: Record<string, ModelProviderConfig>;
-      };
+      }>(modelsPath);
       modelsJsonCostCache = {
         path: modelsPath,
         mtimeMs: stat.mtimeMs,
-        providers: parsed.providers,
+        providers: parsed?.providers,
         normalizedEntries: null,
         rawEntries: null,
       };
@@ -177,6 +260,42 @@ function findConfiguredProviderCost(params: {
   return buildProviderCostIndex(params.config?.models?.providers, {
     allowPluginNormalization: params.allowPluginNormalization,
   }).get(key);
+}
+
+function stableCostFingerprintValue(value: unknown): string {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? JSON.stringify(value) : JSON.stringify(String(value));
+  }
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableCostFingerprintValue(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .toSorted()
+    .map((key) => `${JSON.stringify(key)}:${stableCostFingerprintValue(record[key])}`)
+    .join(",")}}`;
+}
+
+function serializeCostIndex(
+  entries: Map<string, ModelCostConfig>,
+): Array<[string, ModelCostConfig]> {
+  return Array.from(entries.entries()).toSorted(([a], [b]) => a.localeCompare(b));
+}
+
+export function resolveModelCostConfigFingerprint(config?: OpenClawConfig): string {
+  return stableCostFingerprintValue({
+    configuredRaw: serializeCostIndex(
+      buildProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
+    ),
+    configuredNormalized: serializeCostIndex(buildProviderCostIndex(config?.models?.providers)),
+    modelsJsonRaw: serializeCostIndex(loadModelsJsonCostIndex({ allowPluginNormalization: false })),
+    modelsJsonNormalized: serializeCostIndex(loadModelsJsonCostIndex()),
+    gatewayPricing: getGatewayModelPricingCacheFingerprint(),
+  });
 }
 
 export function resolveModelCostConfig(params: {
@@ -232,6 +351,52 @@ export function resolveModelCostConfig(params: {
 const toNumber = (value: number | undefined): number =>
   typeof value === "number" && Number.isFinite(value) ? value : 0;
 
+function selectPricingTier(tiers: PricingTier[], input: number): PricingTier | undefined {
+  const sortedTiers = tiers.toSorted((a, b) => a.range[0] - b.range[0]);
+  if (sortedTiers.length === 0) {
+    return undefined;
+  }
+  if (input <= 0) {
+    return sortedTiers[0];
+  }
+
+  for (const tier of sortedTiers) {
+    const [start, end] = tier.range;
+    if (input >= start && input < end) {
+      return tier;
+    }
+  }
+
+  for (let index = sortedTiers.length - 1; index >= 0; index -= 1) {
+    const tier = sortedTiers[index];
+    if (input >= tier.range[0]) {
+      return tier;
+    }
+  }
+
+  return sortedTiers[0];
+}
+
+function computeTieredCost(
+  tiers: PricingTier[],
+  input: number,
+  output: number,
+  cacheRead: number,
+  cacheWrite: number,
+): number {
+  const tier = selectPricingTier(tiers, input);
+  if (!tier) {
+    return 0;
+  }
+
+  return (
+    input * tier.input +
+    output * tier.output +
+    cacheRead * tier.cacheRead +
+    cacheWrite * tier.cacheWrite
+  );
+}
+
 export function estimateUsageCost(params: {
   usage?: NormalizedUsage | UsageTotals | null;
   cost?: ModelCostConfig;
@@ -245,11 +410,18 @@ export function estimateUsageCost(params: {
   const output = toNumber(usage.output);
   const cacheRead = toNumber(usage.cacheRead);
   const cacheWrite = toNumber(usage.cacheWrite);
-  const total =
-    input * cost.input +
-    output * cost.output +
-    cacheRead * cost.cacheRead +
-    cacheWrite * cost.cacheWrite;
+
+  let total: number;
+  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
+    total = computeTieredCost(cost.tieredPricing, input, output, cacheRead, cacheWrite);
+  } else {
+    total =
+      input * cost.input +
+      output * cost.output +
+      cacheRead * cost.cacheRead +
+      cacheWrite * cost.cacheWrite;
+  }
+
   if (!Number.isFinite(total)) {
     return undefined;
   }

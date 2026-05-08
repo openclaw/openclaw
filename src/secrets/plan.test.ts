@@ -3,6 +3,11 @@ import {
   INVALID_EXEC_SECRET_REF_IDS,
   VALID_EXEC_SECRET_REF_IDS,
 } from "../test-utils/secret-ref-test-vectors.js";
+import {
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
+  TALK_TEST_PROVIDER_ID,
+} from "../test-utils/talk-test-provider.js";
 import { isSecretsApplyPlan, resolveValidatedPlanTarget } from "./plan.js";
 
 describe("secrets plan validation", () => {
@@ -58,9 +63,10 @@ describe("secrets plan validation", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "talk.apiKey",
-          path: "talk.apiKey",
-          pathSegments: ["talk", "apiKey"],
+          type: "talk.providers.*.apiKey",
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          providerId: TALK_TEST_PROVIDER_ID,
           ref: { source: "env", provider: "default", id: "TALK_API_KEY" },
         },
       ],
@@ -112,9 +118,10 @@ describe("secrets plan validation", () => {
         generatedBy: "manual",
         targets: [
           {
-            type: "talk.apiKey",
-            path: "talk.apiKey",
-            pathSegments: ["talk", "apiKey"],
+            type: "talk.providers.*.apiKey",
+            path: TALK_TEST_PROVIDER_API_KEY_PATH,
+            pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+            providerId: TALK_TEST_PROVIDER_ID,
             ref: { source: "exec", provider: "vault", id },
           },
         ],
@@ -132,9 +139,10 @@ describe("secrets plan validation", () => {
         generatedBy: "manual",
         targets: [
           {
-            type: "talk.apiKey",
-            path: "talk.apiKey",
-            pathSegments: ["talk", "apiKey"],
+            type: "talk.providers.*.apiKey",
+            path: TALK_TEST_PROVIDER_API_KEY_PATH,
+            pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+            providerId: TALK_TEST_PROVIDER_ID,
             ref: { source: "exec", provider: "vault", id },
           },
         ],

@@ -1,10 +1,15 @@
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import type { GatewayBindMode } from "../config/types.gateway.js";
+import {
+  __resetContainerEnvironmentCacheForTest,
+  isContainerEnvironment,
+} from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
 } from "../infra/network-interfaces.js";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
@@ -12,6 +17,7 @@ import {
   isPrivateOrLoopbackIpAddress,
   normalizeIpAddress,
 } from "../shared/net/ip.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
@@ -25,7 +31,7 @@ export function pickPrimaryLanIPv4(): string | undefined {
 }
 
 export function normalizeHostHeader(hostHeader?: string): string {
-  return (hostHeader ?? "").trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(hostHeader);
 }
 
 export function resolveHostName(hostHeader?: string): string {
@@ -200,27 +206,10 @@ export function resolveRequestClientIp(
   });
 }
 
-export function isLocalGatewayAddress(ip: string | undefined): boolean {
-  if (isLoopbackAddress(ip)) {
-    return true;
-  }
-  if (!ip) {
-    return false;
-  }
-  const normalized = normalizeIp(ip);
-  if (!normalized) {
-    return false;
-  }
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) {
-    return true;
-  }
-  const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
-    return true;
-  }
-  return false;
-}
+export {
+  isContainerEnvironment,
+  __resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
+};
 
 /**
  * Resolves gateway bind host with fallback strategy.
@@ -229,13 +218,13 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
  * - loopback: 127.0.0.1 (rarely fails, but handled gracefully)
  * - lan: always 0.0.0.0 (no fallback)
  * - tailnet: Tailnet IPv4 if available, else loopback
- * - auto: Loopback if available, else 0.0.0.0
+ * - auto: 0.0.0.0 inside containers (Docker/Podman/K8s); loopback otherwise
  * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable
  *
  * @returns The bind address to use (never null)
  */
 export async function resolveGatewayBindHost(
-  bind: import("../config/config.js").GatewayBindMode | undefined,
+  bind: GatewayBindMode | undefined,
   customHost?: string,
 ): Promise<string> {
   const mode = bind ?? "loopback";
@@ -277,6 +266,11 @@ export async function resolveGatewayBindHost(
   }
 
   if (mode === "auto") {
+    // Inside a container, loopback is unreachable from the host network
+    // namespace, so prefer 0.0.0.0 to make port-forwarding work.
+    if (isContainerEnvironment()) {
+      return "0.0.0.0";
+    }
     if (await canBindToHost("127.0.0.1")) {
       return "127.0.0.1";
     }
@@ -287,13 +281,34 @@ export async function resolveGatewayBindHost(
 }
 
 /**
+ * Returns the effective default bind mode when `gateway.bind` is not explicitly
+ * configured. Inside a detected container environment the default is `"auto"`
+ * (which resolves to `0.0.0.0` for port-forwarding compatibility); on bare-metal
+ * / VM hosts the default remains `"loopback"`.
+ *
+ * When {@link tailscaleMode} is `"serve"` or `"funnel"`, the function always
+ * returns `"loopback"` because Tailscale serve/funnel architecturally requires
+ * a loopback bind — container auto-detection must never override this.
+ *
+ * Use this only in gateway startup codepaths that execute in the same
+ * environment as the eventual bind decision. Host-side diagnostics should keep
+ * their own explicit defaults instead of inferring from the caller process.
+ */
+export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode {
+  if (tailscaleMode && tailscaleMode !== "off") {
+    return "loopback";
+  }
+  return isContainerEnvironment() ? "auto" : "loopback";
+}
+
+/**
  * Test if we can bind to a specific host address.
  * Creates a temporary server, attempts to bind, then closes it.
  *
  * @param host - The host address to test
  * @returns True if we can successfully bind to this address
  */
-export async function canBindToHost(host: string): Promise<boolean> {
+async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {
@@ -313,6 +328,12 @@ export async function resolveGatewayListenHosts(
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
   if (bindHost !== "127.0.0.1") {
+    return [bindHost];
+  }
+  // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
+  // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
+  // the same port causes non-deterministic TCP routing → HTTP requests hang silently.
+  if (process.platform === "win32") {
     return [bindHost];
   }
   const canBind = opts?.canBindToHost ?? canBindToHost;
@@ -399,7 +420,7 @@ function parseHostForAddressChecks(
   if (!host) {
     return null;
   }
-  const normalizedHost = host.trim().toLowerCase();
+  const normalizedHost = normalizeLowercaseStringOrEmpty(host);
   const canonicalHost = normalizedHost.replace(/\.+$/, "");
   if (canonicalHost === "localhost") {
     return { isLocalhost: true, unbracketedHost: canonicalHost };

@@ -1,5 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { buildMarkdownCard } from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -23,13 +24,17 @@ const {
   mockRuntimeResolveMarkdownTableMode: vi.fn(() => "preserve"),
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockResolveMarkdownTableMode,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
-  convertMarkdownTables: mockConvertMarkdownTables,
-}));
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+  return {
+    ...actual,
+    convertMarkdownTables: mockConvertMarkdownTables,
+  };
+});
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
@@ -68,6 +73,15 @@ describe("getMessageFeishu", () => {
       resolveFeishuCardTemplate,
       sendMessageFeishu,
     } = await import("./send.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/text-runtime");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./runtime.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -123,7 +137,8 @@ describe("getMessageFeishu", () => {
       channel: "feishu",
     });
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
-    expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
+    expect(result).toMatchObject({ messageId: "om_send", chatId: "oc_send" });
+    expect(result.receipt.primaryPlatformMessageId).toBe("om_send");
   });
 
   it("extracts text content from interactive card elements", async () => {
@@ -159,6 +174,95 @@ describe("getMessageFeishu", () => {
         chatId: "oc_1",
         contentType: "interactive",
         content: "hello markdown\nhello div",
+      }),
+    );
+  });
+
+  it("falls through empty interactive card element arrays and locale variants", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_i18n_card",
+            chat_id: "oc_i18n_card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                elements: [],
+                body: { elements: [] },
+                i18n_elements: {
+                  zh_cn: [],
+                  en_us: [
+                    {
+                      tag: "markdown",
+                      content: "hello ${count} {{label}} {{metadata}}",
+                    },
+                  ],
+                },
+                template_variable: {
+                  count: 2,
+                  label: "tasks",
+                  metadata: { ignored: true },
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_i18n_card",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_i18n_card",
+        chatId: "oc_i18n_card",
+        contentType: "interactive",
+        content: "hello 2 tasks {{metadata}}",
+      }),
+    );
+  });
+
+  it("falls back to post-format content when interactive card elements are empty", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_post_card",
+            chat_id: "oc_post_card",
+            msg_type: "interactive",
+            body: {
+              content: JSON.stringify({
+                elements: [],
+                post: {
+                  zh_cn: {
+                    title: "Card summary",
+                    content: [[{ tag: "md", text: "**fallback** body" }]],
+                  },
+                },
+              }),
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_post_card",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_post_card",
+        chatId: "oc_post_card",
+        contentType: "interactive",
+        content: "Card summary\n\n**fallback** body",
       }),
     );
   });
@@ -402,6 +506,35 @@ describe("resolveFeishuCardTemplate", () => {
 
   it("drops unsupported free-form identity themes", () => {
     expect(resolveFeishuCardTemplate("space lobster")).toBeUndefined();
+  });
+});
+
+function expectSchema2WidthConfig(card: unknown) {
+  const typedCard = card as {
+    config: {
+      width_mode?: string;
+      enable_forward?: boolean;
+      wide_screen_mode?: boolean;
+    };
+  };
+
+  expect(typedCard.config.width_mode).toBe("fill");
+  expect(typedCard.config.enable_forward).toBeUndefined();
+  expect(typedCard.config.wide_screen_mode).toBeUndefined();
+}
+
+describe("Feishu card schema config", () => {
+  it.each([
+    {
+      name: "structured card",
+      build: () => buildStructuredCard("hello"),
+    },
+    {
+      name: "markdown card",
+      build: () => buildMarkdownCard("hello"),
+    },
+  ])("$name uses schema-2.0 width config instead of legacy wide screen mode", ({ build }) => {
+    expectSchema2WidthConfig(build());
   });
 });
 

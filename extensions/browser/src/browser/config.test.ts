@@ -1,8 +1,43 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../../test-support.js";
+import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
+import {
+  getManagedBrowserMissingDisplayError,
+  OPENCLAW_BROWSER_HEADLESS_ENV,
+  resolveBrowserConfig,
+  resolveManagedBrowserHeadlessMode,
+  resolveProfile,
+  shouldStartLocalBrowserServer,
+} from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+
+function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
+  const snapshot = new Map<string, string | undefined>();
+  for (const [key] of Object.entries(env)) {
+    snapshot.set(key, process.env[key]);
+  }
+
+  try {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    return fn();
+  } finally {
+    for (const [key, value] of snapshot) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
@@ -32,6 +67,13 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
+    expect(resolved.actionTimeoutMs).toBe(60_000);
+    expect(resolved.tabCleanup).toEqual({
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    });
   });
 
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {
@@ -85,9 +127,101 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       remoteCdpTimeoutMs: 2200,
       remoteCdpHandshakeTimeoutMs: 5000,
+      actionTimeoutMs: 45_000,
     });
     expect(resolved.remoteCdpTimeoutMs).toBe(2200);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(5000);
+    expect(resolved.actionTimeoutMs).toBe(45_000);
+  });
+
+  it("supports custom browser tab cleanup policy", () => {
+    const resolved = resolveBrowserConfig({
+      tabCleanup: {
+        enabled: false,
+        idleMinutes: 0,
+        maxTabsPerSession: 0,
+        sweepMinutes: 15,
+      },
+    });
+    expect(resolved.tabCleanup).toEqual({
+      enabled: false,
+      idleMinutes: 0,
+      maxTabsPerSession: 0,
+      sweepMinutes: 15,
+    });
+  });
+
+  it("expands tilde-prefixed executablePath with the OS home directory", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: " ~/.local/bin/chromium ",
+    });
+
+    expect(resolved.executablePath).toBe(path.resolve(os.homedir(), ".local/bin/chromium"));
+  });
+
+  it("keeps non-tilde executablePath values unchanged after trimming", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: " ./local-chromium ",
+    });
+
+    expect(resolved.executablePath).toBe("./local-chromium");
+  });
+
+  it("normalizes blank executablePath to undefined", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "   ",
+    });
+
+    expect(resolved.executablePath).toBeUndefined();
+  });
+
+  it("expands a bare ~ executablePath to the OS home directory", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "~",
+    });
+
+    expect(resolved.executablePath).toBe(path.resolve(os.homedir()));
+  });
+
+  // Windows-only: on POSIX path.resolve treats `\` as a literal character,
+  // so "~\foo" cannot resolve to "$HOME/foo". The helper's regex still matches
+  // a leading `~\` on every platform; we only assert the resolved form where
+  // the OS path module agrees.
+  (process.platform === "win32" ? it : it.skip)(
+    "expands a Windows-style ~\\ executablePath to the OS home directory",
+    () => {
+      const resolved = resolveBrowserConfig({
+        executablePath: "~\\AppData\\Local\\Chromium\\chrome.exe",
+      });
+
+      expect(resolved.executablePath).toBe(
+        path.resolve(os.homedir(), "AppData/Local/Chromium/chrome.exe"),
+      );
+    },
+  );
+
+  it("does not expand executablePath values where ~ is not the home prefix", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "/opt/~chromium/chrome",
+    });
+
+    expect(resolved.executablePath).toBe("/opt/~chromium/chrome");
+  });
+
+  it("normalizes invalid browser tab cleanup numbers to defaults", () => {
+    const resolved = resolveBrowserConfig({
+      tabCleanup: {
+        idleMinutes: -1,
+        maxTabsPerSession: -2,
+        sweepMinutes: 0,
+      },
+    });
+    expect(resolved.tabCleanup).toEqual({
+      enabled: true,
+      idleMinutes: 120,
+      maxTabsPerSession: 8,
+      sweepMinutes: 5,
+    });
   });
 
   it("falls back to default color for invalid hex", () => {
@@ -150,6 +284,238 @@ describe("browser config", () => {
 
     const remote = resolveProfile(resolved, "remote");
     expect(remote?.attachOnly).toBe(true);
+  });
+
+  it("inherits headless from global browser config when profile override is not set", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.headless).toBe(true);
+  });
+
+  it("allows profile headless to override global browser headless", () => {
+    const resolved = resolveBrowserConfig({
+      headless: false,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", headless: true, color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.headless).toBe(true);
+  });
+
+  it("allows profile headless=false to override global browser headless=true", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", headless: false, color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.headless).toBe(false);
+  });
+
+  describe("managed browser headless mode", () => {
+    const noDisplayEnv = {
+      DISPLAY: undefined,
+      WAYLAND_DISPLAY: undefined,
+      [OPENCLAW_BROWSER_HEADLESS_ENV]: undefined,
+    };
+
+    it("falls back to headless for local managed Linux profiles without display", () => {
+      const resolved = resolveBrowserConfig({});
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: true, source: "linux-display-fallback" });
+    });
+
+    it("does not apply the no-display fallback to remote CDP profiles", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
+        },
+      });
+      const profile = resolveProfile(resolved, "remote")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: false, source: "default" });
+    });
+
+    it("lets explicit profile headless=false beat the Linux no-display fallback", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: false, source: "profile" });
+    });
+
+    it("lets explicit global headless=false beat the Linux no-display fallback", () => {
+      const resolved = resolveBrowserConfig({ headless: false });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: false, source: "config" });
+    });
+
+    it("lets OPENCLAW_BROWSER_HEADLESS override profile/global config", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "linux",
+          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "1" },
+        }),
+      ).toEqual({ headless: true, source: "env" });
+    });
+
+    it("lets request-local headless override beat env and profile/global config", () => {
+      const resolved = resolveBrowserConfig({
+        headless: false,
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          headlessOverride: true,
+          platform: "linux",
+          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "0" },
+        }),
+      ).toEqual({ headless: true, source: "request" });
+    });
+
+    it("returns an actionable error only when headed mode is explicitly selected", () => {
+      const defaultResolved = resolveBrowserConfig({});
+      const defaultProfile = resolveProfile(defaultResolved, "openclaw")!;
+      expect(
+        getManagedBrowserMissingDisplayError(defaultResolved, defaultProfile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toBeNull();
+
+      const profileResolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+        },
+      });
+      const profile = resolveProfile(profileResolved, "openclaw")!;
+      expect(
+        getManagedBrowserMissingDisplayError(profileResolved, profile, {
+          platform: "linux",
+          env: noDisplayEnv,
+        }),
+      ).toContain("browser.profiles.openclaw.headless=false");
+    });
+  });
+
+  describe("managed browser startup timeouts", () => {
+    it("uses defaults for local launch and post-launch readiness windows", () => {
+      const resolved = resolveBrowserConfig({});
+
+      expect(resolved.localLaunchTimeoutMs).toBe(15_000);
+      expect(resolved.localCdpReadyTimeoutMs).toBe(8_000);
+    });
+
+    it("accepts custom local startup timeout values", () => {
+      const resolved = resolveBrowserConfig({
+        localLaunchTimeoutMs: 45_000,
+        localCdpReadyTimeoutMs: 30_000,
+      });
+
+      expect(resolved.localLaunchTimeoutMs).toBe(45_000);
+      expect(resolved.localCdpReadyTimeoutMs).toBe(30_000);
+    });
+
+    it("clamps oversized local startup timeout values", () => {
+      const resolved = resolveBrowserConfig({
+        localLaunchTimeoutMs: 999_999,
+        localCdpReadyTimeoutMs: 999_999,
+      });
+
+      expect(resolved.localLaunchTimeoutMs).toBe(120_000);
+      expect(resolved.localCdpReadyTimeoutMs).toBe(120_000);
+    });
+  });
+
+  it("inherits executablePath from global browser config when profile override is not set", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "~/bin/chrome-global",
+      profiles: {
+        remote: { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.executablePath).toBe(path.resolve(os.homedir(), "bin/chrome-global"));
+  });
+
+  it("allows profile executablePath to override global browser executablePath", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "/usr/bin/chrome-global",
+      profiles: {
+        remote: {
+          cdpUrl: "http://127.0.0.1:9222",
+          executablePath: " ~/bin/chrome-profile ",
+          color: "#0066CC",
+        },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.executablePath).toBe(path.resolve(os.homedir(), "bin/chrome-profile"));
+  });
+
+  it("falls back to global executablePath when profile executablePath is blank", () => {
+    const resolved = resolveBrowserConfig({
+      executablePath: "/usr/bin/chrome-global",
+      profiles: {
+        remote: {
+          cdpUrl: "http://127.0.0.1:9222",
+          executablePath: "   ",
+          color: "#0066CC",
+        },
+      },
+    });
+
+    const remote = resolveProfile(resolved, "remote");
+    expect(remote?.executablePath).toBe("/usr/bin/chrome-global");
   });
 
   it("uses base protocol for profiles with only cdpPort", () => {
@@ -273,7 +639,7 @@ describe("browser config", () => {
         allowedHostnames: [" localhost ", ""],
         hostnameAllowlist: [" *.trusted.example ", " "],
       },
-    });
+    } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["localhost"],
@@ -281,17 +647,49 @@ describe("browser config", () => {
     });
   });
 
-  it("defaults browser SSRF policy to trusted-network mode", () => {
+  it("defaults browser SSRF policy to strict mode when unset", () => {
     const resolved = resolveBrowserConfig({});
-    expect(resolved.ssrfPolicy).toEqual({
-      dangerouslyAllowPrivateNetwork: true,
-    });
+    expect(resolved.ssrfPolicy).toEqual({});
   });
 
   it("supports explicit strict mode by disabling private network access", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         dangerouslyAllowPrivateNetwork: false,
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: false });
+  });
+
+  it("preserves legacy explicit strict mode from allowPrivateNetwork=false", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowPrivateNetwork: false,
+      },
+    } as unknown as BrowserConfig);
+    expect(resolved.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: false });
+  });
+
+  it("keeps allowlist-only browser SSRF policy strict by default", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowedHostnames: ["example.com"],
+        hostnameAllowlist: ["*.example.com"],
+      },
+    } as unknown as BrowserConfig);
+    expect(resolved.ssrfPolicy).toEqual({
+      allowedHostnames: ["example.com"],
+      hostnameAllowlist: ["*.example.com"],
+    });
+  });
+
+  it("keeps configured profile cdpUrls out of the shared browser SSRF policy", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        remote: {
+          color: "#123456",
+          cdpUrl: "http://172.29.128.1:9223",
+        },
       },
     });
     expect(resolved.ssrfPolicy).toEqual({});
@@ -335,6 +733,47 @@ describe("browser config", () => {
     expect(profile?.userDataDir).toBe(
       resolveUserPath("~/Library/Application Support/BraveSoftware/Brave-Browser"),
     );
+  });
+
+  it("resolves Chrome MCP command, args, and endpoint URL for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          cdpUrl: "http://127.0.0.1:9222/",
+          mcpCommand: " /usr/local/bin/chrome-devtools-mcp ",
+          mcpArgs: ["--no-usage-statistics", " ", "--performanceCrux", "false"],
+          color: "#00AA00",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, "chrome-live");
+    expect(profile?.driver).toBe("existing-session");
+    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(profile?.cdpHost).toBe("127.0.0.1");
+    expect(profile?.cdpIsLoopback).toBe(true);
+    expect(profile?.mcpCommand).toBe("/usr/local/bin/chrome-devtools-mcp");
+    expect(profile?.mcpArgs).toEqual(["--no-usage-statistics", "--performanceCrux", "false"]);
+  });
+
+  it("preserves direct websocket cdpUrl for existing-session profiles", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key",
+          color: "#00AA00",
+        },
+      },
+    });
+
+    const profile = resolveProfile(resolved, "chrome-live");
+    expect(profile?.cdpUrl).toBe("ws://127.0.0.1:9222/devtools/browser/ABC?token=test-key");
+    expect(profile?.cdpHost).toBe("127.0.0.1");
+    expect(profile?.cdpIsLoopback).toBe(true);
   });
 
   it("sets usesChromeMcp only for existing-session profiles", () => {

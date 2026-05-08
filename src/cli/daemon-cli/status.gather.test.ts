@@ -1,15 +1,26 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 
 const callGatewayStatusProbe = vi.fn<
-  (opts?: unknown) => Promise<{ ok: boolean; url?: string; error?: string | null }>
+  (opts?: unknown) => Promise<{
+    ok: boolean;
+    url?: string;
+    error?: string | null;
+    server?: { version?: string | null; connId?: string | null };
+  }>
 >(async (_opts?: unknown) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
+  server: { version: "2026.5.6", connId: "conn-1" },
 }));
 const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
@@ -24,6 +35,9 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   hints: [],
 }));
 const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
+const readGatewayRestartHandoffSync = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
+>(() => null);
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
 const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
@@ -58,6 +72,8 @@ const resolveStateDir = vi.fn(
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
 });
+const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
+const loadConfigCalls = vi.fn((configPath: string) => configPath);
 let daemonLoadedConfig: Record<string, unknown> = {
   gateway: {
     bind: "lan",
@@ -74,16 +90,26 @@ let cliLoadedConfig: Record<string, unknown> = {
 vi.mock("../../config/config.js", () => ({
   createConfigIO: ({ configPath }: { configPath: string }) => {
     const isDaemon = configPath.includes("/openclaw-daemon/");
+    const runtimeConfig = isDaemon ? daemonLoadedConfig : cliLoadedConfig;
     return {
-      readConfigFileSnapshot: async () => ({
-        path: configPath,
-        exists: true,
-        valid: true,
-        issues: [],
-      }),
-      loadConfig: () => (isDaemon ? daemonLoadedConfig : cliLoadedConfig),
+      readConfigFileSnapshot: async () => {
+        readConfigFileSnapshotCalls(configPath);
+        return {
+          path: configPath,
+          exists: true,
+          valid: true,
+          issues: [],
+          runtimeConfig,
+          config: runtimeConfig,
+        };
+      },
+      loadConfig: () => {
+        loadConfigCalls(configPath);
+        return runtimeConfig;
+      },
     };
   },
+  getRuntimeConfig: () => cliLoadedConfig,
   loadConfig: () => cliLoadedConfig,
   resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
@@ -119,6 +145,10 @@ vi.mock("../../gateway/net.js", () => ({
 vi.mock("../../infra/ports.js", () => ({
   inspectPortUsage: (port: number) => inspectPortUsage(port),
   formatPortDiagnostics: () => [],
+}));
+
+vi.mock("../../infra/restart-handoff.js", () => ({
+  readGatewayRestartHandoffSync: (env?: NodeJS.ProcessEnv) => readGatewayRestartHandoffSync(env),
 }));
 
 vi.mock("../../infra/tailnet.js", () => ({
@@ -158,6 +188,9 @@ describe("gatherDaemonStatus", () => {
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
+    readGatewayRestartHandoffSync.mockClear();
+    readConfigFileSnapshotCalls.mockClear();
+    loadConfigCalls.mockClear();
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -192,8 +225,15 @@ describe("gatherDaemonStatus", () => {
       }),
     );
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
+    expect(status.gateway?.tlsEnabled).toBe(true);
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
+    expect(status.rpc?.server).toEqual({ version: "2026.5.6", connId: "conn-1" });
+    expect(status.cli?.version).toBe(VERSION);
+    if (process.argv[1]) {
+      expect(status.cli?.entrypoint).toBe(process.argv[1]);
+    }
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 
   it("forwards requireRpc and configPath to the daemon probe", async () => {
@@ -210,6 +250,65 @@ describe("gatherDaemonStatus", () => {
         configPath: "/tmp/openclaw-daemon/openclaw.json",
       }),
     );
+  });
+
+  it("uses configured handshake timeout as the default daemon probe budget", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        bind: "lan",
+        tls: { enabled: true },
+        handshakeTimeoutMs: 30_000,
+        auth: { token: "daemon-token" },
+      },
+    };
+
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: daemonLoadedConfig,
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
+  it("reuses the shared CLI config snapshot when the daemon uses the same config path", async () => {
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+    });
+
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(readConfigFileSnapshotCalls).toHaveBeenCalledTimes(1);
+    expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith("/tmp/openclaw-cli/openclaw.json");
+    expect(loadConfigCalls).not.toHaveBeenCalled();
+  });
+
+  it("defaults unset daemon bind mode to loopback for host-side status reporting", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        tls: { enabled: true },
+        auth: { token: "daemon-token" },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
+    expect(status.gateway?.bindMode).toBe("loopback");
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
@@ -289,6 +388,95 @@ describe("gatherDaemonStatus", () => {
       status: "running",
       detail: "19001",
     });
+  });
+
+  it("surfaces recent service restart handoffs only during deep status", async () => {
+    readGatewayRestartHandoffSync.mockReturnValueOnce({
+      kind: "gateway-supervisor-restart-handoff",
+      version: 1,
+      intentId: "intent-1",
+      pid: 12_345,
+      createdAt: 10_000,
+      expiresAt: 70_000,
+      reason: "plugin source changed",
+      source: "plugin-change",
+      restartKind: "full-process",
+      supervisorMode: "launchd",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: true,
+    });
+
+    expect(readGatewayRestartHandoffSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+      }),
+    );
+    expect(status.service.restartHandoff).toMatchObject({
+      reason: "plugin source changed",
+      restartKind: "full-process",
+      supervisorMode: "launchd",
+    });
+  });
+
+  it("does not read restart handoffs during normal status", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
+  });
+
+  it("uses the fast config path for plain same-file status reads", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
+    const configPath = path.join(tmp, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        gateway: {
+          bind: "custom",
+          customBindHost: "10.0.0.5",
+          controlUi: { enabled: true },
+        },
+      }),
+    );
+    process.env.OPENCLAW_STATE_DIR = tmp;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        OPENCLAW_STATE_DIR: tmp,
+        OPENCLAW_CONFIG_PATH: configPath,
+      },
+    });
+
+    try {
+      const status = await gatherDaemonStatus({
+        rpc: {},
+        probe: false,
+        deep: false,
+      });
+
+      expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
+      expect(loadConfigCalls).not.toHaveBeenCalled();
+      expect(status.config?.cli).toMatchObject({
+        path: configPath,
+        exists: true,
+        valid: true,
+        controlUi: { enabled: true },
+      });
+      expect(status.config?.daemon).toBe(status.config?.cli);
+      expect(status.gateway?.bindMode).toBe("custom");
+      expect(status.gateway?.customBindHost).toBe("10.0.0.5");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it("resolves daemon gateway auth password SecretRef values before probing", async () => {
@@ -445,7 +633,9 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(status.rpc?.ok).toBe(false);
-    expect(status.rpc?.authWarning).toContain("gateway.auth.token SecretRef is unavailable");
+    expect(status.rpc?.authWarning).toContain(
+      "gateway.auth.token SecretRef is unresolved in this command path",
+    );
     expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
@@ -493,7 +683,12 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc).toBeUndefined();
   });
 
-  it("surfaces stale gateway listener pids from restart health inspection", async () => {
+  it("surfaces stale gateway listener pids from restart health inspection when probe fails", async () => {
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:19001",
+      error: "timeout",
+    });
     inspectGatewayRestart.mockResolvedValueOnce({
       runtime: { status: "running", pid: 8000 },
       portUsage: {

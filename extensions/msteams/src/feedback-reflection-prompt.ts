@@ -1,7 +1,9 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+
 /** Max chars of the thumbed-down response to include in the reflection prompt. */
 const MAX_RESPONSE_CHARS = 500;
 
-export type ParsedReflectionResponse = {
+type ParsedReflectionResponse = {
   learning: string;
   followUp: boolean;
   userMessage?: string;
@@ -45,7 +47,7 @@ function parseBooleanLike(value: unknown): boolean | undefined {
     return value;
   }
   if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(value);
     if (normalized === "true" || normalized === "yes") {
       return true;
     }

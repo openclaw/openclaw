@@ -1,6 +1,83 @@
 import { describe, expect, it } from "vitest";
 import { resolveLastChannelRaw, resolveLastToRaw } from "./session-delivery.js";
 
+describe("inter-session lastRoute preservation (fixes #54441)", () => {
+  it("inter-session message does NOT overwrite established Discord lastChannel", () => {
+    expect(
+      resolveLastChannelRaw({
+        originatingChannelRaw: "webchat",
+        persistedLastChannel: "discord",
+        sessionKey: "agent:samantha:main",
+        isInterSession: true,
+      }),
+    ).toBe("discord");
+  });
+
+  it("inter-session message does NOT overwrite established Telegram lastChannel", () => {
+    expect(
+      resolveLastChannelRaw({
+        originatingChannelRaw: "webchat",
+        persistedLastChannel: "telegram",
+        sessionKey: "agent:main:telegram:direct:123456",
+        isInterSession: true,
+      }),
+    ).toBe("telegram");
+  });
+
+  it("inter-session message does NOT overwrite established external lastTo", () => {
+    expect(
+      resolveLastToRaw({
+        originatingChannelRaw: "webchat",
+        originatingToRaw: "session:somekey",
+        toRaw: "session:somekey",
+        persistedLastTo: "channel:1234567890",
+        persistedLastChannel: "discord",
+        sessionKey: "agent:samantha:main",
+        isInterSession: true,
+      }),
+    ).toBe("channel:1234567890");
+  });
+
+  it("regular Discord user message DOES update lastChannel normally", () => {
+    expect(
+      resolveLastChannelRaw({
+        originatingChannelRaw: "discord",
+        persistedLastChannel: "discord",
+        sessionKey: "agent:main:discord:channel:123",
+        isInterSession: false,
+      }),
+    ).toBe("discord");
+  });
+
+  it("inter-session on a NEW session (no persisted external route) may set webchat", () => {
+    // When there is no established external route, inter-session should not
+    // forcefully block the update — the session has no external route to protect.
+    const result = resolveLastChannelRaw({
+      originatingChannelRaw: "webchat",
+      persistedLastChannel: undefined,
+      sessionKey: "agent:samantha:main",
+      isInterSession: true,
+    });
+    // No external route existed — falls through to normal resolution (webchat or undefined)
+    // The important thing is it does NOT throw and returns a defined or undefined value.
+    expect(result === "webchat" || result === undefined).toBe(true);
+  });
+
+  it("inter-session on session with no persisted lastTo does not crash", () => {
+    const result = resolveLastToRaw({
+      originatingChannelRaw: "webchat",
+      originatingToRaw: "session:somekey",
+      toRaw: "session:somekey",
+      persistedLastTo: undefined,
+      persistedLastChannel: undefined,
+      sessionKey: "agent:samantha:main",
+      isInterSession: true,
+    });
+    // No external route — falls through to normal resolution
+    expect(result === "session:somekey" || result === undefined).toBe(true);
+  });
+});
+
 describe("session delivery direct-session routing overrides", () => {
   it.each([
     "agent:main:direct:user-1",

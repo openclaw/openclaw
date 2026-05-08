@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   createChannelPairingController,
@@ -15,8 +16,6 @@ import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../poli
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 
-export type MSTeamsResolvedSenderAccess = Awaited<ReturnType<typeof resolveMSTeamsSenderAccess>>;
-
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
   activity: MSTeamsTurnContext["activity"];
@@ -24,7 +23,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   const activity = params.activity;
   const msteamsCfg = params.cfg.channels?.msteams;
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
-  const convType = activity.conversation?.conversationType?.toLowerCase();
+  const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const senderName = activity.from?.name ?? activity.from?.id ?? senderId;
@@ -42,7 +41,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     dmPolicy,
     readStore: pairing.readStoreForDmPolicy,
   });
-  const configuredDmAllowFrom = (msteamsCfg?.allowFrom ?? []).map((entry) => String(entry));
+  const configuredDmAllowFrom = msteamsCfg?.allowFrom ?? [];
   const groupAllowFrom = msteamsCfg?.groupAllowFrom;
   const resolvedAllowFromLists = resolveEffectiveAllowFromLists({
     allowFrom: configuredDmAllowFrom,

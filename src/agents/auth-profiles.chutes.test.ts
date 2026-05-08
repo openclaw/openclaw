@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { CHUTES_TOKEN_ENDPOINT } from "./chutes-oauth.js";
 
@@ -11,14 +9,21 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   refreshProviderOAuthCredentialWithPlugin: async () => null,
 }));
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
+afterAll(() => {
+  vi.doUnmock("../plugins/provider-runtime.runtime.js");
+  vi.doUnmock("../plugins/provider-runtime.js");
+});
+
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let ensureAuthProfileStore: typeof import("./auth-profiles.js").ensureAuthProfileStore;
 let resolveApiKeyForProfile: typeof import("./auth-profiles.js").resolveApiKeyForProfile;
 let resetFileLockStateForTest: typeof import("../infra/file-lock.js").resetFileLockStateForTest;
 
 describe("auth-profiles (chutes)", () => {
-  let tempDir: string | null = null;
-
   beforeAll(async () => {
     ({ clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore, resolveApiKeyForProfile } =
       await import("./auth-profiles.js"));
@@ -34,26 +39,19 @@ describe("auth-profiles (chutes)", () => {
     vi.unstubAllGlobals();
     clearRuntimeAuthProfileStoreSnapshots();
     resetFileLockStateForTest();
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true });
-      tempDir = null;
-    }
   });
 
   it("refreshes expired Chutes OAuth credentials", async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chutes-"));
-    const agentDir = path.join(tempDir, "agents", "main", "agent");
-    await withEnvAsync(
+    await withOpenClawTestState(
       {
-        OPENCLAW_STATE_DIR: tempDir,
-        OPENCLAW_AGENT_DIR: agentDir,
-        PI_CODING_AGENT_DIR: agentDir,
-        CHUTES_CLIENT_ID: undefined,
+        layout: "state-only",
+        prefix: "openclaw-chutes-",
+        agentEnv: "main",
+        env: {
+          CHUTES_CLIENT_ID: undefined,
+        },
       },
-      async () => {
-        const authProfilePath = path.join(agentDir, "auth-profiles.json");
-        await fs.mkdir(path.dirname(authProfilePath), { recursive: true });
-
+      async (state) => {
         const store: AuthProfileStore = {
           version: 1,
           profiles: {
@@ -67,7 +65,7 @@ describe("auth-profiles (chutes)", () => {
             },
           },
         };
-        await fs.writeFile(authProfilePath, `${JSON.stringify(store)}\n`);
+        const authProfilePath = await state.writeAuthProfiles(store);
 
         const fetchSpy = vi.fn(async (input: string | URL) => {
           const url = typeof input === "string" ? input : input.toString();

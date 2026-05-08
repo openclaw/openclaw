@@ -1,43 +1,44 @@
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { AGENT_LANE_NESTED } from "../lanes.js";
-import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
+import { retireSessionMcpRuntimeForSessionKey } from "../pi-bundle-mcp-tools.js";
+import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
+
+export { readLatestAssistantReply } from "../run-wait.js";
 
 type GatewayCaller = typeof callGateway;
+type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
 
 const defaultAgentStepDeps = {
+  agentCommandFromIngress: (async (...args) => {
+    const { agentCommandFromIngress } = await import("../../commands/agent.js");
+    return await agentCommandFromIngress(...args);
+  }) as AgentCommandRunner,
   callGateway,
 };
 
 let agentStepDeps: {
+  agentCommandFromIngress: AgentCommandRunner;
   callGateway: GatewayCaller;
 } = defaultAgentStepDeps;
 
-export async function readLatestAssistantReply(params: {
-  sessionKey: string;
-  limit?: number;
-}): Promise<string | undefined> {
-  const history = await agentStepDeps.callGateway<{ messages: Array<unknown> }>({
-    method: "chat.history",
-    params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
-  });
-  const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-  for (let i = filtered.length - 1; i >= 0; i -= 1) {
-    const candidate = filtered[i];
-    if (!candidate || typeof candidate !== "object") {
-      continue;
-    }
-    if ((candidate as { role?: unknown }).role !== "assistant") {
-      continue;
-    }
-    const text = extractAssistantText(candidate);
-    if (!text?.trim()) {
-      continue;
-    }
-    return text;
+function extractAgentCommandReply(result: unknown): string | undefined {
+  const payloads = (result as { payloads?: unknown } | undefined)?.payloads;
+  if (!Array.isArray(payloads)) {
+    return undefined;
   }
-  return undefined;
+  const texts = payloads
+    .map((payload) =>
+      payload &&
+      typeof payload === "object" &&
+      typeof (payload as { text?: unknown }).text === "string"
+        ? (payload as { text: string }).text
+        : "",
+    )
+    .filter((text) => text.trim().length > 0);
+  return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 
 export async function runAgentStep(params: {
@@ -47,50 +48,82 @@ export async function runAgentStep(params: {
   timeoutMs: number;
   channel?: string;
   lane?: string;
+  transcriptMessage?: string;
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
-  const response = await agentStepDeps.callGateway<{ runId?: string }>({
+  const inputProvenance = {
+    kind: "inter_session" as const,
+    sourceSessionKey: params.sourceSessionKey,
+    sourceChannel: params.sourceChannel,
+    sourceTool: params.sourceTool ?? "sessions_send",
+  };
+  const message = annotateInterSessionPromptText(params.message, inputProvenance);
+  const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
+  const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
+  if (params.transcriptMessage !== undefined) {
+    const result = await agentStepDeps.agentCommandFromIngress({
+      message,
+      transcriptMessage: params.transcriptMessage,
+      sessionKey: params.sessionKey,
+      deliver: false,
+      channel,
+      lane,
+      runId: stepIdem,
+      extraSystemPrompt: params.extraSystemPrompt,
+      inputProvenance,
+      senderIsOwner: false,
+      allowModelOverride: false,
+    });
+    await retireSessionMcpRuntimeForSessionKey({
+      sessionKey: params.sessionKey,
+      reason: "nested-agent-step-complete",
+    });
+    return extractAgentCommandReply(result);
+  }
+  const response = await agentStepDeps.callGateway({
     method: "agent",
     params: {
-      message: params.message,
+      message,
       sessionKey: params.sessionKey,
       idempotencyKey: stepIdem,
       deliver: false,
-      channel: params.channel ?? INTERNAL_MESSAGE_CHANNEL,
-      lane: params.lane ?? AGENT_LANE_NESTED,
+      channel,
+      lane,
       extraSystemPrompt: params.extraSystemPrompt,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
-        sourceTool: params.sourceTool ?? "sessions_send",
-      },
+      inputProvenance,
     },
     timeoutMs: 10_000,
   });
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
-  const stepWaitMs = Math.min(params.timeoutMs, 60_000);
-  const wait = await agentStepDeps.callGateway<{ status?: string }>({
-    method: "agent.wait",
-    params: {
-      runId: resolvedRunId,
-      timeoutMs: stepWaitMs,
-    },
-    timeoutMs: stepWaitMs + 2000,
+  const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+    runId: resolvedRunId,
+    sessionKey: params.sessionKey,
+    timeoutMs: Math.min(params.timeoutMs, 60_000),
   });
-  if (wait?.status !== "ok") {
+  if (result.status === "ok" || result.status === "error") {
+    await retireSessionMcpRuntimeForSessionKey({
+      sessionKey: params.sessionKey,
+      reason: "nested-agent-step-complete",
+    });
+  }
+  if (result.status !== "ok") {
     return undefined;
   }
-  return await readLatestAssistantReply({ sessionKey: params.sessionKey });
+  return result.replyText;
 }
 
 export const __testing = {
-  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
+  setDepsForTest(
+    overrides?: Partial<{
+      agentCommandFromIngress: AgentCommandRunner;
+      callGateway: GatewayCaller;
+    }>,
+  ) {
     agentStepDeps = overrides
       ? {
           ...defaultAgentStepDeps,

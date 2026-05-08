@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.js";
+import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 
 const DOCS_ROOT = path.join(process.cwd(), "docs");
 const pluginDocs = [
@@ -42,7 +42,7 @@ describe("ClawHub plugin docs", () => {
 
     expect(validateExternalCodePluginPackageJson(packageJson).issues).toEqual([]);
     expect(typeof pluginManifest.id).toBe("string");
-    expect(pluginManifest.configSchema).toBeTruthy();
+    expect(pluginManifest.configSchema).toEqual(expect.any(Object));
   });
 
   it("does not tell plugin authors to use bare clawhub publish", async () => {

@@ -2,6 +2,11 @@ import type {
   ChannelDirectoryEntry,
   DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
 
@@ -36,13 +41,21 @@ type SlackListChannelsResponse = {
   response_metadata?: { next_cursor?: string };
 };
 
+type SlackAuthTestResponse = {
+  ok?: boolean;
+  user_id?: string;
+  user?: string;
+  team_id?: string;
+  team?: string;
+};
+
 function resolveReadToken(params: DirectoryConfigParams): string | undefined {
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   return account.userToken ?? account.botToken?.trim();
 }
 
 function normalizeQuery(value?: string | null): string {
-  return value?.trim().toLowerCase() ?? "";
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function buildUserRank(user: SlackUser): number {
@@ -58,6 +71,54 @@ function buildUserRank(user: SlackUser): number {
 
 function buildChannelRank(channel: SlackChannel): number {
   return channel.is_archived ? 0 : 1;
+}
+
+function slackUserToDirectoryEntry(
+  user: SlackUser,
+  fallback?: { id?: string; name?: string },
+): ChannelDirectoryEntry | null {
+  const id = normalizeOptionalString(user.id) ?? normalizeOptionalString(fallback?.id);
+  if (!id) {
+    return null;
+  }
+  const handle = normalizeOptionalString(user.name) ?? normalizeOptionalString(fallback?.name);
+  const display =
+    normalizeOptionalString(user.profile?.display_name) ||
+    normalizeOptionalString(user.profile?.real_name) ||
+    normalizeOptionalString(user.real_name) ||
+    handle;
+  return {
+    kind: "user",
+    id: `user:${id}`,
+    name: display || undefined,
+    handle: handle ? `@${handle}` : undefined,
+    rank: buildUserRank(user),
+    raw: user,
+  };
+}
+
+export async function getSlackDirectorySelfLive(
+  params: DirectoryConfigParams,
+): Promise<ChannelDirectoryEntry | null> {
+  const token = resolveReadToken(params);
+  if (!token) {
+    return null;
+  }
+  const client = createSlackWebClient(token);
+  const auth = (await client.auth.test()) as SlackAuthTestResponse;
+  const userId = normalizeOptionalString(auth.user_id);
+  if (!userId) {
+    return null;
+  }
+  try {
+    const info = (await client.users.info({ user: userId })) as { user?: SlackUser };
+    return slackUserToDirectoryEntry(info.user ?? {}, { id: userId, name: auth.user });
+  } catch {
+    return slackUserToDirectoryEntry(
+      { id: userId, name: auth.user },
+      { id: userId, name: auth.user },
+    );
+  }
 }
 
 export async function listSlackDirectoryPeersLive(
@@ -89,7 +150,7 @@ export async function listSlackDirectoryPeersLive(
     const handle = member.name;
     const email = member.profile?.email;
     const candidates = [name, handle, email]
-      .map((item) => item?.trim().toLowerCase())
+      .map((item) => normalizeOptionalLowercaseString(item))
       .filter(Boolean);
     if (!query) {
       return true;
@@ -98,26 +159,7 @@ export async function listSlackDirectoryPeersLive(
   });
 
   const rows = filtered
-    .map((member) => {
-      const id = member.id?.trim();
-      if (!id) {
-        return null;
-      }
-      const handle = member.name?.trim();
-      const display =
-        member.profile?.display_name?.trim() ||
-        member.profile?.real_name?.trim() ||
-        member.real_name?.trim() ||
-        handle;
-      return {
-        kind: "user",
-        id: `user:${id}`,
-        name: display || undefined,
-        handle: handle ? `@${handle}` : undefined,
-        rank: buildUserRank(member),
-        raw: member,
-      } satisfies ChannelDirectoryEntry;
-    })
+    .map((member) => slackUserToDirectoryEntry(member))
     .filter(Boolean) as ChannelDirectoryEntry[];
 
   if (typeof params.limit === "number" && params.limit > 0) {
@@ -153,7 +195,7 @@ export async function listSlackDirectoryGroupsLive(
   } while (cursor);
 
   const filtered = channels.filter((channel) => {
-    const name = channel.name?.trim().toLowerCase();
+    const name = normalizeOptionalLowercaseString(channel.name);
     if (!query) {
       return true;
     }

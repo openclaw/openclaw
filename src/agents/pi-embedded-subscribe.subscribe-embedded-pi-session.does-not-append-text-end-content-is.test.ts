@@ -40,13 +40,16 @@ describe("subscribeEmbeddedPiSession", () => {
       content: "Hello world",
       expected: "Hello world",
     },
-  ])("$name", ({ delta, content, expected }) => {
+  ])("$name", async ({ delta, content, expected }) => {
     const { onBlockReply, subscription, emitDelta, emitTextEnd } = setupTextEndSubscription();
 
     emitDelta(delta);
     emitTextEnd(content);
+    await Promise.resolve();
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
     expect(subscription.assistantTexts).toEqual([expected]);
   });
 });

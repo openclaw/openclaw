@@ -1,4 +1,4 @@
-import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { Skill } from "./skill-contract.js";
 
 export type SkillInstallSpec = {
   id?: string;
@@ -52,6 +52,8 @@ export type SkillCommandSpec = {
   name: string;
   skillName: string;
   description: string;
+  /** Localized descriptions for native command surfaces that support them. */
+  descriptionLocalizations?: Record<string, string>;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
   /** Native prompt template used by Claude-bundle command markdown files. */
@@ -67,11 +69,18 @@ export type SkillsInstallPreferences = {
 
 export type ParsedSkillFrontmatter = Record<string, string>;
 
+export type SkillExposure = {
+  includeInRuntimeRegistry: boolean;
+  includeInAvailableSkillsPrompt: boolean;
+  userInvocable: boolean;
+};
+
 export type SkillEntry = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
+  exposure?: SkillExposure;
 };
 
 export type SkillEligibilityContext = {

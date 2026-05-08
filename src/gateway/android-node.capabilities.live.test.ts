@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
+import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { unwrapRemoteConfigSnapshot } from "./android-node.capabilities.policy-config.js";
-import { shouldFetchRemotePolicyConfig } from "./android-node.capabilities.policy-source.js";
 import { buildGatewayConnectionDetails } from "./call.js";
 import { GatewayClient } from "./client.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
@@ -44,6 +44,12 @@ type CommandResult = {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function expectRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toEqual(expect.any(Object));
+  expect(Array.isArray(value), label).toBe(false);
+  return value as Record<string, unknown>;
 }
 
 function readString(value: unknown): string | null {
@@ -105,7 +111,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("canvas.eval", payload);
-      expect(obj.result).toBeDefined();
+      expect(obj).toHaveProperty("result");
     },
   },
   "canvas.snapshot": {
@@ -192,7 +198,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.permissions", payload);
-      expect(asRecord(obj.permissions)).toBeTruthy();
+      expectRecord(obj.permissions, "device.permissions payload");
     },
   },
   "device.health": {
@@ -201,7 +207,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.health", payload);
-      expect(asRecord(obj.memory)).toBeTruthy();
+      expectRecord(obj.memory, "device.health memory payload");
     },
   },
   "notifications.list": {
@@ -257,7 +263,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
 };
 
 function resolveGatewayConnection() {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const urlOverride = readString(process.env.OPENCLAW_ANDROID_GATEWAY_URL);
   const details = buildGatewayConnectionDetails({
     config: cfg,
@@ -290,7 +296,7 @@ async function resolvePolicyConfigForRun(params: {
     return unwrapRemoteConfigSnapshot(raw);
   }
 
-  const loadLocalConfig = params.loadLocalConfig ?? loadConfig;
+  const loadLocalConfig = params.loadLocalConfig ?? getRuntimeConfig;
   return loadLocalConfig();
 }
 
@@ -313,7 +319,7 @@ describe("resolvePolicyConfigForRun", () => {
 
     expect(loadLocalConfig).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith("config.get", {});
-    expect(asRecord(result.gateway)).toBeTruthy();
+    expectRecord(result.gateway, "remote gateway config");
   });
 
   it("still uses local config loading for local loopback runs", async () => {
@@ -534,6 +540,7 @@ describeLive("android node capability integration (preconditioned)", () => {
     const allowlist = resolveNodeCommandAllowlist(cfg, {
       platform: target.platform,
       deviceFamily: target.deviceFamily,
+      commands,
     });
 
     commandsToRun = commands.filter(
@@ -569,6 +576,8 @@ describeLive("android node capability integration (preconditioned)", () => {
         return;
       }
       const result = await invokeNodeCommand({ client, nodeId, command, profile, ctx });
+      expect(result.command).toBe(command);
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
       results.set(command, result);
       const issue = evaluateCommandResult({ result, profile, ctx });
       if (!issue) {
@@ -587,22 +596,20 @@ describeLive("android node capability integration (preconditioned)", () => {
 
   it("covers every advertised non-interactive command", () => {
     const missingRuns = commandsToRun.filter((command) => !results.has(command));
-    if (missingRuns.length === 0) {
-      return;
-    }
     const summary = [...results.values()]
       .map((entry) => {
         const status = entry.ok ? "ok" : `err:${entry.errorCode ?? "UNKNOWN"}`;
         return `${entry.command} -> ${status} (${entry.durationMs}ms)`;
       })
       .join("\n");
-    throw new Error(
+    expect(
+      missingRuns,
       [
         `advertised commands missing execution (${missingRuns.length}/${commandsToRun.length})`,
         ...missingRuns,
         "summary:",
         summary,
       ].join("\n"),
-    );
+    ).toEqual([]);
   });
 });

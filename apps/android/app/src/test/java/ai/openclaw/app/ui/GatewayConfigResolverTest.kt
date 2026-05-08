@@ -1,11 +1,11 @@
 package ai.openclaw.app.ui
 
-import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.util.Base64
 
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
@@ -27,6 +27,13 @@ class GatewayConfigResolverTest {
   @Test
   fun parseGatewayEndpointRejectsNonLoopbackCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://gateway.example")
+
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsTailnetCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://100.64.0.9:18789")
 
     assertNull(parsed)
   }
@@ -92,6 +99,19 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointRejectsPrivateLanCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://192.168.1.20:18789")
+    assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsMdnsCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://gateway.local:18789")
+
+    assertNull(parsed)
+  }
+
+  @Test
   fun parseGatewayEndpointAllowsIpv6LoopbackCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://[::1]")
 
@@ -128,8 +148,17 @@ class GatewayConfigResolverTest {
   @Test
   fun parseGatewayEndpointRejectsLinkLocalIpv6ZoneCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://[fe80::1%25eth0]")
-
     assertNull(parsed)
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsSecureIpv6ZoneUrls() {
+    val parsed = parseGatewayEndpoint("wss://[fe80::1%25wlan0]:443")
+
+    assertEquals("fe80::1%25wlan0", parsed?.host)
+    assertEquals(443, parsed?.port)
+    assertEquals(true, parsed?.tls)
+    assertEquals("https://[fe80::1%25wlan0]", parsed?.displayUrl)
   }
 
   @Test
@@ -218,6 +247,32 @@ class GatewayConfigResolverTest {
     val resolved = resolveScannedSetupCode(setupCode)
 
     assertNull(resolved)
+  }
+
+  @Test
+  fun resolveScannedSetupCodeResultFlagsInsecureRemoteGateway() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://attacker.example:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved = resolveScannedSetupCodeResult(setupCode)
+
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, resolved.error)
+  }
+
+  @Test
+  fun parseGatewayEndpointResultFlagsInsecureRemoteGateway() {
+    val parsed = parseGatewayEndpointResult("ws://gateway.example:18789")
+
+    assertNull(parsed.config)
+    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, parsed.error)
+  }
+
+  @Test
+  fun parseGatewayEndpointResultFlagsInsecureLanCleartextGateway() {
+    val parsed = parseGatewayEndpointResult("ws://192.168.1.20:18789")
+    assertNull(parsed.config)
+    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, parsed.error)
   }
 
   @Test
@@ -358,7 +413,7 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun resolveGatewayConnectConfigRejectsNonLoopbackManualCleartextEndpoint() {
+  fun resolveGatewayConnectConfigRejectsPrivateLanManualCleartextEndpoint() {
     val resolved =
       resolveGatewayConnectConfig(
         useSetupCode = false,
@@ -377,7 +432,41 @@ class GatewayConfigResolverTest {
     assertNull(resolved)
   }
 
-  private fun encodeSetupCode(payloadJson: String): String {
-    return Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
+  @Test
+  fun composeGatewayManualUrlDefaultsPortTo443WhenTlsAndPortBlank() {
+    val url = composeGatewayManualUrl("mydevice.tail1234.ts.net", "", tls = true)
+
+    assertEquals("https://mydevice.tail1234.ts.net:443", url)
   }
+
+  @Test
+  fun composeGatewayManualUrlRejectsBlankPortWhenTlsIsOff() {
+    val url = composeGatewayManualUrl("127.0.0.1", "", tls = false)
+
+    assertNull(url)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualAcceptsTailscaleHostWithoutPort() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
+        manualHostInput = "mydevice.tail1234.ts.net",
+        manualPortInput = "",
+        manualTlsInput = true,
+        fallbackBootstrapToken = "",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("mydevice.tail1234.ts.net", resolved?.host)
+    assertEquals(443, resolved?.port)
+    assertEquals(true, resolved?.tls)
+  }
+
+  private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
 }

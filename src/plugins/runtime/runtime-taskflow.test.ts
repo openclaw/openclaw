@@ -1,40 +1,21 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { getTaskFlowById, resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
-import { getTaskById, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
+import { getTaskById } from "../../tasks/task-registry.js";
+import {
+  installRuntimeTaskDeliveryMock,
+  resetRuntimeTaskTestState,
+} from "./runtime-task-test-harness.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 
-const hoisted = vi.hoisted(() => {
-  const sendMessageMock = vi.fn();
-  const cancelSessionMock = vi.fn();
-  const killSubagentRunAdminMock = vi.fn();
-  return {
-    sendMessageMock,
-    cancelSessionMock,
-    killSubagentRunAdminMock,
-  };
-});
-
-vi.mock("../../tasks/task-registry-delivery-runtime.js", () => ({
-  sendMessage: hoisted.sendMessageMock,
-}));
-
-vi.mock("../../acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    cancelSession: hoisted.cancelSessionMock,
-  }),
-}));
-
-vi.mock("../../agents/subagent-control.js", () => ({
-  killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
-}));
-
 afterEach(() => {
-  resetTaskRegistryForTests();
-  resetTaskFlowRegistryForTests({ persist: false });
-  vi.clearAllMocks();
+  resetRuntimeTaskTestState({ persist: false });
 });
 
 describe("runtime TaskFlow", () => {
+  beforeEach(() => {
+    installRuntimeTaskDeliveryMock();
+  });
+
   it("binds managed TaskFlow operations to a session key", () => {
     const runtime = createRuntimeTaskFlow();
     const taskFlow = runtime.bindSession({

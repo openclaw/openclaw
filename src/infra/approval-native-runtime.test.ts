@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
+import { clearApprovalNativeRouteStateForTest } from "./approval-native-route-coordinator.js";
 import {
   createChannelNativeApprovalRuntime,
   deliverApprovalRequestViaChannelNativePlan,
@@ -14,8 +15,13 @@ const execRequest = {
   expiresAtMs: 120_000,
 };
 
+afterEach(() => {
+  clearApprovalNativeRouteStateForTest();
+  vi.useRealTimers();
+});
+
 describe("deliverApprovalRequestViaChannelNativePlan", () => {
-  it("sends an origin notice and dedupes converged prepared targets", async () => {
+  it("dedupes converged prepared targets", async () => {
     const adapter: ChannelApprovalNativeAdapter = {
       describeDeliveryCapabilities: () => ({
         enabled: true,
@@ -27,7 +33,6 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
       resolveOriginTarget: async () => ({ to: "origin-room" }),
       resolveApproverDmTargets: async () => [{ to: "approver-1" }, { to: "approver-2" }],
     };
-    const sendOriginNotice = vi.fn().mockResolvedValue(undefined);
     const prepareTarget = vi
       .fn()
       .mockImplementation(
@@ -51,24 +56,21 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
       );
     const onDuplicateSkipped = vi.fn();
 
-    const entries = await deliverApprovalRequestViaChannelNativePlan({
+    const result = await deliverApprovalRequestViaChannelNativePlan({
       cfg: {} as never,
       approvalKind: "exec",
       request: execRequest,
       adapter,
-      sendOriginNotice: async ({ originTarget }) => {
-        await sendOriginNotice(originTarget);
-      },
       prepareTarget,
       deliverTarget,
       onDuplicateSkipped,
     });
 
-    expect(sendOriginNotice).toHaveBeenCalledWith({ to: "origin-room" });
     expect(prepareTarget).toHaveBeenCalledTimes(2);
     expect(deliverTarget).toHaveBeenCalledTimes(1);
     expect(onDuplicateSkipped).toHaveBeenCalledTimes(1);
-    expect(entries).toEqual([{ channelId: "shared-dm" }]);
+    expect(result.entries).toEqual([{ channelId: "shared-dm" }]);
+    expect(result.deliveryPlan.notifyOriginWhenDmOnly).toBe(true);
   });
 
   it("continues after per-target delivery failures", async () => {
@@ -83,7 +85,7 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
     };
     const onDeliveryError = vi.fn();
 
-    const entries = await deliverApprovalRequestViaChannelNativePlan({
+    const result = await deliverApprovalRequestViaChannelNativePlan({
       cfg: {} as never,
       approvalKind: "exec",
       request: execRequest,
@@ -102,7 +104,7 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
     });
 
     expect(onDeliveryError).toHaveBeenCalledTimes(1);
-    expect(entries).toEqual([{ channelId: "approver-2" }]);
+    expect(result.entries).toEqual([{ channelId: "approver-2" }]);
   });
 });
 
@@ -131,6 +133,8 @@ describe("createChannelNativeApprovalRuntime", () => {
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime",
       clientDisplayName: "Test",
+      channel: "telegram",
+      channelLabel: "Telegram",
       cfg: {} as never,
       accountId: "secondary",
       eventKinds: ["exec", "plugin"] as const,
@@ -212,6 +216,8 @@ describe("createChannelNativeApprovalRuntime", () => {
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime-expiry",
       clientDisplayName: "Test",
+      channel: "telegram",
+      channelLabel: "Telegram",
       cfg: {} as never,
       nowMs: Date.now,
       nativeAdapter: {

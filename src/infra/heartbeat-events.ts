@@ -34,6 +34,7 @@ export function resolveIndicatorType(
     case "skipped":
       return undefined;
   }
+  throw new Error("Unsupported heartbeat status");
 }
 
 type HeartbeatEventState = {

@@ -22,8 +22,60 @@ describe("resolveMatrixMonitorAccessState", () => {
     expect(state.roomUserMatch?.allowed).toBe(true);
     expect(state.groupAllowMatch?.allowed).toBe(false);
     expect(state.commandAuthorizers).toEqual([
-      { configured: true, allowed: false },
+      { configured: false, allowed: false },
       { configured: true, allowed: true },
+      { configured: true, allowed: false },
+    ]);
+  });
+
+  it("does not let DM pairing-store entries authorize room control commands", () => {
+    const state = resolveMatrixMonitorAccessState({
+      allowFrom: [],
+      storeAllowFrom: ["@attacker:example.org"],
+      groupAllowFrom: [],
+      roomUsers: [],
+      senderId: "@attacker:example.org",
+      isRoom: true,
+    });
+
+    expect(state.effectiveAllowFrom).toEqual(["@attacker:example.org"]);
+    expect(state.directAllowMatch.allowed).toBe(true);
+    expect(state.commandAuthorizers).toEqual([
+      { configured: false, allowed: false },
+      { configured: false, allowed: false },
+      { configured: false, allowed: false },
+    ]);
+  });
+
+  it("does not let pairing-store entries authorize open DMs without wildcard", () => {
+    const state = resolveMatrixMonitorAccessState({
+      allowFrom: [],
+      storeAllowFrom: ["@alice:example.org"],
+      dmPolicy: "open",
+      groupAllowFrom: [],
+      roomUsers: [],
+      senderId: "@alice:example.org",
+      isRoom: false,
+    });
+
+    expect(state.effectiveAllowFrom).toEqual([]);
+    expect(state.directAllowMatch.allowed).toBe(false);
+  });
+
+  it("does not let configured DM allowFrom authorize room control commands", () => {
+    const state = resolveMatrixMonitorAccessState({
+      allowFrom: ["@owner:example.org"],
+      storeAllowFrom: [],
+      groupAllowFrom: ["@admin:example.org"],
+      roomUsers: [],
+      senderId: "@owner:example.org",
+      isRoom: true,
+    });
+
+    expect(state.directAllowMatch.allowed).toBe(true);
+    expect(state.commandAuthorizers).toEqual([
+      { configured: false, allowed: false },
+      { configured: false, allowed: false },
       { configured: true, allowed: false },
     ]);
   });

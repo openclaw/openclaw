@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -13,8 +13,9 @@ vi.mock("../logger.js", () => ({
 }));
 
 let toToolDefinitions: typeof import("./pi-tool-definition-adapter.js").toToolDefinitions;
-let wrapToolParamNormalization: typeof import("./pi-tools.params.js").wrapToolParamNormalization;
-let CLAUDE_PARAM_GROUPS: typeof import("./pi-tools.params.js").CLAUDE_PARAM_GROUPS;
+let BeforeToolCallBlockedError: typeof import("./pi-tools.before-tool-call.js").BeforeToolCallBlockedError;
+let wrapToolParamValidation: typeof import("./pi-tools.params.js").wrapToolParamValidation;
+let REQUIRED_PARAM_GROUPS: typeof import("./pi-tools.params.js").REQUIRED_PARAM_GROUPS;
 let logError: typeof import("../logger.js").logError;
 
 type ToolExecute = ReturnType<
@@ -25,7 +26,8 @@ const extensionContext = {} as Parameters<ToolExecute>[4];
 describe("pi tool definition adapter logging", () => {
   beforeAll(async () => {
     ({ toToolDefinitions } = await import("./pi-tool-definition-adapter.js"));
-    ({ wrapToolParamNormalization, CLAUDE_PARAM_GROUPS } = await import("./pi-tools.params.js"));
+    ({ BeforeToolCallBlockedError } = await import("./pi-tools.before-tool-call.js"));
+    ({ wrapToolParamValidation, REQUIRED_PARAM_GROUPS } = await import("./pi-tools.params.js"));
     ({ logError } = await import("../logger.js"));
   });
 
@@ -41,8 +43,12 @@ describe("pi tool definition adapter logging", () => {
       description: "edits files",
       parameters: Type.Object({
         path: Type.String(),
-        oldText: Type.String(),
-        newText: Type.String(),
+        edits: Type.Array(
+          Type.Object({
+            oldText: Type.String(),
+            newText: Type.String(),
+          }),
+        ),
       }),
       execute: async () => ({
         content: [{ type: "text" as const, text: "ok" }],
@@ -50,7 +56,7 @@ describe("pi tool definition adapter logging", () => {
       }),
     } satisfies AgentTool;
 
-    const tool = wrapToolParamNormalization(baseTool, CLAUDE_PARAM_GROUPS.edit);
+    const tool = wrapToolParamValidation(baseTool, REQUIRED_PARAM_GROUPS.edit);
     const [def] = toToolDefinitions([tool]);
     if (!def) {
       throw new Error("missing tool definition");
@@ -60,9 +66,126 @@ describe("pi tool definition adapter logging", () => {
 
     expect(logError).toHaveBeenCalledWith(
       expect.stringContaining(
-        '[tools] edit failed: Missing required parameters: oldText alias, newText alias. Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
+        '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
       ),
     );
+  });
+
+  it("does not log raw params for intentional before_tool_call blocks", async () => {
+    const baseTool = {
+      name: "bash",
+      label: "Bash",
+      description: "runs commands",
+      parameters: Type.Object({
+        command: Type.String(),
+      }),
+      execute: async () => {
+        throw new BeforeToolCallBlockedError("blocked by policy");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    const result = await def.execute(
+      "call-blocked-1",
+      { command: "secret-value" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          status: "blocked",
+          deniedReason: "plugin-before-tool-call",
+          reason: "blocked by policy",
+        }),
+      }),
+    );
+    expect(logError).not.toHaveBeenCalled();
+    expect(mocks.logDebug).toHaveBeenCalledWith(
+      "tools: exec blocked by before_tool_call: blocked by policy",
+    );
+  });
+
+  it("logs provider AbortError failures when the agent run was not aborted", async () => {
+    const baseTool = {
+      name: "web_search",
+      label: "Web Search",
+      description: "searches",
+      parameters: Type.Object({
+        query: Type.String(),
+      }),
+      execute: async () => {
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    const result = await def.execute(
+      "call-web-search-abort",
+      { query: "OpenClaw" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          status: "error",
+          tool: "web_search",
+          error: "This operation was aborted",
+        }),
+      }),
+    );
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("[tools] web_search failed: This operation was aborted"),
+    );
+  });
+
+  it("rethrows AbortError failures when the agent run signal was aborted", async () => {
+    const baseTool = {
+      name: "web_search",
+      label: "Web Search",
+      description: "searches",
+      parameters: Type.Object({
+        query: Type.String(),
+      }),
+      execute: async () => {
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      def.execute(
+        "call-web-search-agent-abort",
+        { query: "OpenClaw" },
+        controller.signal,
+        undefined,
+        extensionContext,
+      ),
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: "This operation was aborted",
+    });
+    expect(logError).not.toHaveBeenCalled();
   });
 
   it("accepts nested edits arrays for the current edit schema", async () => {
@@ -86,7 +209,7 @@ describe("pi tool definition adapter logging", () => {
       execute,
     } satisfies AgentTool;
 
-    const tool = wrapToolParamNormalization(baseTool, CLAUDE_PARAM_GROUPS.edit);
+    const tool = wrapToolParamValidation(baseTool, REQUIRED_PARAM_GROUPS.edit);
     const [def] = toToolDefinitions([tool]);
     if (!def) {
       throw new Error("missing tool definition");

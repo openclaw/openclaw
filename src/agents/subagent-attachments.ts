@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { privateFileStore } from "../infra/private-file-store.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
@@ -26,7 +28,7 @@ export function decodeStrictBase64(value: string, maxDecodedBytes: number): Buff
   return decoded;
 }
 
-export type SubagentInlineAttachment = {
+type SubagentInlineAttachment = {
   name: string;
   content: string;
   encoding?: "utf8" | "base64";
@@ -47,14 +49,14 @@ export type SubagentAttachmentReceiptFile = {
   sha256: string;
 };
 
-export type SubagentAttachmentReceipt = {
+type SubagentAttachmentReceipt = {
   count: number;
   totalBytes: number;
   files: SubagentAttachmentReceiptFile[];
   relDir: string;
 };
 
-export type MaterializeSubagentAttachmentsResult =
+type MaterializeSubagentAttachmentsResult =
   | {
       status: "ok";
       receipt: SubagentAttachmentReceipt;
@@ -130,6 +132,7 @@ export async function materializeSubagentAttachments(params: {
 
   try {
     await fs.mkdir(absDir, { recursive: true, mode: 0o700 });
+    const store = privateFileStore(absDir);
 
     const seen = new Set<string>();
     const files: SubagentAttachmentReceiptFile[] = [];
@@ -137,9 +140,9 @@ export async function materializeSubagentAttachments(params: {
     let totalBytes = 0;
 
     for (const raw of requestedAttachments) {
-      const name = typeof raw?.name === "string" ? raw.name.trim() : "";
+      const name = normalizeOptionalString(raw?.name) ?? "";
       const contentVal = typeof raw?.content === "string" ? raw.content : "";
-      const encodingRaw = typeof raw?.encoding === "string" ? raw.encoding.trim() : "utf8";
+      const encodingRaw = normalizeOptionalString(raw?.encoding) ?? "utf8";
       const encoding = encodingRaw === "base64" ? "base64" : "utf8";
 
       if (!name) {
@@ -191,14 +194,11 @@ export async function materializeSubagentAttachments(params: {
       }
 
       const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
-      const outPath = path.join(absDir, name);
-      writeJobs.push({ outPath, buf });
+      writeJobs.push({ outPath: name, buf });
       files.push({ name, bytes, sha256 });
     }
 
-    await Promise.all(
-      writeJobs.map(({ outPath, buf }) => fs.writeFile(outPath, buf, { mode: 0o600, flag: "wx" })),
-    );
+    await Promise.all(writeJobs.map(({ outPath, buf }) => store.writeText(outPath, buf)));
 
     const manifest = {
       relDir,
@@ -206,14 +206,7 @@ export async function materializeSubagentAttachments(params: {
       totalBytes,
       files,
     };
-    await fs.writeFile(
-      path.join(absDir, ".manifest.json"),
-      JSON.stringify(manifest, null, 2) + "\n",
-      {
-        mode: 0o600,
-        flag: "wx",
-      },
-    );
+    await store.writeJson(".manifest.json", manifest, { trailingNewline: true });
 
     return {
       status: "ok",

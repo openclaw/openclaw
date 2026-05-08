@@ -1,26 +1,22 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../../../config/config.js";
-import { resolveBundledPluginWorkspaceSourcePath } from "../../../plugins/bundled-plugin-metadata.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveBundledPluginInstallCommandHint } from "../../../plugins/bundled-sources.js";
-
-export function resolveConfiguredAcpBackendId(cfg: OpenClawConfig): string {
-  return cfg.acp?.backend?.trim() || "acpx";
-}
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 
 export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
-  const configured = cfg.acp?.runtime?.installCommand?.trim();
+  const configured = normalizeOptionalString(cfg.acp?.runtime?.installCommand);
   if (configured) {
     return configured;
   }
   const workspaceDir = process.cwd();
-  const backendId = resolveConfiguredAcpBackendId(cfg).toLowerCase();
+  const backendId = normalizeOptionalLowercaseString(cfg.acp?.backend) ?? "acpx";
   if (backendId === "acpx") {
-    const workspaceLocalPath = resolveBundledPluginWorkspaceSourcePath({
-      rootDir: workspaceDir,
-      pluginId: backendId,
-    });
-    if (workspaceLocalPath && existsSync(workspaceLocalPath)) {
+    const workspaceLocalPath = path.join(workspaceDir, "extensions", "acpx");
+    if (existsSync(workspaceLocalPath)) {
       return `openclaw plugins install ${workspaceLocalPath}`;
     }
     const bundledInstallHint = resolveBundledPluginInstallCommandHint({

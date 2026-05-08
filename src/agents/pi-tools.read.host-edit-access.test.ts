@@ -11,8 +11,10 @@ const mocks = vi.hoisted(() => ({
   operations: undefined as CapturedEditOperations | undefined,
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
+    "@mariozechner/pi-coding-agent",
+  );
   return {
     ...actual,
     createEditTool: (_cwd: string, options?: { operations?: CapturedEditOperations }) => {
@@ -56,14 +58,16 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       await fs.symlink(outsideDir, linkDir);
 
       createHostWorkspaceEditTool(workspaceDir, { workspaceOnly: true });
-      expect(mocks.operations).toBeDefined();
+      if (mocks.operations === undefined) {
+        throw new Error("expected host edit operations mock");
+      }
 
       // access must NOT throw for outside-workspace paths; the upstream
       // library replaces any access error with a misleading "File not found".
       // By resolving silently the subsequent readFile call surfaces the real
       // "Path escapes workspace root" / "outside-workspace" error instead.
       await expect(
-        mocks.operations!.access(path.join(workspaceDir, "escape", "secret.txt")),
+        mocks.operations.access(path.join(workspaceDir, "escape", "secret.txt")),
       ).resolves.toBeUndefined();
     },
   );

@@ -2,12 +2,17 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  type DeliveryContext,
-} from "../utils/delivery-context.js";
+} from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type SystemEvent = {
   text: string;
@@ -37,7 +42,7 @@ type SystemEventOptions = {
 };
 
 function requireSessionKey(key?: string | null): string {
-  const trimmed = typeof key === "string" ? key.trim() : "";
+  const trimmed = normalizeOptionalString(key) ?? "";
   if (!trimmed) {
     throw new Error("system events require a sessionKey");
   }
@@ -45,14 +50,7 @@ function requireSessionKey(key?: string | null): string {
 }
 
 function normalizeContextKey(key?: string | null): string | null {
-  if (!key) {
-    return null;
-  }
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.toLowerCase();
+  return normalizeOptionalLowercaseString(key) ?? null;
 }
 
 function getSessionQueue(sessionKey: string): SessionQueue | undefined {
@@ -129,6 +127,82 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   entry.lastContextKey = null;
   queues.delete(key);
   return out;
+}
+
+function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContext): boolean {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
+}
+
+function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
+  return (
+    left.text === right.text &&
+    left.ts === right.ts &&
+    (left.contextKey ?? null) === (right.contextKey ?? null) &&
+    (left.trusted ?? true) === (right.trusted ?? true) &&
+    areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
+  );
+}
+
+function resetQueueState(key: string, entry: SessionQueue) {
+  if (entry.queue.length === 0) {
+    entry.lastText = null;
+    entry.lastContextKey = null;
+    queues.delete(key);
+    return;
+  }
+  const newest = entry.queue[entry.queue.length - 1];
+  entry.lastText = newest.text;
+  entry.lastContextKey = newest.contextKey ?? null;
+}
+
+export function consumeSystemEventEntries(
+  sessionKey: string,
+  consumedEntries: readonly SystemEvent[],
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
+    return [];
+  }
+  if (
+    consumedEntries.length > entry.queue.length ||
+    !consumedEntries.every((event, index) => areSystemEventsEqual(entry.queue[index], event))
+  ) {
+    return [];
+  }
+  const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
+  resetQueueState(key, entry);
+  return removed;
+}
+
+export function consumeSelectedSystemEventEntries(
+  sessionKey: string,
+  consumedEntries: readonly SystemEvent[],
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
+    return [];
+  }
+  const removed: SystemEvent[] = [];
+  for (const consumed of consumedEntries) {
+    const index = entry.queue.findIndex((event) => areSystemEventsEqual(event, consumed));
+    if (index === -1) {
+      continue;
+    }
+    const [event] = entry.queue.splice(index, 1);
+    if (event) {
+      removed.push(cloneSystemEvent(event));
+    }
+  }
+  resetQueueState(key, entry);
+  return removed;
 }
 
 export function drainSystemEvents(sessionKey: string): string[] {

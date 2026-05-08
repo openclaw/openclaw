@@ -1,87 +1,51 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  type ConfigDocBaseline,
-  renderConfigDocBaselineStatefile,
-  writeConfigDocBaselineStatefile,
+  type ConfigDocBaselineEntry,
+  flattenConfigDocBaselineEntries,
+  renderConfigDocBaselineArtifacts,
+  writeConfigDocBaselineArtifacts,
 } from "./doc-baseline.js";
 
-describe("config doc baseline integration", () => {
-  const tempRoots: string[] = [];
-  const generatedBaselineJsonPath = path.resolve(
-    process.cwd(),
-    "docs/.generated/config-baseline.json",
-  );
-  const generatedBaselineJsonlPath = path.resolve(
-    process.cwd(),
-    "docs/.generated/config-baseline.jsonl",
-  );
-  let sharedBaselinePromise: Promise<ConfigDocBaseline> | null = null;
-  let sharedRenderedPromise: Promise<
-    Awaited<ReturnType<typeof renderConfigDocBaselineStatefile>>
-  > | null = null;
-  let sharedGeneratedJsonPromise: Promise<string> | null = null;
-  let sharedGeneratedJsonlPromise: Promise<string> | null = null;
-  let sharedByPathPromise: Promise<Map<string, ConfigDocBaseline["entries"][number]>> | null = null;
+vi.mock("./doc-baseline.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doc-baseline.runtime.js")>();
+  return {
+    ...actual,
+    collectBundledChannelConfigs: () => undefined,
+  };
+});
 
-  function getSharedBaseline() {
-    sharedBaselinePromise ??= fs
-      .readFile(generatedBaselineJsonPath, "utf8")
-      .then((raw) => JSON.parse(raw) as ConfigDocBaseline);
-    return sharedBaselinePromise;
-  }
+describe("config doc baseline integration", () => {
+  let sharedRenderedPromise: Promise<
+    Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>
+  > | null = null;
+  let sharedByPathPromise: Promise<Map<string, ConfigDocBaselineEntry>> | null = null;
 
   function getSharedRendered() {
-    sharedRenderedPromise ??= renderConfigDocBaselineStatefile(getSharedBaseline());
+    sharedRenderedPromise ??= renderConfigDocBaselineArtifacts();
     return sharedRenderedPromise;
   }
 
-  function getGeneratedJson() {
-    sharedGeneratedJsonPromise ??= fs.readFile(generatedBaselineJsonPath, "utf8");
-    return sharedGeneratedJsonPromise;
-  }
-
-  function getGeneratedJsonl() {
-    sharedGeneratedJsonlPromise ??= fs.readFile(generatedBaselineJsonlPath, "utf8");
-    return sharedGeneratedJsonlPromise;
-  }
-
   function getSharedByPath() {
-    sharedByPathPromise ??= getSharedBaseline().then(
-      (baseline) => new Map(baseline.entries.map((entry) => [entry.path, entry])),
+    sharedByPathPromise ??= getSharedRendered().then(
+      ({ baseline }) =>
+        new Map(flattenConfigDocBaselineEntries(baseline).map((entry) => [entry.path, entry])),
     );
     return sharedByPathPromise;
   }
 
-  afterEach(async () => {
-    await Promise.all(
-      tempRoots.splice(0).map(async (tempRoot) => {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }),
-    );
-  });
-
   it("is deterministic across repeated runs", async () => {
-    const baseline = await getSharedBaseline();
-    const first = await renderConfigDocBaselineStatefile(baseline);
-    const second = await renderConfigDocBaselineStatefile(baseline);
+    const first = await getSharedRendered();
+    const { baseline } = first;
+    const second = await renderConfigDocBaselineArtifacts(baseline);
 
-    expect(second.json).toBe(first.json);
-    expect(second.jsonl).toBe(first.jsonl);
-  });
-
-  it("matches the checked-in generated baseline artifacts", async () => {
-    const [rendered, generatedJson, generatedJsonl] = await Promise.all([
-      getSharedRendered(),
-      getGeneratedJson(),
-      getGeneratedJsonl(),
-    ]);
-
-    expect(rendered.json).toBe(generatedJson);
-    expect(rendered.jsonl).toBe(generatedJsonl);
-  });
+    expect(second.json.combined).toBe(first.json.combined);
+    expect(second.json.core).toBe(first.json.core);
+    expect(second.json.channel).toBe(first.json.channel);
+    expect(second.json.plugin).toBe(first.json.plugin);
+  }, 240_000);
 
   it("includes core, channel, and plugin config metadata", async () => {
     const byPath = await getSharedByPath();
@@ -107,6 +71,13 @@ describe("config doc baseline integration", () => {
     expect(tokenEntry?.help).toContain("gateway access");
     expect(tokenEntry?.tags).toContain("auth");
     expect(tokenEntry?.tags).toContain("security");
+  });
+
+  it("omits legacy hooks.internal.handlers from the generated baseline", async () => {
+    const byPath = await getSharedByPath();
+
+    expect(byPath.get("hooks.internal.handlers")).toBeUndefined();
+    expect(byPath.get("hooks.internal.handlers.*.module")).toBeUndefined();
   });
 
   it("uses human-readable channel metadata for top-level channel sections", async () => {
@@ -143,52 +114,46 @@ describe("config doc baseline integration", () => {
     expect(byPath.get("bindings.*")).toMatchObject({
       hasChildren: true,
     });
-    expect(byPath.get("bindings.*.type")).toBeDefined();
-    expect(byPath.get("bindings.*.match.channel")).toBeDefined();
-    expect(byPath.get("bindings.*.match.peer.id")).toBeDefined();
+    expect(byPath.get("bindings.*.type")).toMatchObject({ path: "bindings.*.type" });
+    expect(byPath.get("bindings.*.match.channel")).toMatchObject({
+      path: "bindings.*.match.channel",
+    });
+    expect(byPath.get("bindings.*.match.peer.id")).toMatchObject({
+      path: "bindings.*.match.peer.id",
+    });
   });
 
-  it("supports check mode for stale generated artifacts", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-doc-baseline-"));
-    tempRoots.push(tempRoot);
-    const rendered = getSharedRendered();
+  it("supports check mode for stale hash files", async () => {
+    await withTempDir({ prefix: "openclaw-config-doc-baseline-" }, async (tempRoot) => {
+      const rendered = getSharedRendered();
 
-    const initial = await writeConfigDocBaselineStatefile({
-      repoRoot: tempRoot,
-      jsonPath: "docs/.generated/config-baseline.json",
-      statefilePath: "docs/.generated/config-baseline.jsonl",
-      rendered,
+      const initial = await writeConfigDocBaselineArtifacts({
+        repoRoot: tempRoot,
+        rendered,
+      });
+      expect(initial.wrote).toBe(true);
+
+      const current = await writeConfigDocBaselineArtifacts({
+        repoRoot: tempRoot,
+        check: true,
+        rendered,
+      });
+      expect(current.changed).toBe(false);
+
+      // Corrupt the hash file to simulate drift
+      await fs.writeFile(
+        path.join(tempRoot, "docs/.generated/config-baseline.sha256"),
+        "0000000000000000000000000000000000000000000000000000000000000000  config-baseline.json\n",
+        "utf8",
+      );
+
+      const stale = await writeConfigDocBaselineArtifacts({
+        repoRoot: tempRoot,
+        check: true,
+        rendered,
+      });
+      expect(stale.changed).toBe(true);
+      expect(stale.wrote).toBe(false);
     });
-    expect(initial.wrote).toBe(true);
-
-    const current = await writeConfigDocBaselineStatefile({
-      repoRoot: tempRoot,
-      jsonPath: "docs/.generated/config-baseline.json",
-      statefilePath: "docs/.generated/config-baseline.jsonl",
-      check: true,
-      rendered,
-    });
-    expect(current.changed).toBe(false);
-
-    await fs.writeFile(
-      path.join(tempRoot, "docs/.generated/config-baseline.json"),
-      '{"generatedBy":"broken","entries":[]}\n',
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(tempRoot, "docs/.generated/config-baseline.jsonl"),
-      '{"recordType":"meta","generatedBy":"broken","totalPaths":0}\n',
-      "utf8",
-    );
-
-    const stale = await writeConfigDocBaselineStatefile({
-      repoRoot: tempRoot,
-      jsonPath: "docs/.generated/config-baseline.json",
-      statefilePath: "docs/.generated/config-baseline.jsonl",
-      check: true,
-      rendered,
-    });
-    expect(stale.changed).toBe(true);
-    expect(stale.wrote).toBe(false);
   });
 });

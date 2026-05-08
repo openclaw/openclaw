@@ -1,6 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
+import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient, MattermostPost } from "./client.js";
@@ -352,7 +352,7 @@ describe("buildButtonAttachments", () => {
     expect(ctx.tweet_id).toBe("123");
     expect(ctx.batch).toBe(true);
     expect(ctx.action_id).toBe("btn");
-    expect(ctx._token).toBeDefined();
+    expect(ctx._token).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("passes callback URL to each button integration", () => {
@@ -427,7 +427,7 @@ describe("buildButtonAttachments", () => {
     const reordered: Record<string, unknown> = {};
     const keys = Object.keys(ctx).filter((k) => k !== "_token");
     // Reverse the key order to simulate reordering
-    for (const key of keys.reverse()) {
+    for (const key of keys.toReversed()) {
       reordered[key] = ctx[key];
     }
     expect(verifyInteractionToken(reordered, token)).toBe(true);
@@ -441,13 +441,11 @@ describe("createMattermostInteractionHandler", () => {
       options: { sessionKey?: string | null; sessionId?: string | null; userId?: string | null },
     ) => boolean = () => true,
   ) {
-    setMattermostRuntime(
-      createPluginRuntimeMock({
-        system: {
-          enqueueSystemEvent,
-        },
-      }),
-    );
+    setMattermostRuntime({
+      system: {
+        enqueueSystemEvent,
+      },
+    } as unknown as PluginRuntime);
   }
 
   function createMattermostClientMock(
@@ -477,6 +475,7 @@ describe("createMattermostInteractionHandler", () => {
     const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
     const req = {
+      destroyed: false,
       method: params.method ?? "POST",
       headers: params.headers ?? {},
       socket: { remoteAddress: params.remoteAddress ?? "203.0.113.10" },
@@ -484,6 +483,18 @@ describe("createMattermostInteractionHandler", () => {
         const existing = listeners.get(event) ?? [];
         existing.push(handler);
         listeners.set(event, existing);
+        return this;
+      },
+      removeListener(event: string, handler: (...args: unknown[]) => void) {
+        const existing = listeners.get(event) ?? [];
+        listeners.set(
+          event,
+          existing.filter((entry) => entry !== handler),
+        );
+        return this;
+      },
+      destroy() {
+        this.destroyed = true;
         return this;
       },
     } as IncomingMessage & { emitTest: (event: string, ...args: unknown[]) => void };

@@ -1,6 +1,10 @@
-import { existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 
 const GCLOUD_DEFAULT_ADC_PATH = join(
@@ -12,7 +16,10 @@ const GCLOUD_DEFAULT_ADC_PATH = join(
 
 function hasAnthropicVertexMetadataServerAdc(env: NodeJS.ProcessEnv = process.env): boolean {
   const explicitMetadataOptIn = normalizeOptionalSecretInput(env.ANTHROPIC_VERTEX_USE_GCP_METADATA);
-  return explicitMetadataOptIn === "1" || explicitMetadataOptIn?.toLowerCase() === "true";
+  return (
+    explicitMetadataOptIn === "1" ||
+    normalizeLowercaseStringOrEmpty(explicitMetadataOptIn) === "true"
+  );
 }
 
 function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -25,23 +32,32 @@ function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.e
     : GCLOUD_DEFAULT_ADC_PATH;
 }
 
-function resolveAnthropicVertexAdcCredentialsPath(
+function resolveAnthropicVertexAdcCredentialsPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const explicitCredentialsPath = env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
-  if (explicitCredentialsPath) {
-    return existsSync(explicitCredentialsPath) ? explicitCredentialsPath : undefined;
+  const explicit = normalizeOptionalString(env.GOOGLE_APPLICATION_CREDENTIALS);
+  if (explicit) {
+    return explicit;
   }
-
-  const defaultAdcPath = resolveAnthropicVertexDefaultAdcPath(env);
-  return existsSync(defaultAdcPath) ? defaultAdcPath : undefined;
+  if (env !== process.env) {
+    return undefined;
+  }
+  return resolveAnthropicVertexDefaultAdcPath(env);
 }
 
-export function hasAnthropicVertexAvailableAuth(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return (
-    hasAnthropicVertexMetadataServerAdc(env) ||
-    resolveAnthropicVertexAdcCredentialsPath(env) !== undefined
-  );
+function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolean {
+  const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
+  if (!credentialsPath) {
+    return false;
+  }
+  try {
+    readFileSync(credentialsPath, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function hasAnthropicVertexAvailableAuth(env: NodeJS.ProcessEnv = process.env): boolean {
+  return hasAnthropicVertexMetadataServerAdc(env) || canReadAnthropicVertexAdc(env);
 }

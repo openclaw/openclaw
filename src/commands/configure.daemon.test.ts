@@ -24,6 +24,7 @@ vi.mock("../cli/progress.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: loadConfig,
   loadConfig,
 }));
 
@@ -50,8 +51,9 @@ vi.mock("./daemon-runtime.js", () => ({
   GATEWAY_DAEMON_RUNTIME_OPTIONS: [{ value: "node", label: "Node" }],
 }));
 
-vi.mock("../daemon/service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+vi.mock("../daemon/service.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return {
     ...actual,
     resolveGatewayService: vi.fn(() => ({

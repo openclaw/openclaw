@@ -1,8 +1,6 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import {
-  createMoonshotThinkingWrapper,
-  resolveMoonshotThinkingType,
-} from "openclaw/plugin-sdk/provider-moonshot";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { MOONSHOT_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
@@ -26,7 +24,7 @@ export default defineSingleProviderPluginEntry({
       {
         methodId: "api-key",
         label: "Kimi API key (.ai)",
-        hint: "Kimi K2.5 + Kimi",
+        hint: "Kimi K2.6 + Kimi",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -34,13 +32,13 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfig(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.5)",
+          groupLabel: "Moonshot AI (Kimi K2.6)",
         },
       },
       {
         methodId: "api-key-cn",
         label: "Kimi API key (.cn)",
-        hint: "Kimi K2.5 + Kimi",
+        hint: "Kimi K2.6 + Kimi",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -48,23 +46,32 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfigCn(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.5)",
+          groupLabel: "Moonshot AI (Kimi K2.6)",
         },
       },
     ],
     catalog: {
       buildProvider: buildMoonshotProvider,
+      buildStaticProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
-    wrapStreamFn: (ctx) => {
-      const thinkingType = resolveMoonshotThinkingType({
-        configuredThinking: ctx.extraParams?.thinking,
-        thinkingLevel: ctx.thinkingLevel,
-      });
-      return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
-    },
+    // Kimi K2+ returns native tool_call IDs shaped like `functions.<name>:<index>`.
+    // Sanitizing them to alphanumeric-only breaks Kimi's serving-layer matching in
+    // multi-turn replay. See openclaw/openclaw#62319.
+    ...buildProviderReplayFamilyHooks({
+      family: "openai-compatible",
+      sanitizeToolCallIds: false,
+    }),
+    ...MOONSHOT_THINKING_STREAM_HOOKS,
+    resolveThinkingProfile: () => ({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+      defaultLevel: "off",
+    }),
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearMemoryEmbeddingProviders,
   getMemoryEmbeddingProvider,
@@ -12,6 +12,7 @@ import {
 } from "./memory-embedding-providers.js";
 
 const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
+const INITIAL_REGISTERED_MEMORY_EMBEDDING_PROVIDERS = listRegisteredMemoryEmbeddingProviders();
 
 function createAdapter(id: string): MemoryEmbeddingProviderAdapter {
   return {
@@ -92,8 +93,12 @@ function expectRegisteredProviderSnapshotCase(params: {
   });
 }
 
-afterEach(() => {
+beforeEach(() => {
   clearMemoryEmbeddingProviders();
+});
+
+afterEach(() => {
+  restoreRegisteredMemoryEmbeddingProviders(INITIAL_REGISTERED_MEMORY_EMBEDDING_PROVIDERS);
 });
 
 describe("memory embedding provider registry", () => {

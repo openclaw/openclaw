@@ -5,6 +5,7 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
+  type ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -16,9 +17,17 @@ import {
   upsertAuthProfile,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import {
+  normalizeModelCompat,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  createPayloadPatchStreamWrapper,
+  createToolStreamWrapper,
+  defaultToolStreamExtraParams,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition } from "./model-definitions.js";
@@ -32,8 +41,16 @@ function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
-  if (!trimmedModelId.toLowerCase().startsWith("glm-5")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmedModelId).startsWith("glm-5")) {
     return undefined;
+  }
+
+  const existing = ctx.modelRegistry.find(
+    PROVIDER_ID,
+    trimmedModelId,
+  ) as ProviderRuntimeModel | null;
+  if (existing) {
+    return existing;
   }
 
   const def = buildZaiModelDefinition({ id: trimmedModelId });
@@ -57,6 +74,44 @@ function resolveGlm5ForwardCompatModel(
 
 function resolveZaiDefaultModel(modelIdOverride?: string): string {
   return modelIdOverride ? `zai/${modelIdOverride}` : ZAI_DEFAULT_MODEL_REF;
+}
+
+function isTrueParam(value: unknown): boolean {
+  return value === true;
+}
+
+function shouldPreserveZaiThinking(extraParams?: Record<string, unknown>): boolean {
+  return isTrueParam(extraParams?.preserveThinking) || isTrueParam(extraParams?.preserve_thinking);
+}
+
+function isDisabledThinkingLevel(thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"]) {
+  return thinkingLevel === "off";
+}
+
+function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
+  let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
+  const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
+
+  if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking) {
+    return streamFn;
+  }
+
+  streamFn = createPayloadPatchStreamWrapper(streamFn, ({ payload, model }) => {
+    if (model.api !== "openai-completions" || model.provider !== PROVIDER_ID) {
+      return;
+    }
+
+    if (isDisabledThinkingLevel(ctx.thinkingLevel)) {
+      payload.thinking = { type: "disabled" };
+      return;
+    }
+
+    if (preserveThinking) {
+      payload.thinking = { type: "enabled", clear_thinking: false };
+    }
+  });
+
+  return streamFn;
 }
 
 async function promptForZaiEndpoint(ctx: ProviderAuthContext): Promise<ZaiEndpointId> {
@@ -264,20 +319,18 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
-      prepareExtraParams: (ctx) => {
-        if (ctx.extraParams?.tool_stream !== undefined) {
-          return ctx.extraParams;
-        }
-        return {
-          ...ctx.extraParams,
-          tool_stream: true,
-        };
-      },
-      wrapStreamFn: (ctx) =>
-        createZaiToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false),
-      isBinaryThinking: () => true,
+      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
+      wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "low", label: "on" },
+        ],
+        defaultLevel: "off",
+      }),
       isModernModelRef: ({ modelId }) => {
-        const lower = modelId.trim().toLowerCase();
+        const lower = normalizeLowercaseStringOrEmpty(modelId);
         return (
           lower.startsWith("glm-5") ||
           lower.startsWith("glm-4.7") ||

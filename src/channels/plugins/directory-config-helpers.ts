@@ -1,9 +1,13 @@
 import type { OpenClawConfig } from "../../config/types.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { DirectoryConfigParams } from "./directory-types.js";
-import type { ChannelDirectoryEntry } from "./types.js";
+import type { ChannelDirectoryEntry } from "./types.public.js";
 
 function resolveDirectoryQuery(query?: string | null): string {
-  return query?.trim().toLowerCase() || "";
+  return normalizeLowercaseStringOrEmpty(query);
 }
 
 function resolveDirectoryLimit(limit?: number | null): number | undefined {
@@ -16,50 +20,76 @@ export function applyDirectoryQueryAndLimit(
 ): string[] {
   const q = resolveDirectoryQuery(params.query);
   const limit = resolveDirectoryLimit(params.limit);
-  const filtered = ids.filter((id) => (q ? id.toLowerCase().includes(q) : true));
-  return typeof limit === "number" ? filtered.slice(0, limit) : filtered;
+  const filtered: string[] = [];
+  for (const id of ids) {
+    if (q && !normalizeLowercaseStringOrEmpty(id).includes(q)) {
+      continue;
+    }
+    filtered.push(id);
+    if (typeof limit === "number" && filtered.length >= limit) {
+      break;
+    }
+  }
+  return filtered;
 }
 
 export function toDirectoryEntries(kind: "user" | "group", ids: string[]): ChannelDirectoryEntry[] {
-  return ids.map((id) => ({ kind, id }) as const);
-}
-
-function normalizeDirectoryIds(params: {
-  rawIds: readonly string[];
-  normalizeId?: (entry: string) => string | null | undefined;
-}): string[] {
-  return params.rawIds
-    .map((entry) => entry.trim())
-    .filter((entry) => Boolean(entry) && entry !== "*")
-    .map((entry) => {
-      const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
-      return typeof normalized === "string" ? normalized.trim() : "";
-    })
-    .filter(Boolean);
+  const entries: ChannelDirectoryEntry[] = [];
+  for (const id of ids) {
+    entries.push({ kind, id });
+  }
+  return entries;
 }
 
 function collectDirectoryIdsFromEntries(params: {
   entries?: readonly unknown[];
   normalizeId?: (entry: string) => string | null | undefined;
 }): string[] {
-  return normalizeDirectoryIds({
-    rawIds: (params.entries ?? []).map((entry) => String(entry)),
-    normalizeId: params.normalizeId,
-  });
+  const ids: string[] = [];
+  for (const value of params.entries ?? []) {
+    const entry = normalizeOptionalString(String(value)) ?? "";
+    if (!entry || entry === "*") {
+      continue;
+    }
+    const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
+    const id = normalizeOptionalString(normalized) ?? "";
+    if (id) {
+      ids.push(id);
+    }
+  }
+  return ids;
 }
 
 function collectDirectoryIdsFromMapKeys(params: {
   groups?: Record<string, unknown>;
   normalizeId?: (entry: string) => string | null | undefined;
 }): string[] {
-  return normalizeDirectoryIds({
-    rawIds: Object.keys(params.groups ?? {}),
-    normalizeId: params.normalizeId,
-  });
+  const ids: string[] = [];
+  for (const key of Object.keys(params.groups ?? {})) {
+    const entry = normalizeOptionalString(key) ?? "";
+    if (!entry || entry === "*") {
+      continue;
+    }
+    const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
+    const id = normalizeOptionalString(normalized) ?? "";
+    if (id) {
+      ids.push(id);
+    }
+  }
+  return ids;
 }
 
 function dedupeDirectoryIds(ids: string[]): string[] {
-  return Array.from(new Set(ids));
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    deduped.push(id);
+  }
+  return deduped;
 }
 
 export function collectNormalizedDirectoryIds(params: {
@@ -69,12 +99,12 @@ export function collectNormalizedDirectoryIds(params: {
   const ids = new Set<string>();
   for (const source of params.sources) {
     for (const value of source) {
-      const raw = String(value).trim();
+      const raw = normalizeOptionalString(value) ?? "";
       if (!raw || raw === "*") {
         continue;
       }
       const normalized = params.normalizeId(raw);
-      const trimmed = typeof normalized === "string" ? normalized.trim() : "";
+      const trimmed = normalizeOptionalString(normalized) ?? "";
       if (trimmed) {
         ids.add(trimmed);
       }

@@ -9,7 +9,7 @@ export {
 } from "../infra/retry.js";
 export {
   createRateLimitRetryRunner,
-  createTelegramRetryRunner,
-  TELEGRAM_RETRY_DEFAULTS,
+  createChannelApiRetryRunner as createTelegramRetryRunner,
+  CHANNEL_API_RETRY_DEFAULTS as TELEGRAM_RETRY_DEFAULTS,
   type RetryRunner,
 } from "../infra/retry-policy.js";

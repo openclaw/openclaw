@@ -183,6 +183,22 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
+  it("throws when /Run fails during restart", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { code: 1, stdout: "", stderr: "ERROR: Access is denied." },
+      );
+
+      await expect(restartScheduledTask({ env, stdout })).rejects.toThrow(
+        "schtasks run failed: ERROR: Access is denied.",
+      );
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });

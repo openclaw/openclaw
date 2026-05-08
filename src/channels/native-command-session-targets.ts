@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export type ResolveNativeCommandSessionTargetsParams = {
   agentId: string;
   sessionPrefix: string;
@@ -13,7 +15,9 @@ export function resolveNativeCommandSessionTargets(
   const rawSessionKey =
     params.boundSessionKey ?? `agent:${params.agentId}:${params.sessionPrefix}:${params.userId}`;
   return {
-    sessionKey: params.lowercaseSessionKey ? rawSessionKey.toLowerCase() : rawSessionKey,
+    sessionKey: params.lowercaseSessionKey
+      ? normalizeLowercaseStringOrEmpty(rawSessionKey)
+      : rawSessionKey,
     commandTargetSessionKey: params.boundSessionKey ?? params.targetSessionKey,
   };
 }

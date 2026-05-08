@@ -50,6 +50,62 @@ describe("markdownToMatrixHtml", () => {
     expect(html).toContain("<br");
   });
 
+  it("compacts loose ordered lists without paragraph tags", () => {
+    const html = markdownToMatrixHtml("1. first\n\n2. second\n\n3. third");
+    expect(html).toContain("<ol>");
+    expect(html).toContain("<li>");
+    expect(html).not.toContain("<p>");
+  });
+
+  it("compacts loose unordered lists without paragraph tags", () => {
+    const html = markdownToMatrixHtml("- one\n\n- two\n\n- three");
+    expect(html).toContain("<ul>");
+    expect(html).not.toContain("<p>");
+  });
+
+  it("keeps tight lists unchanged", () => {
+    const html = markdownToMatrixHtml("- one\n- two");
+    expect(html).toContain("<ul>");
+    expect(html).not.toContain("<p>");
+  });
+
+  it("preserves inline formatting in loose lists", () => {
+    const html = markdownToMatrixHtml("1. **bold**\n\n2. _italic_");
+    expect(html).toContain("<strong>bold</strong>");
+    expect(html).toContain("<em>italic</em>");
+    expect(html).not.toContain("<p>");
+  });
+
+  it("does not strip paragraph tags outside lists", () => {
+    const html = markdownToMatrixHtml("Hello\n\nWorld");
+    expect(html).toContain("<p>Hello</p>");
+    expect(html).toContain("<p>World</p>");
+  });
+
+  it("compacts nested sublists without paragraph tags", () => {
+    const html = markdownToMatrixHtml("1. parent\n\n   - child\n\n2. other");
+    expect(html).toContain("<ol>");
+    expect(html).toContain("<ul>");
+    expect(html).not.toContain("<p>");
+  });
+
+  it("compacts loose lists with mentions via renderMarkdownToMatrixHtmlWithMentions", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "1. hello @alice:example.org\n\n2. bye",
+      client: createMentionClient(),
+    });
+    expect(result.html).not.toContain("<p>");
+    expect(result.html).toContain('href="https://matrix.to/#/%40alice%3Aexample.org"');
+    expect(result.mentions).toEqual({ user_ids: ["@alice:example.org"] });
+  });
+
+  it("preserves paragraph wrappers for multi-paragraph list items", () => {
+    const html = markdownToMatrixHtml("1. First sentence.\n\n   Second sentence in the same item.");
+    expect(html).toContain("<li>");
+    expect(html).toContain("<p>First sentence.</p>");
+    expect(html).toContain("<p>Second sentence in the same item.</p>");
+  });
+
   it("renders qualified Matrix user mentions as matrix.to links and m.mentions metadata", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice:example.org",

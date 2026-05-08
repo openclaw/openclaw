@@ -1,10 +1,12 @@
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
+import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { applyLocalSetupWorkspaceConfig } from "../onboard-config.js";
+import { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -13,7 +15,6 @@ import {
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
-import { inferAuthChoiceFromFlags } from "./local/auth-choice-inference.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
 import {
   type GatewayHealthFailureDiagnostics,
@@ -25,6 +26,32 @@ import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
 
 const INSTALL_DAEMON_HEALTH_DEADLINE_MS = 45_000;
 const ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS = 15_000;
+const INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS = 10_000;
+const WINDOWS_INSTALL_DAEMON_HEALTH_DEADLINE_MS = 90_000;
+const WINDOWS_INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS = 15_000;
+const INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 10_000;
+const WINDOWS_INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 90_000;
+
+export function resolveInstallDaemonGatewayHealthTiming(
+  platform: NodeJS.Platform = process.platform,
+): {
+  deadlineMs: number;
+  probeTimeoutMs: number;
+  healthCommandTimeoutMs: number;
+} {
+  if (platform === "win32") {
+    return {
+      deadlineMs: WINDOWS_INSTALL_DAEMON_HEALTH_DEADLINE_MS,
+      probeTimeoutMs: WINDOWS_INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS,
+      healthCommandTimeoutMs: WINDOWS_INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS,
+    };
+  }
+  return {
+    deadlineMs: INSTALL_DAEMON_HEALTH_DEADLINE_MS,
+    probeTimeoutMs: INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS,
+    healthCommandTimeoutMs: INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS,
+  };
+}
 
 async function collectGatewayHealthFailureDiagnostics(): Promise<
   GatewayHealthFailureDiagnostics | undefined
@@ -67,6 +94,47 @@ async function collectGatewayHealthFailureDiagnostics(): Promise<
     : undefined;
 }
 
+export async function resolveGatewayHealthProbeToken(
+  nextConfig: OpenClawConfig,
+): Promise<{ token?: string; password?: string; unresolvedRefReason?: string }> {
+  if (nextConfig.gateway?.auth?.mode === "password") {
+    const resolved = await resolveConfiguredSecretInputString({
+      config: nextConfig,
+      env: process.env,
+      value: nextConfig.gateway.auth.password,
+      path: "gateway.auth.password",
+      unresolvedReasonStyle: "detailed",
+    });
+    return {
+      password: resolved.value,
+      unresolvedRefReason: resolved.unresolvedRefReason,
+    };
+  }
+
+  const resolved = await resolveGatewayAuthToken({
+    cfg: nextConfig,
+    env: process.env,
+    envFallback: "no-secret-ref",
+    unresolvedReasonStyle: "detailed",
+  });
+  const probeAuth: { token?: string; unresolvedRefReason?: string } = {};
+  if (resolved.token) {
+    probeAuth.token = resolved.token;
+  }
+  if (resolved.unresolvedRefReason) {
+    probeAuth.unresolvedRefReason = resolved.unresolvedRefReason;
+  }
+  return probeAuth;
+}
+
+function formatGatewayHealthFailureDetail(params: {
+  probeDetail?: string;
+  unresolvedRefReason?: string;
+}): string | undefined {
+  const detail = [params.probeDetail, params.unresolvedRefReason].filter(Boolean).join("\n");
+  return detail || undefined;
+}
+
 export async function runNonInteractiveLocalSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -83,9 +151,18 @@ export async function runNonInteractiveLocalSetup(params: {
   });
 
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
 
-  const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
-  if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {
+  const inferredAuthChoice = opts.authChoice
+    ? undefined
+    : (await import("./local/auth-choice-inference.js")).inferAuthChoiceFromFlags(opts, {
+        config: nextConfig,
+        workspaceDir,
+        env: process.env,
+      });
+  if (!opts.authChoice && inferredAuthChoice && inferredAuthChoice.matches.length > 1) {
     runtime.error(
       [
         "Multiple API key flags were provided for non-interactive setup.",
@@ -96,7 +173,7 @@ export async function runNonInteractiveLocalSetup(params: {
     runtime.exit(1);
     return;
   }
-  const authChoice = opts.authChoice ?? inferredAuthChoice.choice ?? "skip";
+  const authChoice = opts.authChoice ?? inferredAuthChoice?.choice ?? "skip";
   if (authChoice !== "skip") {
     const { applyNonInteractiveAuthChoice } = await import("./local/auth-choice.js");
     const nextConfigAfterAuth = await applyNonInteractiveAuthChoice({
@@ -130,11 +207,13 @@ export async function runNonInteractiveLocalSetup(params: {
   await replaceConfigFile({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
+    writeOptions: { allowConfigSizeDrop: true },
   });
   logConfigUpdated(runtime);
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
@@ -200,15 +279,26 @@ export async function runNonInteractiveLocalSetup(params: {
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
+    const installDaemonGatewayHealthTiming = resolveInstallDaemonGatewayHealthTiming();
+    const probeAuth = await resolveGatewayHealthProbeToken(nextConfig);
     const probe = await waitForGatewayReachable({
       url: links.wsUrl,
-      token: gatewayResult.gatewayToken,
+      token: probeAuth.token,
+      password: probeAuth.password,
       deadlineMs: opts.installDaemon
-        ? INSTALL_DAEMON_HEALTH_DEADLINE_MS
+        ? installDaemonGatewayHealthTiming.deadlineMs
         : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
+      probeTimeoutMs: opts.installDaemon
+        ? installDaemonGatewayHealthTiming.probeTimeoutMs
+        : undefined,
     });
     if (!probe.ok) {
+      const detail = formatGatewayHealthFailureDetail({
+        probeDetail: probe.detail,
+        unresolvedRefReason: probeAuth.unresolvedRefReason,
+      });
       const diagnostics = opts.installDaemon
         ? await collectGatewayHealthFailureDiagnostics()
         : undefined;
@@ -218,7 +308,7 @@ export async function runNonInteractiveLocalSetup(params: {
         mode,
         phase: "gateway-health",
         message: `Gateway did not become reachable at ${links.wsUrl}.`,
-        detail: probe.detail,
+        detail,
         gateway: {
           wsUrl: links.wsUrl,
           httpUrl: links.httpUrl,
@@ -240,7 +330,18 @@ export async function runNonInteractiveLocalSetup(params: {
       runtime.exit(1);
       return;
     }
-    await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+    await healthCommand(
+      {
+        json: false,
+        timeoutMs: opts.installDaemon
+          ? installDaemonGatewayHealthTiming.healthCommandTimeoutMs
+          : 10_000,
+        config: nextConfig,
+        token: probeAuth.token,
+        password: probeAuth.password,
+      },
+      runtime,
+    );
   }
 
   logNonInteractiveOnboardingJson({

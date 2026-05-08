@@ -1,6 +1,13 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { loadSettings, saveSettings } from "./storage.ts";
+import { normalizeImportedCustomTheme } from "./custom-theme.ts";
+import {
+  loadLocalUserIdentity,
+  loadSettings,
+  saveLocalUserIdentity,
+  saveSettings,
+} from "./storage.ts";
 
 function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
   vi.stubGlobal("location", {
@@ -37,6 +44,66 @@ function expectedGatewayUrl(basePath: string): string {
   return `${proto}://${location.host}${basePath}`;
 }
 
+function createCustomThemeFixture() {
+  return normalizeImportedCustomTheme(
+    {
+      name: "Light Green",
+      cssVars: {
+        theme: {
+          "font-sans": "Inter, system-ui, sans-serif",
+          "font-mono": "JetBrains Mono, monospace",
+        },
+        light: {
+          background: "oklch(0.98 0.01 120)",
+          foreground: "oklch(0.2 0.03 265)",
+          card: "oklch(1 0 0)",
+          "card-foreground": "oklch(0.2 0.03 265)",
+          popover: "oklch(1 0 0)",
+          "popover-foreground": "oklch(0.2 0.03 265)",
+          primary: "oklch(0.8 0.2 128)",
+          "primary-foreground": "oklch(0 0 0)",
+          secondary: "oklch(0.35 0.03 257)",
+          "secondary-foreground": "oklch(0.98 0.01 248)",
+          muted: "oklch(0.96 0.01 248)",
+          "muted-foreground": "oklch(0.55 0.04 257)",
+          accent: "oklch(0.98 0.02 155)",
+          "accent-foreground": "oklch(0.45 0.1 151)",
+          destructive: "oklch(0.64 0.2 25)",
+          "destructive-foreground": "oklch(1 0 0)",
+          border: "oklch(0.92 0.01 255)",
+          input: "oklch(0.92 0.01 255)",
+          ring: "oklch(0.8 0.2 128)",
+        },
+        dark: {
+          background: "oklch(0.12 0.04 265)",
+          foreground: "oklch(0.98 0.01 248)",
+          card: "oklch(0.2 0.04 266)",
+          "card-foreground": "oklch(0.98 0.01 248)",
+          popover: "oklch(0.2 0.04 266)",
+          "popover-foreground": "oklch(0.98 0.01 248)",
+          primary: "oklch(0.8 0.2 128)",
+          "primary-foreground": "oklch(0 0 0)",
+          secondary: "oklch(0.28 0.04 260)",
+          "secondary-foreground": "oklch(0.98 0.01 248)",
+          muted: "oklch(0.28 0.04 260)",
+          "muted-foreground": "oklch(0.71 0.03 257)",
+          accent: "oklch(0.39 0.09 152)",
+          "accent-foreground": "oklch(0.8 0.2 128)",
+          destructive: "oklch(0.44 0.16 27)",
+          "destructive-foreground": "oklch(1 0 0)",
+          border: "oklch(0.28 0.04 260)",
+          input: "oklch(0.28 0.04 260)",
+          ring: "oklch(0.8 0.2 128)",
+        },
+      },
+    },
+    {
+      sourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      themeId: "cmlhfpjhw000004l4f4ax3m7z",
+    },
+  );
+}
+
 describe("loadSettings default gateway URL derivation", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -53,7 +120,7 @@ describe("loadSettings default gateway URL derivation", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses configured base path and normalizes trailing slash", async () => {
+  it("uses configured base path and normalizes trailing slash", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -64,7 +131,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/openclaw"));
   });
 
-  it("infers base path from nested pathname when configured base path is not set", async () => {
+  it("infers base path from nested pathname when configured base path is not set", () => {
     setTestLocation({
       protocol: "http:",
       host: "gateway.example:18789",
@@ -74,7 +141,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
   });
 
-  it("skips node sessionStorage accessors that warn without a storage file", async () => {
+  it("skips node sessionStorage accessors that warn without a storage file", () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -97,7 +164,7 @@ describe("loadSettings default gateway URL derivation", () => {
     );
   });
 
-  it("ignores and scrubs legacy persisted tokens", async () => {
+  it("ignores and scrubs legacy persisted tokens", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -141,7 +208,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("loads the current-tab token from sessionStorage", async () => {
+  it("loads the current-tab token from sessionStorage", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -172,7 +239,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("does not reuse a session token for a different gatewayUrl", async () => {
+  it("does not reuse a session token for a different gatewayUrl", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -221,7 +288,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("does not persist gateway tokens when saving settings", async () => {
+  it("does not persist gateway tokens when saving settings", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -273,7 +340,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(1);
   });
 
-  it("clears the current-tab token when saving an empty token", async () => {
+  it("clears the current-tab token when saving an empty token", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -318,7 +385,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("persists themeMode and navWidth alongside the selected theme", async () => {
+  it("persists themeMode and navWidth alongside the selected theme", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -351,7 +418,88 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("scopes persisted session selection per gateway", async () => {
+  it("persists the browser-local custom theme payload when present", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const customTheme = createCustomThemeFixture();
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "custom",
+      themeMode: "system",
+      chatFocusMode: false,
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      customTheme,
+    });
+
+    expect(loadSettings()).toMatchObject({
+      theme: "custom",
+      customTheme: {
+        label: "Light Green",
+        themeId: "cmlhfpjhw000004l4f4ax3m7z",
+      },
+    });
+  });
+
+  it("falls back to claw when persisted custom theme data is invalid", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        theme: "custom",
+        themeMode: "dark",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        chatShowToolCalls: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navWidth: 220,
+        navGroupsCollapsed: {},
+        borderRadius: 50,
+        customTheme: {
+          sourceUrl: "https://tweakcn.com/themes/broken",
+          themeId: "broken",
+          label: "Broken",
+          importedAt: "2026-04-22T00:00:00.000Z",
+          light: {},
+          dark: {},
+        },
+        sessionsByGateway: {
+          [gwUrl]: {
+            sessionKey: "main",
+            lastActiveSessionKey: "main",
+          },
+        },
+      }),
+    );
+
+    expect(loadSettings()).toMatchObject({
+      theme: "claw",
+      themeMode: "dark",
+    });
+  });
+
+  it("scopes persisted session selection per gateway", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway-a.example:8443",
@@ -383,7 +531,7 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("caps persisted session scopes to the most recent gateways", async () => {
+  it("caps persisted session scopes to the most recent gateways", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -423,7 +571,7 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
 
-    expect(persisted.sessionsByGateway).toBeDefined();
+    expect(persisted.sessionsByGateway).toEqual(expect.any(Object));
     const scopes = Object.keys(persisted.sessionsByGateway);
     expect(scopes).toHaveLength(10);
     // oldest stale entries should be evicted
@@ -436,5 +584,50 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "agent:current:main",
       lastActiveSessionKey: "agent:current:main",
     });
+  });
+
+  it("persists local user identity separately from gateway settings", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    saveLocalUserIdentity({ name: "Buns", avatar: "🦞" });
+
+    expect(loadLocalUserIdentity()).toEqual({
+      name: "Buns",
+      avatar: "🦞",
+    });
+    expect(JSON.parse(localStorage.getItem("openclaw.control.user.v1") ?? "{}")).toEqual({
+      name: "Buns",
+      avatar: "🦞",
+    });
+  });
+
+  it("normalizes invalid local user identity values on load", () => {
+    localStorage.setItem(
+      "openclaw.control.user.v1",
+      JSON.stringify({
+        name: "  ",
+        avatar: "https://example.com/avatar.png",
+      }),
+    );
+
+    expect(loadLocalUserIdentity()).toEqual({
+      name: null,
+      avatar: null,
+    });
+  });
+
+  it("removes the persisted local user identity when cleared", () => {
+    saveLocalUserIdentity({ name: "Buns", avatar: "data:image/png;base64,AAA" });
+    saveLocalUserIdentity({ name: null, avatar: null });
+
+    expect(loadLocalUserIdentity()).toEqual({
+      name: null,
+      avatar: null,
+    });
+    expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
   });
 });

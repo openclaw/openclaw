@@ -15,8 +15,10 @@ const { withFileLockMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/file-lock", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/file-lock")>(
+    "openclaw/plugin-sdk/file-lock",
+  );
   return {
     ...actual,
     withFileLock: withFileLockMock,
@@ -27,6 +29,8 @@ let persistIdbToDisk: typeof import("./idb-persistence.js").persistIdbToDisk;
 let restoreIdbFromDisk: typeof import("./idb-persistence.js").restoreIdbFromDisk;
 type CapturedLockOptions =
   typeof import("./idb-persistence-lock.js").MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS;
+const DATABASE_PREFIX = "openclaw-matrix-lock-order-test";
+const cryptoDatabaseName = `${DATABASE_PREFIX}::matrix-sdk-crypto`;
 
 beforeAll(async () => {
   ({ persistIdbToDisk, restoreIdbFromDisk } = await import("./idb-persistence.js"));
@@ -41,33 +45,32 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
     withFileLockMock.mockImplementation(
       async <T>(_filePath: string, _options: unknown, fn: () => Promise<T>) => await fn(),
     );
-    await clearAllIndexedDbState();
+    await clearAllIndexedDbState({ databasePrefix: DATABASE_PREFIX });
   });
 
   afterEach(async () => {
-    await clearAllIndexedDbState();
+    await clearAllIndexedDbState({ databasePrefix: DATABASE_PREFIX });
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("captures the snapshot after the file lock is acquired", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
-    const dbName = "openclaw-matrix-test::matrix-sdk-crypto";
     await seedDatabase({
-      name: dbName,
+      name: cryptoDatabaseName,
       storeName: "sessions",
       records: [{ key: "room-1", value: { session: "old-session" } }],
     });
 
     withFileLockMock.mockImplementationOnce(async (_filePath, _options, fn) => {
       await seedDatabase({
-        name: dbName,
+        name: cryptoDatabaseName,
         storeName: "sessions",
         records: [{ key: "room-1", value: { session: "new-session" } }],
       });
       return await fn();
     });
 
-    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+    await persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX });
 
     const data = JSON.parse(fs.readFileSync(snapshotPath, "utf8")) as Array<{
       stores: Array<{
@@ -87,8 +90,9 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
       capturedOptions.push(options as CapturedLockOptions);
       return 0;
     });
-    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+    await persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX });
 
+    fs.writeFileSync(snapshotPath, "[]", "utf8");
     withFileLockMock.mockImplementationOnce(async (_filePath, options) => {
       capturedOptions.push(options as CapturedLockOptions);
       return false;

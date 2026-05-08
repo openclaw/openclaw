@@ -5,7 +5,11 @@ function failOrUndefined(params: { onMissing: "throw" | "undefined"; message: st
   return undefined;
 }
 
-export function decodeJsonPointerToken(token: string): string {
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function decodeJsonPointerToken(token: string): string {
   return token.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
@@ -45,50 +49,19 @@ export function readJsonPointer(
       current = current[index];
       continue;
     }
-    if (typeof current !== "object" || current === null || Array.isArray(current)) {
+    if (!isJsonObject(current)) {
       return failOrUndefined({
         onMissing,
         message: `JSON pointer segment "${token}" does not exist.`,
       });
     }
-    const record = current as Record<string, unknown>;
-    if (!Object.hasOwn(record, token)) {
+    if (!Object.hasOwn(current, token)) {
       return failOrUndefined({
         onMissing,
         message: `JSON pointer segment "${token}" does not exist.`,
       });
     }
-    current = record[token];
+    current = current[token];
   }
   return current;
-}
-
-export function setJsonPointer(
-  root: Record<string, unknown>,
-  pointer: string,
-  value: unknown,
-): void {
-  if (!pointer.startsWith("/")) {
-    throw new Error(`Invalid JSON pointer "${pointer}".`);
-  }
-
-  const tokens = pointer
-    .slice(1)
-    .split("/")
-    .map((token) => decodeJsonPointerToken(token));
-
-  let current: Record<string, unknown> = root;
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    const isLast = index === tokens.length - 1;
-    if (isLast) {
-      current[token] = value;
-      return;
-    }
-    const child = current[token];
-    if (typeof child !== "object" || child === null || Array.isArray(child)) {
-      current[token] = {};
-    }
-    current = current[token] as Record<string, unknown>;
-  }
 }

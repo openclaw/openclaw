@@ -1,9 +1,17 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledBundledRuntimeSidecarPaths,
+  collectInstalledContextEngineRuntimeErrors,
+  collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
+  normalizeInstalledBinaryVersion,
+  resolveInstalledBinaryPath,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/public-artifacts.ts";
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -32,8 +40,29 @@ describe("buildPublishedInstallScenarios", () => {
   });
 });
 
+describe("buildPublishedInstallCommandArgs", () => {
+  it("runs lifecycle scripts for published install verification", () => {
+    const args = buildPublishedInstallCommandArgs("/tmp/openclaw-prefix", "openclaw@2026.4.10");
+
+    expect(args).toEqual([
+      "install",
+      "-g",
+      "--prefix",
+      "/tmp/openclaw-prefix",
+      "openclaw@2026.4.10",
+      "--no-fund",
+      "--no-audit",
+    ]);
+    expect(args).not.toContain("--ignore-scripts");
+  });
+});
+
 describe("collectInstalledPackageErrors", () => {
-  it("flags version mismatches and missing runtime sidecars", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-package-"));
+  }
+
+  it("flags version mismatches", () => {
     const errors = collectInstalledPackageErrors({
       expectedVersion: "2026.3.23-2",
       installedVersion: "2026.3.23",
@@ -43,14 +72,301 @@ describe("collectInstalledPackageErrors", () => {
     expect(errors[0]).toBe(
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
     );
-    expect(errors).toEqual(
-      expect.arrayContaining(
-        BUNDLED_RUNTIME_SIDECAR_PATHS.map(
-          (relativePath) =>
-            `installed package is missing required bundled runtime sidecar: ${relativePath}`,
-        ),
-      ),
+  });
+
+  it("requires runtime sidecars for bundled extensions included in the package", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+      mkdirSync(join(packageRoot, "dist", "extensions", "slack"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "slack", "package.json"),
+        "{}\n",
+        "utf8",
+      );
+
+      expect(collectInstalledBundledRuntimeSidecarPaths(packageRoot)).toContain(
+        "dist/extensions/slack/runtime-api.js",
+      );
+      expect(
+        collectInstalledPackageErrors({
+          expectedVersion: "2026.3.23",
+          installedVersion: "2026.3.23",
+          packageRoot,
+        }),
+      ).toContain(
+        "installed package is missing required bundled runtime sidecar: dist/extensions/slack/runtime-api.js",
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectInstalledContextEngineRuntimeErrors", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-context-engine-"));
+  }
+
+  it("rejects packaged bundles with unresolved legacy context engine runtime loaders", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "runtime-plugins-BUG.js"),
+        'throw new Error("Failed to load legacy context engine runtime.");\n',
+        "utf8",
+      );
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
+        "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts packaged bundles that inline the legacy context engine registration", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "runtime-plugins-OK.js"),
+        "registerContextEngineForOwner('legacy', async () => new LegacyContextEngine());\n",
+        "utf8",
+      );
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("normalizeInstalledBinaryVersion", () => {
+  it("accepts decorated CLI version output", () => {
+    expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8 (9ece252)")).toBe("2026.4.8");
+    expect(normalizeInstalledBinaryVersion("OpenClaw 2026.4.8-beta.1 (9ece252)")).toBe(
+      "2026.4.8-beta.1",
     );
-    expect(errors.length).toBeGreaterThanOrEqual(1 + BUNDLED_RUNTIME_SIDECAR_PATHS.length);
+  });
+});
+
+describe("resolveInstalledBinaryPath", () => {
+  it("uses the Unix global bin path on non-Windows platforms", () => {
+    expect(resolveInstalledBinaryPath("/tmp/openclaw-prefix", "darwin")).toBe(
+      "/tmp/openclaw-prefix/bin/openclaw",
+    );
+  });
+
+  it("uses the Windows npm shim path on win32", () => {
+    expect(resolveInstalledBinaryPath("C:/openclaw-prefix", "win32")).toBe(
+      "C:/openclaw-prefix/openclaw.cmd",
+    );
+  });
+});
+
+describe("collectInstalledRootDependencyManifestErrors", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-root-deps-"));
+  }
+
+  function writePackageFile(root: string, relativePath: string, value: unknown): void {
+    const fullPath = join(root, relativePath);
+    mkdirSync(dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  }
+
+  it("flags root dist imports whose declared runtime package name is missing", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'typebox' for dist importers: typebox-CXXonh2u.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts root dist imports when the runtime package name is declared", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {
+          typebox: "1.1.28",
+        },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts optional or externalized runtime imports", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "optional-runtime.js"),
+        'await import("@lancedb/lancedb");\n',
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "discord-voice-runtime.js"),
+        'const OpusScript = require("opusscript");\nexport { OpusScript };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("flags undeclared imports from mjs and cjs root dist files", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "esm-entry.mjs"),
+        'export { value } from "mjs-only";\n',
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "cjs-entry.cjs"),
+        'const cjsOnly = require("cjs-only");\nmodule.exports = cjsOnly;\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'cjs-only' for dist importers: cjs-entry.cjs. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores import-like text inside comments", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "comment-only.js"),
+        [
+          '// import "fake-package";',
+          '/* require("fake-package-two"); */',
+          "export const ok = true;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores import-like text inside string literals", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "string-only.js"),
+        [
+          "export const help = \"run import('fake-package') after setup\";",
+          'export const note = "from \\"fake-package-two\\"";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a structured error when installed package.json is invalid", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), "{not-json\n", "utf8");
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        expect.stringMatching(/^installed package\.json could not be parsed:/u),
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses oversized root dist files", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "oversized.js"),
+        "x".repeat(4 * 1024 * 1024 + 1),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root dist file 'oversized.js' is invalid or exceeds 4194304 bytes.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 });

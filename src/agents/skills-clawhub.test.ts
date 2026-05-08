@@ -11,7 +11,7 @@ const searchClawHubSkillsMock = vi.fn();
 const archiveCleanupMock = vi.fn();
 const withExtractedArchiveRootMock = vi.fn();
 const installPackageDirMock = vi.fn();
-const fileExistsMock = vi.fn();
+const pathExistsMock = vi.fn();
 
 vi.mock("../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
@@ -29,8 +29,8 @@ vi.mock("../infra/install-package-dir.js", () => ({
   installPackageDir: installPackageDirMock,
 }));
 
-vi.mock("../infra/archive.js", () => ({
-  fileExists: fileExistsMock,
+vi.mock("../infra/fs-safe.js", () => ({
+  pathExists: pathExistsMock,
 }));
 
 const { installSkillFromClawHub, searchSkillsFromClawHub, updateSkillsFromClawHub } =
@@ -46,10 +46,10 @@ describe("skills-clawhub", () => {
     archiveCleanupMock.mockReset();
     withExtractedArchiveRootMock.mockReset();
     installPackageDirMock.mockReset();
-    fileExistsMock.mockReset();
+    pathExistsMock.mockReset();
 
     resolveClawHubBaseUrlMock.mockReturnValue("https://clawhub.ai");
-    fileExistsMock.mockImplementation(async (input: string) => input.endsWith("SKILL.md"));
+    pathExistsMock.mockImplementation(async (input: string) => input.endsWith("SKILL.md"));
     fetchClawHubSkillDetailMock.mockResolvedValue({
       skill: {
         slug: "agentreceipt",
@@ -145,6 +145,18 @@ describe("skills-clawhub", () => {
       return { workspaceDir, skillDir };
     }
 
+    function expectLegacyUpdateSuccess(results: unknown, workspaceDir: string, slug: string) {
+      expect(results).toMatchObject([
+        {
+          ok: true,
+          slug,
+          previousVersion: "0.9.0",
+          version: "1.0.0",
+          targetDir: path.join(workspaceDir, "skills", slug),
+        },
+      ]);
+    }
+
     it("updates all tracked legacy Unicode slugs in place", async () => {
       const slug = "re\u0430ct";
       const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
@@ -167,15 +179,7 @@ describe("skills-clawhub", () => {
           version: "1.0.0",
           baseUrl: "https://legacy.clawhub.ai",
         });
-        expect(results).toMatchObject([
-          {
-            ok: true,
-            slug,
-            previousVersion: "0.9.0",
-            version: "1.0.0",
-            targetDir: path.join(workspaceDir, "skills", slug),
-          },
-        ]);
+        expectLegacyUpdateSuccess(results, workspaceDir, slug);
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }
@@ -195,15 +199,7 @@ describe("skills-clawhub", () => {
           slug,
         });
 
-        expect(results).toMatchObject([
-          {
-            ok: true,
-            slug,
-            previousVersion: "0.9.0",
-            version: "1.0.0",
-            targetDir: path.join(workspaceDir, "skills", slug),
-          },
-        ]);
+        expectLegacyUpdateSuccess(results, workspaceDir, slug);
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }

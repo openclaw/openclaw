@@ -23,6 +23,7 @@ describe("buildApiErrorObservationFields", () => {
       rawErrorPreview: expect.stringContaining('"request_id":"sha256:'),
       rawErrorHash: expect.stringMatching(/^sha256:/),
       rawErrorFingerprint: expect.stringMatching(/^sha256:/),
+      providerRuntimeFailureKind: "timeout",
       providerErrorType: "overloaded_error",
       providerErrorMessagePreview: "Overloaded",
       requestIdHash: expect.stringMatching(/^sha256:/),
@@ -69,6 +70,7 @@ describe("buildApiErrorObservationFields", () => {
       textPreview: expect.stringContaining('"request_id":"sha256:'),
       textHash: expect.stringMatching(/^sha256:/),
       textFingerprint: expect.stringMatching(/^sha256:/),
+      providerRuntimeFailureKind: "timeout",
       providerErrorType: "overloaded_error",
       providerErrorMessagePreview: "Overloaded",
       requestIdHash: expect.stringMatching(/^sha256:/),
@@ -107,8 +109,8 @@ describe("buildApiErrorObservationFields", () => {
       `{"type":"error","error":{"type":"server_error","message":"${longMessage}"},"request_id":"req_long"}`,
     );
 
-    expect(observed.rawErrorPreview).toBeDefined();
-    expect(observed.providerErrorMessagePreview).toBeDefined();
+    expect(observed.rawErrorPreview).toEqual(expect.any(String));
+    expect(observed.providerErrorMessagePreview).toEqual(expect.any(String));
     expect(observed.rawErrorPreview?.length).toBeLessThanOrEqual(401);
     expect(observed.providerErrorMessagePreview?.length).toBeLessThanOrEqual(201);
     expect(observed.providerErrorMessagePreview?.endsWith("…")).toBe(true);
@@ -156,6 +158,7 @@ describe("buildApiErrorObservationFields", () => {
       textHash: undefined,
       textFingerprint: undefined,
       httpCode: undefined,
+      providerRuntimeFailureKind: undefined,
       providerErrorType: undefined,
       providerErrorMessagePreview: undefined,
       requestIdHash: undefined,
@@ -175,6 +178,17 @@ describe("buildApiErrorObservationFields", () => {
 
     expect(observed.rawErrorPreview).not.toContain("custom-secret-abc123");
     expect(observed.rawErrorPreview).toContain("custom");
+  });
+
+  it("keeps provider-less missing-scope auth payloads out of the codex-specific scope lane", () => {
+    const observed = buildApiErrorObservationFields(
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
+    );
+
+    expect(observed).toMatchObject({
+      httpCode: "401",
+      providerRuntimeFailureKind: "unclassified",
+    });
   });
 });
 

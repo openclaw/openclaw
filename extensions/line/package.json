@@ -1,14 +1,21 @@
 {
   "name": "@openclaw/line",
-  "version": "2026.4.1-beta.1",
-  "private": true,
+  "version": "2026.5.6",
   "description": "OpenClaw LINE channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
+  "dependencies": {
+    "@line/bot-sdk": "^11.0.0"
+  },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.1-beta.1"
+    "openclaw": ">=2026.5.6"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -35,7 +42,17 @@
     "install": {
       "npmSpec": "@openclaw/line",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.1"
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.6"
+    },
+    "build": {
+      "openclawVersion": "2026.5.6"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

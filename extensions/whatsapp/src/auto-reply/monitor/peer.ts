@@ -1,5 +1,5 @@
-import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { getSenderIdentity } from "../../identity.js";
+import { jidToE164, normalizeE164 } from "../../text-runtime.js";
 import type { WebInboundMsg } from "../types.js";
 
 export function resolvePeerId(msg: WebInboundMsg) {

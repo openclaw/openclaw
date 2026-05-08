@@ -1,4 +1,6 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -17,10 +19,10 @@ import {
   renderAgentChannels,
   renderAgentCron,
 } from "./agents-panels-status-files.ts";
+export type { AgentsPanel } from "./agents.types.ts";
 import { renderAgentTools, renderAgentSkills } from "./agents-panels-tools-skills.ts";
 import { agentBadgeText, buildAgentContext, normalizeAgentLabel } from "./agents-utils.ts";
-
-export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+import type { AgentsPanel } from "./agents.types.ts";
 
 export type ConfigState = {
   form: Record<string, unknown> | null;
@@ -155,7 +157,7 @@ export function renderAgents(props: AgentsProps) {
               @change=${(e: Event) => props.onSelectAgent((e.target as HTMLSelectElement).value)}
             >
               ${agents.length === 0
-                ? html` <option value="">No agents</option> `
+                ? html` <option value="">${t("agents.noAgents")}</option> `
                 : agents.map(
                     (agent) => html`
                       <option value=${agent.id} ?selected=${agent.id === selectedId}>
@@ -174,9 +176,9 @@ export function renderAgents(props: AgentsProps) {
                     type="button"
                     class="btn btn--sm btn--ghost"
                     @click=${() => void navigator.clipboard.writeText(selectedAgent.id)}
-                    title="Copy agent ID to clipboard"
+                    title=${t("agents.copyIdTitle")}
                   >
-                    Copy ID
+                    ${t("agents.copyId")}
                   </button>
                   <button
                     type="button"
@@ -184,10 +186,12 @@ export function renderAgents(props: AgentsProps) {
                     ?disabled=${Boolean(defaultId && selectedAgent.id === defaultId)}
                     @click=${() => props.onSetDefault(selectedAgent.id)}
                     title=${defaultId && selectedAgent.id === defaultId
-                      ? "Already the default agent"
-                      : "Set as the default agent"}
+                      ? t("agents.alreadyDefaultTitle")
+                      : t("agents.setDefaultTitle")}
                   >
-                    ${defaultId && selectedAgent.id === defaultId ? "Default" : "Set Default"}
+                    ${defaultId && selectedAgent.id === defaultId
+                      ? t("agents.default")
+                      : t("agents.setDefault")}
                   </button>
                 `
               : nothing}
@@ -196,7 +200,7 @@ export function renderAgents(props: AgentsProps) {
               ?disabled=${props.loading}
               @click=${props.onRefresh}
             >
-              ${props.loading ? "Loading…" : "Refresh"}
+              ${props.loading ? t("common.loading") : t("common.refresh")}
             </button>
           </div>
         </div>
@@ -208,8 +212,8 @@ export function renderAgents(props: AgentsProps) {
         ${!selectedAgent
           ? html`
               <div class="card">
-                <div class="card-title">Select an agent</div>
-                <div class="card-sub">Pick an agent to inspect its workspace and tools.</div>
+                <div class="card-title">${t("agents.selectTitle")}</div>
+                <div class="card-sub">${t("agents.selectSubtitle")}</div>
               </div>
             `
           : html`
@@ -219,25 +223,28 @@ export function renderAgents(props: AgentsProps) {
                 tabCounts,
               )}
               ${props.activePanel === "overview"
-                ? renderAgentOverview({
-                    agent: selectedAgent,
-                    basePath: props.basePath,
-                    defaultId,
-                    configForm: props.config.form,
-                    agentFilesList: props.agentFiles.list,
-                    agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
-                    agentIdentityError: props.agentIdentityError,
-                    agentIdentityLoading: props.agentIdentityLoading,
-                    configLoading: props.config.loading,
-                    configSaving: props.config.saving,
-                    configDirty: props.config.dirty,
-                    modelCatalog: props.modelCatalog,
-                    onConfigReload: props.onConfigReload,
-                    onConfigSave: props.onConfigSave,
-                    onModelChange: props.onModelChange,
-                    onModelFallbacksChange: props.onModelFallbacksChange,
-                    onSelectPanel: props.onSelectPanel,
-                  })
+                ? keyed(
+                    selectedAgent.id,
+                    renderAgentOverview({
+                      agent: selectedAgent,
+                      basePath: props.basePath,
+                      defaultId,
+                      configForm: props.config.form,
+                      agentFilesList: props.agentFiles.list,
+                      agentIdentity: props.agentIdentityById[selectedAgent.id] ?? null,
+                      agentIdentityError: props.agentIdentityError,
+                      agentIdentityLoading: props.agentIdentityLoading,
+                      configLoading: props.config.loading,
+                      configSaving: props.config.saving,
+                      configDirty: props.config.dirty,
+                      modelCatalog: props.modelCatalog,
+                      onConfigReload: props.onConfigReload,
+                      onConfigSave: props.onConfigSave,
+                      onModelChange: props.onModelChange,
+                      onModelFallbacksChange: props.onModelFallbacksChange,
+                      onSelectPanel: props.onSelectPanel,
+                    }),
+                  )
                 : nothing}
               ${props.activePanel === "files"
                 ? renderAgentFiles({
@@ -347,12 +354,12 @@ function renderAgentTabs(
   counts: Record<string, number | null>,
 ) {
   const tabs: Array<{ id: AgentsPanel; label: string }> = [
-    { id: "overview", label: "Overview" },
-    { id: "files", label: "Files" },
-    { id: "tools", label: "Tools" },
-    { id: "skills", label: "Skills" },
-    { id: "channels", label: "Channels" },
-    { id: "cron", label: "Cron Jobs" },
+    { id: "overview", label: t("agents.tabs.overview") },
+    { id: "files", label: t("agents.tabs.files") },
+    { id: "tools", label: t("agents.tabs.tools") },
+    { id: "skills", label: t("agents.tabs.skills") },
+    { id: "channels", label: t("agents.tabs.channels") },
+    { id: "cron", label: t("agents.tabs.cronJobs") },
   ];
   return html`
     <div class="agent-tabs">

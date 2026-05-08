@@ -1,7 +1,7 @@
-import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
-import { normalizeToolParams } from "./pi-tools.params.js";
+import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
+import { getToolParamsRecord } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 type EditToolRecoveryOptions = {
@@ -22,12 +22,9 @@ type EditReplacement = {
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
 
-/** Resolve path for edit recovery: expand ~ and resolve relative paths against root. */
 function resolveEditPath(root: string, pathParam: string): string {
-  const expanded =
-    pathParam.startsWith("~/") || pathParam === "~"
-      ? pathParam.replace(/^~/, os.homedir())
-      : pathParam;
+  const home = resolveOsHomeDir();
+  const expanded = home ? expandHomePrefix(pathParam, { home }) : pathParam;
   return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(root, expanded);
 }
 
@@ -61,12 +58,9 @@ function readEditReplacements(record: Record<string, unknown> | undefined): Edit
 }
 
 function readEditToolParams(params: unknown): EditToolParams {
-  const normalized = normalizeToolParams(params);
-  const record =
-    normalized ??
-    (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+  const record = getToolParamsRecord(params);
   return {
-    pathParam: readStringParam(record, "path", "file_path", "filePath", "file"),
+    pathParam: readStringParam(record, "path"),
     edits: readEditReplacements(record),
   };
 }

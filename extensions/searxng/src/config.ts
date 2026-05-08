@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInput,
@@ -48,7 +48,7 @@ function normalizeBaseUrl(value: string | undefined): string | undefined {
   return value?.replace(/\/+$/u, "") || undefined;
 }
 
-export function resolveSearxngWebSearchConfig(
+function resolveSearxngWebSearchConfig(
   config?: OpenClawConfig,
 ): SearxngPluginConfig["webSearch"] | undefined {
   const pluginConfig = config?.plugins?.entries?.searxng?.config as SearxngPluginConfig | undefined;

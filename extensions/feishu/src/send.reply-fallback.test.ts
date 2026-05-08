@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuSendTargetMock = vi.hoisted(() => vi.fn());
 const resolveMarkdownTableModeMock = vi.hoisted(() => vi.fn(() => "preserve"));
@@ -18,11 +18,6 @@ vi.mock("./runtime.js", () => ({
       },
     },
   }),
-}));
-
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
 }));
 
 let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
@@ -46,6 +41,12 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     ({ sendCardFeishu, sendMessageFeishu } = await import("./send.js"));
   });
 
+  afterAll(() => {
+    vi.doUnmock("./send-target.js");
+    vi.doUnmock("./runtime.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     resolveFeishuSendTargetMock.mockReturnValue({
@@ -60,6 +61,34 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       receiveId: "ou_target",
       receiveIdType: "open_id",
     });
+  });
+
+  it("preserves Feishu diagnostics when direct sends reject before response checks", async () => {
+    const apiError = Object.assign(new Error("Request failed with status code 400"), {
+      response: {
+        status: 400,
+        data: {
+          code: 9499,
+          msg: "Bad Request",
+          error: {
+            log_id: "202604291247104BEF4C42D2420A9AD569",
+            troubleshooter:
+              "https://open.feishu.cn/search?log_id=202604291247104BEF4C42D2420A9AD569",
+          },
+        },
+      },
+    });
+    createMock.mockRejectedValue(apiError);
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as never,
+        to: "user:ou_target",
+        text: "hello",
+      }),
+    ).rejects.toThrow(
+      /Feishu send failed: .*"http_status":400.*"feishu_code":9499.*"feishu_msg":"Bad Request".*"feishu_log_id":"202604291247104BEF4C42D2420A9AD569".*"feishu_troubleshooter":"https:\/\/open\.feishu\.cn\/search\?log_id=202604291247104BEF4C42D2420A9AD569"/,
+    );
   });
 
   it("falls back to create for withdrawn post replies", async () => {

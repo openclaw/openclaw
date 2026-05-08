@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findGitRoot } from "../infra/git-root.js";
 import {
   formatUserTime,
@@ -9,7 +9,7 @@ import {
   type ResolvedTimeFormat,
 } from "./date-time.js";
 
-export type RuntimeInfoInput = {
+type RuntimeInfoInput = {
   agentId?: string;
   host: string;
   os: string;
@@ -25,7 +25,7 @@ export type RuntimeInfoInput = {
   repoRoot?: string;
 };
 
-export type SystemPromptRuntimeParams = {
+type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
   userTimezone: string;
   userTime?: string;

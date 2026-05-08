@@ -3,6 +3,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
@@ -16,7 +17,7 @@ async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git
   if (res.code !== 0) {
     // Avoid noisy "Update via package manager" notes when git is missing/broken,
     // but do show it when this is clearly not a git checkout.
-    if (res.stderr.toLowerCase().includes("not a git repository")) {
+    if (normalizeLowercaseStringOrEmpty(res.stderr).includes("not a git repository")) {
       return "not-git";
     }
     return "unknown";
@@ -37,7 +38,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     params.options.nonInteractive !== true &&
     params.options.yes !== true &&
     params.options.repair !== true &&
-    Boolean(process.stdin.isTTY);
+    process.stdin.isTTY;
   if (!canOfferUpdate || !params.root) {
     return { updated: false };
   }

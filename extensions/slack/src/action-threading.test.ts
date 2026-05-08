@@ -4,7 +4,7 @@ import { resolveSlackAutoThreadId } from "./action-threading.js";
 type SlackThreadingToolContext = {
   currentChannelId?: string;
   currentThreadTs?: string;
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
 
@@ -39,6 +39,21 @@ describe("resolveSlackAutoThreadId", () => {
         toolContext: createToolContext(),
       }),
     ).toBeUndefined();
+  });
+
+  it("threads first matching prefixed channel target with bare current channel", () => {
+    const hasRepliedRef = { value: false };
+
+    expect(
+      resolveSlackAutoThreadId({
+        to: "channel:C123",
+        toolContext: createToolContext({
+          replyToMode: "first",
+          hasRepliedRef,
+        }),
+      }),
+    ).toBe("thread-1");
+    expect(hasRepliedRef.value).toBe(false);
   });
 
   it("skips auto-threading when reply mode or thread context blocks it", () => {
