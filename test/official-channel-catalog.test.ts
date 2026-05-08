@@ -29,7 +29,6 @@ function writeJson(filePath: string, value: unknown): void {
 
 function requireInstall(entry: OfficialChannelCatalogEntry | undefined): OfficialChannelInstall {
   const install = entry?.openclaw?.install;
-  expect(install).toBeDefined();
   if (!install) {
     throw new Error("expected official channel install config");
   }
@@ -37,7 +36,6 @@ function requireInstall(entry: OfficialChannelCatalogEntry | undefined): Officia
 }
 
 function requireNpmInstallSource(source: ReturnType<typeof describePluginInstallSource>) {
-  expect(source.npm).toBeDefined();
   if (!source.npm) {
     throw new Error("expected npm install source");
   }

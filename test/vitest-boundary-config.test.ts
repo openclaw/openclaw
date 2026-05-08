@@ -7,7 +7,6 @@ import {
 import { boundaryTestFiles } from "./vitest/vitest.unit-paths.mjs";
 
 function requireTestConfig(config: ReturnType<typeof createBoundaryVitestConfig>) {
-  expect(config.test).toBeDefined();
   if (!config.test) {
     throw new Error("expected boundary vitest test config");
   }

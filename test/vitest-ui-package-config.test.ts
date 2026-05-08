@@ -3,7 +3,6 @@ import uiConfig from "../ui/vitest.config.ts";
 import uiNodeConfig from "../ui/vitest.node.config.ts";
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
-  expect(config.test).toBeDefined();
   if (!config.test) {
     throw new Error("expected ui package vitest test config");
   }

@@ -7,7 +7,6 @@ import {
 
 function requireFirstWarning(warn: ReturnType<typeof vi.fn>): unknown {
   const message = warn.mock.calls[0]?.[0];
-  expect(message).toBeDefined();
   if (message === undefined) {
     throw new Error("expected package manager warning");
   }

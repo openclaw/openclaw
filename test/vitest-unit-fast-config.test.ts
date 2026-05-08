@@ -14,7 +14,6 @@ import {
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
-  expect(config.test).toBeDefined();
   if (!config.test) {
     throw new Error("expected unit-fast vitest test config");
   }

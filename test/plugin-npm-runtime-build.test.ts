@@ -16,7 +16,6 @@ function expectDistRelativePaths(paths: string[]) {
 function expectPluginNpmRuntimeBuildPlan(
   plan: ReturnType<typeof resolvePluginNpmRuntimeBuildPlan>,
 ): PluginNpmRuntimeBuildPlan {
-  expect(plan).toBeTruthy();
   if (!plan) {
     throw new Error("expected plugin npm runtime build plan");
   }
