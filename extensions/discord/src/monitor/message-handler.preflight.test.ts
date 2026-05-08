@@ -888,7 +888,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
-    expect(result).not.toBeNull();
+    expect(expectPreflightResult(result)).toEqual(expect.any(Object));
   });
 
   it("hydrates mention metadata from REST when bot mention syntax is present but mentions are missing", async () => {
@@ -934,7 +934,7 @@ describe("preflightDiscordMessage", () => {
       botUserId: botId,
     });
 
-    expect(result).not.toBeNull();
+    expect(expectPreflightResult(result)).toEqual(expect.any(Object));
   });
 
   it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
@@ -973,7 +973,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
-    expect(result).not.toBeNull();
+    expect(expectPreflightResult(result)).toEqual(expect.any(Object));
   });
 
   it("routes ordinary guild text control commands through authorization instead of dropping them", async () => {
@@ -1015,11 +1015,11 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.baseText).toBe("/steer keep digging");
-    expect(result?.commandAuthorized).toBe(true);
-    expect(result?.shouldRequireMention).toBe(true);
-    expect(result?.shouldBypassMention).toBe(true);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.baseText).toBe("/steer keep digging");
+    expect(preflight.commandAuthorized).toBe(true);
+    expect(preflight.shouldRequireMention).toBe(true);
+    expect(preflight.shouldBypassMention).toBe(true);
   });
 
   it("still drops Discord native command echo messages", async () => {
