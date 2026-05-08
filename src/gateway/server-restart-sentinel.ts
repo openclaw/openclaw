@@ -52,7 +52,7 @@ const log = createSubsystemLogger("gateway/restart-sentinel");
 const OUTBOUND_RETRY_DELAY_MS = 1_000;
 const OUTBOUND_MAX_ATTEMPTS = 45;
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
-const RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS = 5;
+const RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS = 20;
 const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
   "restart continuation deferred because previous run is still shutting down";
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
@@ -554,6 +554,7 @@ async function loadRestartSentinelStartupTask(params: {
     let replyToId: string | undefined;
     let resolvedThreadId = threadId;
     let continuationQueueId: string | undefined;
+    let continuationRoute: SessionDeliveryRoute | undefined;
 
     if (channel && to) {
       const resolved = resolveOutboundTarget({
@@ -582,19 +583,20 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     if (payload.continuation) {
+      continuationRoute = resolveRestartContinuationRoute({
+        channel: channel ?? undefined,
+        to: resolvedTo,
+        accountId: origin?.accountId,
+        replyToId,
+        threadId: resolvedThreadId,
+        chatType,
+      });
       continuationQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({
           sessionKey: canonicalKey,
           continuation: payload.continuation,
           ts: payload.ts,
-          route: resolveRestartContinuationRoute({
-            channel: channel ?? undefined,
-            to: resolvedTo,
-            accountId: origin?.accountId,
-            replyToId,
-            threadId: resolvedThreadId,
-            chatType,
-          }),
+          route: continuationRoute,
           deliveryContext:
             resolvedTo && channel
               ? {
@@ -609,7 +611,12 @@ async function loadRestartSentinelStartupTask(params: {
     }
 
     await removeRestartSentinelFile(sentinelPath);
-    enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
+    const routedAgentTurnContinuation =
+      payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
+    // The routed continuation is the wake; a parallel heartbeat wake can steal the session.
+    if (!routedAgentTurnContinuation) {
+      enqueueRestartSentinelWake(message, sessionKey, wakeDeliveryContext);
+    }
 
     if (resolvedTo && channel) {
       const outboundSession = buildOutboundSessionContext({

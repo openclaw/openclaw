@@ -568,6 +568,7 @@ describe("scheduleRestartSentinelWake", () => {
         }),
       }),
     );
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
   });
 
   it("preserves the session chat type for agentTurn continuations", async () => {
@@ -959,12 +960,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      "restart message",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-      }),
-    );
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.stringContaining("retry failed for entry session-delivery-1: Error: dispatch failed"),
     );
@@ -1001,6 +997,7 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("retries restart continuations when the previous run is still shutting down", async () => {
     const busyReply = "⚠️ Previous run is still shutting down. Please try again in a moment.";
+    let attempt = 0;
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:main",
@@ -1016,20 +1013,21 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.recordInboundSessionAndDispatchReply
-      .mockImplementationOnce(async (params) => {
+    mocks.recordInboundSessionAndDispatchReply.mockImplementation(async (params) => {
+      attempt += 1;
+      if (attempt <= 6) {
         await params.deliver({ text: busyReply });
-      })
-      .mockImplementationOnce(async (params) => {
-        await params.deliver({
-          text: "done",
-          replyToId: String(params.ctxPayload.MessageSid),
-        });
+        return;
+      }
+      await params.deliver({
+        text: "done",
+        replyToId: String(params.ctxPayload.MessageSid),
       });
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(2);
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(7);
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -1039,10 +1037,10 @@ describe("scheduleRestartSentinelWake", () => {
       }),
     );
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenNthCalledWith(
-      2,
+      7,
       expect.objectContaining({
         ctxPayload: expect.objectContaining({
-          MessageSid: "restart-sentinel:agent:main:main:agentTurn:123:retry:1",
+          MessageSid: "restart-sentinel:agent:main:main:agentTurn:123:retry:6",
         }),
       }),
     );
@@ -1062,6 +1060,7 @@ describe("scheduleRestartSentinelWake", () => {
         "retry failed for entry session-delivery-1: Error: restart continuation deferred because previous run is still shutting down",
       ),
     );
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
   });
 
   it("falls back to a session wake when restart routing cannot resolve a destination", async () => {
