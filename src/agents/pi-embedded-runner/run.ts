@@ -1554,6 +1554,8 @@ export async function runEmbeddedPiAgent(
                   `[timeout-compaction] compaction succeeded for ${provider}/${modelId}; retrying prompt`,
                 );
                 postCompactionGuard.armPostCompaction();
+                // Yield to event loop so health monitor probes continue to pass
+                await new Promise<void>((resolve) => setImmediate(resolve));
                 continue;
               } else {
                 log.warn(
@@ -1764,6 +1766,9 @@ export async function runEmbeddedPiAgent(
                   nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
                   suppressNextUserMessagePersistence = true;
                 }
+                // Yield to event loop so health monitor probes continue to pass
+                // while the retry prompt is in flight (prevents crash loop on compaction)
+                await new Promise<void>((resolve) => setImmediate(resolve));
                 continue;
               }
               log.warn(
