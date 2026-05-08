@@ -753,34 +753,35 @@ describe("scoped vitest configs", () => {
   });
 
   it("normalizes tasks include patterns relative to the scoped dir", () => {
-    expect(defaultTasksConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultTasksConfig.test?.include).toEqual(["tasks/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultTasksConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["tasks/**/*.test.ts"]);
   });
 
   it("normalizes wizard include patterns relative to the scoped dir", () => {
-    expect(defaultWizardConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultWizardConfig.test?.include).toEqual(["wizard/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultWizardConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["wizard/**/*.test.ts"]);
   });
 
   it("normalizes tui include patterns relative to the scoped dir", () => {
-    expect(defaultTuiConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultTuiConfig.test?.include).toEqual(["tui/**/*.test.ts"]);
+    const testConfig = requireTestConfig(defaultTuiConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["tui/**/*.test.ts"]);
   });
 
   it("normalizes media-understanding include patterns relative to the scoped dir", () => {
-    expect(defaultMediaUnderstandingConfig.test?.dir).toBe(path.join(process.cwd(), "src"));
-    expect(defaultMediaUnderstandingConfig.test?.include).toEqual([
-      "media-understanding/**/*.test.ts",
-    ]);
+    const testConfig = requireTestConfig(defaultMediaUnderstandingConfig);
+    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
+    expect(testConfig.include).toEqual(["media-understanding/**/*.test.ts"]);
   });
 
   it("keeps tooling tests in their own lane", () => {
-    expect(defaultToolingConfig.test?.include).toEqual(
+    const testConfig = requireTestConfig(defaultToolingConfig);
+    expect(testConfig.include).toEqual(
       expect.arrayContaining(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]),
     );
-    expect(defaultToolingConfig.test?.include).not.toContain(
-      "src/config/doc-baseline.integration.test.ts",
-    );
+    expect(testConfig.include).not.toContain("src/config/doc-baseline.integration.test.ts");
   });
 
   it("normalizes acp include patterns relative to the scoped dir", () => {
