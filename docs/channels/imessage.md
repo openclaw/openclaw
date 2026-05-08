@@ -1,25 +1,27 @@
 ---
-summary: "Legacy iMessage support via imsg (JSON-RPC over stdio). New setups should use BlueBubbles."
+summary: "Native iMessage support via imsg (JSON-RPC over stdio). Preferred for new OpenClaw iMessage setups when host requirements fit."
 read_when:
   - Setting up iMessage support
   - Debugging iMessage send/receive
 title: "iMessage"
 ---
 
-<Warning>
-For new iMessage deployments, use <a href="/channels/bluebubbles">BlueBubbles</a>.
+<Note>
+For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host. If your Gateway runs on Linux or Windows, point `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the Mac.
+</Note>
 
-The `imsg` integration is legacy and may be removed in a future release.
+<Warning>
+BlueBubbles is deprecated and no longer ships as a bundled OpenClaw channel. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw now supports iMessage through `imsg` only. If you still need a BlueBubbles-backed bridge, publish or install it as a third-party plugin outside core.
 </Warning>
 
-Status: legacy external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port).
+Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port).
 
 <CardGroup cols={3}>
-  <Card title="BlueBubbles (recommended)" icon="message-circle" href="/channels/bluebubbles">
-    Preferred iMessage path for new setups.
-  </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     iMessage DMs default to pairing mode.
+  </Card>
+  <Card title="Remote Mac" icon="terminal" href="#remote-mac-over-ssh">
+    Use an SSH wrapper when the Gateway is not running on the Messages Mac.
   </Card>
   <Card title="Configuration reference" icon="settings" href="/gateway/config-channels#imessage">
     Full iMessage field reference.
@@ -364,7 +366,23 @@ imsg rpc --help
 openclaw channels status --probe
 ```
 
-    If probe reports RPC unsupported, update `imsg`.
+    If probe reports RPC unsupported, update `imsg`. If the Gateway is not running on macOS, use the Remote Mac over SSH setup above instead of the default local `imsg` path.
+
+  </Accordion>
+
+  <Accordion title="Gateway is not running on macOS">
+    The default `cliPath: "imsg"` must run on the Mac signed into Messages. On Linux or Windows, set `channels.imessage.cliPath` to a wrapper script that SSHes to that Mac and runs `imsg "$@"`.
+
+```bash
+#!/usr/bin/env bash
+exec ssh -T messages-mac imsg "$@"
+```
+
+    Then run:
+
+```bash
+openclaw channels status --probe --channel imessage
+```
 
   </Accordion>
 
@@ -416,7 +434,6 @@ imsg send <handle> "test"
 - [Configuration reference - iMessage](/gateway/config-channels#imessage)
 - [Gateway configuration](/gateway/configuration)
 - [Pairing](/channels/pairing)
-- [BlueBubbles](/channels/bluebubbles)
 
 ## Related
 

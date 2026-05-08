@@ -96,7 +96,19 @@ describe("json file helpers", () => {
     });
   });
 
-  it("falls back to copy-on-replace for Windows rename EPERM", async () => {
+  it("can skip durable fsync work for hot state writes", async () => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "state.json");
+      const openSpy = vi.spyOn(fs, "open");
+
+      await writeTextAtomic(filePath, "new", { durable: false });
+
+      expect(openSpy).not.toHaveBeenCalled();
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
+    });
+  });
+
+  it("preserves text when Windows rename reports EPERM", async () => {
     await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "state.json");
       await fs.writeFile(filePath, "old", "utf8");
@@ -104,12 +116,10 @@ describe("json file helpers", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       const renameError = Object.assign(new Error("EPERM"), { code: "EPERM" });
       const renameSpy = vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
-      const copySpy = vi.spyOn(fs, "copyFile");
 
       await writeTextAtomic(filePath, "new");
 
       expect(renameSpy).toHaveBeenCalledOnce();
-      expect(copySpy).toHaveBeenCalledOnce();
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
     });
   });

@@ -92,12 +92,6 @@ describe("bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    expect(Object.keys(entries).some((entry) => entry.startsWith("extensions/bluebubbles/"))).toBe(
-      true,
-    );
-    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/bluebubbles/"))).toBe(
-      false,
-    );
     for (const pluginId of ["acpx", "googlechat", "line"]) {
       expect(
         Object.keys(entries).some((entry) => entry.startsWith(`extensions/${pluginId}/`)),

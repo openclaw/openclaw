@@ -400,7 +400,7 @@ export function renderMessageGroup(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     contextWindow?: number | null;
@@ -465,7 +465,7 @@ export function renderMessageGroup(
               isToolExpanded: opts.isToolExpanded,
               onToggleToolExpanded: opts.onToggleToolExpanded,
               onRequestUpdate: opts.onRequestUpdate,
-              canvasHostUrl: opts.canvasHostUrl,
+              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               basePath: opts.basePath,
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
@@ -1566,7 +1566,7 @@ function renderInlineToolCards(
     onOpenSidebar?: (content: SidebarContent) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -1580,7 +1580,7 @@ function renderInlineToolCards(
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
             : () => undefined,
           onOpenSidebar: opts.onOpenSidebar,
-          canvasHostUrl: opts.canvasHostUrl,
+          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
         }),
@@ -1662,7 +1662,7 @@ function renderGroupedMessage(
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     onRequestUpdate?: () => void;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
@@ -1832,7 +1832,7 @@ function renderGroupedMessage(
                           ? renderExpandedToolCardContent(
                               singleToolCard,
                               onOpenSidebar,
-                              opts.canvasHostUrl,
+                              opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
                             )
@@ -1841,7 +1841,7 @@ function renderGroupedMessage(
                               onOpenSidebar,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
-                              canvasHostUrl: opts.canvasHostUrl,
+                              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
                             })
@@ -1870,7 +1870,7 @@ function renderGroupedMessage(
                   (block) => html`${renderToolPreview(block.preview, "chat_message", {
                     onOpenSidebar,
                     rawText: block.rawText ?? null,
-                    canvasHostUrl: opts.canvasHostUrl,
+                    canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                     embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                   })}
                   ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
@@ -1895,7 +1895,7 @@ function renderGroupedMessage(
                   onOpenSidebar,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
-                  canvasHostUrl: opts.canvasHostUrl,
+                  canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                   allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
                 })
