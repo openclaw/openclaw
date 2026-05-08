@@ -20,7 +20,6 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
 
 type DeliveryQueueTestDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
-type KvTestDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
 type CurrentConversationBindingsTestDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "current_conversation_bindings"

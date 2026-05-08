@@ -1864,7 +1864,6 @@ type AgentVfsEntryMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "vfs_ent
 type AgentToolArtifactMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "tool_artifacts">;
 type LegacyGlobalAgentOwnedMigrationDatabase = Pick<OpenClawStateKyselyDatabase, never>;
 type DeliveryQueueMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
-type KvMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
 type CurrentConversationBindingsMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "current_conversation_bindings"

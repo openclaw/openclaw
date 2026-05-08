@@ -636,12 +636,17 @@ function writeStoreToSqliteDb(
     database,
     db
       .deleteFrom("acp_replay_events")
-      .where(({ not, exists, selectFrom, ref }) =>
-        not(
-          exists(
-            selectFrom("acp_replay_sessions")
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("acp_replay_sessions")
               .select("session_id")
-              .whereRef("acp_replay_sessions.session_id", "=", ref("acp_replay_events.session_id")),
+              .whereRef(
+                "acp_replay_sessions.session_id",
+                "=",
+                eb.ref("acp_replay_events.session_id"),
+              ),
           ),
         ),
       ),

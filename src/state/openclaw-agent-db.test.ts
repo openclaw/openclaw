@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
@@ -64,7 +63,7 @@ describe("openclaw agent database", () => {
     expect(registered).toMatchObject({
       agentId: "worker-1",
       path: database.path,
-      schemaVersion: 4,
+      schemaVersion: 1,
     });
     expect(registered?.sizeBytes).toBeGreaterThan(0);
   });
@@ -79,53 +78,11 @@ describe("openclaw agent database", () => {
     expect(readPragmaNumber(database.db, "busy_timeout")).toBe(30_000);
     expect(readPragmaNumber(database.db, "foreign_keys")).toBe(1);
     expect(readPragmaNumber(database.db, "synchronous")).toBe(1);
+    expect(readPragmaNumber(database.db, "user_version")).toBe(1);
     expect(readPragmaNumber(database.db, "wal_autocheckpoint")).toBe(1000);
     const journalMode = database.db.prepare("PRAGMA journal_mode").get() as
       | { journal_mode?: string }
       | undefined;
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("wal");
-  });
-
-  it("backfills transcript event identities when upgrading existing agent databases", () => {
-    const stateDir = createTempStateDir();
-    const dbPath = resolveOpenClawAgentSqlitePath({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    const sqlite = requireNodeSqlite();
-    const oldDb = new sqlite.DatabaseSync(dbPath);
-    oldDb.exec(`
-      CREATE TABLE transcript_events (
-        session_id TEXT NOT NULL,
-        seq INTEGER NOT NULL,
-        event_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (session_id, seq)
-      );
-      INSERT INTO transcript_events(session_id, seq, event_json, created_at)
-      VALUES (
-        'session-1',
-        0,
-        '{"type":"message","id":"m1","parentId":null,"message":{"idempotencyKey":"idem-1"}}',
-        123
-      );
-      PRAGMA user_version = 3;
-    `);
-    oldDb.close();
-
-    const database = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 4 });
-    expect(
-      database.db
-        .prepare(
-          "SELECT event_id, has_parent, message_idempotency_key FROM transcript_event_identities",
-        )
-        .all(),
-    ).toEqual([{ event_id: "m1", has_parent: 1, message_idempotency_key: "idem-1" }]);
   });
 });
