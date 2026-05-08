@@ -38,7 +38,6 @@ function requireRecordByExport(exportName: string) {
   const record = publicSurfaceEnvelope.records.find((entry) =>
     entry.exportNames.includes(exportName),
   );
-  expect(record).toBeDefined();
   if (!record) {
     throw new Error(`Expected topology record for ${exportName}`);
   }
