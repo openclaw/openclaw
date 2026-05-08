@@ -188,6 +188,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: keep the recent tail after manual `/compact` when Pi returns an empty or no-op compaction summary, preventing blank checkpoints from replacing the live context.
 - fix(discord): gate user allowlist name resolution [AI]. (#79002) Thanks @pgondhi987.
 - fix(msteams): gate startup user allowlist resolution [AI]. (#79003) Thanks @pgondhi987.
+- Infra/fetch-timeout: pass `operation` and `url` context to `buildTimeoutAbortSignal` from the music-generate reference fetch and the Matrix guarded redirect transport, so the `fetch timeout reached; aborting operation` warning carries actionable structured fields instead of a bare line. Fixes #79195. Thanks @pandadev66.
 - Harden macOS shell wrapper allowlist parsing [AI]. (#78518) Thanks @pgondhi987.
 - macOS/config: reject stale or destructive app fallback config writes before direct replacement and keep rejected payloads as private audit artifacts, so `gateway.mode`, metadata, and auth are not silently clobbered. Fixes #64973 and #74890. Thanks @BunsDev.
 - Gateway/macOS: include Apple Silicon Homebrew bin and sbin directories in generated LaunchAgent service PATHs so `openclaw gateway restart` keeps Homebrew Node installs reachable. Fixes #79232. Thanks @BunsDev.
