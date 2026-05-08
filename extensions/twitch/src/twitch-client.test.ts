@@ -436,7 +436,6 @@ describe("TwitchClientManager", () => {
         id: "msg123",
       });
 
-      expect(capturedMessage).not.toBeNull();
       expect(capturedMessage?.username).toBe("testuser");
       expect(capturedMessage?.displayName).toBe("TestUser");
       expect(capturedMessage?.userId).toBe("12345");
