@@ -470,6 +470,38 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("drops a stale transcript path when a stale session rotates ids", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    dateOnlyFakeClockActive = true;
+    vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
+    const staleEntry = {
+      sessionId: "old-session-id",
+      sessionFile: "/tmp/openclaw/agents/main/sessions/old-session-id.jsonl",
+      updatedAt: 0,
+      sessionStartedAt: 0,
+    };
+    mockMainSessionEntry(staleEntry);
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": { ...staleEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await runMainAgent("test", "test-idem-stale-transcript");
+
+    expect(capturedEntry?.sessionId).not.toBe("old-session-id");
+    expect(capturedEntry?.sessionFile).toBeUndefined();
+  });
+
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
     const sessionKey = "agent:main:slack:group:C123";
     const existingEntry = buildExistingMainStoreEntry({

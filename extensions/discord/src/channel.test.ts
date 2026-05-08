@@ -5,6 +5,7 @@ import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-help
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
+import * as directoryLive from "./directory-live.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import * as sendModule from "./send.js";
 import { createDiscordSendReceipt } from "./send.receipt.js";
@@ -170,6 +171,33 @@ describe("discordPlugin outbound", () => {
     expect(parseExplicitTarget({ raw: "1470130713209602050" })).toEqual({
       to: "channel:1470130713209602050",
       chatType: "channel",
+    });
+  });
+
+  it("resolves Discord usernames through the messaging target resolver", async () => {
+    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
+      { kind: "user", id: "user:999", name: "Jane" } as const,
+    ]);
+    const resolveTarget = discordPlugin.messaging?.targetResolver?.resolveTarget;
+    if (!resolveTarget) {
+      throw new Error(
+        "Expected discordPlugin.messaging.targetResolver.resolveTarget to be defined",
+      );
+    }
+
+    await expect(
+      resolveTarget({
+        cfg: createCfg(),
+        accountId: "default",
+        input: "jane",
+        normalized: "channel:jane",
+        preferredKind: "user",
+      }),
+    ).resolves.toEqual({
+      to: "user:999",
+      kind: "user",
+      display: "jane",
+      source: "directory",
     });
   });
 
