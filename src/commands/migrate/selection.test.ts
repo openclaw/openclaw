@@ -87,15 +87,25 @@ function codexPluginConfigItem(pluginNames: string[]): MigrationItem {
 }
 
 function plan(items: MigrationItem[]): MigrationPlan {
+  const countStatus = (status: MigrationItem["status"]): number => {
+    let count = 0;
+    for (const item of items) {
+      if (item.status === status) {
+        count += 1;
+      }
+    }
+    return count;
+  };
+
   return {
     providerId: "codex",
     source: "/tmp/codex",
     summary: {
       total: items.length,
-      planned: items.filter((item) => item.status === "planned").length,
+      planned: countStatus("planned"),
       migrated: 0,
-      skipped: items.filter((item) => item.status === "skipped").length,
-      conflicts: items.filter((item) => item.status === "conflict").length,
+      skipped: countStatus("skipped"),
+      conflicts: countStatus("conflict"),
       errors: 0,
       sensitive: 0,
     },
