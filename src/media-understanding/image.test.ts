@@ -387,7 +387,12 @@ describe("describeImageWithModel", () => {
       throw new Error("Expected image completion call");
     }
     const [, context] = firstCall;
-    expect(context.messages[0]?.content).toHaveLength(1);
+    const userMessage = context.messages[0];
+    expect(userMessage).toBeDefined();
+    if (!userMessage) {
+      throw new Error("expected image completion user message");
+    }
+    expect(userMessage.content).toHaveLength(1);
   });
 
   it("places OpenRouter image prompts in user content before images", async () => {
@@ -432,7 +437,12 @@ describe("describeImageWithModel", () => {
     }
     const [, context] = firstCall;
     expect(context.systemPrompt).toBeUndefined();
-    expect(context.messages[0]?.content).toEqual([
+    const userMessage = context.messages[0];
+    expect(userMessage).toBeDefined();
+    if (!userMessage) {
+      throw new Error("expected OpenRouter image completion user message");
+    }
+    expect(userMessage.content).toEqual([
       { type: "text", text: "Describe the image." },
       expect.objectContaining({
         type: "image",
