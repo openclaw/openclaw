@@ -88,6 +88,10 @@ export class NodeRegistry {
       return null;
     }
     this.nodesByConn.delete(connId);
+    const current = this.nodesById.get(nodeId);
+    if (current?.connId !== connId) {
+      return nodeId;
+    }
     this.nodesById.delete(nodeId);
     for (const [id, pending] of this.pendingInvokes.entries()) {
       if (pending.nodeId !== nodeId) {
