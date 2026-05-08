@@ -412,10 +412,7 @@ describe("control UI routing", () => {
     expect(toggle.getAttribute("aria-label")).toEqual(expect.stringMatching(/\S/u));
 
     const nav = app.querySelector<HTMLElement>(".shell-nav");
-    expect(nav).not.toBeNull();
-    if (!nav) {
-      return;
-    }
+    expect(nav).toBeInstanceOf(HTMLElement);
 
     expect(shell.classList.contains("shell--nav-drawer-open")).toBe(false);
     toggle.click();
@@ -560,34 +557,32 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const initialContainer: HTMLElement | null = app.querySelector(".chat-thread");
-    expect(initialContainer).not.toBeNull();
-    if (!initialContainer) {
-      return;
-    }
-    initialContainer.style.maxHeight = "180px";
-    initialContainer.style.overflow = "auto";
+    const initialContainer = app.querySelector<HTMLElement>(".chat-thread");
+    expect(initialContainer).toBeInstanceOf(HTMLElement);
+    const initialThread = initialContainer!;
+    initialThread.style.maxHeight = "180px";
+    initialThread.style.overflow = "auto";
     let scrollTop = 0;
-    Object.defineProperty(initialContainer, "clientHeight", {
+    Object.defineProperty(initialThread, "clientHeight", {
       configurable: true,
       get: () => 180,
     });
-    Object.defineProperty(initialContainer, "scrollHeight", {
+    Object.defineProperty(initialThread, "scrollHeight", {
       configurable: true,
       get: () => 2400,
     });
-    Object.defineProperty(initialContainer, "scrollTop", {
+    Object.defineProperty(initialThread, "scrollTop", {
       configurable: true,
       get: () => scrollTop,
       set: (value: number) => {
         scrollTop = value;
       },
     });
-    initialContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
+    initialThread.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
       const top =
         typeof options === "number" ? (y ?? 0) : typeof options?.top === "number" ? options.top : 0;
       scrollTop = Math.max(0, Math.min(top, 2400 - 180));
-    }) as typeof initialContainer.scrollTo;
+    }) as typeof initialThread.scrollTo;
 
     app.chatMessages = Array.from({ length: 3 }, (_, index) => ({
       role: "assistant",
@@ -600,35 +595,33 @@ describe("control UI routing", () => {
       await nextFrame();
     }
 
-    const container = app.querySelector(".chat-thread");
-    expect(container).not.toBeNull();
-    if (!container) {
-      return;
-    }
+    const container = app.querySelector<HTMLElement>(".chat-thread");
+    expect(container).toBeInstanceOf(HTMLElement);
+    const thread = container!;
     let finalScrollTop = 0;
-    Object.defineProperty(container, "clientHeight", {
+    Object.defineProperty(thread, "clientHeight", {
       value: 180,
       configurable: true,
     });
-    Object.defineProperty(container, "scrollHeight", {
+    Object.defineProperty(thread, "scrollHeight", {
       value: 960,
       configurable: true,
     });
-    Object.defineProperty(container, "scrollTop", {
+    Object.defineProperty(thread, "scrollTop", {
       configurable: true,
       get: () => finalScrollTop,
       set: (value: number) => {
         finalScrollTop = value;
       },
     });
-    Object.defineProperty(container, "scrollTo", {
+    Object.defineProperty(thread, "scrollTo", {
       configurable: true,
       value: ({ top }: { top: number }) => {
         finalScrollTop = top;
       },
     });
-    const targetScrollTop = container.scrollHeight;
-    expect(targetScrollTop).toBeGreaterThan(container.clientHeight);
+    const targetScrollTop = thread.scrollHeight;
+    expect(targetScrollTop).toBeGreaterThan(thread.clientHeight);
     app.chatMessages = [
       ...app.chatMessages,
       {
@@ -639,12 +632,12 @@ describe("control UI routing", () => {
     ];
     await app.updateComplete;
     for (let i = 0; i < 10; i++) {
-      if (container.scrollTop === targetScrollTop) {
+      if (thread.scrollTop === targetScrollTop) {
         break;
       }
       await nextFrame();
     }
-    expect(container.scrollTop).toBe(targetScrollTop);
+    expect(thread.scrollTop).toBe(targetScrollTop);
   });
 
   it("hydrates hash tokens, restores same-tab refreshes, and clears after gateway changes", async () => {
