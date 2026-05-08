@@ -403,7 +403,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
 
 <AccordionGroup>
   <Accordion title="Attachments and media">
-    - inbound attachment ingestion is optional: `channels.imessage.includeAttachments`
+    - inbound attachment ingestion is **off by default** — set `channels.imessage.includeAttachments: true` to forward photos, voice memos, video, and other attachments to the agent. With it disabled, attachment-only iMessages are dropped before reaching the agent and may produce no `Inbound message` log line at all.
     - remote attachment paths can be fetched via SCP when `remoteHost` is set
     - attachment paths must match allowed roots:
       - `channels.imessage.attachmentRoots` (local)
