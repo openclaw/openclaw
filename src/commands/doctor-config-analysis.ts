@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ZodIssue } from "zod";
 import { CONFIG_PATH } from "../config/config.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { note } from "../terminal/note.js";
@@ -153,4 +154,33 @@ export function noteIncludeConfinementWarning(snapshot: {
     ].join("\n"),
     "Doctor warnings",
   );
+}
+
+export function collectStringModelFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
+  const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  if (defaultFallbacks.length === 0) {
+    return [];
+  }
+  const warnings: string[] = [];
+  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
+    if (!agent || typeof agent.model !== "string" || !agent.model.trim()) {
+      continue;
+    }
+    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
+    warnings.push(
+      [
+        `- agents.list[${id}].model is a plain string ("${agent.model}"). At runtime this clobbers agents.defaults.model.fallbacks (${defaultFallbacks.join(", ")}), leaving the agent with no fallbacks.`,
+        `- Fix: use object form { "primary": "${agent.model}", "fallbacks": [...] } or omit per-agent model to inherit defaults.`,
+      ].join("\n"),
+    );
+  }
+  return warnings;
+}
+
+export function noteStringModelFallbackClobberWarnings(cfg: OpenClawConfig): void {
+  const warnings = collectStringModelFallbackClobberWarnings(cfg);
+  if (warnings.length === 0) {
+    return;
+  }
+  note(warnings.join("\n"), "Doctor warnings");
 }

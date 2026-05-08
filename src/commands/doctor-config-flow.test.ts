@@ -1311,9 +1311,11 @@ vi.mock("./doctor-config-analysis.js", () => {
   }
 
   return {
+    collectStringModelFallbackClobberWarnings: vi.fn(() => []),
     formatConfigPath,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
+    noteStringModelFallbackClobberWarnings: vi.fn(),
     resolveConfigPathTarget,
     stripUnknownConfigKeys: vi.fn((config: Record<string, unknown>) => {
       const next = structuredClone(config);
