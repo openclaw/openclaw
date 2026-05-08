@@ -989,7 +989,7 @@ describe("/model chat UX", () => {
       initialModelLabel: "openai/gpt-4o",
     });
 
-    expect(sessionEntry.agentRuntimeOverride).toBe("pi");
+    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "Ignored unsupported runtime claude-cli for openai.",
       {

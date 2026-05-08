@@ -1202,6 +1202,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         models: {
           providers: {
             openai: {
+              baseUrl: "https://api.openai.com/v1",
               agentRuntime: { id: "codex" },
               models: [],
             },

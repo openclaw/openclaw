@@ -1,32 +1,21 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
-import {
-  isOpenAICodexProvider,
-  openAIProviderUsesCodexRuntimeByDefault,
-} from "../openai-codex-routing.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../pi-embedded-runner/run/types.js";
-import {
-  normalizeEmbeddedAgentRuntime,
-  type EmbeddedAgentRuntime,
-} from "../pi-embedded-runner/runtime.js";
 import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
 import { createPiAgentHarness } from "./builtin-pi.js";
+import { resolveAgentHarnessPolicy, type AgentHarnessPolicy } from "./policy.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type { AgentHarness, AgentHarnessSupport } from "./types.js";
 import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
 
 const log = createSubsystemLogger("agents/harness");
-
-type AgentHarnessPolicy = {
-  runtime: EmbeddedAgentRuntime;
-  runtimeSource?: "model" | "provider" | "implicit";
-};
+export { resolveAgentHarnessPolicy };
+export type { AgentHarnessPolicy };
 
 type AgentHarnessSelectionCandidate = {
   id: string;
@@ -260,45 +249,4 @@ export async function maybeCompactAgentHarnessSession(
     return undefined;
   }
   return harness.compact(params);
-}
-
-export function resolveAgentHarnessPolicy(params: {
-  provider?: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  env?: NodeJS.ProcessEnv;
-}): AgentHarnessPolicy {
-  const configured = resolveModelRuntimePolicy({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  const configuredRuntime = configured.policy?.id?.trim();
-  const runtimeSource = configured.source ?? "implicit";
-  const runtime =
-    configuredRuntime && configuredRuntime !== "default"
-      ? normalizeEmbeddedAgentRuntime(configuredRuntime)
-      : "auto";
-  if (
-    openAIProviderUsesCodexRuntimeByDefault({ provider: params.provider, config: params.config })
-  ) {
-    if (runtime === "auto") {
-      return { runtime: "codex", runtimeSource };
-    }
-    return { runtime, runtimeSource };
-  }
-  if (isOpenAICodexProvider(params.provider)) {
-    if (runtime === "auto") {
-      return { runtime: "codex", runtimeSource };
-    }
-    return { runtime, runtimeSource };
-  }
-  return {
-    runtime,
-    runtimeSource,
-  };
 }

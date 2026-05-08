@@ -115,6 +115,7 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
     models: {
       providers: {
         [provider]: {
+          baseUrl: "https://api.openai.com/v1",
           agentRuntime: { id: runtime },
           models: [],
         },

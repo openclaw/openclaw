@@ -885,7 +885,7 @@ export async function runPreparedReply(
         agentId,
         sessionKey: runtimePolicySessionKey,
       });
-  const resolveAcceptedAuthProfileProviders = (entry: SessionEntry | undefined) =>
+  const resolveAcceptedAuthProfileProviders = () =>
     agentHarnessPolicy
       ? listOpenAIAuthProfileProvidersForAgentRuntime({
           provider,
@@ -898,9 +898,7 @@ export async function runPreparedReply(
         resolveSessionAuthProfileOverride({
           cfg,
           provider,
-          acceptedProviderIds: resolveAcceptedAuthProfileProviders(
-            preparedSessionState.sessionEntry,
-          ),
+          acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
           agentDir,
           sessionEntry: preparedSessionState.sessionEntry,
           sessionStore,
@@ -959,9 +957,7 @@ export async function runPreparedReply(
           : await resolveSessionAuthProfileOverride({
               cfg,
               provider,
-              acceptedProviderIds: resolveAcceptedAuthProfileProviders(
-                preparedSessionState.sessionEntry,
-              ),
+              acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
               agentDir,
               sessionEntry: preparedSessionState.sessionEntry,
               sessionStore,

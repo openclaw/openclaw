@@ -280,6 +280,10 @@ export async function persistInlineDirectives(params: {
             },
           );
         } else if (runtimeOverride?.kind === "invalid") {
+          if (sessionEntry.agentRuntimeOverride) {
+            delete sessionEntry.agentRuntimeOverride;
+            updated = true;
+          }
           enqueueSystemEvent(
             `Ignored unsupported runtime ${runtimeOverride.runtime} for ${modelResolution.modelSelection.provider}.`,
             {

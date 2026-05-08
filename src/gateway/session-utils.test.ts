@@ -58,15 +58,19 @@ function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
 
 function createModelDefaultsConfig(params: {
   primary: string;
-  models?: Record<string, Record<string, never>>;
+  models?: Record<string, { agentRuntime?: { id: string } }>;
   agentRuntime?: { id: string };
 }): OpenClawConfig {
   return {
     agents: {
       defaults: {
         model: { primary: params.primary },
-        models: params.models,
-        agentRuntime: params.agentRuntime,
+        models: {
+          ...params.models,
+          ...(params.agentRuntime
+            ? { [params.primary]: { agentRuntime: params.agentRuntime } }
+            : {}),
+        },
       },
     },
   } as OpenClawConfig;
@@ -1049,9 +1053,8 @@ describe("gateway session utils", () => {
             primary: "openai/gpt-5.4",
             fallbacks: ["openai-codex/gpt-5.4"],
           },
-          agentRuntime: { id: "pi" },
         },
-        list: [{ id: "main", default: true, agentRuntime: { id: "claude-cli" } }],
+        list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
 
@@ -1064,8 +1067,8 @@ describe("gateway session utils", () => {
         fallbacks: ["openai-codex/gpt-5.4"],
       },
       agentRuntime: {
-        id: "claude-cli",
-        source: "agent",
+        id: "codex",
+        source: "implicit",
       },
     });
   });
@@ -1073,9 +1076,18 @@ describe("gateway session utils", () => {
   test("listAgentsForGateway reports explicit plugin runtime metadata", () => {
     const cfg = {
       session: { mainKey: "main" },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "codex" },
+            models: [],
+          },
+        },
+      },
       agents: {
         defaults: {
-          agentRuntime: { id: "codex" },
+          model: { primary: "openai/gpt-5.4" },
         },
         list: [{ id: "main", default: true }],
       },
@@ -1086,7 +1098,7 @@ describe("gateway session utils", () => {
       id: "main",
       agentRuntime: {
         id: "codex",
-        source: "defaults",
+        source: "provider",
       },
     });
   });
@@ -1312,7 +1324,7 @@ describe("listSessionsFromStore selected model display", () => {
           lastMessagePreview: "last 0",
         }),
       );
-      expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
+      expect(listed.sessions[0]?.agentRuntime).toEqual({ id: "codex", source: "implicit" });
       expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
       expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
       expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
@@ -1441,7 +1453,7 @@ describe("listSessionsFromStore selected model display", () => {
     expect(result.sessions[0]?.model).toBe("claude-opus-4-7");
     expect(result.sessions[0]?.agentRuntime).toEqual({
       id: "claude-cli",
-      source: "defaults",
+      source: "model",
     });
   });
 

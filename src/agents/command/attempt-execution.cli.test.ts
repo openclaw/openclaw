@@ -1000,6 +1000,7 @@ describe("embedded attempt harness pinning", () => {
         models: {
           providers: {
             codex: {
+              baseUrl: "https://api.openai.com/v1",
               agentRuntime: { id: "codex" },
               models: [],
             },
@@ -1206,6 +1207,7 @@ describe("embedded attempt harness pinning", () => {
         models: {
           providers: {
             openai: {
+              baseUrl: "https://api.openai.com/v1",
               agentRuntime: { id: "pi" },
               models: [],
             },
