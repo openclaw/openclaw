@@ -405,6 +405,18 @@ describe("commands registry", () => {
   it("keeps unregistered dock underscore aliases unchanged", () => {
     expect(normalizeCommandBody("/dock_telegram")).toBe("/dock_telegram");
   });
+
+  it("preserves multiline args after command head — regression for #79155", () => {
+    expect(normalizeCommandBody("/btw\nfirst line\nsecond line")).toBe(
+      "/btw\nfirst line\nsecond line",
+    );
+    expect(normalizeCommandBody("/help\nline 1\nline 2\nline 3")).toBe(
+      "/help\nline 1\nline 2\nline 3",
+    );
+    expect(
+      normalizeCommandBody("/help@openclaw\nmultiline args", { botUsername: "openclaw" }),
+    ).toBe("/help\nmultiline args");
+  });
 });
 
 describe("commands registry args", () => {

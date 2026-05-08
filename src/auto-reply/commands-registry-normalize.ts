@@ -57,6 +57,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
 
   const newline = trimmed.indexOf("\n");
   const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
+  const multilineTail = newline === -1 ? "" : trimmed.slice(newline);
 
   const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
   const normalized = colonMatch
@@ -80,24 +81,27 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   const textAliasMap = getTextAliasMap();
   const exact = textAliasMap.get(lowered);
   if (exact) {
-    return exact.canonical;
+    return exact.canonical + multilineTail;
   }
 
   const tokenMatch = commandBody.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
   if (!tokenMatch) {
-    return commandBody;
+    return commandBody + multilineTail;
   }
   const [, token, rest] = tokenMatch;
   const tokenKey = `/${normalizeLowercaseStringOrEmpty(token)}`;
   const tokenSpec = textAliasMap.get(tokenKey);
   if (!tokenSpec) {
-    return commandBody;
+    return commandBody + multilineTail;
   }
   if (rest && !tokenSpec.acceptsArgs) {
-    return commandBody;
+    return commandBody + multilineTail;
   }
   const normalizedRest = rest?.trimStart();
-  return normalizedRest ? `${tokenSpec.canonical} ${normalizedRest}` : tokenSpec.canonical;
+  const resolvedHead = normalizedRest
+    ? `${tokenSpec.canonical} ${normalizedRest}`
+    : tokenSpec.canonical;
+  return resolvedHead + multilineTail;
 }
 
 export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
