@@ -43,6 +43,7 @@ title: "Features"
 
 - Embedded agent runtime with tool streaming
 - Multi-agent routing with isolated sessions per workspace or sender
+- Workspace capabilities: optional Markdown descriptors for local workspace integrations (Bridge, Mail, CAD, etc.)
 - Sessions: direct chats collapse into shared `main`; groups are isolated
 - Streaming and chunking for long responses
 

@@ -7,10 +7,11 @@ Skills own workflows; root owns hard policy and routing.
 
 - Repo: `https://github.com/openclaw/openclaw`
 - Replies: repo-root refs only: `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
-- Docs/user-visible work: `pnpm docs:list`, then read relevant docs only.
-- Fix/triage answers need source, tests, current/shipped behavior, and dependency contract proof.
-- Dependency-backed behavior: read upstream docs/source/types first. No API/default/error/timing guesses.
-- Live-verify when feasible. Never print secrets.
+- Run docs list first: `pnpm docs:list` if available; read relevant docs only.
+- Capability Discovery: Check `capabilities/index.md` for local workspace integrations (Bridge, Mail, CAD, etc.) before concluding a task is unsupported.
+- High-confidence answers only when fixing/triaging: verify source, tests, shipped/current behavior, and dependency contracts before deciding.
+- Dependency-backed behavior: read upstream dependency docs/source/types first. Do not assume APIs, defaults, errors, timing, or runtime behavior.
+- Live-verify when feasible. Check env/`~/.profile` for keys before assuming live tests are blocked; keep secret output redacted.
 - Missing deps: `pnpm install`, retry once, then report first actionable error.
 - CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review.
 - Product/docs/UI/changelog wording: "plugin/plugins"; `extensions/` is internal.

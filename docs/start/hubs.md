@@ -177,6 +177,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Skills](/tools/skills)
 - [ClawHub](/clawhub)
 - [Skills config](/tools/skills-config)
+- [Workspace capabilities](/concepts/workspace-capabilities)
 - [Default AGENTS](/reference/AGENTS.default)
 - [Templates: AGENTS](/reference/templates/AGENTS)
 - [Templates: BOOTSTRAP](/reference/templates/BOOTSTRAP)

@@ -277,6 +277,13 @@ openclaw memory search "query"  # Search from the command line
 openclaw memory index --force   # Rebuild the index
 ```
 
+## Memory vs. Capabilities
+
+- **Memory (`MEMORY.md`, `memory/*.md`):** Durable facts, preferences, and observations (e.g., "I like TypeScript").
+- **Capabilities (`capabilities/*.md`):** Durable operating procedures and local integrations (e.g., "How to use the Windows Bridge").
+
+Keep facts in memory and procedures in capabilities. See [Workspace capabilities](/concepts/workspace-capabilities).
+
 ## Further reading
 
 - [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.

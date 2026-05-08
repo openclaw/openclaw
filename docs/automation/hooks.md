@@ -245,7 +245,7 @@ Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YY
 
 Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
 
-For workspace-local procedures and bridge documentation, use [Workspace capabilities](/concepts/workspace-capabilities). Capability descriptors are not recognized bootstrap basenames, so link them from `TOOLS.md` or keep runtime auto-discovery as an explicit follow-up.
+For workspace-local procedures and bridge documentation, use [Workspace capabilities](/concepts/workspace-capabilities). Capability descriptors are not recognized bootstrap basenames, so follow the **Discovery Convention**: keep a `capabilities/index.md` index and link it from `TOOLS.md` or `AGENTS.md` so agents can discover local capability paths autonomously.
 
 <a id="command-logger"></a>
 
