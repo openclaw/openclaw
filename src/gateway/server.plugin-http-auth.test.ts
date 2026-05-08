@@ -97,8 +97,10 @@ const withPluginGatewayServer = (params: Parameters<typeof withGatewayServer>[0]
 const PROBE_CASES = [
   { path: "/health", status: "live" },
   { path: "/healthz", status: "live" },
+  { path: "/health/live", status: "live" },
   { path: "/ready", status: "ready" },
   { path: "/readyz", status: "ready" },
+  { path: "/health/ready", status: "ready" },
 ] as const;
 
 async function expectProbeRoutesHealthy(server: Parameters<typeof sendRequest>[0]) {

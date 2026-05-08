@@ -34,7 +34,7 @@ describe("gateway OpenAI-compatible disabled HTTP routes", () => {
 });
 
 describe("gateway probe endpoints", () => {
-  it("returns detailed readiness payload for local /ready requests", async () => {
+  it("returns detailed readiness payload for local /ready and /health/ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: true,
       failing: [],
@@ -46,12 +46,70 @@ describe("gateway probe endpoints", () => {
       resolvedAuth: AUTH_NONE,
       overrides: { getReadiness },
       run: async (server) => {
-        const req = createRequest({ path: "/ready" });
+        for (const path of ["/ready", "/health/ready"]) {
+          const req = createRequest({ path });
+          const { res, getBody } = createResponse();
+          await dispatchRequest(server, req, res);
+
+          expect(res.statusCode, path).toBe(200);
+          expect(JSON.parse(getBody()), path).toEqual({
+            ready: true,
+            failing: [],
+            uptimeMs: 45_000,
+          });
+        }
+      },
+    });
+  });
+
+  it("keeps /health/live as a cheap liveness alias", async () => {
+    await withGatewayServer({
+      prefix: "probe-health-live",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const req = createRequest({ path: "/health/live" });
         const { res, getBody } = createResponse();
         await dispatchRequest(server, req, res);
 
         expect(res.statusCode).toBe(200);
-        expect(JSON.parse(getBody())).toEqual({ ready: true, failing: [], uptimeMs: 45_000 });
+        expect(JSON.parse(getBody())).toEqual({ ok: true, status: "live" });
+      },
+    });
+  });
+
+  it("returns event-loop performance details for local /health/perf requests", async () => {
+    const eventLoop = {
+      degraded: true,
+      reasons: ["cpu"],
+      intervalMs: 1_250,
+      delayP99Ms: 12.3,
+      delayMaxMs: 24.5,
+      utilization: 0.25,
+      cpuCoreRatio: 0.91,
+    } as const;
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["event-loop"],
+      uptimeMs: 9_000,
+      eventLoop: eventLoop as never,
+    });
+
+    await withGatewayServer({
+      prefix: "probe-health-perf",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const req = createRequest({ path: "/health/perf" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({
+          perf: true,
+          ready: false,
+          eventLoop,
+          uptimeMs: 9_000,
+        });
       },
     });
   });

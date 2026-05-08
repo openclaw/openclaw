@@ -23,8 +23,14 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "not-control-ui" as const },
       },
       {
+        name: "keeps nested health probes outside the SPA catch-all",
+        pathname: "/health/perf",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
         name: "keeps readiness probes outside the SPA catch-all",
-        pathname: "/ready",
+        pathname: "/health/ready",
         method: "HEAD",
         expected: { kind: "not-control-ui" as const },
       },

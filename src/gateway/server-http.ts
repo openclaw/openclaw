@@ -154,11 +154,14 @@ function getPluginRouteRuntimeScopesModule() {
   return pluginRouteRuntimeScopesModulePromise;
 }
 
-const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
+const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready" | "perf">([
   ["/health", "live"],
   ["/healthz", "live"],
+  ["/health/live", "live"],
   ["/ready", "ready"],
   ["/readyz", "ready"],
+  ["/health/ready", "ready"],
+  ["/health/perf", "perf"],
 ]);
 const pluginGatewayAuthBypassPathsCache = new WeakMap<
   OpenClawConfig,
@@ -309,6 +312,30 @@ async function handleGatewayProbeRequest(
       body = JSON.stringify(
         includeDetails ? { ready: false, failing: ["internal"], uptimeMs: 0 } : { ready: false },
       );
+    }
+  } else if (status === "perf" && getReadiness) {
+    const includeDetails = await canRevealReadinessDetails({
+      req,
+      resolvedAuth,
+      trustedProxies,
+      allowRealIpFallback,
+    });
+    try {
+      const result = getReadiness();
+      statusCode = 200;
+      body = JSON.stringify(
+        includeDetails
+          ? {
+              perf: true,
+              ready: result.ready,
+              eventLoop: result.eventLoop ?? null,
+              uptimeMs: result.uptimeMs,
+            }
+          : { perf: true },
+      );
+    } catch {
+      statusCode = 503;
+      body = JSON.stringify(includeDetails ? { perf: false, eventLoop: null } : { perf: false });
     }
   } else {
     statusCode = 200;
