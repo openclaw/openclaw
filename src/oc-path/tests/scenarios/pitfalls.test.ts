@@ -161,7 +161,6 @@ describe("wave-23 pitfalls — sentinels & collisions", () => {
       ast,
       parseOcPath("oc://config/channels.telegram.groups.-5028303500.requireMention"),
     );
-    expect(m).not.toBeNull();
     expect(m?.kind).toBe("leaf");
     if (m?.kind === "leaf") {
       expect(m.valueText).toBe("false");
