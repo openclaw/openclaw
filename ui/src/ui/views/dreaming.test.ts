@@ -197,12 +197,20 @@ function renderInto(props: DreamingProps): HTMLDivElement {
   return container;
 }
 
+function expectElement(container: Element, selector: string): Element {
+  const element = container.querySelector(selector);
+  expect(element).toBeInstanceOf(Element);
+  if (!(element instanceof Element)) {
+    throw new Error(`Expected element matching ${selector}`);
+  }
+  return element;
+}
+
 describe("dreaming view", () => {
   it("renders the active dream scene chrome and status", () => {
     const container = renderInto(buildProps({ dreamingOf: "reindexing old chats\u2026" }));
 
-    const svg = container.querySelector(".dreams__lobster svg");
-    expect(svg).not.toBeNull();
+    expectElement(container, ".dreams__lobster svg");
 
     const zs = container.querySelectorAll(".dreams__z");
     expect(zs.length).toBe(3);
@@ -210,7 +218,7 @@ describe("dreaming view", () => {
     const stars = container.querySelectorAll(".dreams__star");
     expect(stars.length).toBe(12);
 
-    expect(container.querySelector(".dreams__moon")).not.toBeNull();
+    expectElement(container, ".dreams__moon");
 
     const phases = [...container.querySelectorAll(".dreams__phase-name")].map((node) =>
       node.textContent?.trim(),
@@ -225,7 +233,7 @@ describe("dreaming view", () => {
     expect(buttons).not.toContain("Backfill");
     expect(buttons).not.toContain("Reset");
     expect(buttons).not.toContain("Clear Replayed");
-    expect(container.querySelector(".dreams__bubble")).not.toBeNull();
+    expectElement(container, ".dreams__bubble");
     const text = container.querySelector(".dreams__bubble-text");
     expect(text?.textContent).toBe("reindexing old chats\u2026");
     const label = container.querySelector(".dreams__status-label");
@@ -243,7 +251,7 @@ describe("dreaming view", () => {
     const idleContainer = renderInto(buildProps({ active: false }));
     expect(idleContainer.querySelector(".dreams__bubble")).toBeNull();
     expect(idleContainer.querySelector(".dreams__status-label")?.textContent).toBe("Dreaming Idle");
-    expect(idleContainer.querySelector(".dreams--idle")).not.toBeNull();
+    expectElement(idleContainer, ".dreams--idle");
 
     const unknownPhaseContainer = renderInto(buildProps({ phases: undefined }));
     const statuses = [...unknownPhaseContainer.querySelectorAll(".dreams__phase-next")].map(
@@ -375,8 +383,7 @@ describe("dreaming view", () => {
     const title = container.querySelector(".dreams-diary__title");
     expect(title?.textContent).toContain("Dream Diary");
 
-    const entry = container.querySelector(".dreams-diary__entry");
-    expect(entry).not.toBeNull();
+    expectElement(container, ".dreams-diary__entry");
     const date = container.querySelector(".dreams-diary__date");
     expect(date?.textContent).toContain("April 5, 2026");
     const body = container.querySelector(".dreams-diary__para");
