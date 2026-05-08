@@ -394,8 +394,6 @@ describe("resolveCodexCliBin", () => {
   });
 
   it("returns null or a valid path (never throws)", () => {
-    // The function should never throw regardless of environment
-    expect(() => resolveCodexCliBin()).not.toThrow();
     const result = resolveCodexCliBin();
     expect(result === null || typeof result === "string").toBe(true);
   });
