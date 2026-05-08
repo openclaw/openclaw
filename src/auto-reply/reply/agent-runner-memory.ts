@@ -369,11 +369,11 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   if (!sessionId) {
     return undefined;
   }
-  const fallbackSessionFile = normalizeOptionalString(params.sessionFile);
+  const fallbackTranscriptLocator = normalizeOptionalString(params.sessionFile);
   const sessionEntryForTranscript =
-    params.sessionEntry?.sessionFile || !fallbackSessionFile
+    params.sessionEntry?.sessionFile || !fallbackTranscriptLocator
       ? params.sessionEntry
-      : ({ ...params.sessionEntry, sessionFile: fallbackSessionFile } as SessionEntry);
+      : ({ ...params.sessionEntry, sessionFile: fallbackTranscriptLocator } as SessionEntry);
   try {
     const snapshot = await readSessionLogSnapshot({
       sessionId,

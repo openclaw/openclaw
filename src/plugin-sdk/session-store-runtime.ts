@@ -2,7 +2,7 @@
 
 export { resolveSessionRowEntry } from "../config/sessions/store-entry.js";
 export { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
-export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
+export { resolveAndPersistSessionTranscriptLocator } from "../config/sessions/session-locator.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";

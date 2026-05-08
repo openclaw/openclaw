@@ -8,7 +8,7 @@ import {
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import { createSqliteSessionTranscriptLocator } from "./paths.js";
-import { resolveAndPersistSessionFile } from "./session-file.js";
+import { resolveAndPersistSessionTranscriptLocator } from "./session-locator.js";
 import { getSessionEntry, normalizeSessionRowKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
@@ -98,7 +98,7 @@ function parseAssistantTranscriptEventText(event: unknown): AssistantTranscriptT
   };
 }
 
-export async function resolveSessionTranscriptFile(params: {
+export async function resolveSessionTranscriptTarget(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
@@ -109,22 +109,22 @@ export async function resolveSessionTranscriptFile(params: {
   let sessionEntry = params.sessionEntry;
 
   const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
-  const fallbackSessionFile = !sessionEntry?.sessionFile
+  const fallbackTranscriptLocator = !sessionEntry?.sessionFile
     ? createSqliteSessionTranscriptLocator({
         sessionId: params.sessionId,
         agentId: params.agentId,
         topicId: params.threadId ?? threadIdFromSessionKey,
       })
     : undefined;
-  const resolvedSessionFile = await resolveAndPersistSessionFile({
+  const resolvedTranscript = await resolveAndPersistSessionTranscriptLocator({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry,
     agentId: params.agentId,
-    fallbackSessionFile,
+    fallbackTranscriptLocator,
   });
-  const sessionFile = resolvedSessionFile.sessionFile;
-  sessionEntry = resolvedSessionFile.sessionEntry;
+  const sessionFile = resolvedTranscript.transcriptLocator;
+  sessionEntry = resolvedTranscript.sessionEntry;
   if (params.sessionStore) {
     params.sessionStore[params.sessionKey] = sessionEntry;
   }
@@ -247,13 +247,13 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 
   let sessionFile: string;
   try {
-    const resolvedSessionFile = await resolveAndPersistSessionFile({
+    const resolvedTranscript = await resolveAndPersistSessionTranscriptLocator({
       sessionId: entry.sessionId,
       sessionKey: normalizedKey,
       sessionEntry: entry,
       agentId,
     });
-    sessionFile = resolvedSessionFile.sessionFile;
+    sessionFile = resolvedTranscript.transcriptLocator;
   } catch (err) {
     return {
       ok: false,

@@ -3,13 +3,13 @@ import { createSqliteSessionTranscriptLocator, isSqliteSessionTranscriptLocator 
 import { getSessionEntry, upsertSessionEntry } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
-export async function resolveAndPersistSessionFile(params: {
+export async function resolveAndPersistSessionTranscriptLocator(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry?: SessionEntry;
   agentId?: string;
-  fallbackSessionFile?: string;
-}): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
+  fallbackTranscriptLocator?: string;
+}): Promise<{ transcriptLocator: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey } = params;
   const now = Date.now();
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
@@ -25,26 +25,26 @@ export async function resolveAndPersistSessionFile(params: {
   const persistedSessionFile = baseEntry.sessionFile?.trim();
   const shouldReusePersistedSessionFile =
     baseEntry.sessionId === sessionId && isSqliteSessionTranscriptLocator(persistedSessionFile);
-  const fallbackSessionFile = params.fallbackSessionFile?.trim();
-  const sessionFile = shouldReusePersistedSessionFile
+  const fallbackTranscriptLocator = params.fallbackTranscriptLocator?.trim();
+  const transcriptLocator = shouldReusePersistedSessionFile
     ? persistedSessionFile!
-    : fallbackSessionFile && isSqliteSessionTranscriptLocator(fallbackSessionFile)
-      ? fallbackSessionFile
+    : fallbackTranscriptLocator && isSqliteSessionTranscriptLocator(fallbackTranscriptLocator)
+      ? fallbackTranscriptLocator
       : createSqliteSessionTranscriptLocator({ agentId, sessionId });
   const persistedEntry: SessionEntry = {
     ...baseEntry,
     sessionId,
     updatedAt: now,
     sessionStartedAt: baseEntry.sessionId === sessionId ? (baseEntry.sessionStartedAt ?? now) : now,
-    sessionFile,
+    sessionFile: transcriptLocator,
   };
-  if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {
+  if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== transcriptLocator) {
     upsertSessionEntry({
       agentId,
       sessionKey,
       entry: persistedEntry,
     });
-    return { sessionFile, sessionEntry: persistedEntry };
+    return { transcriptLocator, sessionEntry: persistedEntry };
   }
-  return { sessionFile, sessionEntry: persistedEntry };
+  return { transcriptLocator, sessionEntry: persistedEntry };
 }

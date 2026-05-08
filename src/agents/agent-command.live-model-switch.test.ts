@@ -186,7 +186,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
-  resolveSessionTranscriptFile: async () => ({
+  resolveSessionTranscriptTarget: async () => ({
     sessionFile: "/tmp/session.jsonl",
     sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
   }),

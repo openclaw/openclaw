@@ -19,8 +19,8 @@ import {
   resolveThreadFlag,
   type SessionFreshness,
 } from "../../config/sessions/reset.js";
-import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { resolveAndPersistSessionTranscriptLocator } from "../../config/sessions/session-locator.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -725,28 +725,28 @@ export async function initSessionState(params: {
         sessionEntry.sessionId = forked.sessionId;
         sessionEntry.sessionFile = forked.sessionFile;
         sessionEntry.forkedFromParent = true;
-        log.warn(`forked session created: file=${forked.sessionFile}`);
+        log.warn(`forked session created: transcript=${forked.sessionFile}`);
       }
     }
   }
   const threadIdFromSessionKey = parseSessionThreadInfoFast(
     sessionCtxForState.SessionKey ?? sessionKey,
   ).threadId;
-  const fallbackSessionFile = !sessionEntry.sessionFile
+  const fallbackTranscriptLocator = !sessionEntry.sessionFile
     ? createSqliteSessionTranscriptLocator({
         sessionId: sessionEntry.sessionId,
         agentId,
         topicId: ctx.MessageThreadId ?? threadIdFromSessionKey,
       })
     : undefined;
-  const resolvedSessionFile = await resolveAndPersistSessionFile({
+  const resolvedTranscript = await resolveAndPersistSessionTranscriptLocator({
     sessionId: sessionEntry.sessionId,
     sessionKey,
     sessionEntry,
     agentId,
-    fallbackSessionFile,
+    fallbackTranscriptLocator,
   });
-  sessionEntry = resolvedSessionFile.sessionEntry;
+  sessionEntry = resolvedTranscript.sessionEntry;
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
