@@ -442,10 +442,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           ? params.dispatcher.sendBlockReply(ttsPayload)
           : params.dispatcher.sendFinalReply(ttsPayload);
 
-    // Bind-aware fallback: when the parent dispatcher is torn down (returns
-    // false), route the payload to any active bound conversations via
-    // routeReply. This handles the spawn-child case where the parent's run
-    // ends while the child is still emitting events (catalog #1 / #15).
+    // Bind-aware fallback: when the parent dispatcher cannot accept the payload
+    // (returns false, e.g., because the payload normalizes to empty), route
+    // the payload to any active bound conversations via routeReply. This
+    // handles the spawn-child case where the parent's run ends while the
+    // child is still emitting events (catalog #1 / #15).
     if (!delivered && deliverySessionKey) {
       try {
         const { deliverViaSessionBindings } = await loadBindAwareDispatch();
