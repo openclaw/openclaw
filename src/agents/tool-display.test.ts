@@ -104,6 +104,18 @@ describe("tool display details", () => {
     expect(detail).toContain(".openclaw/workspace)");
   });
 
+  it("summarizes bash commands with the same command explainer", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "bash",
+        args: { command: "sed -n '1,80p' extensions/discord/src/draft-stream.ts" },
+        detailMode: "explain",
+      }),
+    );
+
+    expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
+  });
+
   it("moves cd path to context suffix and appends raw command", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
