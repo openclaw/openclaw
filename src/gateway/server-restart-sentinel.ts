@@ -1,4 +1,5 @@
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ChatType } from "../channels/chat-type.js";
@@ -27,6 +28,7 @@ import {
 import {
   drainPendingSessionDeliveries,
   enqueueSessionDelivery,
+  loadPendingSessionDelivery,
   recoverPendingSessionDeliveries,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
@@ -49,7 +51,13 @@ import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 const log = createSubsystemLogger("gateway/restart-sentinel");
 const OUTBOUND_RETRY_DELAY_MS = 1_000;
 const OUTBOUND_MAX_ATTEMPTS = 45;
+const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
+const RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS = 5;
+const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
+  "restart continuation deferred because previous run is still shutting down";
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
+
+type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
 
 function cloneRestartSentinelPayload(
   payload: RestartSentinelPayload | null,
@@ -203,6 +211,23 @@ function resolveRestartContinuationOutboundPayload(params: {
   return params.replyToId ? { ...payload, replyToId: params.replyToId } : payload;
 }
 
+function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
+  return (
+    typeof payload.text === "string" && payload.text.trim() === REPLY_RUN_STILL_SHUTTING_DOWN_TEXT
+  );
+}
+
+function isRestartContinuationBusyRetry(entry: QueuedSessionDelivery | null): boolean {
+  return entry?.lastError === RESTART_CONTINUATION_BUSY_RETRY_ERROR;
+}
+
+function resolveQueuedRestartContinuationMessageId(entry: QueuedAgentTurnSessionDelivery): string {
+  if (isRestartContinuationBusyRetry(entry) && entry.retryCount > 0) {
+    return `${entry.messageId}:retry:${entry.retryCount}`;
+  }
+  return entry.messageId;
+}
+
 function resolveQueuedSessionDeliveryContext(entry: QueuedSessionDelivery):
   | {
       channel?: string;
@@ -270,7 +295,7 @@ async function deliverQueuedSessionDelivery(params: {
   }
 
   const route = params.entry.route;
-  const messageId = params.entry.messageId;
+  const messageId = resolveQueuedRestartContinuationMessageId(params.entry);
   const userMessage = params.entry.message.trim();
   const agentId = resolveSessionAgentId({
     sessionKey: canonicalKey,
@@ -320,12 +345,16 @@ async function deliverQueuedSessionDelivery(params: {
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
-      preparePayload: (payload) =>
-        resolveRestartContinuationOutboundPayload({
+      preparePayload: (payload) => {
+        if (isRestartContinuationBusyPayload(payload)) {
+          throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
+        }
+        return resolveRestartContinuationOutboundPayload({
           payload,
           messageId,
           replyToId: route.replyToId,
-        }),
+        });
+      },
       durable: (_payload, info) =>
         info.kind === "final"
           ? {
@@ -421,16 +450,30 @@ async function drainRestartContinuationQueue(params: {
   entryId: string;
   log: SessionDeliveryRecoveryLogger;
 }) {
-  await drainPendingSessionDeliveries({
-    drainKey: `restart-continuation:${params.entryId}`,
-    logLabel: "restart continuation",
-    log: params.log,
-    deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
-    selectEntry: (entry) => ({
-      match: entry.id === params.entryId,
-      bypassBackoff: true,
-    }),
-  });
+  for (let attempt = 1; attempt <= RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS; attempt += 1) {
+    await drainPendingSessionDeliveries({
+      drainKey: `restart-continuation:${params.entryId}`,
+      logLabel: "restart continuation",
+      log: params.log,
+      deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
+      selectEntry: (entry) => ({
+        match: entry.id === params.entryId,
+        bypassBackoff: true,
+      }),
+    });
+
+    const queued = await loadPendingSessionDelivery(params.entryId);
+    if (!isRestartContinuationBusyRetry(queued)) {
+      return;
+    }
+    if (attempt >= RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS) {
+      return;
+    }
+    params.log.info(
+      `restart continuation: entry ${params.entryId} still waiting for the previous run to clear; retrying in ${RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS}ms`,
+    );
+    await waitForOutboundRetry(RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS);
+  }
 }
 
 export async function recoverPendingRestartContinuationDeliveries(params: {

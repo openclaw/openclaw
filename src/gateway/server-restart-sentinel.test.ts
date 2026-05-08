@@ -78,6 +78,7 @@ const mocks = vi.hoisted(() => {
       state.queuedSessionDelivery = payload;
       return "session-delivery-1";
     }),
+    loadPendingSessionDelivery: vi.fn(async () => state.queuedSessionDelivery),
     drainPendingSessionDeliveries: vi.fn(
       async (params: {
         logLabel: string;
@@ -99,7 +100,13 @@ const mocks = vi.hoisted(() => {
         }
         try {
           await params.deliver(entry);
+          state.queuedSessionDelivery = null;
         } catch (err) {
+          state.queuedSessionDelivery = {
+            ...entry,
+            retryCount: entry.retryCount + 1,
+            lastError: err instanceof Error ? err.message : String(err),
+          };
           params.log.warn(`${params.logLabel}: retry failed for entry ${entry.id}: ${String(err)}`);
         }
       },
@@ -157,6 +164,7 @@ vi.mock("../infra/restart-sentinel.js", () => ({
 
 vi.mock("../infra/session-delivery-queue.js", () => ({
   enqueueSessionDelivery: mocks.enqueueSessionDelivery,
+  loadPendingSessionDelivery: mocks.loadPendingSessionDelivery,
   drainPendingSessionDeliveries: mocks.drainPendingSessionDeliveries,
   recoverPendingSessionDeliveries: mocks.recoverPendingSessionDeliveries,
 }));
@@ -320,6 +328,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.enqueueSystemEvent.mockClear();
     mocks.requestHeartbeat.mockClear();
     mocks.enqueueSessionDelivery.mockClear();
+    mocks.loadPendingSessionDelivery.mockClear();
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
     mocks.removeRestartSentinelFile.mockClear();
@@ -987,6 +996,71 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.stringContaining("retry failed for entry session-delivery-1: Error: route failed"),
+    );
+  });
+
+  it("retries restart continuations when the previous run is still shutting down", async () => {
+    const busyReply = "⚠️ Previous run is still shutting down. Please try again in a moment.";
+    mocks.readRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mocks.recordInboundSessionAndDispatchReply
+      .mockImplementationOnce(async (params) => {
+        await params.deliver({ text: busyReply });
+      })
+      .mockImplementationOnce(async (params) => {
+        await params.deliver({
+          text: "done",
+          replyToId: String(params.ctxPayload.MessageSid),
+        });
+      });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(2);
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        ctxPayload: expect.objectContaining({
+          MessageSid: "restart-sentinel:agent:main:main:agentTurn:123",
+        }),
+      }),
+    );
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        ctxPayload: expect.objectContaining({
+          MessageSid: "restart-sentinel:agent:main:main:agentTurn:123:retry:1",
+        }),
+      }),
+    );
+    const deliveredBusyReply = (
+      mocks.deliverOutboundPayloads.mock.calls as unknown as Array<
+        [{ payloads?: Array<{ text?: string }> }]
+      >
+    ).some(([call]) => call.payloads?.some((payload) => payload.text === busyReply) === true);
+    expect(deliveredBusyReply).toBe(false);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "done" }],
+      }),
+    );
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "retry failed for entry session-delivery-1: Error: restart continuation deferred because previous run is still shutting down",
+      ),
     );
   });
 
