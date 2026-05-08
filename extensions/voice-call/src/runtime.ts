@@ -76,9 +76,6 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "Be accurate, brief, and speakable.",
 ].join(" ");
 
-/** Background consult runs are not time-critical — use 0 to disable the agent timeout. */
-const BACKGROUND_CONSULT_TIMEOUT_MS = 0;
-
 let telnyxProviderPromise: Promise<TelnyxProviderModule> | undefined;
 let twilioProviderPromise: Promise<TwilioProviderModule> | undefined;
 let plivoProviderPromise: Promise<PlivoProviderModule> | undefined;
@@ -430,7 +427,7 @@ export async function createVoiceCallRuntime(params: {
             );
             const consultPromise = consultRealtimeVoiceAgent({
               ...consultParams,
-              timeoutMs: BACKGROUND_CONSULT_TIMEOUT_MS,
+              timeoutMs: undefined,
             });
             consultPromise
               .then((result: { text: string }) => {
@@ -465,7 +462,7 @@ export async function createVoiceCallRuntime(params: {
             );
             const consultPromise = consultRealtimeVoiceAgent({
               ...consultParams,
-              timeoutMs: BACKGROUND_CONSULT_TIMEOUT_MS,
+              timeoutMs: undefined,
             });
             const result = await Promise.race([
               consultPromise.then((r: { text: string }) => ({ kind: "result" as const, value: r })),
