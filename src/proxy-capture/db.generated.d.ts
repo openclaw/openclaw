@@ -13,7 +13,7 @@ export interface CaptureBlobs {
   blob_id: string;
   content_type: string | null;
   created_at: number;
-  data: Buffer;
+  data: Uint8Array;
   encoding: string;
   sha256: string;
   size_bytes: number;

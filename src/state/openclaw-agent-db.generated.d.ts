@@ -17,7 +17,7 @@ export interface AcpParentStreamEvents {
 }
 
 export interface CacheEntries {
-  blob: Buffer | null;
+  blob: Uint8Array | null;
   expires_at: number | null;
   key: string;
   scope: string;
@@ -33,7 +33,7 @@ export interface Kv {
 }
 
 export interface RunArtifacts {
-  blob: Buffer | null;
+  blob: Uint8Array | null;
   created_at: number;
   kind: string;
   metadata_json: string;
@@ -54,7 +54,7 @@ export interface SessionEntries {
 
 export interface ToolArtifacts {
   artifact_id: string;
-  blob: Buffer | null;
+  blob: Uint8Array | null;
   created_at: number;
   kind: string;
   metadata_json: string;
@@ -98,7 +98,7 @@ export interface TranscriptSnapshots {
 }
 
 export interface VfsEntries {
-  content_blob: Buffer | null;
+  content_blob: Uint8Array | null;
   kind: string;
   metadata_json: string;
   namespace: string;

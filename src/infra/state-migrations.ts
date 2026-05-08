@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { sql } from "kysely";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -44,8 +43,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -53,13 +50,7 @@ import {
   recordOpenClawStateMigrationRun,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  executeCompiledSqliteQuerySync,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { normalizeConversationRef } from "./outbound/session-binding-normalization.js";
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
 import { isWithinDir } from "./path-safety.js";
@@ -96,10 +87,6 @@ export type LegacyStateDetection = {
   channelPlans: {
     hasLegacy: boolean;
     plans: ChannelLegacyStateMigrationPlan[];
-  };
-  sqlite: {
-    hasLegacy: boolean;
-    legacyTables: string[];
   };
   preview: string[];
 };
@@ -212,11 +199,6 @@ function resolveLegacyMigrationSourceStatus(params: {
 }): "completed" | "failed" | "warning" {
   if (params.runStatus !== "warning") {
     return params.runStatus;
-  }
-  if (params.source.sourceTable && isGlobalAgentOwnedSqliteLegacyTable(params.source.sourceTable)) {
-    return detectGlobalAgentOwnedSqliteLegacyTables(params.env).includes(params.source.sourceTable)
-      ? "warning"
-      : "completed";
   }
   if (params.source.targetPath && fileExists(params.source.targetPath)) {
     return "completed";
@@ -1806,63 +1788,6 @@ function removeDirIfEmpty(dir: string) {
   }
 }
 
-const GLOBAL_AGENT_OWNED_SQLITE_LEGACY_TABLES = [
-  "session_entries",
-  "transcript_events",
-  "vfs_entries",
-  "tool_artifacts",
-] as const;
-
-type GlobalAgentOwnedSqliteLegacyTable = (typeof GLOBAL_AGENT_OWNED_SQLITE_LEGACY_TABLES)[number];
-
-type LegacyGlobalSessionEntryRow = {
-  agent_id?: unknown;
-  session_key?: unknown;
-  entry_json?: unknown;
-  updated_at?: unknown;
-};
-
-type LegacyGlobalTranscriptEventRow = {
-  agent_id?: unknown;
-  session_id?: unknown;
-  seq?: unknown;
-  event_json?: unknown;
-  created_at?: unknown;
-};
-
-type LegacyGlobalVfsEntryRow = {
-  agent_id?: unknown;
-  namespace?: unknown;
-  path?: unknown;
-  kind?: unknown;
-  content_blob?: unknown;
-  metadata_json?: unknown;
-  updated_at?: unknown;
-};
-
-type LegacyGlobalToolArtifactRow = {
-  agent_id?: unknown;
-  run_id?: unknown;
-  artifact_id?: unknown;
-  kind?: unknown;
-  metadata_json?: unknown;
-  blob?: unknown;
-  created_at?: unknown;
-};
-
-type SqliteFoundRow = {
-  found?: unknown;
-};
-
-type SqliteCountRow = {
-  count?: number | bigint;
-};
-
-type AgentSessionEntryMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "session_entries">;
-type AgentTranscriptEventMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "transcript_events">;
-type AgentVfsEntryMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "vfs_entries">;
-type AgentToolArtifactMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "tool_artifacts">;
-type LegacyGlobalAgentOwnedMigrationDatabase = Pick<OpenClawStateKyselyDatabase, never>;
 type DeliveryQueueMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 type CurrentConversationBindingsMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -1873,65 +1798,6 @@ type PluginStateMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_st
 const CLAWHUB_SKILL_STATE_OWNER_ID = "core:clawhub-skills";
 const CLAWHUB_SKILL_STATE_NAMESPACE = "skill-installs";
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
-
-function isGlobalAgentOwnedSqliteLegacyTable(
-  table: string,
-): table is GlobalAgentOwnedSqliteLegacyTable {
-  return GLOBAL_AGENT_OWNED_SQLITE_LEGACY_TABLES.includes(
-    table as GlobalAgentOwnedSqliteLegacyTable,
-  );
-}
-
-function detectGlobalAgentOwnedSqliteLegacyTables(env: NodeJS.ProcessEnv): string[] {
-  const dbPath = resolveOpenClawStateSqlitePath(env);
-  if (!fs.existsSync(dbPath)) {
-    return [];
-  }
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-  try {
-    const found: string[] = [];
-    const kysely = getNodeSqliteKysely<LegacyGlobalAgentOwnedMigrationDatabase>(db);
-    for (const table of GLOBAL_AGENT_OWNED_SQLITE_LEGACY_TABLES) {
-      const row = executeCompiledSqliteQuerySync<SqliteFoundRow>(
-        db,
-        sql`SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ${table} LIMIT 1`.compile(
-          kysely,
-        ),
-      ).rows[0];
-      if (row?.found !== undefined) {
-        found.push(table);
-      }
-    }
-    return found;
-  } finally {
-    db.close();
-  }
-}
-
-function countGlobalAgentOwnedSqliteRows(params: {
-  env: NodeJS.ProcessEnv;
-  table: GlobalAgentOwnedSqliteLegacyTable;
-}): number | undefined {
-  const dbPath = resolveOpenClawStateSqlitePath(params.env);
-  if (!fs.existsSync(dbPath)) {
-    return undefined;
-  }
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-  try {
-    const kysely = getNodeSqliteKysely<LegacyGlobalAgentOwnedMigrationDatabase>(db);
-    const row = executeCompiledSqliteQuerySync<SqliteCountRow>(
-      db,
-      sql`SELECT COUNT(*) AS count FROM ${sql.table(params.table)}`.compile(kysely),
-    ).rows[0];
-    return typeof row?.count === "bigint" ? Number(row.count) : row?.count;
-  } catch {
-    return undefined;
-  } finally {
-    db.close();
-  }
-}
 
 function collectLegacyMigrationSources(detected: LegacyStateDetection): MigrationSourceReport[] {
   const sources: MigrationSourceReport[] = [];
@@ -2004,27 +1870,6 @@ function collectLegacyMigrationSources(detected: LegacyStateDetection): Migratio
         recordCount: plan.kind === "custom" ? plan.recordCount : 1,
       }),
     );
-  }
-
-  const stateDbPath = resolveOpenClawStateSqlitePath(detected.env);
-  for (const table of detected.sqlite.legacyTables) {
-    const recordCount = isGlobalAgentOwnedSqliteLegacyTable(table)
-      ? countGlobalAgentOwnedSqliteRows({ env: detected.env, table })
-      : undefined;
-    sources.push({
-      kind: "global-sqlite-table",
-      sourcePath: stateDbPath,
-      sourceTable: table,
-      targetTable: `agent.${table}`,
-      ...(fs.existsSync(stateDbPath)
-        ? {
-            sizeBytes: fs.statSync(stateDbPath).size,
-            mtimeMs: fs.statSync(stateDbPath).mtimeMs,
-            sha256: hashFileSha256(stateDbPath),
-          }
-        : {}),
-      recordCount,
-    });
   }
 
   return sources.toSorted((a, b) =>
@@ -2352,7 +2197,6 @@ export async function detectLegacyStateMigrations(params: {
         oauthDir,
       })
     : [];
-  const sqliteLegacyTables = detectGlobalAgentOwnedSqliteLegacyTables(env);
 
   const preview: string[] = [];
   if (hasLegacySessions) {
@@ -2369,11 +2213,6 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
-  }
-  if (sqliteLegacyTables.length > 0) {
-    preview.push(
-      `- SQLite: move global agent-owned table(s) into per-agent databases: ${sqliteLegacyTables.join(", ")}`,
-    );
   }
 
   return {
@@ -2400,10 +2239,6 @@ export async function detectLegacyStateMigrations(params: {
     channelPlans: {
       hasLegacy: channelPlans.length > 0,
       plans: channelPlans,
-    },
-    sqlite: {
-      hasLegacy: sqliteLegacyTables.length > 0,
-      legacyTables: sqliteLegacyTables,
     },
     preview,
   };
@@ -2637,292 +2472,6 @@ async function migrateChannelLegacyStatePlans(
   return await runLegacyMigrationPlans(detected, detected.channelPlans.plans);
 }
 
-function globalSqliteTableExists(params: {
-  db: import("node:sqlite").DatabaseSync;
-  name: GlobalAgentOwnedSqliteLegacyTable;
-}) {
-  const kysely = getNodeSqliteKysely<LegacyGlobalAgentOwnedMigrationDatabase>(params.db);
-  const row = executeCompiledSqliteQuerySync<SqliteFoundRow>(
-    params.db,
-    sql`SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ${params.name} LIMIT 1`.compile(
-      kysely,
-    ),
-  ).rows[0];
-  return row?.found !== undefined;
-}
-
-function groupRowsByAgentId<T extends { agent_id?: unknown }>(rows: T[]): Map<string, T[]> {
-  const grouped = new Map<string, T[]>();
-  for (const row of rows) {
-    if (typeof row.agent_id !== "string" || !row.agent_id.trim()) {
-      continue;
-    }
-    const agentId = normalizeAgentId(row.agent_id);
-    grouped.set(agentId, [...(grouped.get(agentId) ?? []), row]);
-  }
-  return grouped;
-}
-
-function migrateGlobalAgentOwnedSqliteTables(params: { env?: NodeJS.ProcessEnv }): {
-  changes: string[];
-  warnings: string[];
-} {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const stateDatabase = openOpenClawStateDatabase({ env: params.env });
-  const legacyKysely = getNodeSqliteKysely<LegacyGlobalAgentOwnedMigrationDatabase>(
-    stateDatabase.db,
-  );
-
-  try {
-    if (globalSqliteTableExists({ db: stateDatabase.db, name: "session_entries" })) {
-      const rows = executeCompiledSqliteQuerySync<LegacyGlobalSessionEntryRow>(
-        stateDatabase.db,
-        sql`SELECT agent_id, session_key, entry_json, updated_at FROM session_entries`.compile(
-          legacyKysely,
-        ),
-      ).rows;
-      for (const [agentId, agentRows] of groupRowsByAgentId(rows)) {
-        runOpenClawAgentWriteTransaction(
-          (agentDatabase) => {
-            const validRows = agentRows.flatMap((row) => {
-              if (typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
-                return [];
-              }
-              return [
-                {
-                  session_key: row.session_key,
-                  entry_json: row.entry_json,
-                  updated_at: Number(row.updated_at ?? Date.now()),
-                },
-              ];
-            });
-            if (validRows.length === 0) {
-              return;
-            }
-            const db = getNodeSqliteKysely<AgentSessionEntryMigrationDatabase>(agentDatabase.db);
-            executeSqliteQuerySync(
-              agentDatabase.db,
-              db
-                .insertInto("session_entries")
-                .values(validRows)
-                .onConflict((conflict) =>
-                  conflict.column("session_key").doUpdateSet({
-                    entry_json: (eb) => eb.ref("excluded.entry_json"),
-                    updated_at: (eb) => eb.ref("excluded.updated_at"),
-                  }),
-                ),
-            );
-          },
-          { agentId, env: params.env },
-        );
-      }
-      stateDatabase.db.exec(
-        "DROP INDEX IF EXISTS idx_session_entries_updated_at; DROP TABLE session_entries;",
-      );
-      if (rows.length > 0) {
-        changes.push(
-          `Migrated ${rows.length} global session row(s) into per-agent SQLite databases.`,
-        );
-      }
-    }
-  } catch (err) {
-    warnings.push(`Failed migrating global session rows into per-agent databases: ${String(err)}`);
-  }
-
-  try {
-    if (globalSqliteTableExists({ db: stateDatabase.db, name: "transcript_events" })) {
-      const rows = executeCompiledSqliteQuerySync<LegacyGlobalTranscriptEventRow>(
-        stateDatabase.db,
-        sql`SELECT agent_id, session_id, seq, event_json, created_at FROM transcript_events`.compile(
-          legacyKysely,
-        ),
-      ).rows;
-      for (const [agentId, agentRows] of groupRowsByAgentId(rows)) {
-        runOpenClawAgentWriteTransaction(
-          (agentDatabase) => {
-            const validRows = agentRows.flatMap((row) => {
-              if (typeof row.session_id !== "string" || typeof row.event_json !== "string") {
-                return [];
-              }
-              return [
-                {
-                  session_id: row.session_id,
-                  seq: Number(row.seq ?? 0),
-                  event_json: row.event_json,
-                  created_at: Number(row.created_at ?? Date.now()),
-                },
-              ];
-            });
-            if (validRows.length === 0) {
-              return;
-            }
-            const db = getNodeSqliteKysely<AgentTranscriptEventMigrationDatabase>(agentDatabase.db);
-            executeSqliteQuerySync(
-              agentDatabase.db,
-              db
-                .insertInto("transcript_events")
-                .values(validRows)
-                .onConflict((conflict) =>
-                  conflict.columns(["session_id", "seq"]).doUpdateSet({
-                    event_json: (eb) => eb.ref("excluded.event_json"),
-                    created_at: (eb) => eb.ref("excluded.created_at"),
-                  }),
-                ),
-            );
-          },
-          { agentId, env: params.env },
-        );
-      }
-      stateDatabase.db.exec("DROP TABLE transcript_events;");
-      if (rows.length > 0) {
-        changes.push(
-          `Migrated ${rows.length} global transcript event row(s) into per-agent SQLite databases.`,
-        );
-      }
-    }
-  } catch (err) {
-    warnings.push(
-      `Failed migrating global transcript event rows into per-agent databases: ${String(err)}`,
-    );
-  }
-
-  try {
-    if (globalSqliteTableExists({ db: stateDatabase.db, name: "vfs_entries" })) {
-      const rows = executeCompiledSqliteQuerySync<LegacyGlobalVfsEntryRow>(
-        stateDatabase.db,
-        sql`SELECT agent_id, namespace, path, kind, content_blob, metadata_json, updated_at FROM vfs_entries`.compile(
-          legacyKysely,
-        ),
-      ).rows;
-      for (const [agentId, agentRows] of groupRowsByAgentId(rows)) {
-        runOpenClawAgentWriteTransaction(
-          (agentDatabase) => {
-            const validRows = agentRows.flatMap((row) => {
-              if (
-                typeof row.namespace === "string" &&
-                typeof row.path === "string" &&
-                typeof row.kind === "string" &&
-                typeof row.metadata_json === "string"
-              ) {
-                const contentBlob =
-                  row.content_blob instanceof Uint8Array ? Buffer.from(row.content_blob) : null;
-                return [
-                  {
-                    namespace: row.namespace,
-                    path: row.path,
-                    kind: row.kind,
-                    content_blob: contentBlob,
-                    metadata_json: row.metadata_json,
-                    updated_at: Number(row.updated_at ?? Date.now()),
-                  },
-                ];
-              }
-              return [];
-            });
-            if (validRows.length === 0) {
-              return;
-            }
-            const db = getNodeSqliteKysely<AgentVfsEntryMigrationDatabase>(agentDatabase.db);
-            executeSqliteQuerySync(
-              agentDatabase.db,
-              db
-                .insertInto("vfs_entries")
-                .values(validRows)
-                .onConflict((conflict) =>
-                  conflict.columns(["namespace", "path"]).doUpdateSet({
-                    kind: (eb) => eb.ref("excluded.kind"),
-                    content_blob: (eb) => eb.ref("excluded.content_blob"),
-                    metadata_json: (eb) => eb.ref("excluded.metadata_json"),
-                    updated_at: (eb) => eb.ref("excluded.updated_at"),
-                  }),
-                ),
-            );
-          },
-          { agentId, env: params.env },
-        );
-      }
-      stateDatabase.db.exec(
-        "DROP INDEX IF EXISTS idx_vfs_entries_namespace; DROP TABLE vfs_entries;",
-      );
-      if (rows.length > 0) {
-        changes.push(`Migrated ${rows.length} global VFS row(s) into per-agent SQLite databases.`);
-      }
-    }
-  } catch (err) {
-    warnings.push(`Failed migrating global VFS rows into per-agent databases: ${String(err)}`);
-  }
-
-  try {
-    if (globalSqliteTableExists({ db: stateDatabase.db, name: "tool_artifacts" })) {
-      const rows = executeCompiledSqliteQuerySync<LegacyGlobalToolArtifactRow>(
-        stateDatabase.db,
-        sql`SELECT agent_id, run_id, artifact_id, kind, metadata_json, blob, created_at FROM tool_artifacts`.compile(
-          legacyKysely,
-        ),
-      ).rows;
-      for (const [agentId, agentRows] of groupRowsByAgentId(rows)) {
-        runOpenClawAgentWriteTransaction(
-          (agentDatabase) => {
-            const validRows = agentRows.flatMap((row) => {
-              if (
-                typeof row.run_id === "string" &&
-                typeof row.artifact_id === "string" &&
-                typeof row.kind === "string" &&
-                typeof row.metadata_json === "string"
-              ) {
-                const blob = row.blob instanceof Uint8Array ? Buffer.from(row.blob) : null;
-                return [
-                  {
-                    run_id: row.run_id,
-                    artifact_id: row.artifact_id,
-                    kind: row.kind,
-                    metadata_json: row.metadata_json,
-                    blob,
-                    created_at: Number(row.created_at ?? Date.now()),
-                  },
-                ];
-              }
-              return [];
-            });
-            if (validRows.length === 0) {
-              return;
-            }
-            const db = getNodeSqliteKysely<AgentToolArtifactMigrationDatabase>(agentDatabase.db);
-            executeSqliteQuerySync(
-              agentDatabase.db,
-              db
-                .insertInto("tool_artifacts")
-                .values(validRows)
-                .onConflict((conflict) =>
-                  conflict.columns(["run_id", "artifact_id"]).doUpdateSet({
-                    kind: (eb) => eb.ref("excluded.kind"),
-                    metadata_json: (eb) => eb.ref("excluded.metadata_json"),
-                    blob: (eb) => eb.ref("excluded.blob"),
-                    created_at: (eb) => eb.ref("excluded.created_at"),
-                  }),
-                ),
-            );
-          },
-          { agentId, env: params.env },
-        );
-      }
-      stateDatabase.db.exec("DROP TABLE tool_artifacts;");
-      if (rows.length > 0) {
-        changes.push(
-          `Migrated ${rows.length} global tool artifact row(s) into per-agent SQLite databases.`,
-        );
-      }
-    }
-  } catch (err) {
-    warnings.push(
-      `Failed migrating global tool artifact rows into per-agent databases: ${String(err)}`,
-    );
-  }
-
-  return { changes, warnings };
-}
-
 export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
   now?: () => number;
@@ -2936,20 +2485,9 @@ export async function runLegacyStateMigrations(params: {
     const sessions = await migrateLegacySessions(detected);
     const agentDir = await migrateLegacyAgentDir(detected, now);
     const channelPlans = await migrateChannelLegacyStatePlans(detected);
-    const globalAgentRows = migrateGlobalAgentOwnedSqliteTables({ env: detected.env });
     const result = {
-      changes: [
-        ...sessions.changes,
-        ...agentDir.changes,
-        ...channelPlans.changes,
-        ...globalAgentRows.changes,
-      ],
-      warnings: [
-        ...sessions.warnings,
-        ...agentDir.warnings,
-        ...channelPlans.warnings,
-        ...globalAgentRows.warnings,
-      ],
+      changes: [...sessions.changes, ...agentDir.changes, ...channelPlans.changes],
+      warnings: [...sessions.warnings, ...agentDir.warnings, ...channelPlans.warnings],
     };
     const finishedAt = now();
     const status = result.warnings.length > 0 ? "warning" : "completed";

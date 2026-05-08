@@ -215,10 +215,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
       plans: [],
     },
-    sqlite: {
-      hasLegacy: false,
-      legacyTables: [],
-    },
     preview: params?.preview ?? [],
   };
 }
