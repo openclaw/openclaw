@@ -1,162 +1,79 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MsgContext } from "../auto-reply/templating.js";
-
-const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
-const updateLastRouteMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
-
-vi.mock("../config/sessions/inbound.runtime.js", () => ({
-  recordSessionMetaFromInbound: (args: unknown) => recordSessionMetaFromInboundMock(args),
-  updateLastRoute: (args: unknown) => updateLastRouteMock(args),
-}));
-
-type SessionModule = typeof import("./session.js");
-
-let recordInboundSession: SessionModule["recordInboundSession"];
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { loadSessionStore } from "../config/sessions.js";
+import { recordInboundSession } from "./session.js";
 
 describe("recordInboundSession", () => {
-  const ctx: MsgContext = {
-    Provider: "demo-channel",
-    From: "demo-channel:1234",
-    SessionKey: "agent:main:demo-channel:1234:thread:42",
-    OriginatingTo: "demo-channel:1234",
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  const createCaseDir = async (prefix: string) => {
+    const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
   };
 
   beforeAll(async () => {
-    ({ recordInboundSession } = await import("./session.js"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recordInboundSession-"));
   });
 
-  beforeEach(() => {
-    recordSessionMetaFromInboundMock.mockClear();
-    updateLastRouteMock.mockClear();
+  afterAll(async () => {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  it("does not pass ctx when updating a different session key", async () => {
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
-      ctx,
-      updateLastRoute: {
-        sessionKey: "agent:main:main",
-        channel: "demo-channel",
-        to: "demo-channel:1234",
-      },
-      onRecordError: vi.fn(),
-    });
-
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        ctx: undefined,
-        deliveryContext: expect.objectContaining({
-          channel: "demo-channel",
-          to: "demo-channel:1234",
-        }),
-      }),
-    );
-  });
-
-  it("passes ctx when updating the same session key", async () => {
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
-      ctx,
-      updateLastRoute: {
-        sessionKey: "agent:main:demo-channel:1234:thread:42",
-        channel: "demo-channel",
-        to: "demo-channel:1234",
-      },
-      onRecordError: vi.fn(),
-    });
-
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:demo-channel:1234:thread:42",
-        ctx,
-        deliveryContext: expect.objectContaining({
-          channel: "demo-channel",
-          to: "demo-channel:1234",
-        }),
-      }),
-    );
-  });
-
-  it("normalizes mixed-case session keys before recording and route updates", async () => {
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "Agent:Main:Demo-Channel:1234:Thread:42",
-      ctx,
-      updateLastRoute: {
-        sessionKey: "agent:main:demo-channel:1234:thread:42",
-        channel: "demo-channel",
-        to: "demo-channel:1234",
-      },
-      onRecordError: vi.fn(),
-    });
-
-    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:demo-channel:1234:thread:42",
-      }),
-    );
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:demo-channel:1234:thread:42",
-        ctx,
-      }),
-    );
-  });
-
-  it("skips last-route updates when main DM owner pin mismatches sender", async () => {
-    const onSkip = vi.fn();
+  it("persists delivery route from OriginatingChannel and OriginatingTo when updateLastRoute is omitted", async () => {
+    const dir = await createCaseDir("mattermost-group");
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}", "utf-8");
+    const sessionKey = "agent:main:mattermost:group:room123";
+    const ctx = {
+      OriginatingChannel: "mattermost",
+      OriginatingTo: "channel:room123",
+      Provider: "mattermost",
+      AccountId: "default",
+      MessageThreadId: "thread-77",
+    };
 
     await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
+      storePath,
+      sessionKey,
       ctx,
-      updateLastRoute: {
-        sessionKey: "agent:main:main",
-        channel: "demo-channel",
-        to: "demo-channel:1234",
-        mainDmOwnerPin: {
-          ownerRecipient: "1234",
-          senderRecipient: "9999",
-          onSkip,
-        },
-      },
-      onRecordError: vi.fn(),
+      onRecordError: () => undefined,
     });
 
-    expect(updateLastRouteMock).not.toHaveBeenCalled();
-    expect(onSkip).toHaveBeenCalledWith({
-      ownerRecipient: "1234",
-      senderRecipient: "9999",
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.deliveryContext).toEqual({
+      channel: "mattermost",
+      to: "channel:room123",
+      accountId: "default",
+      threadId: "thread-77",
     });
   });
 
-  it("forwards session creation policy to last-route updates", async () => {
+  it("falls back to Provider/To when Originating fields are absent", async () => {
+    const dir = await createCaseDir("provider-to");
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}", "utf-8");
+    const sessionKey = "agent:main:matrix:group:room999";
+    const ctx = {
+      Provider: "matrix",
+      To: "room:room999",
+      Surface: "matrix",
+    };
+
     await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
+      storePath,
+      sessionKey,
       ctx,
-      createIfMissing: false,
-      updateLastRoute: {
-        sessionKey: "agent:main:main",
-        channel: "demo-channel",
-        to: "demo-channel:1234",
-      },
-      onRecordError: vi.fn(),
+      onRecordError: () => undefined,
     });
 
-    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        createIfMissing: false,
-      }),
-    );
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        createIfMissing: false,
-      }),
-    );
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.deliveryContext).toEqual({
+      channel: "matrix",
+      to: "room:room999",
+    });
   });
 });
