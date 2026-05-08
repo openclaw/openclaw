@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PostUpgradeFinding, PostUpgradeReport } from "./doctor-post-upgrade.types.js";
@@ -7,6 +8,8 @@ type InstalledPluginRecord = {
   rootDir: string;
   enabled: boolean;
   packageJson?: { path: string };
+  manifestPath?: string;
+  manifestHash?: string;
 };
 
 type InstallsJson = { plugins: InstalledPluginRecord[] };
@@ -23,6 +26,15 @@ async function fileExists(absPath: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function sha256OfFile(absPath: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(absPath);
+    return crypto.createHash("sha256").update(raw).digest("hex");
+  } catch {
+    return null;
   }
 }
 
@@ -58,7 +70,19 @@ export async function runPostUpgradeProbes(params: {
         });
       }
     }
+
+    if (record.manifestPath && record.manifestHash) {
+      const currentHash = await sha256OfFile(record.manifestPath);
+      if (currentHash && currentHash !== record.manifestHash) {
+        findings.push({
+          level: "warn",
+          code: "plugin.manifest_drift",
+          message: `Plugin ${record.pluginId} manifest hash drifted from installs.json snapshot. Run \`openclaw plugins registry --refresh\` to re-sync.`,
+          plugin: record.pluginId,
+        });
+      }
+    }
   }
 
-  return { probesRun: ["plugin.entry_unresolved"], findings };
+  return { probesRun: ["plugin.entry_unresolved", "plugin.manifest_drift"], findings };
 }

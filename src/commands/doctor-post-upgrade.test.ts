@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -104,6 +105,64 @@ describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
 
       const report = await runPostUpgradeProbes({ installsPath });
       expect(report.findings.filter((f) => f.code === "plugin.entry_unresolved")).toHaveLength(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runPostUpgradeProbes — plugin.manifest_drift", () => {
+  it("flags a plugin whose manifest hash differs from installs.json", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-post-upgrade-manifest-drift-"));
+    try {
+      const pluginDir = path.join(root, "user-plugins", "drifted");
+      await fs.mkdir(path.join(pluginDir, "dist"), { recursive: true });
+      await fs.writeFile(path.join(pluginDir, "dist", "index.js"), "export default {};", "utf-8");
+      await fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "drifted",
+          version: "0.0.1",
+          type: "module",
+          openclaw: { extensions: ["./dist/index.js"] },
+        }),
+        "utf-8",
+      );
+
+      const oldManifestRaw = JSON.stringify({ id: "drifted", version: 1 });
+      const oldManifestHash = crypto.createHash("sha256").update(oldManifestRaw).digest("hex");
+      // Write a NEW manifest after installs.json was snapshotted.
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "drifted", version: 2 }),
+        "utf-8",
+      );
+
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(
+        installsPath,
+        JSON.stringify({
+          version: 1,
+          plugins: [
+            {
+              pluginId: "drifted",
+              manifestPath: path.join(pluginDir, "openclaw.plugin.json"),
+              manifestHash: oldManifestHash,
+              rootDir: pluginDir,
+              enabled: true,
+              packageJson: { path: "package.json" },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const report = await runPostUpgradeProbes({ installsPath });
+      const finding = report.findings.find((f) => f.code === "plugin.manifest_drift");
+      expect(finding).toBeDefined();
+      expect(finding?.level).toBe("warn");
+      expect(finding?.plugin).toBe("drifted");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
