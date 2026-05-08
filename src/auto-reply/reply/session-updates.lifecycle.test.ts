@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntry } from "../../config/sessions/store.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
@@ -127,5 +128,57 @@ describe("session-updates lifecycle hooks", () => {
       sessionKey,
       agentId: "main",
     });
+  });
+
+  it("keeps SQLite transcript locators virtual when compaction rotates topic sessions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-updates-sqlite-"));
+    tempDirs.push(root);
+    if (!previousStateDirCaptured) {
+      previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      previousStateDirCaptured = true;
+    }
+    process.env.OPENCLAW_STATE_DIR = root;
+    const sessionKey = "agent:main:forum:direct:compaction:topic:456";
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "s1",
+      topicId: 456,
+    });
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "s1",
+      transcriptPath: sessionFile,
+      events: [{ type: "message" }],
+    });
+    const entry = {
+      sessionId: "s1",
+      sessionFile,
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: entry,
+    };
+    upsertSessionEntry({ agentId: "main", sessionKey, entry });
+    const cfg = { session: {} } as OpenClawConfig;
+
+    await incrementCompactionCount({
+      cfg,
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      newSessionId: "s2",
+    });
+
+    const expectedNextFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "s2",
+      topicId: 456,
+    });
+    expect(sessionStore[sessionKey]?.sessionFile).toBe(expectedNextFile);
+    expect(sessionStore[sessionKey]?.sessionFile).toContain("sqlite-transcript://");
+    expect(sessionStore[sessionKey]?.sessionFile).not.toMatch(/^sqlite-transcript:\/[^/]/u);
+    const [endEvent] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+    expect(endEvent?.sessionFile).toBe(sessionFile);
   });
 });

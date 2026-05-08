@@ -12,10 +12,13 @@ import {
 import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
 import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js";
 import {
+  createSqliteSessionTranscriptLocator,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   getSessionEntry,
+  isSqliteSessionTranscriptLocator,
   mergeSessionEntry,
+  parseSqliteSessionTranscriptLocator,
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
@@ -382,6 +385,14 @@ function rewriteSessionFileForNewSessionId(params: {
   if (!trimmed) {
     return undefined;
   }
+  const sqliteScope = parseSqliteSessionTranscriptLocator(trimmed);
+  if (sqliteScope) {
+    return createSqliteSessionTranscriptLocator({
+      agentId: sqliteScope.agentId,
+      sessionId: params.nextSessionId,
+      topicId: extractSqliteTranscriptTopicId(trimmed, params.previousSessionId),
+    });
+  }
   const base = path.basename(trimmed);
   if (!base.endsWith(".jsonl")) {
     return undefined;
@@ -403,4 +414,24 @@ function rewriteSessionFileForNewSessionId(params: {
     return path.join(path.dirname(trimmed), `${forkMatch[1]}_${params.nextSessionId}.jsonl`);
   }
   return undefined;
+}
+
+function extractSqliteTranscriptTopicId(
+  locator: string,
+  previousSessionId: string,
+): string | undefined {
+  if (!isSqliteSessionTranscriptLocator(locator)) {
+    return undefined;
+  }
+  try {
+    const url = new URL(locator.trim());
+    const fileName = decodeURIComponent(url.pathname.replace(/^\/+/u, ""));
+    const topicPrefix = `${previousSessionId}-topic-`;
+    if (!fileName.endsWith(".jsonl") || !fileName.startsWith(topicPrefix)) {
+      return undefined;
+    }
+    return fileName.slice(topicPrefix.length, -".jsonl".length);
+  } catch {
+    return undefined;
+  }
 }
