@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { upsertSessionEntry } from "../../config/sessions/store.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { initSessionState } from "./session.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
@@ -40,45 +42,28 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: sessionCleanupMocks.closeTrackedBrowserTabsForSessions,
 }));
 
-vi.mock("../../agents/session-write-lock.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
-    "../../agents/session-write-lock.js",
-  );
-  return {
-    ...actual,
-    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(
-      ({
-        timeoutMs,
-        graceMs = 2 * 60 * 1000,
-        minMs = 5 * 60 * 1000,
-      }: {
-        timeoutMs: number;
-        graceMs?: number;
-        minMs?: number;
-      }) => Math.max(minMs, timeoutMs + graceMs),
-    ),
-  };
-});
-
-async function createStorePath(prefix: string): Promise<string> {
+async function createFixtureDir(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
-  return path.join(root, "sessions.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const transcriptDir = path.join(root, "transcripts");
+  await fs.mkdir(transcriptDir, { recursive: true });
+  return transcriptDir;
 }
 
-async function writeStore(
-  storePath: string,
+async function writeSessionRows(
   store: Record<string, SessionEntry | Record<string, unknown>>,
 ): Promise<void> {
-  await saveSessionStore(storePath, store as Record<string, SessionEntry>);
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    upsertSessionEntry({ agentId: "main", sessionKey, entry: entry as SessionEntry });
+  }
 }
 
 async function writeTranscript(
-  storePath: string,
+  transcriptDir: string,
   sessionId: string,
   text = "hello",
 ): Promise<string> {
-  const transcriptPath = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+  const transcriptPath = path.join(transcriptDir, `${sessionId}.jsonl`);
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
@@ -100,17 +85,17 @@ async function createStoredSession(params: {
   sessionId: string;
   text?: string;
   updatedAt?: number;
-}): Promise<{ storePath: string; transcriptPath: string }> {
-  const storePath = await createStorePath(params.prefix);
-  const transcriptPath = await writeTranscript(storePath, params.sessionId, params.text);
-  await writeStore(storePath, {
+}): Promise<{ transcriptPath: string }> {
+  const transcriptDir = await createFixtureDir(params.prefix);
+  const transcriptPath = await writeTranscript(transcriptDir, params.sessionId, params.text);
+  await writeSessionRows({
     [params.sessionKey]: {
       sessionId: params.sessionId,
       sessionFile: transcriptPath,
       updatedAt: params.updatedAt ?? Date.now(),
     },
   });
-  return { storePath, transcriptPath };
+  return { transcriptPath };
 }
 
 type SessionResetConfig = NonNullable<NonNullable<OpenClawConfig["session"]>["reset"]>;
@@ -123,10 +108,9 @@ async function initStoredSessionState(params: {
   updatedAt: number;
   reset?: SessionResetConfig;
 }): Promise<void> {
-  const { storePath } = await createStoredSession(params);
+  await createStoredSession(params);
   const cfg = {
     session: {
-      store: storePath,
       ...(params.reset ? { reset: params.reset } : {}),
     },
   } as OpenClawConfig;
@@ -155,13 +139,15 @@ describe("session hook context wiring", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllEnvs();
   });
 
   it("passes sessionKey to session_start hook context", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
-    const storePath = await createStorePath("openclaw-session-hook-start");
-    await writeStore(storePath, {});
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    await createFixtureDir("openclaw-session-hook-start");
+    await writeSessionRows({});
+    const cfg = { session: {} } as OpenClawConfig;
 
     await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
@@ -178,12 +164,12 @@ describe("session hook context wiring", () => {
 
   it("passes sessionKey to session_end hook context on reset", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
-    const { storePath, transcriptPath } = await createStoredSession({
+    const { transcriptPath } = await createStoredSession({
       prefix: "openclaw-session-hook-end",
       sessionKey,
       sessionId: "old-session",
     });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg = { session: {} } as OpenClawConfig;
 
     await initSessionState({
       ctx: { Body: "/new", SessionKey: sessionKey },
@@ -210,13 +196,13 @@ describe("session hook context wiring", () => {
 
   it("marks explicit /reset rollovers with reason reset", async () => {
     const sessionKey = "agent:main:telegram:direct:456";
-    const { storePath } = await createStoredSession({
+    await createStoredSession({
       prefix: "openclaw-session-hook-explicit-reset",
       sessionKey,
       sessionId: "reset-session",
       text: "reset me",
     });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg = { session: {} } as OpenClawConfig;
 
     await initSessionState({
       ctx: { Body: "/reset", SessionKey: sessionKey },
@@ -230,7 +216,7 @@ describe("session hook context wiring", () => {
 
   it("maps custom reset trigger aliases to the new-session reason", async () => {
     const sessionKey = "agent:main:telegram:direct:alias";
-    const { storePath } = await createStoredSession({
+    await createStoredSession({
       prefix: "openclaw-session-hook-reset-alias",
       sessionKey,
       sessionId: "alias-session",
@@ -238,7 +224,6 @@ describe("session hook context wiring", () => {
     });
     const cfg = {
       session: {
-        store: storePath,
         resetTriggers: ["/fresh"],
       },
     } as OpenClawConfig;
