@@ -316,3 +316,4 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 
 - [CLI reference](/cli)
 - [Models](/concepts/models)
+- [Workspace capabilities](/concepts/workspace-capabilities)
