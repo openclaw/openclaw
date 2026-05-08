@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSequentialQueue } from "./sequential-queue.js";
 
 function createDeferred() {
@@ -13,6 +13,10 @@ function createDeferred() {
 }
 
 describe("createSequentialQueue", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("serializes tasks for the same key", async () => {
     const enqueue = createSequentialQueue();
     const gate = createDeferred();
@@ -94,6 +98,7 @@ describe("createSequentialQueue", () => {
   });
 
   it("evicts a stuck task after taskTimeoutMs so newer same-key work proceeds", async () => {
+    vi.useFakeTimers();
     const timeouts: Array<{ key: string; timeoutMs: number }> = [];
     const enqueue = createSequentialQueue({
       taskTimeoutMs: 25,
@@ -116,6 +121,7 @@ describe("createSequentialQueue", () => {
       order.push("follow-up:ran");
     });
 
+    await vi.advanceTimersByTimeAsync(25);
     await followUp;
 
     expect(order).toEqual(["stuck:start", "follow-up:ran"]);
@@ -127,6 +133,7 @@ describe("createSequentialQueue", () => {
   });
 
   it("disables the timeout cap when taskTimeoutMs is 0 (legacy behavior)", async () => {
+    vi.useFakeTimers();
     const timeouts: Array<{ key: string; timeoutMs: number }> = [];
     const enqueue = createSequentialQueue({
       taskTimeoutMs: 0,
@@ -147,7 +154,7 @@ describe("createSequentialQueue", () => {
     });
 
     // Wait long enough that a timeout would have fired if it were active.
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await vi.advanceTimersByTimeAsync(30);
     expect(order).toEqual(["first:start"]);
     expect(timeouts).toEqual([]);
 
