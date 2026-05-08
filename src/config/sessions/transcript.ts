@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -200,7 +200,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -255,7 +255,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   idempotencyKey?: string;
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {

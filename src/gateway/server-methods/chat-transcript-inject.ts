@@ -1,6 +1,6 @@
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
@@ -52,7 +52,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {
