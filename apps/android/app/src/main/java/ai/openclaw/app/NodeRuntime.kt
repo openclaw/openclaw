@@ -67,6 +67,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -80,6 +81,15 @@ class NodeRuntime(
     val bootstrapToken: String?,
     val password: String?,
   )
+
+  private data class PendingForwardedNodeEvent(
+    val event: String,
+    val payloadJson: String?,
+  )
+
+  private companion object {
+    private const val MAX_PENDING_FORWARDED_NODE_EVENTS = 64
+  }
 
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -304,6 +314,9 @@ class NodeRuntime(
   private var operatorConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
+  private val pendingForwardedNodeEvents = ArrayDeque<PendingForwardedNodeEvent>()
+  private val pendingForwardedNodeEventsLock = Any()
+  private var flushingForwardedNodeEvents = false
 
   private val operatorSession =
     GatewaySession(
@@ -357,6 +370,7 @@ class NodeRuntime(
         updateStatus()
         showLocalCanvasOnConnect()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
+        flushPendingForwardedNodeEvents()
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
         if (endpoint != null && auth != null) {
@@ -384,8 +398,74 @@ class NodeRuntime(
 
   init {
     DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
-      scope.launch {
-        nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
+      enqueueForwardedNodeEvent(event = event, payloadJson = payloadJson)
+    }
+  }
+
+  private fun enqueueForwardedNodeEvent(
+    event: String,
+    payloadJson: String?,
+  ) {
+    scope.launch {
+      val sent = nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
+      if (sent) {
+        return@launch
+      }
+      rememberPendingForwardedNodeEvent(
+        PendingForwardedNodeEvent(
+          event = event,
+          payloadJson = payloadJson,
+        ),
+      )
+    }
+  }
+
+  private fun rememberPendingForwardedNodeEvent(event: PendingForwardedNodeEvent) {
+    synchronized(pendingForwardedNodeEventsLock) {
+      while (pendingForwardedNodeEvents.size >= MAX_PENDING_FORWARDED_NODE_EVENTS) {
+        pendingForwardedNodeEvents.removeFirst()
+      }
+      pendingForwardedNodeEvents.addLast(event)
+    }
+  }
+
+  private fun flushPendingForwardedNodeEvents() {
+    synchronized(pendingForwardedNodeEventsLock) {
+      if (flushingForwardedNodeEvents || pendingForwardedNodeEvents.isEmpty()) {
+        return
+      }
+      flushingForwardedNodeEvents = true
+    }
+    scope.launch {
+      val events =
+        synchronized(pendingForwardedNodeEventsLock) {
+          val drained = pendingForwardedNodeEvents.toList()
+          pendingForwardedNodeEvents.clear()
+          drained
+        }
+      try {
+        for ((index, event) in events.withIndex()) {
+          val sent =
+            nodeSession.sendNodeEvent(
+              event = event.event,
+              payloadJson = event.payloadJson,
+            )
+          if (!sent) {
+            synchronized(pendingForwardedNodeEventsLock) {
+              for (remaining in events.drop(index)) {
+                while (pendingForwardedNodeEvents.size >= MAX_PENDING_FORWARDED_NODE_EVENTS) {
+                  pendingForwardedNodeEvents.removeFirst()
+                }
+                pendingForwardedNodeEvents.addLast(remaining)
+              }
+            }
+            return@launch
+          }
+        }
+      } finally {
+        synchronized(pendingForwardedNodeEventsLock) {
+          flushingForwardedNodeEvents = false
+        }
       }
     }
   }

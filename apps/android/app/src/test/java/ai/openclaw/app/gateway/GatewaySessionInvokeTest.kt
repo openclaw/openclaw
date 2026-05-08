@@ -21,6 +21,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -529,6 +530,72 @@ class GatewaySessionInvokeTest {
         assertEquals("123", payload["sentAtMs"]?.jsonPrimitive?.content)
         assertEquals(true, response["handled"]?.jsonPrimitive?.content?.toBooleanStrict())
         assertEquals("persisted", response["reason"]?.jsonPrimitive?.content)
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun sendNodeEventDetailed_doesNotSendBeforeConnectHandshakeCompletes() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectRequest = CompletableDeferred<Pair<WebSocket, String>>()
+      val nodeEventParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          when (method) {
+            "connect" -> {
+              if (!connectRequest.isCompleted) {
+                connectRequest.complete(webSocket to id)
+              }
+            }
+            "node.event" -> {
+              if (!nodeEventParams.isCompleted) {
+                nodeEventParams.complete(frame["params"]?.jsonObject ?: JsonObject(emptyMap()))
+              }
+              webSocket.send(
+                """{"type":"res","id":"$id","ok":true,"payload":{"handled":true}}""",
+              )
+              webSocket.close(1000, "done")
+            }
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        val (webSocket, connectId) = withTimeout(TEST_TIMEOUT_MS) { connectRequest.await() }
+
+        val result =
+          harness.session.sendNodeEventDetailed(
+            event = "notifications.changed",
+            payloadJson = """{"change":"posted"}""",
+            timeoutMs = 50,
+          )
+
+        assertFalse(result.ok)
+        assertNull(withTimeoutOrNull(250) { nodeEventParams.await() })
+
+        webSocket.send(connectResponseFrame(connectId))
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val afterConnect =
+          harness.session.sendNodeEventDetailed(
+            event = "notifications.changed",
+            payloadJson = """{"change":"posted"}""",
+            timeoutMs = TEST_TIMEOUT_MS,
+          )
+        val params = withTimeout(TEST_TIMEOUT_MS) { nodeEventParams.await() }
+
+        assertEquals(true, afterConnect.ok)
+        assertEquals("notifications.changed", params["event"]?.jsonPrimitive?.content)
       } finally {
         shutdownHarness(harness, server)
       }

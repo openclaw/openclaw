@@ -898,12 +898,14 @@ class GatewaySession(
           target.options,
           target.tls,
         )
-      currentConnection = conn
       try {
         conn.connect()
+        currentConnection = conn
         conn.awaitClose()
       } finally {
-        currentConnection = null
+        if (currentConnection === conn) {
+          currentConnection = null
+        }
         pluginSurfaceUrls = emptyMap()
         mainSessionKey = null
       }
