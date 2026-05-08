@@ -149,7 +149,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   if (!branchedSessionFile) {
     throw new Error("expected branched compaction session file");
   }
-  const branchedSession = SessionManager.open(branchedSessionFile, dir);
+  const branchedSession = SessionManager.open(branchedSessionFile);
   expect(branchedSession.getEntries()).toHaveLength(
     fixture.preCompactionSession.getEntries().length,
   );
@@ -197,7 +197,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   if (!restoredSessionFile) {
     throw new Error("expected restored compaction session file");
   }
-  const restoredSession = SessionManager.open(restoredSessionFile, dir);
+  const restoredSession = SessionManager.open(restoredSessionFile);
   expect(restoredSession.getEntries()).toHaveLength(
     fixture.preCompactionSession.getEntries().length,
   );

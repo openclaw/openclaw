@@ -423,7 +423,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
 describe("truncateOversizedToolResultsInSession", () => {
   it("readably truncates aggregate medium tool results in a session file", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
+    const sm = SessionManager.create(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     const medium = "alpha beta gamma delta epsilon ".repeat(600);
@@ -488,7 +488,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
   it("prefers truncating newer aggregate tool-result entries before older larger ones", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
+    const sm = SessionManager.create(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     const olderLarge = "older-large ".repeat(1_000);
@@ -528,7 +528,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
   it("allows persisted-session recovery truncation to shrink below the old 2k floor", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
+    const sm = SessionManager.create(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
@@ -554,7 +554,7 @@ describe("truncateOversizedToolResultsInSession", () => {
   });
   it("combines oversized and aggregate recovery truncation in the same session rewrite", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
+    const sm = SessionManager.create(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
@@ -586,7 +586,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
   it("lets aggregate recovery honor a tiny explicit cap during persisted rewrite", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir, dir);
+    const sm = SessionManager.create(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     const medium = "alpha beta gamma delta epsilon ".repeat(800);

@@ -46,7 +46,7 @@ describe("session-compaction-checkpoints", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-"));
     tempDirs.push(dir);
 
-    const session = SessionManager.create(dir, dir);
+    const session = SessionManager.create(dir);
     session.appendMessage({
       role: "user",
       content: "before async compaction",
@@ -81,7 +81,7 @@ describe("session-compaction-checkpoints", () => {
       expect(snapshot).not.toBeNull();
       expect(snapshot?.leafId).toBe(leafId);
       expect(snapshot?.sessionFile).not.toBe(sessionFile);
-      expect(snapshot?.sessionFile).toContain(".checkpoint.");
+      expect(snapshot?.sessionFile).toContain("sqlite-transcript://");
       expect(
         hasSqliteSessionTranscriptSnapshot({
           agentId: DEFAULT_AGENT_ID,
@@ -129,7 +129,7 @@ describe("session-compaction-checkpoints", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-metadata-"));
     tempDirs.push(dir);
 
-    const session = SessionManager.create(dir, dir);
+    const session = SessionManager.create(dir);
     session.appendMessage({
       role: "user",
       content: "derive checkpoint metadata",
@@ -164,7 +164,7 @@ describe("session-compaction-checkpoints", () => {
       expect(snapshot?.sessionId).not.toBe(sessionId);
       expect(snapshot?.leafId).toBe(leafId);
       expect(snapshot?.sessionFile).not.toBe(sessionFile);
-      expect(snapshot?.sessionFile).toContain(".checkpoint.");
+      expect(snapshot?.sessionFile).toContain("sqlite-transcript://");
     } finally {
       await cleanupCompactionCheckpointSnapshot(snapshot);
       sessionManagerOpenSpy.mockRestore();
@@ -225,7 +225,7 @@ describe("session-compaction-checkpoints", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-oversized-"));
     tempDirs.push(dir);
 
-    const session = SessionManager.create(dir, dir);
+    const session = SessionManager.create(dir);
     session.appendMessage({
       role: "user",
       content: "before compaction",
@@ -248,7 +248,7 @@ describe("session-compaction-checkpoints", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-fork-"));
     tempDirs.push(dir);
 
-    const session = SessionManager.create(dir, dir);
+    const session = SessionManager.create(dir);
     session.appendMessage({
       role: "user",
       content: "before checkpoint fork",
@@ -272,7 +272,6 @@ describe("session-compaction-checkpoints", () => {
     try {
       forked = await forkCompactionCheckpointTranscriptAsync({
         sourceFile: sessionFile!,
-        sessionDir: dir,
       });
 
       expect(openSpy).not.toHaveBeenCalled();
@@ -373,7 +372,6 @@ describe("session-compaction-checkpoints", () => {
 
     const forked = await forkCompactionCheckpointTranscriptAsync({
       sourceFile: legacySessionFile,
-      sessionDir: dir,
     });
 
     expect(forked).toBeNull();

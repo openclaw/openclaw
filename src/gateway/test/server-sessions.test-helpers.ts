@@ -354,7 +354,7 @@ export function sessionStoreEntry(sessionId: string, overrides: Partial<SessionE
 
 export async function createCheckpointFixture(dir: string) {
   const { SessionManager } = await getSessionManagerModule();
-  const session = SessionManager.create(dir, dir);
+  const session = SessionManager.create(dir);
   const userMessage: UserMessage = {
     role: "user",
     content: "before compaction",
@@ -401,7 +401,7 @@ export async function createCheckpointFixture(dir: string) {
   if (!preCompactionSessionFile) {
     throw new Error("expected persisted checkpoint snapshot");
   }
-  const preCompactionSession = SessionManager.open(preCompactionSessionFile, dir);
+  const preCompactionSession = SessionManager.open(preCompactionSessionFile);
   session.appendCompaction("checkpoint summary", preCompactionLeafId, 123, { ok: true });
   const postCompactionLeafId = session.getLeafId();
   if (!postCompactionLeafId) {

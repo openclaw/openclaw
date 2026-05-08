@@ -56,7 +56,7 @@ function createCompactedSession(sessionDir: string): {
   firstKeptId: string;
   oldUserId: string;
 } {
-  const manager = SessionManager.create(sessionDir, sessionDir);
+  const manager = SessionManager.create(sessionDir);
   manager.appendModelChange("openai", "gpt-5.2");
   manager.appendThinkingLevelChange("medium");
   manager.appendCustomEntry("test-extension", { cursor: "before-compaction" });
@@ -152,7 +152,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("deduplicates stale pre-compaction session state", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = SessionManager.create(dir);
 
     const staleModelId = manager.appendModelChange("anthropic", "claude-sonnet-4-5");
     const staleThinkingId = manager.appendThinkingLevelChange("low");
@@ -207,7 +207,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("drops duplicate user messages from the rotated active branch tail", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = SessionManager.create(dir);
     manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
     const firstKeptId = manager.appendMessage(makeAssistant("old assistant", 2));
     manager.appendCompaction("Summary of old work.", firstKeptId, 5000);
@@ -245,7 +245,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("skips sessions with no compaction entry", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = SessionManager.create(dir);
     manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     manager.appendMessage(makeAssistant("hi", 2));
 
@@ -262,7 +262,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("uses a refreshed manager after manual boundary hardening", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = SessionManager.create(dir);
     manager.appendMessage({ role: "user", content: "old question", timestamp: 1 });
     manager.appendMessage(makeAssistant("old answer", 2));
     const recentTailId = manager.appendMessage({
@@ -308,7 +308,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("preserves unsummarized sibling branches and branch summaries", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = SessionManager.create(dir);
 
     manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     const branchFromId = manager.appendMessage(makeAssistant("hi there", 2));
@@ -359,7 +359,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("orders preserved sibling branches after their surviving parents", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = SessionManager.create(dir);
 
     manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     const branchFromId = manager.appendMessage(makeAssistant("hi there", 2));
