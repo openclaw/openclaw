@@ -193,17 +193,16 @@ export async function runIMessageCatchup(
       }
     }
 
-    collected.sort((a, b) => a.rowid - b.rowid);
-    const capped = collected.slice(0, limit);
-    if (capped.length < collected.length) {
+    const sorted = collected.toSorted((a, b) => a.rowid - b.rowid);
+    const capped = sorted.slice(0, limit);
+    const isCapTruncated = capped.length < sorted.length;
+    if (isCapTruncated) {
       warnLog(
-        `imessage catchup: fetched ${collected.length} rows across chats, ` +
+        `imessage catchup: fetched ${sorted.length} rows across chats, ` +
           `capped to perRunLimit=${limit} (oldest first); next startup picks up the rest`,
       );
-    }
-    // Drop payloads we are no longer going to dispatch so the dispatch
-    // adapter does not have to defend against the discarded ones.
-    if (capped.length < collected.length) {
+      // Drop payloads we are no longer going to dispatch so the dispatch
+      // adapter does not have to defend against the discarded ones.
       const keep = new Set(capped.map((row) => row.guid));
       for (const guid of payloadByGuid.keys()) {
         if (!keep.has(guid)) {
@@ -212,11 +211,36 @@ export async function runIMessageCatchup(
       }
     }
 
+    // Clamp the raw watermark when cap-truncation hits so the catchup loop
+    // cannot persist a cursor past undispatched valid rows. Without this,
+    // a `messages.history` page wider than `perRunLimit` would silently
+    // skip the cap-truncated tail forever — the WARN above promises the
+    // next startup picks up the rest, and that promise relies on the
+    // cursor staying at the last dispatched rowid. When no truncation
+    // happens, the watermark covers parse-rejected rows interspersed
+    // with the dispatched batch (the original forward-progress fix).
+    let effectiveWatermarkRowid = rawWatermarkRowid;
+    let effectiveWatermarkMs = rawWatermarkMs;
+    if (isCapTruncated && capped.length > 0) {
+      const last = capped.at(-1);
+      if (last) {
+        effectiveWatermarkRowid = Math.min(effectiveWatermarkRowid, last.rowid);
+        effectiveWatermarkMs = Math.min(effectiveWatermarkMs, last.date);
+      }
+    } else if (isCapTruncated && capped.length === 0) {
+      // Pathological: cap=0. Don't emit any watermark; preserve the prior
+      // cursor and let the next pass try again.
+      effectiveWatermarkRowid = Number.NaN;
+      effectiveWatermarkMs = Number.NaN;
+    }
+
     return {
       resolved: true,
       rows: capped,
-      ...(Number.isFinite(rawWatermarkRowid) ? { highWatermarkRowid: rawWatermarkRowid } : {}),
-      ...(Number.isFinite(rawWatermarkMs) ? { highWatermarkMs: rawWatermarkMs } : {}),
+      ...(Number.isFinite(effectiveWatermarkRowid)
+        ? { highWatermarkRowid: effectiveWatermarkRowid }
+        : {}),
+      ...(Number.isFinite(effectiveWatermarkMs) ? { highWatermarkMs: effectiveWatermarkMs } : {}),
     };
   };
 

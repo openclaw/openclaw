@@ -270,6 +270,15 @@ describe("runIMessageCatchup", () => {
     expect(summary.replayed).toBe(5);
     // Oldest-first by rowid: 100, 101, 102, 103, 200 (chat 1's first 4, then chat 2's first).
     expect(dispatched).toEqual(["g-100", "g-101", "g-102", "g-103", "g-200"]);
+    // Regression for clawsweeper #79387 finding: the cursor must NOT
+    // advance past the last dispatched row when perRunLimit truncates
+    // the cross-chat page. Without the cap-aware watermark clamp, the
+    // bridge would emit a watermark covering the raw rows it dropped
+    // (rowids 201, 202, 203 from chat 2), and the catchup loop would
+    // persist `lastSeenRowid` past them — so the promised "next startup
+    // picks up the rest" warning would lie and those rows would be
+    // permanently lost. Cursor must stop at the last dispatched rowid (200).
+    expect(summary.cursorAfter.lastSeenRowid).toBe(200);
   });
 
   it("treats a dispatch throw as a failure and holds the cursor", async () => {
