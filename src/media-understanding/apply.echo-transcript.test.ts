@@ -104,6 +104,13 @@ function createAudioConfigWithEcho(opts?: {
   return { cfg, providers };
 }
 
+function disableImageUnderstanding(cfg: OpenClawConfig): void {
+  if (!cfg.tools?.media) {
+    throw new Error("Expected media tool config");
+  }
+  cfg.tools.media.image = { enabled: false };
+}
+
 function expectSingleEchoDeliveryCall() {
   expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
   const callArgs = mockDeliverOutboundPayloads.mock.calls[0]?.[0];
@@ -292,7 +299,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       echoTranscript: true,
       transcribedText: "should not appear",
     });
-    cfg.tools!.media!.image = { enabled: false };
+    disableImageUnderstanding(cfg);
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
