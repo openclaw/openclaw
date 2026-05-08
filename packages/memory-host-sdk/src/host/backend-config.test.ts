@@ -45,6 +45,30 @@ const rootMemoryConfig = (workspaceDir: string): OpenClawConfig =>
 const collectionNames = (resolved: ResolvedMemoryBackendConfig): Set<string> =>
   new Set((resolved.qmd?.collections ?? []).map((collection) => collection.name));
 
+function requireQmdConfig(
+  resolved: ResolvedMemoryBackendConfig,
+): NonNullable<ResolvedMemoryBackendConfig["qmd"]> {
+  expect(resolved.qmd).toBeDefined();
+  if (!resolved.qmd) {
+    throw new Error("expected qmd memory backend config");
+  }
+  return resolved.qmd;
+}
+
+function requireQmdCollection(
+  resolved: ResolvedMemoryBackendConfig,
+  name: string,
+): NonNullable<ResolvedMemoryBackendConfig["qmd"]>["collections"][number] {
+  const collection = requireQmdConfig(resolved).collections.find(
+    (candidate) => candidate.name === name,
+  );
+  expect(collection).toBeDefined();
+  if (!collection) {
+    throw new Error(`expected qmd collection ${name}`);
+  }
+  return collection;
+}
+
 const customQmdCollections = (
   resolved: ResolvedMemoryBackendConfig,
 ): NonNullable<ResolvedMemoryBackendConfig["qmd"]>["collections"] =>
@@ -89,25 +113,23 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.backend).toBe("qmd");
-    expect(resolved.qmd?.collections.length).toBe(2);
-    expect(resolved.qmd?.command).toBe("qmd");
-    expect(resolved.qmd?.searchMode).toBe("search");
-    expect(resolved.qmd?.update.intervalMs).toBeGreaterThan(0);
-    expect(resolved.qmd?.update.onBoot).toBe(true);
-    expect(resolved.qmd?.update.startup).toBe("off");
-    expect(resolved.qmd?.update.startupDelayMs).toBe(120_000);
-    expect(resolved.qmd?.update.waitForBootSync).toBe(false);
-    expect(resolved.qmd?.update.commandTimeoutMs).toBe(30_000);
-    expect(resolved.qmd?.update.updateTimeoutMs).toBe(120_000);
-    expect(resolved.qmd?.update.embedTimeoutMs).toBe(120_000);
-    const names = new Set((resolved.qmd?.collections ?? []).map((collection) => collection.name));
+    const qmd = requireQmdConfig(resolved);
+    expect(qmd.collections.length).toBe(2);
+    expect(qmd.command).toBe("qmd");
+    expect(qmd.searchMode).toBe("search");
+    expect(qmd.update.intervalMs).toBeGreaterThan(0);
+    expect(qmd.update.onBoot).toBe(true);
+    expect(qmd.update.startup).toBe("off");
+    expect(qmd.update.startupDelayMs).toBe(120_000);
+    expect(qmd.update.waitForBootSync).toBe(false);
+    expect(qmd.update.commandTimeoutMs).toBe(30_000);
+    expect(qmd.update.updateTimeoutMs).toBe(120_000);
+    expect(qmd.update.embedTimeoutMs).toBe(120_000);
+    const names = new Set(qmd.collections.map((collection) => collection.name));
     expect(names.has("memory-root-main")).toBe(true);
     expect(names.has("memory-dir-main")).toBe(true);
     expect(names.has("memory-alt-main")).toBe(false);
-    const rootCollection = resolved.qmd?.collections.find(
-      (collection) => collection.name === "memory-root-main",
-    );
-    expect(rootCollection?.pattern).toBe("MEMORY.md");
+    expect(requireQmdCollection(resolved, "memory-root-main").pattern).toBe("MEMORY.md");
   });
 
   it("keeps uppercase MEMORY.md as the root pattern when only lowercase memory.md exists", () => {
@@ -115,10 +137,7 @@ describe("resolveMemoryBackendConfig", () => {
     withMemoryRootEntries([memoryFileEntry("memory.md")], () => {
       const cfg = rootMemoryConfig(workspaceDir);
       const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-      const rootCollection = resolved.qmd?.collections.find(
-        (collection) => collection.name === "memory-root-main",
-      );
-      expect(rootCollection?.pattern).toBe("MEMORY.md");
+      expect(requireQmdCollection(resolved, "memory-root-main").pattern).toBe("MEMORY.md");
       expect(collectionNames(resolved).has("memory-alt-main")).toBe(false);
     });
   });
@@ -128,10 +147,7 @@ describe("resolveMemoryBackendConfig", () => {
     withMemoryRootEntries([memoryFileEntry("MEMORY.md"), memoryFileEntry("memory.md")], () => {
       const cfg = rootMemoryConfig(workspaceDir);
       const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-      const rootCollection = resolved.qmd?.collections.find(
-        (collection) => collection.name === "memory-root-main",
-      );
-      expect(rootCollection?.pattern).toBe("MEMORY.md");
+      expect(requireQmdCollection(resolved, "memory-root-main").pattern).toBe("MEMORY.md");
       expect(collectionNames(resolved).has("memory-alt-main")).toBe(false);
     });
   });
@@ -147,7 +163,7 @@ describe("resolveMemoryBackendConfig", () => {
       },
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-    expect(resolved.qmd?.command).toBe("/Applications/QMD Tools/qmd");
+    expect(requireQmdConfig(resolved).command).toBe("/Applications/QMD Tools/qmd");
   });
 
   it("resolves custom paths relative to workspace", () => {
