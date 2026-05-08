@@ -1444,6 +1444,7 @@ function renderGroupedMessage(
     "chat-bubble",
     isToolMessage ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
+    canCopyMarkdown || canExpand ? "has-copy" : "",
     "fade-in",
   ]
     .filter(Boolean)
