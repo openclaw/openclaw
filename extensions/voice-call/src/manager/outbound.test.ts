@@ -174,6 +174,53 @@ describe("voice-call outbound helpers", () => {
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
   });
 
+  it("freezes opts.agentId on the outbound CallRecord", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation" },
+        fromNumber: "+14155550100",
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+    };
+
+    const result = await initiateCall(ctx as never, "+14155550123", undefined, {
+      message: "hi",
+      agentId: "slack-u123",
+    });
+
+    expect(result.success).toBe(true);
+    expect(ctx.activeCalls.get(result.callId)?.agentId).toBe("slack-u123");
+  });
+
+  it("omits agentId from CallRecord when no opts.agentId is supplied", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation" },
+        fromNumber: "+14155550100",
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+    };
+
+    const result = await initiateCall(ctx as never, "+14155550123", undefined, {
+      message: "hi",
+    });
+
+    expect(result.success).toBe(true);
+    expect(ctx.activeCalls.get(result.callId)?.agentId).toBeUndefined();
+  });
+
   it("assigns per-call session keys to outbound calls when configured", async () => {
     const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
     const ctx = {
