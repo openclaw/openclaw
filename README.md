@@ -1,5 +1,34 @@
 # 🦞 OpenClaw — Personal AI Assistant
-
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-1zq3cHa6Lq036IIbWfI9C
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-H9GwV0BwMBK7edlDpjBuc
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-IFOchhvlFLPe0ctJzqesq
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-JRzeMXxiAoIcfTGNJ20rX
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-RI6BqZrBNJfhU3ImjzKwC
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-_azkcGQ0-qK0rncoUfwRq
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-d4XL5v4u-e0lJf1PQqqjY
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-i990D-awTzjHu6bUhBcXI
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-wfYYi_lp8FWSDKIz6eCXc
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-yU5E6n57-zNz4L3_MlTV5
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl-zS7AdVPMIrc6T671TSqk0
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl8948khMZbgdWcCfBCXoEk7
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl8CSJT0vRs85VraeXlRQqGP
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl8I0ldm6x1RHdvn5CyS1CYN
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl8Op2NF3arFDh-EiELcTwz_
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl8a8XO6gnBu2mzWfSMhA-JZ
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl8hkXNglQzMASUB3Izz5DQB
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl91ncYgVsl-fvYR8yIaYGj0
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl9N11rMmlE87K8hHCHCKWPD
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl9V3X2KLa4g_SGBcJEtMsJ7
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl9f9vWE1ikgh8IOR2sC8Ceg
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl9n8F2-f3dL9zyMKs7XY1XE
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl9qpKdJYp41NOGMHcmfgdiZ
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl9zvlHwd6ygxAN4hjYnP_17
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl_5rBi8uJMyLLVy9VEdUkEE
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl_Kcs7xkSJx4yQJvgf7-hHV
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl_NVvq1n_TPjS3cyau8I2Vz
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl_Py91LJRkzdbdD5DRZSXCx
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl_orMCb5ZuJZ5bA8Scq7JoY
+- https://www.youtube.com/playlist?list=PLGb_EL9XLjl_vUNmt4ps8_GO9uamADWsO
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.svg">
