@@ -120,7 +120,7 @@ export async function runIMessageCatchup(
       // Skip chats that have not seen activity in the catchup window. Saves
       // a per-chat RPC for every old archived conversation.
       const lastMs =
-        typeof chat.last_message_at === "string" ? Date.parse(chat.last_message_at) : NaN;
+        typeof chat.last_message_at === "string" ? Date.parse(chat.last_message_at) : Number.NaN;
       if (Number.isFinite(lastMs) && lastMs < sinceMs) {
         continue;
       }
@@ -158,7 +158,7 @@ export async function runIMessageCatchup(
             : null;
         const rawCreatedAt =
           rawRecord && typeof rawRecord.created_at === "string" ? rawRecord.created_at : null;
-        const rawDateMs = rawCreatedAt ? Date.parse(rawCreatedAt) : NaN;
+        const rawDateMs = rawCreatedAt ? Date.parse(rawCreatedAt) : Number.NaN;
         if (rawRowid !== null) {
           rawWatermarkRowid = Math.max(rawWatermarkRowid, rawRowid);
         }
@@ -176,7 +176,7 @@ export async function runIMessageCatchup(
         const guid = payload.guid?.trim();
         const rowid = typeof payload.id === "number" ? payload.id : null;
         const dateMs =
-          typeof payload.created_at === "string" ? Date.parse(payload.created_at) : NaN;
+          typeof payload.created_at === "string" ? Date.parse(payload.created_at) : Number.NaN;
         if (!guid || rowid === null || !Number.isFinite(rowid) || !Number.isFinite(dateMs)) {
           continue;
         }

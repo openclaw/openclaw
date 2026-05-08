@@ -133,7 +133,7 @@ describe("capFailureRetriesMap", () => {
     const map = { a: 1, b: 9, c: 5, d: 9 };
     const capped = capFailureRetriesMap(map, 2);
     // Both b and d at 9; tiebreak by guid string (alphabetical) → b, d
-    expect(Object.keys(capped).sort()).toEqual(["b", "d"]);
+    expect(Object.keys(capped).toSorted()).toEqual(["b", "d"]);
   });
 });
 

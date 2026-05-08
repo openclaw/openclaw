@@ -339,8 +339,8 @@ export async function performIMessageCatchup(
 
   // Stable order: process oldest-first so the cursor advances monotonically
   // and a mid-run failure leaves a usable lastSeenRowid for the next pass.
-  const rows = [...fetchResult.rows].sort((a, b) => a.rowid - b.rowid);
-  const failureRetries = { ...(cursor?.failureRetries ?? {}) };
+  const rows = fetchResult.rows.toSorted((a, b) => a.rowid - b.rowid);
+  const failureRetries = { ...cursor?.failureRetries };
 
   // Two distinct watermarks: `highWatermark*` is the high point we reached on
   // any row we processed cleanly (success / skipFromMe / skipPreCursor /
