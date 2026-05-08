@@ -6,6 +6,7 @@ import {
   buildSessionEntry,
   listSessionFilesForAgent,
   sessionPathForFile,
+  type SessionFileEntry,
 } from "./session-files.js";
 
 let fixtureRoot: string;
@@ -35,6 +36,14 @@ afterEach(() => {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
 });
+
+function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
+  expect(entry).toBeTruthy();
+  if (!entry) {
+    throw new Error("expected session entry");
+  }
+  return entry;
+}
 
 describe("listSessionFilesForAgent", () => {
   it("includes reset and deleted transcripts in session file listing", async () => {
@@ -110,19 +119,19 @@ describe("buildSessionEntry", () => {
     const filePath = path.join(tmpDir, "session.jsonl");
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
-    const entry = await buildSessionEntry(filePath);
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
     // The content should have 3 lines (3 message records)
-    const contentLines = entry?.content.split("\n");
+    const contentLines = entry.content.split("\n");
     expect(contentLines).toHaveLength(3);
-    expect(contentLines?.[0]).toContain("User: Hello world");
-    expect(contentLines?.[1]).toContain("Assistant: Hi there");
-    expect(contentLines?.[2]).toContain("User: Tell me a joke");
+    expect(contentLines[0]).toContain("User: Hello world");
+    expect(contentLines[1]).toContain("Assistant: Hi there");
+    expect(contentLines[2]).toContain("User: Tell me a joke");
 
     // lineMap should map each content line to its original JSONL line (1-indexed)
     // Content line 0 → JSONL line 4 (the first user message)
     // Content line 1 → JSONL line 6 (the assistant message)
     // Content line 2 → JSONL line 7 (the second user message)
-    expect(entry?.lineMap).toEqual([4, 6, 7]);
+    expect(entry.lineMap).toEqual([4, 6, 7]);
   });
 
   it("returns empty lineMap when no messages are found", async () => {
@@ -133,9 +142,9 @@ describe("buildSessionEntry", () => {
     const filePath = path.join(tmpDir, "empty-session.jsonl");
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
-    const entry = await buildSessionEntry(filePath);
-    expect(entry?.content).toBe("");
-    expect(entry?.lineMap).toEqual([]);
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe("");
+    expect(entry.lineMap).toEqual([]);
   });
 
   it("indexes usage-counted reset/deleted archives but still skips bak and checkpoint artifacts", async () => {
