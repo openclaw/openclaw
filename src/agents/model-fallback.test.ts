@@ -475,6 +475,73 @@ describe("runWithModelFallback", () => {
     }
   });
 
+  it("does not let bare-model alias override an explicitly specified provider (#79325)", () => {
+    // Regression: openrouter/deepseek/deepseek-v4-pro has an alias "DeepSeek-V4-Pro",
+    // and opencode-go/deepseek-v4-pro is also configured (no alias).
+    // When the user explicitly picks opencode-go/deepseek-v4-pro, the bare alias
+    // "deepseek-v4-pro" → "openrouter/deepseek/deepseek-v4-pro" must not overwrite
+    // the explicit provider choice.
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+          models: {
+            "openrouter/deepseek/deepseek-v4-pro": {
+              alias: "DeepSeek-V4-Pro",
+            },
+            "opencode-go/deepseek-v4-pro": {},
+          },
+        },
+      },
+    });
+
+    const candidates = __testing.resolveFallbackCandidates({
+      cfg,
+      provider: "opencode-go",
+      model: "deepseek-v4-pro",
+    });
+
+    expect(candidates[0]).toEqual({
+      provider: "opencode-go",
+      model: "deepseek-v4-pro",
+    });
+  });
+
+  it("lets bare-model alias supply provider when user does not specify one", () => {
+    // When user just types an alias without a provider prefix, the alias
+    // should still resolve to its configured provider.
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+          models: {
+            "openrouter/deepseek/deepseek-v4-pro": {
+              alias: "DeepSeek-V4-Pro",
+            },
+          },
+        },
+      },
+    });
+
+    // User types just the alias → alias resolves
+    const candidates = __testing.resolveFallbackCandidates({
+      cfg,
+      provider: "",
+      model: "DeepSeek-V4-Pro",
+    });
+
+    expect(candidates[0]).toEqual({
+      provider: "openrouter",
+      model: "deepseek/deepseek-v4-pro",
+    });
+  });
+
   it("falls back on unrecognized errors when candidates remain", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");

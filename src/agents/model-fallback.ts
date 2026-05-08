@@ -588,8 +588,16 @@ function resolveFallbackCandidates(params: {
     defaultProvider,
     aliasIndex,
   });
+  // When the caller explicitly specified a provider (e.g. --model opencode-go/deepseek-v4-pro),
+  // a bare-model alias that resolves to a *different* provider must not overwrite the
+  // explicit choice.  If the alias stays within the same provider (e.g. "sonnet" →
+  // "anthropic/claude-sonnet-4-6") it is still fine.
+  const providerSpecified = !!(params.provider && normalizeOptionalString(params.provider));
   const resolvedPrimary =
-    (resolvedModelAlias?.alias ? resolvedModelAlias.ref : null) ??
+    (resolvedModelAlias?.alias &&
+    (!providerSpecified || resolvedModelAlias.ref.provider === providerRaw)
+      ? resolvedModelAlias.ref
+      : null) ??
     (resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
     normalizedPrimary;
   const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model);
