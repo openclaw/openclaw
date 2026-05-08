@@ -131,11 +131,19 @@ function isCronRunGeneratedRecord(record: unknown): boolean {
     return false;
   }
   const candidate = record as {
+    message?: unknown;
     sessionKey?: unknown;
     data?: unknown;
   };
   if (hasCronRunSessionKey(candidate.sessionKey)) {
     return true;
+  }
+  const message = candidate.message as { role?: unknown; content?: unknown } | undefined;
+  if (message?.role === "user") {
+    const rawText = collectRawSessionText(message.content);
+    if (rawText !== null && isGeneratedCronPromptMessage(normalizeSessionText(rawText), "user")) {
+      return true;
+    }
   }
   if (!candidate.data || typeof candidate.data !== "object" || Array.isArray(candidate.data)) {
     return false;
