@@ -337,12 +337,6 @@ function isAlwaysBlockedCloudMetadataHostOrIpNormalized(normalized: string): boo
   );
 }
 
-function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy): void {
-  if (isBlockedHostnameOrIp(hostnameOrIp, policy)) {
-    throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
-  }
-}
-
 function resolveHostnamePolicyChecks(
   hostname: string,
   policy?: SsrFPolicy,
