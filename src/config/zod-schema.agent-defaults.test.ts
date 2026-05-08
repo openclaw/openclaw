@@ -5,24 +5,24 @@ import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
 describe("agent defaults schema", () => {
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expect(
+      AgentDefaultsSchema.safeParse({
         subagents: {
           archiveAfterMinutes: 0,
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts videoGenerationModel", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expect(
+      AgentDefaultsSchema.safeParse({
         videoGenerationModel: {
           primary: "qwen/wan2.6-t2v",
           fallbacks: ["minimax/video-01"],
         },
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts imageGenerationModel timeoutMs", () => {
@@ -48,11 +48,11 @@ describe("agent defaults schema", () => {
   });
 
   it("accepts mediaGenerationAutoProviderFallback", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expect(
+      AgentDefaultsSchema.safeParse({
         mediaGenerationAutoProviderFallback: false,
       }),
-    ).not.toThrow();
+    ).toMatchObject({ success: true });
   });
 
   it("accepts experimental.localModelLean", () => {
