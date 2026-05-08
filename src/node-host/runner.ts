@@ -53,6 +53,65 @@ type NodeHostReconnectPausedDeps = {
   exit?: (code: number) => never;
 };
 
+type NodeHostGatewayDropDeps = {
+  now?: () => number;
+  writeLine?: (message: string) => void;
+  exit?: (code: number) => never;
+};
+
+const NODE_HOST_UNHEALTHY_GATEWAY_DROP_LIMIT = 3;
+const NODE_HOST_UNHEALTHY_GATEWAY_DROP_WINDOW_MS = 60_000;
+
+function isNodeHostUnhealthyGatewayConnectError(message: string): boolean {
+  return /Unexpected server response:\s*502/i.test(message);
+}
+
+function isNodeHostUnhealthyGatewayClose(code: number): boolean {
+  return code === 1006;
+}
+
+export function createNodeHostGatewayDropWatchdog(deps: NodeHostGatewayDropDeps = {}): {
+  recordConnectError: (err: Error) => void;
+  recordClose: (code: number, reason: string) => void;
+} {
+  const now = deps.now ?? (() => Date.now());
+  const writeLine = deps.writeLine ?? writeStderrLine;
+  const exit = deps.exit ?? ((code: number): never => process.exit(code));
+  const unhealthyDrops: number[] = [];
+
+  function recordUnhealthyDrop(detail: string): void {
+    const current = now();
+    const cutoff = current - NODE_HOST_UNHEALTHY_GATEWAY_DROP_WINDOW_MS;
+    while (unhealthyDrops.length > 0 && unhealthyDrops[0] < cutoff) {
+      unhealthyDrops.shift();
+    }
+    unhealthyDrops.push(current);
+    if (unhealthyDrops.length < NODE_HOST_UNHEALTHY_GATEWAY_DROP_LIMIT) {
+      return;
+    }
+    writeLine(
+      `node host gateway unhealthy after ${unhealthyDrops.length} transport failures in ${NODE_HOST_UNHEALTHY_GATEWAY_DROP_WINDOW_MS}ms (${detail}); exiting for supervisor restart`,
+    );
+    exit(1);
+  }
+
+  return {
+    recordConnectError: (err: Error) => {
+      if (!isNodeHostUnhealthyGatewayConnectError(err.message)) {
+        return;
+      }
+      recordUnhealthyDrop(`connect failed: ${err.message}`);
+    },
+    recordClose: (code: number, reason: string) => {
+      if (!isNodeHostUnhealthyGatewayClose(code)) {
+        return;
+      }
+      const suffix = reason.trim() ? `: ${reason}` : "";
+      recordUnhealthyDrop(`gateway closed (${code})${suffix}`);
+    },
+  };
+}
+
 export function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
   return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
 }
@@ -218,6 +277,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const scheme = gateway.tls ? "wss" : "ws";
   const url = `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
+  const gatewayDropWatchdog = createNodeHostGatewayDropWatchdog();
 
   const client = new GatewayClient({
     url,
@@ -253,14 +313,17 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       void handleInvoke(payload, client, skillBins);
     },
     onConnectError: (err) => {
-      // keep retrying (handled by GatewayClient)
+      // keep retrying (handled by GatewayClient) until repeated proxy/transport failures
+      // prove the node host is unhealthy enough for the service supervisor to restart it.
       writeStderrLine(`node host gateway connect failed: ${err.message}`);
+      gatewayDropWatchdog.recordConnectError(err);
     },
     onReconnectPaused: (info) => {
       handleNodeHostReconnectPaused(info);
     },
     onClose: (code, reason) => {
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
+      gatewayDropWatchdog.recordClose(code, reason);
     },
   });
 

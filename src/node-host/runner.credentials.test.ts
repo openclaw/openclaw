@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createNodeHostGatewayDropWatchdog,
   handleNodeHostReconnectPaused,
   resolveNodeHostGatewayCredentials,
   shouldExitNodeHostOnReconnectPaused,
@@ -150,6 +151,66 @@ describe("resolveNodeHostGatewayCredentials", () => {
         expect(credentials.password).toBeUndefined();
       },
     );
+  });
+});
+
+describe("createNodeHostGatewayDropWatchdog", () => {
+  it("exits after repeated abnormal websocket closes so systemd can restart zombies", () => {
+    let currentTime = 1_000;
+    const lines: string[] = [];
+    const exit = vi.fn((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never;
+    const watchdog = createNodeHostGatewayDropWatchdog({
+      now: () => currentTime,
+      writeLine: (line) => lines.push(line),
+      exit,
+    });
+
+    watchdog.recordClose(1006, "");
+    currentTime += 1_000;
+    watchdog.recordClose(1006, "abnormal closure");
+    currentTime += 1_000;
+
+    expect(() => watchdog.recordClose(1006, "abnormal closure")).toThrow("exit 1");
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines).toEqual([
+      "node host gateway unhealthy after 3 transport failures in 60000ms (gateway closed (1006): abnormal closure); exiting for supervisor restart",
+    ]);
+  });
+
+  it("exits after repeated gateway proxy 502 connect failures", () => {
+    const exit = vi.fn((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never;
+    const watchdog = createNodeHostGatewayDropWatchdog({ writeLine: () => {}, exit });
+
+    watchdog.recordConnectError(new Error("Unexpected server response: 502"));
+    watchdog.recordConnectError(new Error("Unexpected server response: 502"));
+
+    expect(() =>
+      watchdog.recordConnectError(new Error("Unexpected server response: 502")),
+    ).toThrow("exit 1");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("does not exit for isolated or stale abnormal gateway drops", () => {
+    let currentTime = 1_000;
+    const exit = vi.fn((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never;
+    const watchdog = createNodeHostGatewayDropWatchdog({
+      now: () => currentTime,
+      writeLine: () => {},
+      exit,
+    });
+
+    watchdog.recordClose(1006, "abnormal closure");
+    currentTime += 61_000;
+    watchdog.recordConnectError(new Error("Unexpected server response: 502"));
+    watchdog.recordClose(1000, "normal closure");
+
+    expect(exit).not.toHaveBeenCalled();
   });
 });
 
