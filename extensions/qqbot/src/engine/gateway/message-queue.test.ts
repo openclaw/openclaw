@@ -14,6 +14,14 @@ function groupMsg(overrides: Partial<QueuedMessage> = {}): QueuedMessage {
   };
 }
 
+function requireMergeMetadata(message: QueuedMessage): NonNullable<QueuedMessage["merge"]> {
+  expect(message.merge).toBeDefined();
+  if (!message.merge) {
+    throw new Error("expected QQBot merged message metadata");
+  }
+  return message.merge;
+}
+
 describe("engine/gateway/message-queue", () => {
   describe("mergeGroupMessages", () => {
     it("returns the single message unchanged", () => {
@@ -28,8 +36,9 @@ describe("engine/gateway/message-queue", () => {
         groupMsg({ senderName: "B", content: "yo" }),
       ]);
       expect(merged.content).toBe("[A]: hi\n[B]: yo");
-      expect(merged.merge?.count).toBe(2);
-      expect(merged.merge?.messages).toHaveLength(2);
+      const merge = requireMergeMetadata(merged);
+      expect(merge.count).toBe(2);
+      expect(merge.messages).toHaveLength(2);
     });
 
     it("takes messageId / msgIdx / timestamp from the last message", () => {
@@ -62,7 +71,11 @@ describe("engine/gateway/message-queue", () => {
           ],
         }),
       ]);
-      expect(merged.attachments?.map((a) => a.url)).toEqual(["a", "b", "c"]);
+      expect(merged.attachments).toBeDefined();
+      if (!merged.attachments) {
+        throw new Error("expected QQBot merged attachments");
+      }
+      expect(merged.attachments.map((a) => a.url)).toEqual(["a", "b", "c"]);
     });
 
     it("deduplicates mentions by member/user openid", () => {
@@ -70,7 +83,11 @@ describe("engine/gateway/message-queue", () => {
         groupMsg({ mentions: [{ member_openid: "X" }, { member_openid: "Y" }] }),
         groupMsg({ mentions: [{ member_openid: "X" }, { member_openid: "Z" }] }),
       ]);
-      expect(merged.mentions?.map((m) => m.member_openid)).toEqual(["X", "Y", "Z"]);
+      expect(merged.mentions).toBeDefined();
+      if (!merged.mentions) {
+        throw new Error("expected QQBot merged mentions");
+      }
+      expect(merged.mentions.map((m) => m.member_openid)).toEqual(["X", "Y", "Z"]);
     });
 
     it("flags merged turn as @bot when ANY source was GROUP_AT_MESSAGE_CREATE", () => {
@@ -197,7 +214,9 @@ describe("engine/gateway/message-queue", () => {
       //  varies; we only assert the bot message id never appeared.)
       const mergedCall = seen.find((m) => (m.merge?.count ?? 0) > 1);
       if (mergedCall) {
-        expect(mergedCall.merge?.messages.map((m) => m.messageId)).not.toContain("B1");
+        expect(requireMergeMetadata(mergedCall).messages.map((m) => m.messageId)).not.toContain(
+          "B1",
+        );
       } else {
         expect(seenIds).not.toContain("B1");
       }
