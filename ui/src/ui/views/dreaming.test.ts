@@ -298,7 +298,10 @@ describe("dreaming view", () => {
       ".dreams-diary__insight-actions .btn",
     )[1];
     expect(openSourceButton).toBeInstanceOf(HTMLButtonElement);
-    openSourceButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    if (!(openSourceButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected imported source button");
+    }
+    openSourceButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
     expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
     setDreamDiarySubTab("dreams");
@@ -328,7 +331,10 @@ describe("dreaming view", () => {
       ".dreams-diary__insight-actions .btn",
     )[1];
     expect(openSourceButton).toBeInstanceOf(HTMLButtonElement);
-    openSourceButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    if (!(openSourceButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected imported source button");
+    }
+    openSourceButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
     await Promise.resolve();
 

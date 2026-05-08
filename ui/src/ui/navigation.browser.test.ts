@@ -14,11 +14,11 @@ function nextFrame() {
 }
 
 function expectElement<T extends Element>(
-  app: ReturnType<typeof mountApp>,
+  root: Element,
   selector: string,
   constructor: new () => T,
 ): T {
-  const element = app.querySelector<T>(selector);
+  const element = root.querySelector<T>(selector);
   expect(element).toBeInstanceOf(constructor);
   if (!(element instanceof constructor)) {
     throw new Error(`Expected ${selector} to match ${constructor.name}`);
@@ -57,8 +57,7 @@ describe("control UI routing", () => {
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
 
-    const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreaming"]');
-    expect(dreamsLink).not.toBeNull();
+    expectElement(app, 'a.nav-item[href="/dreaming"]', HTMLAnchorElement);
   });
 
   it("renders the dashboard breadcrumb as an overview link", async () => {
@@ -153,8 +152,8 @@ describe("control UI routing", () => {
     await app.updateComplete;
 
     expect(app.tab).toBe("dreams");
-    expect(app.querySelector(".dreams__tab")).not.toBeNull();
-    expect(app.querySelector(".dreams__lobster")).not.toBeNull();
+    expectElement(app, ".dreams__tab", HTMLElement);
+    expectElement(app, ".dreams__lobster", HTMLElement);
   });
 
   it("requires confirmation before sending dreaming restart patch", async () => {
@@ -337,18 +336,18 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    expect(app.querySelector(".topnav-shell")).not.toBeNull();
-    expect(app.querySelector(".topnav-shell__content")).not.toBeNull();
-    expect(app.querySelector(".topnav-shell__actions")).not.toBeNull();
+    expectElement(app, ".topnav-shell", HTMLElement);
+    expectElement(app, ".topnav-shell__content", HTMLElement);
+    expectElement(app, ".topnav-shell__actions", HTMLElement);
     expect(app.querySelector(".topnav-shell .brand-title")).toBeNull();
 
-    expect(app.querySelector(".sidebar-shell")).not.toBeNull();
-    expect(app.querySelector(".sidebar-shell__header")).not.toBeNull();
-    expect(app.querySelector(".sidebar-shell__body")).not.toBeNull();
-    expect(app.querySelector(".sidebar-shell__footer")).not.toBeNull();
-    expect(app.querySelector(".sidebar-brand")).not.toBeNull();
-    expect(app.querySelector(".sidebar-brand__logo")).not.toBeNull();
-    expect(app.querySelector(".sidebar-brand__copy")).not.toBeNull();
+    expectElement(app, ".sidebar-shell", HTMLElement);
+    expectElement(app, ".sidebar-shell__header", HTMLElement);
+    expectElement(app, ".sidebar-shell__body", HTMLElement);
+    expectElement(app, ".sidebar-shell__footer", HTMLElement);
+    expectElement(app, ".sidebar-brand", HTMLElement);
+    expectElement(app, ".sidebar-brand__logo", HTMLElement);
+    expectElement(app, ".sidebar-brand__copy", HTMLElement);
 
     app.hello = {
       ok: true,
@@ -357,58 +356,42 @@ describe("control UI routing", () => {
     app.requestUpdate();
     await app.updateComplete;
 
-    const version = app.querySelector<HTMLElement>(".sidebar-version");
-    const statusDot = app.querySelector<HTMLElement>(".sidebar-version__status");
-    expect(version).not.toBeNull();
-    expect(statusDot).not.toBeNull();
-    expect(statusDot?.getAttribute("aria-label")).toContain("Online");
+    expectElement(app, ".sidebar-version", HTMLElement);
+    const statusDot = expectElement(app, ".sidebar-version__status", HTMLElement);
+    expect(statusDot.getAttribute("aria-label")).toContain("Online");
 
     app.applySettings({ ...app.settings, navWidth: 360 });
     await app.updateComplete;
 
     expect(app.querySelector(".sidebar-resizer")).toBeNull();
-    const shell = app.querySelector<HTMLElement>(".shell");
-    expect(shell?.style.getPropertyValue("--shell-nav-width")).toBe("");
+    const shell = expectElement(app, ".shell", HTMLElement);
+    expect(shell.style.getPropertyValue("--shell-nav-width")).toBe("");
 
-    const split = app.querySelector(".chat-split-container");
-    expect(split).not.toBeNull();
-    if (split) {
-      split.classList.add("chat-split-container--open");
-      await app.updateComplete;
-      expect(split.classList.contains("chat-split-container--open")).toBe(true);
-    }
+    const split = expectElement(app, ".chat-split-container", HTMLElement);
+    split.classList.add("chat-split-container--open");
+    await app.updateComplete;
+    expect(split.classList.contains("chat-split-container--open")).toBe(true);
 
-    const chatMain = app.querySelector(".chat-main");
-    expect(chatMain).not.toBeNull();
+    expectElement(app, ".chat-main", HTMLElement);
 
-    const topShell = app.querySelector<HTMLElement>(".topnav-shell");
-    const content = app.querySelector<HTMLElement>(".topnav-shell__content");
-    expect(topShell).not.toBeNull();
-    expect(content).not.toBeNull();
-    if (!topShell || !content) {
-      return;
-    }
+    const topShell = expectElement(app, ".topnav-shell", HTMLElement);
+    const content = expectElement(app, ".topnav-shell__content", HTMLElement);
 
     expect(topShell.classList.contains("topnav-shell")).toBe(true);
     expect(content.classList.contains("topnav-shell__content")).toBe(true);
-    expect(topShell.querySelector(".topbar-nav-toggle")).not.toBeNull();
+    expectElement(topShell, ".topbar-nav-toggle", HTMLElement);
     expect(topShell.children[1]).toBe(content);
-    expect(topShell.querySelector(".topnav-shell__actions")).not.toBeNull();
+    expectElement(topShell, ".topnav-shell__actions", HTMLElement);
 
-    const toggle = app.querySelector<HTMLElement>(".topbar-nav-toggle");
-    const actions = app.querySelector<HTMLElement>(".topnav-shell__actions");
-    expect(toggle).not.toBeNull();
-    expect(actions).not.toBeNull();
-    if (!toggle || !actions || !shell) {
-      return;
-    }
+    const toggle = expectElement(app, ".topbar-nav-toggle", HTMLElement);
+    const actions = expectElement(app, ".topnav-shell__actions", HTMLElement);
 
     expect(toggle.classList.contains("topbar-nav-toggle")).toBe(true);
     expect(toggle.classList.contains("sidebar-menu-trigger")).toBe(true);
     expect(actions.classList.contains("topnav-shell__actions")).toBe(true);
     expect(topShell.firstElementChild).toBe(toggle);
     expect(topShell.querySelector(".topbar-nav-toggle")).toBe(toggle);
-    expect(actions.querySelector(".topbar-search")).not.toBeNull();
+    expectElement(actions, ".topbar-search", HTMLElement);
     expect(toggle.getAttribute("aria-label")).toEqual(expect.stringMatching(/\S/u));
 
     const nav = expectElement(app, ".shell-nav", HTMLElement);
@@ -434,37 +417,26 @@ describe("control UI routing", () => {
     expect(app.querySelector(".nav-section__label")).toBeNull();
     expect(app.querySelector(".sidebar-brand__logo")).toBeNull();
 
-    expect(app.querySelector(".sidebar-shell__footer")).not.toBeNull();
-    expect(app.querySelector(".sidebar-utility-link")).not.toBeNull();
+    expectElement(app, ".sidebar-shell__footer", HTMLElement);
+    expectElement(app, ".sidebar-utility-link", HTMLElement);
 
-    const item = app.querySelector<HTMLElement>(".sidebar .nav-item");
-    const header = app.querySelector<HTMLElement>(".sidebar-shell__header");
-    const sidebar = app.querySelector<HTMLElement>(".sidebar");
-    expect(item).not.toBeNull();
-    expect(header).not.toBeNull();
-    expect(sidebar).not.toBeNull();
-    if (!item || !header || !sidebar) {
-      return;
-    }
+    const item = expectElement(app, ".sidebar .nav-item", HTMLElement);
+    const header = expectElement(app, ".sidebar-shell__header", HTMLElement);
+    const sidebar = expectElement(app, ".sidebar", HTMLElement);
 
     expect(sidebar.classList.contains("sidebar--collapsed")).toBe(true);
-    expect(item.querySelector(".nav-item__icon")).not.toBeNull();
+    expectElement(item, ".nav-item__icon", HTMLElement);
     expect(item.querySelector(".nav-item__text")).toBeNull();
     expect(app.querySelector(".sidebar-brand__copy")).toBeNull();
-    expect(header.querySelector(".nav-collapse-toggle")).not.toBeNull();
+    expectElement(header, ".nav-collapse-toggle", HTMLElement);
   });
 
   it("closes mobile chat controls on Escape, outside pointerdown, and tab changes", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const toggle = app.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
-    const dropdown = app.querySelector<HTMLElement>(".chat-controls-dropdown");
-    expect(toggle).not.toBeNull();
-    expect(dropdown).not.toBeNull();
-    if (!toggle || !dropdown) {
-      return;
-    }
+    const toggle = expectElement(app, ".chat-controls-mobile-toggle", HTMLButtonElement);
+    const dropdown = expectElement(app, ".chat-controls-dropdown", HTMLElement);
 
     toggle.focus();
     toggle.click();
@@ -521,15 +493,14 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/chat");
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
 
-    const shell = app.querySelector(".shell");
-    expect(shell).not.toBeNull();
-    expect(shell?.classList.contains("shell--chat-focus")).toBe(false);
+    const shell = expectElement(app, ".shell", HTMLElement);
+    expect(shell.classList.contains("shell--chat-focus")).toBe(false);
 
     const toggle = expectElement(app, 'button[title^="Toggle focus mode"]', HTMLButtonElement);
     toggle.click();
 
     await app.updateComplete;
-    expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
+    expect(shell.classList.contains("shell--chat-focus")).toBe(true);
 
     const channelsLink = expectElement(app, 'a.nav-item[href="/channels"]', HTMLAnchorElement);
     channelsLink.dispatchEvent(
@@ -538,14 +509,14 @@ describe("control UI routing", () => {
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
-    expect(shell?.classList.contains("shell--chat-focus")).toBe(false);
+    expect(shell.classList.contains("shell--chat-focus")).toBe(false);
 
     const chatLink = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
     chatLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
     expect(app.tab).toBe("chat");
-    expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
+    expect(shell.classList.contains("shell--chat-focus")).toBe(true);
   });
 
   it("auto-scrolls chat history to the latest message", async () => {
@@ -659,12 +630,13 @@ describe("control UI routing", () => {
       undefined,
     );
 
-    const gatewayUrlInput = refreshed.querySelector<HTMLInputElement>(
+    const gatewayUrlInput = expectElement(
+      refreshed,
       'input[placeholder="ws://100.x.y.z:18789"]',
+      HTMLInputElement,
     );
-    expect(gatewayUrlInput).not.toBeNull();
-    gatewayUrlInput!.value = "wss://other-gateway.example/openclaw";
-    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    gatewayUrlInput.value = "wss://other-gateway.example/openclaw";
+    gatewayUrlInput.dispatchEvent(new Event("input", { bubbles: true }));
     await refreshed.updateComplete;
 
     expect(refreshed.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
