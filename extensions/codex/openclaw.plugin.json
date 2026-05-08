@@ -38,6 +38,11 @@
         "enum": ["native-first", "openclaw-compat"],
         "default": "native-first"
       },
+      "codexDynamicToolsLoading": {
+        "type": "string",
+        "enum": ["searchable", "direct"],
+        "default": "searchable"
+      },
       "codexDynamicToolsExclude": {
         "type": "array",
         "items": { "type": "string" },
@@ -159,6 +164,11 @@
     "codexDynamicToolsProfile": {
       "label": "Dynamic Tools Profile",
       "help": "Select which OpenClaw dynamic tools are exposed to Codex app-server. native-first omits tools Codex already owns.",
+      "advanced": true
+    },
+    "codexDynamicToolsLoading": {
+      "label": "Dynamic Tools Loading",
+      "help": "Use searchable to defer OpenClaw dynamic tools behind Codex tool search, or direct to expose them in the initial context.",
       "advanced": true
     },
     "codexDynamicToolsExclude": {
