@@ -32,7 +32,7 @@ export type ConnectAuthState = {
   deviceTokenCandidateSource?: DeviceTokenCandidateSource;
 };
 
-type VerifyDeviceTokenResult = { ok: boolean };
+type VerifyDeviceTokenResult = { ok: boolean; reason?: string };
 type VerifyBootstrapTokenResult = { ok: boolean; reason?: string };
 
 export type ConnectAuthDecision = {
@@ -214,10 +214,12 @@ export async function resolveConnectAuthDecision(params: {
         params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
       }
     } else {
+      const isScopeMismatch = tokenCheck.reason === "scope-mismatch";
       authResult = {
         ok: false,
-        reason:
-          params.state.deviceTokenCandidateSource === "explicit-device-token"
+        reason: isScopeMismatch
+          ? "device_token_scope_mismatch"
+          : params.state.deviceTokenCandidateSource === "explicit-device-token"
             ? "device_token_mismatch"
             : (authResult.reason ?? "device_token_mismatch"),
       };

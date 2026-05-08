@@ -108,6 +108,27 @@ describe("resolveConnectAuthDecision", () => {
     expect(verifyDeviceToken).toHaveBeenCalledOnce();
   });
 
+  it("reports scope-mismatch from verifyDeviceToken as device_token_scope_mismatch", async () => {
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({
+      ok: false,
+      reason: "scope-mismatch",
+    }));
+    const decision = await resolveConnectAuthDecision({
+      state: createBaseState({
+        deviceTokenCandidateSource: "explicit-device-token",
+      }),
+      hasDeviceIdentity: true,
+      deviceId: "dev-1",
+      publicKey: "pub-1",
+      role: "operator",
+      scopes: ["operator.read", "operator.admin", "operator.pairing"],
+      verifyBootstrapToken: async () => ({ ok: false, reason: "bootstrap_token_invalid" }),
+      verifyDeviceToken,
+    });
+    expect(decision.authOk).toBe(false);
+    expect(decision.authResult.reason).toBe("device_token_scope_mismatch");
+  });
+
   it("reports explicit device-token mismatches as device_token_mismatch", async () => {
     const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: false }));
     const decision = await resolveConnectAuthDecision({
