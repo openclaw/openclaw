@@ -7,6 +7,8 @@ import {
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
+export const MEMORY_SQLITE_BUSY_TIMEOUT_MS = 30_000;
+
 export function openMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean): DatabaseSync {
   const dir = path.dirname(dbPath);
   ensureDir(dir);
@@ -16,7 +18,7 @@ export function openMemoryDatabaseAtPath(dbPath: string, allowExtension: boolean
   // busy_timeout is per-connection and resets to 0 on restart.
   // Set it on every open so concurrent processes retry instead of
   // failing immediately with SQLITE_BUSY.
-  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec(`PRAGMA busy_timeout = ${MEMORY_SQLITE_BUSY_TIMEOUT_MS}`);
   return db;
 }
 

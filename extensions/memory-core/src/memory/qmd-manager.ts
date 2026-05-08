@@ -2218,7 +2218,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.db = new DatabaseSync(this.indexPath, { readOnly: true });
     // busy_timeout is per-connection; set it on every open so concurrent
     // processes retry instead of failing immediately with SQLITE_BUSY.
-    // Use a lower value than the write path (5 s) because this read-only
+    // Use a lower value than the memory write path because this read-only
     // connection runs synchronous queries on the main thread via DatabaseSync.
     // In WAL mode readers rarely block, so 1 s is a safe upper bound.
     this.db.exec("PRAGMA busy_timeout = 1000");
