@@ -16,6 +16,16 @@ import { parseMd } from "../parse.js";
 import { resolveOcPath, setOcPath } from "../universal.js";
 import { parseYaml } from "../yaml/parse.js";
 
+function collectMatchedItems(matches: readonly { path: { item?: string } }[]): string[] {
+  const items: string[] = [];
+  for (const match of matches) {
+    if (match.path.item !== undefined) {
+      items.push(match.path.item);
+    }
+  }
+  return items;
+}
+
 // ---------- hasWildcard ----------------------------------------------------
 
 describe("hasWildcard", () => {
@@ -699,7 +709,7 @@ describe("findOcPaths — Markdown kind", () => {
     // The `send-email` item is under the `tools` block. Pin that we
     // get at least one match (the substrate's md `**` should reach it).
     expect(out.length).toBeGreaterThanOrEqual(1);
-    const items = out.map((m) => m.path.item).filter((v): v is string => v !== undefined);
+    const items = collectMatchedItems(out);
     expect(items).toContain("send-email");
   });
 });
