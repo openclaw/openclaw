@@ -35,7 +35,7 @@ function runScript(args: string[], cwd = process.cwd()) {
 }
 
 function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
-  const arg = mock.mock.calls[0]?.[0];
+  const [arg] = mock.mock.calls[0] ?? [];
   if (arg === undefined) {
     throw new Error("expected first mock call argument");
   }
