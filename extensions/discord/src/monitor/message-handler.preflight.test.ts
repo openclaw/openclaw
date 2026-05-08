@@ -87,6 +87,17 @@ function createPreflightArgs(params: {
   return createDiscordPreflightArgs(params);
 }
 
+type DiscordPreflightResult = NonNullable<Awaited<ReturnType<typeof preflightDiscordMessage>>>;
+
+function expectPreflightResult(
+  result: Awaited<ReturnType<typeof preflightDiscordMessage>>,
+): DiscordPreflightResult {
+  if (result === null) {
+    throw new Error("Expected Discord preflight result");
+  }
+  return result;
+}
+
 function createThreadClient(params: { threadId: string; parentId: string }): DiscordClient {
   return {
     fetchChannel: async (channelId: string) => {
@@ -386,8 +397,8 @@ describe("preflightDiscordMessage", () => {
       } as DiscordConfig,
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.threadBinding).toMatchObject({
+    const preflight = expectPreflightResult(result);
+    expect(preflight.threadBinding).toMatchObject({
       conversation: {
         channel: "discord",
         accountId: "default",
@@ -468,11 +479,11 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.route.agentId).toBe("newagent");
-    expect(result?.route.sessionKey).toBe(`agent:newagent:discord:channel:${channelId}`);
-    expect(result?.boundSessionKey).toBeUndefined();
-    expect(result?.threadBinding).toBeUndefined();
+    const preflight = expectPreflightResult(result);
+    expect(preflight.route.agentId).toBe("newagent");
+    expect(preflight.route.sessionKey).toBe(`agent:newagent:discord:channel:${channelId}`);
+    expect(preflight.boundSessionKey).toBeUndefined();
+    expect(preflight.threadBinding).toBeUndefined();
   });
 
   it("preflights direct-message voice notes without mention gating", async () => {
@@ -512,9 +523,9 @@ describe("preflightDiscordMessage", () => {
         }),
       }),
     );
-    expect(result).not.toBeNull();
-    expect(result?.isDirectMessage).toBe(true);
-    expect(result?.preflightAudioTranscript).toBe("hello openclaw from dm audio");
+    const preflight = expectPreflightResult(result);
+    expect(preflight.isDirectMessage).toBe(true);
+    expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
   });
 
   it("keeps no-guild messages direct when channel lookup is unavailable", async () => {
@@ -542,11 +553,11 @@ describe("preflightDiscordMessage", () => {
       } as DiscordConfig,
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.channelInfo).toBeNull();
-    expect(result?.isDirectMessage).toBe(true);
-    expect(result?.isGroupDm).toBe(false);
-    expect(result?.route.sessionKey).toBe("agent:main:discord:direct:user-1");
+    const preflight = expectPreflightResult(result);
+    expect(preflight.channelInfo).toBeNull();
+    expect(preflight.isDirectMessage).toBe(true);
+    expect(preflight.isGroupDm).toBe(false);
+    expect(preflight.route.sessionKey).toBe("agent:main:discord:direct:user-1");
   });
 
   it("falls back to the default discord account for omitted-account dm authorization", async () => {
