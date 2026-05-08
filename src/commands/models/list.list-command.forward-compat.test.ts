@@ -396,6 +396,40 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
+    it("keeps scoped provider fallback rows filtered by model suppression", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      const currentModel = {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text", "image"],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      };
+      const suppressedModel = {
+        ...currentModel,
+        id: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
+      };
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [currentModel],
+        availableKeys: undefined,
+        registry: {
+          getAll: () => [currentModel, suppressedModel],
+        },
+      });
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true, provider: "openai" }, runtime as never);
+
+      expect(lastPrintedRows<{ key: string }>()).toEqual([
+        expect.objectContaining({ key: "openai/gpt-5.5" }),
+      ]);
+    });
+
     it("uses provider static catalog rows for provider filters without --all", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
