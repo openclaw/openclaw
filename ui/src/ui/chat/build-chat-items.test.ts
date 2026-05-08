@@ -154,7 +154,6 @@ describe("buildChatItems", () => {
     expect(items).toEqual([]);
   });
 
-<<<<<<< fix/control-ui-sender-metadata-stream
   it("suppresses active sender metadata streams before rendering", () => {
     const items = buildChatItems(
       createProps({
@@ -197,7 +196,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toEqual([]);
-=======
+  });
+
   it("renders only the last 100 history messages and shows a hidden-count notice", () => {
     const items = buildChatItems(
       createProps({
@@ -229,7 +229,6 @@ describe("buildChatItems", () => {
     expect(groups.at(-1)?.messages[0].message).toMatchObject({
       content: "message 104",
     });
->>>>>>> main
   });
 
   it("does not collapse duplicate text messages separated by another message", () => {
@@ -310,6 +309,45 @@ describe("buildChatItems", () => {
 
     expect(firstMessageContent(groups[0]).some((block) => isCanvasBlock(block))).toBe(true);
     expect(firstMessageContent(groups[1]).some((block) => isCanvasBlock(block))).toBe(false);
+  });
+
+  it("preserves a metadata-only assistant anchor when lifting canvas previews", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "assistant-metadata-anchor",
+          role: "assistant",
+          content: SENDER_METADATA_BLOCK,
+          timestamp: 1_000,
+        },
+      ],
+      toolMessages: [
+        {
+          id: "tool-canvas-for-empty-anchor",
+          role: "tool",
+          toolCallId: "call-canvas-empty-anchor",
+          toolName: "canvas_render",
+          content: JSON.stringify({
+            kind: "canvas",
+            view: {
+              backend: "canvas",
+              id: "cv_empty_anchor",
+              url: "/__openclaw__/canvas/documents/cv_empty_anchor/index.html",
+              title: "Empty anchor demo",
+              preferred_height: 320,
+            },
+            presentation: {
+              target: "assistant_message",
+            },
+          }),
+          timestamp: 1_001,
+        },
+      ],
+    });
+
+    expect(
+      groups.some((group) => firstMessageContent(group).some((block) => isCanvasBlock(block))),
+    ).toBe(true);
   });
 
   it("does not lift generic view handles from non-canvas payloads", () => {

@@ -260,11 +260,18 @@ function sanitizeStreamText(text: string): string {
 }
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
-  const items: ChatItem[] = [];
+  let items: ChatItem[] = [];
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
   );
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
+  const liftedCanvasSources = tools
+    .map((tool) => extractChatMessagePreview(tool))
+    .filter((entry) => Boolean(entry)) as Array<{
+    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
+    text: string | null;
+    timestamp: number | null;
+  }>;
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
   if (historyStart > 0) {
     items.push({
@@ -309,7 +316,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     if (props.searchOpen && searchQuery.trim() && !messageMatchesSearchQuery(msg, searchQuery)) {
       continue;
     }
-    if (!hasRenderableNormalizedMessage(msg)) {
+    if (!hasRenderableNormalizedMessage(msg) && normalized.role.toLowerCase() !== "assistant") {
       continue;
     }
 
@@ -319,13 +326,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       message: msg,
     });
   }
-  const liftedCanvasSources = tools
-    .map((tool) => extractChatMessagePreview(tool))
-    .filter((entry) => Boolean(entry)) as Array<{
-    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
-    text: string | null;
-    timestamp: number | null;
-  }>;
   for (const liftedCanvasSource of liftedCanvasSources) {
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
     if (assistantIndex == null) {
@@ -344,6 +344,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       ),
     };
   }
+  items = items.filter(
+    (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
+  );
   const segments = props.streamSegments ?? [];
   const maxLen = Math.max(segments.length, tools.length);
   for (let i = 0; i < maxLen; i++) {
