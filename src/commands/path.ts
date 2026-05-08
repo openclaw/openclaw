@@ -126,21 +126,27 @@ async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
   return parseMd(raw).ast;
 }
 
-function emitForKind(ast: OcAst): string {
+function emitForKind(ast: OcAst, fileName?: string): string {
+  // Plumb fileName through so OcEmitSentinelError messages carry the
+  // file context (`oc://gateway.jsonc/[raw]`) instead of the
+  // empty-slot fallback (`oc:///[raw]`). Test S-12 in the wave-21
+  // sentinel suite asserts the OcPath context appears in the error;
+  // without this plumbing, CLI emits had it stripped.
+  const opts = fileName !== undefined ? { fileNameForGuard: fileName } : {};
   switch (ast.kind) {
     case "jsonc":
-      return emitJsonc(ast);
+      return emitJsonc(ast, opts);
     case "jsonl":
-      return emitJsonl(ast);
+      return emitJsonl(ast, opts);
     case "yaml":
       // Default round-trip mode preserves bytes verbatim for unmodified
       // ASTs (so `openclaw path emit foo.yaml` is a true byte-fidelity
       // diagnostic). After `setOcPath` mutates a YAML AST the substrate
       // re-renders into `ast.raw` already, so round-trip mode emits the
       // mutated bytes too — no need for the render-mode override.
-      return emitYaml(ast);
+      return emitYaml(ast, opts);
     case "md":
-      return emitMd(ast);
+      return emitMd(ast, opts);
   }
   throw new Error(`unreachable: emitForKind kind`);
 }
@@ -190,7 +196,20 @@ export async function pathResolveCommand(
   }
   const fsPath = resolveFsPath(ocPath, options);
   const ast = await loadAst(fsPath, ocPath.file);
-  const match = resolveOcPath(ast, ocPath);
+  let match;
+  try {
+    match = resolveOcPath(ast, ocPath);
+  } catch (err) {
+    if (err instanceof OcPathError) {
+      // resolveOcPath now throws on wildcard patterns (the pattern
+      // belongs in `find`, not `resolve`). Surface the structured code
+      // so the CLI message points the caller at the right verb.
+      emitError(runtime, mode, `resolve refused: ${err.message}`, err.code);
+      runtime.exit(2);
+      return;
+    }
+    throw err;
+  }
   if (match === null) {
     emit(
       runtime,
@@ -278,7 +297,7 @@ export async function pathSetCommand(
   // refusal path.
   let newBytes: string;
   try {
-    newBytes = emitForKind(result.ast);
+    newBytes = emitForKind(result.ast, ocPath.file);
   } catch (err) {
     if (err instanceof OcEmitSentinelError) {
       emitError(
@@ -496,7 +515,7 @@ export async function pathEmitCommand(
   const ast = await loadAst(fsPath, fileName);
   let bytes: string;
   try {
-    bytes = emitForKind(ast);
+    bytes = emitForKind(ast, fileName);
   } catch (err) {
     if (err instanceof OcEmitSentinelError) {
       emitError(

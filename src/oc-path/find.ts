@@ -728,6 +728,23 @@ function walkMd(
           [{ slot: cur.slot, value: block.slug }],
           onMatch,
         );
+        // `**` retain-i branch: in addition to descending with `**`
+        // consumed (i + 1), also descend with `**` still active (i)
+        // so the next sub can match deeper. Without this, md `**`
+        // semantics diverged from yaml/jsonc — `oc://X.md/**/value`
+        // only matched the immediate-block layer and silently missed
+        // deeper hierarchies (cross-kind asymmetry — same lint rule
+        // worked on yaml but produced 0 matches on md).
+        if (cur.value === WILDCARD_RECURSIVE) {
+          walkMdInsideBlock(
+            block,
+            ast,
+            subs,
+            i,
+            [{ slot: cur.slot, value: block.slug }],
+            onMatch,
+          );
+        }
       }
       // `**` 0-match: emit at root if any.
       if (cur.value === WILDCARD_RECURSIVE && i + 1 >= subs.length) {

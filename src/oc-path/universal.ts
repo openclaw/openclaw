@@ -36,7 +36,14 @@ import { appendJsonlOcPath as appendJsonlLine, setJsonlOcPath } from './jsonl/ed
 import { resolveJsonlOcPath } from './jsonl/resolve.js';
 import { setMdOcPath } from './edit.js';
 import type { OcPath } from './oc-path.js';
-import { hasWildcard, isQuotedSeg, splitRespectingBrackets, unquoteSeg } from './oc-path.js';
+import {
+  formatOcPath,
+  hasWildcard,
+  isQuotedSeg,
+  OcPathError,
+  splitRespectingBrackets,
+  unquoteSeg,
+} from './oc-path.js';
 import { resolveMdOcPath } from './resolve.js';
 import { emitJsonc } from './jsonc/emit.js';
 import { emitJsonl } from './jsonl/emit.js';
@@ -166,9 +173,18 @@ export function detectInsertion(path: OcPath): InsertionInfo | null {
  */
 export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
   // Wildcard guard: `resolveOcPath` is the single-match verb. Wildcards
-  // belong to `findOcPaths` (multi-match). Reject early so consumers
-  // see the right verb in the error rather than a silent unresolved.
-  if (hasWildcard(path)) {return null;}
+  // belong to `findOcPaths` (multi-match). Throw with a structured code
+  // (consistent with `setOcPath`'s `wildcard-not-allowed` discriminator)
+  // — silent `null` here is indistinguishable from "path doesn't
+  // resolve", so consumers couldn't tell whether they should switch to
+  // findOcPaths or accept the address as missing.
+  if (hasWildcard(path)) {
+    throw new OcPathError(
+      `resolveOcPath received a wildcard pattern; use findOcPaths instead: ${formatOcPath(path)}`,
+      formatOcPath(path),
+      'OC_PATH_WILDCARD_IN_RESOLVE',
+    );
+  }
   const insertion = detectInsertion(path);
   if (insertion !== null) {
     return resolveInsertion(ast, insertion);

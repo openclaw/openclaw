@@ -185,6 +185,13 @@ describe("openclaw path CLI", () => {
       );
       expect(rt.exitCode).toBe(1);
       expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
+      // F13 — file context in sentinel error. Without fileNameForGuard
+      // plumbing through emitForKind, the message would carry the
+      // empty-slot fallback (`oc:///[raw]`); now it carries the actual
+      // file (`oc://gateway.jsonc/[raw]`). Forensics + audit pipelines
+      // rely on this — without the file context, "sentinel rejected
+      // somewhere" doesn't tell you WHICH file was involved.
+      expect(stderrText(rt)).toContain("gateway.jsonc");
     });
 
     it("CLI-S04 missing args returns 2", async () => {

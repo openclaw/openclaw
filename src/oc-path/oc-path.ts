@@ -141,6 +141,11 @@ export function parseOcPath(input: string): OcPath {
 
   // P-032 — hard cap on input length. Pathological inputs are rejected
   // before any further string ops so quadratic scans can't be triggered.
+  // The pre-normalize check fails fast on absurd input (a 10 MB string
+  // shouldn't even reach .normalize); the post-normalize check below
+  // catches the corner case where NFC composition grows the string
+  // past the cap (a few decomposed Hangul or combining-mark sequences
+  // can exceed pre-normalize length).
   if (input.length > MAX_PATH_LENGTH) {
     throw new OcPathError(
       `oc:// path exceeds ${MAX_PATH_LENGTH} bytes (length: ${input.length})`,
@@ -159,8 +164,20 @@ export function parseOcPath(input: string): OcPath {
   // is the canonical form for cross-platform string equality.
   normalized = normalized.normalize('NFC');
 
+  // Re-check the cap after NFC. NFC can grow a string (some Hangul
+  // and combining-mark sequences); without this re-check the
+  // documented invariant — "downstream loops iterate at most
+  // MAX_PATH_LENGTH chars" — doesn't hold.
+  if (normalized.length > MAX_PATH_LENGTH) {
+    throw new OcPathError(
+      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes after NFC (length: ${normalized.length})`,
+      input.slice(0, 80) + '…',
+      'OC_PATH_TOO_LONG',
+    );
+  }
+
   if (!normalized.startsWith(OC_SCHEME)) {
-    throw new OcPathError(`Missing oc:// scheme: ${input}`, input, 'OC_PATH_MISSING_SCHEME');
+    throw new OcPathError(`Missing oc:// scheme: ${printable(input)}`, input, 'OC_PATH_MISSING_SCHEME');
   }
 
   const afterScheme = normalized.slice(OC_SCHEME.length);
@@ -173,19 +190,19 @@ export function parseOcPath(input: string): OcPath {
   const queryPart = queryIndex === -1 ? '' : afterScheme.slice(queryIndex + 1);
 
   if (pathPart.length === 0) {
-    throw new OcPathError(`Empty oc:// path: ${input}`, input, 'OC_PATH_EMPTY');
+    throw new OcPathError(`Empty oc:// path: ${printable(input)}`, input, 'OC_PATH_EMPTY');
   }
 
   const segments = splitRespectingBrackets(pathPart, '/', input);
   for (const seg of segments) {
     if (seg.length === 0) {
-      throw new OcPathError(`Empty segment in oc:// path: ${input}`, input, 'OC_PATH_EMPTY_SEGMENT');
+      throw new OcPathError(`Empty segment in oc:// path: ${printable(input)}`, input, 'OC_PATH_EMPTY_SEGMENT');
     }
   }
 
   if (segments.length > 4) {
     throw new OcPathError(
-      `Too many segments in oc:// path (max 4): ${input}`,
+      `Too many segments in oc:// path (max 4): ${printable(input)}`,
       input,
       'OC_PATH_TOO_DEEP',
     );
@@ -198,7 +215,7 @@ export function parseOcPath(input: string): OcPath {
     const subs = splitRespectingBrackets(seg, '.', input);
     if (subs.length > MAX_SUB_SEGMENTS_PER_SLOT) {
       throw new OcPathError(
-        `Sub-segment count exceeds ${MAX_SUB_SEGMENTS_PER_SLOT} in segment "${seg}": ${input}`,
+        `Sub-segment count exceeds ${MAX_SUB_SEGMENTS_PER_SLOT} in segment "${seg}": ${printable(input)}`,
         input,
         'OC_PATH_TOO_DEEP',
       );
@@ -960,7 +977,7 @@ function validateBrackets(seg: string, input: string): void {
     else if (c === '}') {depthBrace--;}
     if (depthBracket < 0 || depthBrace < 0) {
       throw new OcPathError(
-        `Unbalanced bracket/brace in segment "${seg}": ${input}`,
+        `Unbalanced bracket/brace in segment "${seg}": ${printable(input)}`,
         input,
         'OC_PATH_UNBALANCED',
       );
@@ -968,7 +985,7 @@ function validateBrackets(seg: string, input: string): void {
   }
   if (depthBracket !== 0 || depthBrace !== 0) {
     throw new OcPathError(
-      `Unbalanced bracket/brace in segment "${seg}": ${input}`,
+      `Unbalanced bracket/brace in segment "${seg}": ${printable(input)}`,
       input,
       'OC_PATH_UNBALANCED',
     );
@@ -979,7 +996,7 @@ function validateSubSegment(sub: string, input: string): void {
   // Empty sub-segment from dotted-form means a stray `.` (e.g. `a..b`).
   if (sub.length === 0) {
     throw new OcPathError(
-      `Empty dotted sub-segment in oc:// path: ${input}`,
+      `Empty dotted sub-segment in oc:// path: ${printable(input)}`,
       input,
       'OC_PATH_EMPTY_SUB_SEGMENT',
     );
@@ -992,7 +1009,7 @@ function validateSubSegment(sub: string, input: string): void {
   // slashes in keys, not control bytes.
   if (hasControlChar(sub)) {
     throw new OcPathError(
-      `Control character in oc:// segment "${printable(sub)}": ${input}`,
+      `Control character in oc:// segment "${printable(sub)}": ${printable(input)}`,
       input,
       'OC_PATH_CONTROL_CHAR',
     );
@@ -1010,7 +1027,7 @@ function validateSubSegment(sub: string, input: string): void {
   if (!sub.startsWith('[') && !sub.startsWith('{')) {
     if (RESERVED_CHARS_RE.test(sub)) {
       throw new OcPathError(
-        `Reserved character (\`?\` / \`&\` / \`%\`) in oc:// segment "${sub}": ${input}`,
+        `Reserved character (\`?\` / \`&\` / \`%\`) in oc:// segment "${sub}": ${printable(input)}`,
         input,
         'OC_PATH_RESERVED_CHAR',
       );
@@ -1023,7 +1040,7 @@ function validateSubSegment(sub: string, input: string): void {
   if (!sub.startsWith('[') && !sub.startsWith('{')) {
     if (sub !== sub.trim() || /\s/.test(sub)) {
       throw new OcPathError(
-        `Whitespace in oc:// segment "${sub}": ${input}`,
+        `Whitespace in oc:// segment "${sub}": ${printable(input)}`,
         input,
         'OC_PATH_WHITESPACE',
       );
@@ -1038,7 +1055,7 @@ function validateSubSegment(sub: string, input: string): void {
   const endsBracket = sub.endsWith(']');
   if (startsBracket !== endsBracket) {
     throw new OcPathError(
-      `Mismatched bracket in segment "${sub}": ${input}`,
+      `Mismatched bracket in segment "${sub}": ${printable(input)}`,
       input,
       'OC_PATH_MALFORMED_PREDICATE',
     );
@@ -1047,7 +1064,7 @@ function validateSubSegment(sub: string, input: string): void {
     const inner = sub.slice(1, -1);
     if (inner.length === 0) {
       throw new OcPathError(
-        `Empty bracket segment "${sub}": ${input}`,
+        `Empty bracket segment "${sub}": ${printable(input)}`,
         input,
         'OC_PATH_MALFORMED_PREDICATE',
       );
@@ -1058,7 +1075,7 @@ function validateSubSegment(sub: string, input: string): void {
       const parsed = parsePredicateSeg(sub);
       if (parsed === null || parsed.key.length === 0 || parsed.value.length === 0) {
         throw new OcPathError(
-          `Malformed predicate "${sub}" — must be \`[key<op>value]\` with non-empty key and value: ${input}`,
+          `Malformed predicate "${sub}" — must be \`[key<op>value]\` with non-empty key and value: ${printable(input)}`,
           input,
           'OC_PATH_MALFORMED_PREDICATE',
         );
@@ -1072,7 +1089,7 @@ function validateSubSegment(sub: string, input: string): void {
   const endsBrace = sub.endsWith('}');
   if (startsBrace !== endsBrace) {
     throw new OcPathError(
-      `Mismatched brace in segment "${sub}": ${input}`,
+      `Mismatched brace in segment "${sub}": ${printable(input)}`,
       input,
       'OC_PATH_MALFORMED_UNION',
     );
@@ -1081,14 +1098,14 @@ function validateSubSegment(sub: string, input: string): void {
     const inner = sub.slice(1, -1);
     if (inner.length === 0) {
       throw new OcPathError(
-        `Empty union "${sub}" — must contain at least one alternative: ${input}`,
+        `Empty union "${sub}" — must contain at least one alternative: ${printable(input)}`,
         input,
         'OC_PATH_MALFORMED_UNION',
       );
     }
     if (inner.split(',').some((a) => a.length === 0)) {
       throw new OcPathError(
-        `Empty alternative in union "${sub}": ${input}`,
+        `Empty alternative in union "${sub}": ${printable(input)}`,
         input,
         'OC_PATH_MALFORMED_UNION',
       );

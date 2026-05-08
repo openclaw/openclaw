@@ -16,6 +16,7 @@ import { parseYaml } from '../yaml/parse.js';
 import {
   formatOcPath,
   hasWildcard,
+  OcPathError,
   parseOcPath,
 } from '../oc-path.js';
 import {
@@ -58,8 +59,22 @@ describe('hasWildcard', () => {
 describe('wildcard guard', () => {
   const yaml = parseYaml('steps:\n  - id: a\n    command: foo\n').ast;
 
-  it('resolveOcPath returns null for wildcard pattern', () => {
-    expect(resolveOcPath(yaml, parseOcPath('oc://wf/steps/*/command'))).toBeNull();
+  it('resolveOcPath throws OcPathError for wildcard pattern (F16)', () => {
+    // Previously returned `null` — indistinguishable from "path doesn't
+    // resolve". Now throws with `OC_PATH_WILDCARD_IN_RESOLVE` so the
+    // CLI / consumers can surface "use findOcPaths" rather than "not
+    // found". setOcPath uses a discriminated `wildcard-not-allowed`
+    // reason; this is the resolve-side analogue.
+    expect(() =>
+      resolveOcPath(yaml, parseOcPath('oc://wf/steps/*/command')),
+    ).toThrow(/findOcPaths/);
+    try {
+      resolveOcPath(yaml, parseOcPath('oc://wf/**'));
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(OcPathError);
+      expect((err as OcPathError).code).toBe('OC_PATH_WILDCARD_IN_RESOLVE');
+    }
   });
 
   it('setOcPath returns wildcard-not-allowed for wildcard pattern', () => {
@@ -618,6 +633,27 @@ describe('findOcPaths — Markdown kind', () => {
     const out = findOcPaths(md, parseOcPath('oc://SKILL.md/Tools/*/send_email'));
     expect(out).toHaveLength(1);
     expect(out[0].path.item).toBe('send-email');
+  });
+
+  it('** at section slot matches blocks at every depth (F14 — cross-kind symmetry)', () => {
+    // Without the retain-i branch on `**`, walkMd only descended one
+    // level (i + 1, consumed `**`) — yaml/jsonc walkers also retain
+    // `**` to keep matching deeper. A lint rule like "find every
+    // `risk:` field across all sections" would silently get 0 md
+    // matches on a multi-block file that worked on yaml/jsonc.
+    const multiBlock = parseMd(
+      '## Boundaries\n\n' +
+        '- never: rm -rf\n\n' +
+        '## Tools\n\n' +
+        '- send_email: enabled\n' +
+        '- search: enabled\n',
+    ).ast;
+    const out = findOcPaths(multiBlock, parseOcPath('oc://SOUL.md/**/send_email'));
+    // The `send_email` item is under the `tools` block; `**` must
+    // expand to that section before consuming the trailing field.
+    expect(out.length).toBeGreaterThanOrEqual(1);
+    const items = out.map((m) => m.path.item).filter((v): v is string => v !== undefined);
+    expect(items).toContain('send-email');
   });
 });
 
