@@ -427,7 +427,8 @@ describe("chat compaction divider", () => {
     const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
     expect(button?.textContent).toContain("Open checkpoints");
 
-    button?.click();
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    button!.click();
 
     expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
   });
@@ -509,7 +510,9 @@ describe("chat voice controls", () => {
       'Realtime voice provider "openai" is not configured',
     );
 
-    container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
+    const dismiss = container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]');
+    expect(dismiss).toBeInstanceOf(HTMLButtonElement);
+    dismiss!.click();
 
     expect(onDismissError).toHaveBeenCalledTimes(1);
   });
