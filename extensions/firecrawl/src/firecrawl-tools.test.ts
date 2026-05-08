@@ -215,9 +215,9 @@ describe("firecrawl tools", () => {
   });
 
   it("blocks private and non-http scrape targets before Firecrawl requests", () => {
-    expect(() =>
+    expect(
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     for (const blockedUrl of [
       "http://localhost/admin",
