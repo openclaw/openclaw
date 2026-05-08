@@ -32,7 +32,6 @@ async function loadProviderRegistry() {
 
 function requireVideoProvider(id: string): VideoGenerationProviderPlugin {
   const provider = getVideoGenerationProvider(id);
-  expect(provider).toBeDefined();
   if (!provider) {
     throw new Error(`expected video generation provider ${id}`);
   }

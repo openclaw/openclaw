@@ -34,7 +34,6 @@ function requireAttempt(
   index: number,
 ): NonNullable<(typeof result.attempts)[number]> {
   const attempt = result.attempts[index];
-  expect(attempt).toBeDefined();
   if (!attempt) {
     throw new Error(`expected video generation attempt ${index}`);
   }
