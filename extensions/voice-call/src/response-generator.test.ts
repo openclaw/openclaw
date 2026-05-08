@@ -32,12 +32,6 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
   const resolveAgentIdentity = vi.fn((_cfg: CoreConfig, agentId: string) => ({
     name: `${agentId} tester`,
   }));
-  const resolveSessionFilePath = vi.fn(
-    (_sessionId: string, _entry: unknown, params: { agentId?: string }) => {
-      return `/tmp/openclaw/${params.agentId ?? "main"}/sessions/session.jsonl`;
-    },
-  );
-
   const runtime = {
     defaults: {
       provider: "together",
@@ -56,7 +50,6 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
         Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
       upsertSessionEntry,
       patchSessionEntry: async () => null,
-      resolveSessionFilePath,
     },
   } as unknown as CoreAgentDeps;
 
@@ -69,7 +62,6 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
     resolveAgentDir,
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
-    resolveSessionFilePath,
   };
 }
 

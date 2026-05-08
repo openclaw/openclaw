@@ -45,14 +45,10 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
   });
 
-  it("ignores legacy sessionFile paths even when a sessions dir is provided", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-
-    const resolved = resolveSessionFilePath(
-      "sess-1",
-      { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
-      { sessionsDir },
-    );
+  it("ignores legacy sessionFile paths", () => {
+    const resolved = resolveSessionFilePath("sess-1", {
+      sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl",
+    });
     expect(resolved).toBe(createSqliteSessionTranscriptLocator({ sessionId: "sess-1" }));
   });
 

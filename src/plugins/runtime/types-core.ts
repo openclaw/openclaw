@@ -206,7 +206,6 @@ export type PluginRuntimeCore = {
       listSessionEntries: typeof import("../../config/sessions/store.js").listSessionEntries;
       patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
       upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
-      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
   system: {

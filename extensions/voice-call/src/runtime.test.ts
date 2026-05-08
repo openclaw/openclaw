@@ -170,7 +170,6 @@ function createSessionRuntimeMock(sessionStore: Record<string, unknown>) {
     upsertSessionEntry: vi.fn(({ sessionKey, entry }: { sessionKey: string; entry: unknown }) => {
       sessionStore[sessionKey] = entry;
     }),
-    resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
   };
 }
 

@@ -1,11 +1,7 @@
 // Narrow SQLite session row helpers for channel hot paths.
 
 export { resolveSessionRowEntry } from "../config/sessions/store-entry.js";
-export {
-  createSqliteSessionTranscriptLocator,
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptPathInDir,
-} from "../config/sessions/paths.js";
+export { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
 export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";

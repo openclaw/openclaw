@@ -9,7 +9,6 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionFilePath } from "../../config/sessions/paths.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -74,7 +73,6 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     listSessionEntries,
     patchSessionEntry,
     upsertSessionEntry,
-    resolveSessionFilePath,
   }));
 
   return agentRuntime as PluginRuntime["agent"];
