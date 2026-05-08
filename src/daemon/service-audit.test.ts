@@ -124,7 +124,8 @@ describe("auditGatewayServiceConfig", () => {
   it("accepts canonical macOS gateway service PATH without user-bin defaults", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
     try {
-      const servicePath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+      const servicePath =
+        "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
       const audit = await auditGatewayServiceConfig({
         env: { HOME: home },
