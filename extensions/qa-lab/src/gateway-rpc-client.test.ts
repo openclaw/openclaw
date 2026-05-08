@@ -145,8 +145,10 @@ describe("startQaGatewayRpcClient", () => {
       },
     );
 
-    expect(resolveFirst).not.toBeNull();
-    resolveFirst!({ ok: true });
+    if (resolveFirst === null) {
+      throw new Error("Expected first gateway request resolver");
+    }
+    resolveFirst({ ok: true });
     await expect(firstRequest).resolves.toEqual({ ok: true });
   });
 
@@ -174,8 +176,10 @@ describe("startQaGatewayRpcClient", () => {
 
     expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
 
-    expect(releaseFirst).not.toBeNull();
-    releaseFirst!();
+    if (releaseFirst === null) {
+      throw new Error("Expected first gateway request release callback");
+    }
+    releaseFirst();
 
     await expect(firstRequest).resolves.toEqual({ ok: true });
     await expect(secondRequest).resolves.toEqual({ ok: true });
