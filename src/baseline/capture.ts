@@ -1,0 +1,431 @@
+import fs from "node:fs";
+import path from "node:path";
+import { listAgentEntries } from "../agents/agent-scope.js";
+import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { callGateway } from "../gateway/call.js";
+import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
+import { getLoadedPlugins, getPluginManifest } from "../plugins/clawHub.js";
+
+/**
+ * Baseline Capture and Compare
+ *
+ * Captures system state snapshots for regression detection.
+ * Used after repairs, upgrades, or configuration changes.
+ *
+ * `openclaw baseline capture` - captures current state
+ * `openclaw baseline compare` - compares current state to baseline
+ */
+
+export const BASELINE_DIRNAME = "baselines";
+export const BASELINE_FILENAME = "baseline.json";
+
+export type BaselineSeverity = "pass" | "warn" | "fail";
+
+export type ComponentStatus = {
+  status: BaselineSeverity;
+  message?: string;
+  details?: Record<string, unknown>;
+};
+
+export type BaselineCapture = {
+  version: string;
+  timestamp: string;
+  openClawVersion: string;
+  components: {
+    gateway: ComponentStatus;
+    channels: ComponentStatus;
+    agents: ComponentStatus;
+    tasks: ComponentStatus;
+    locks: ComponentStatus;
+    plugins: ComponentStatus;
+  };
+  metrics: {
+    sessionCount: number;
+    agentCount: number;
+    channelCount: number;
+    activeTaskCount: number;
+    gatewayPid?: number;
+    gatewayUptimeMs?: number;
+  };
+  config?: {
+    agentBindings: number;
+    configuredChannels: number;
+    enabledPlugins: number;
+  };
+};
+
+export type BaselineComparison = {
+  baseline: BaselineCapture;
+  current: BaselineCapture;
+  diff: {
+    components: {
+      gateway?: { baseline: BaselineSeverity; current: BaselineSeverity };
+      channels?: { baseline: BaselineSeverity; current: BaselineSeverity };
+      agents?: { baseline: BaselineSeverity; current: BaselineSeverity };
+      tasks?: { baseline: BaselineSeverity; current: BaselineSeverity };
+      locks?: { baseline: BaselineSeverity; current: BaselineSeverity };
+      plugins?: { baseline: BaselineSeverity; current: BaselineSeverity };
+    };
+    metrics: {
+      sessionCount?: { baseline: number; current: number; delta: number };
+      agentCount?: { baseline: number; current: number; delta: number };
+      channelCount?: { baseline: number; current: number; delta: number };
+      activeTaskCount?: { baseline: number; current: number; delta: number };
+    };
+  };
+  overallStatus: BaselineSeverity;
+  regressions: string[];
+  improvements: string[];
+};
+
+function resolveBaselineDir(config?: OpenClawConfig): string {
+  const stateDir = resolveStateDir();
+  const baselineDir = path.join(stateDir, BASELINE_DIRNAME);
+  if (!fs.existsSync(baselineDir)) {
+    fs.mkdirSync(baselineDir, { recursive: true });
+  }
+  return baselineDir;
+}
+
+function resolveBaselinePath(name: string, config?: OpenClawConfig): string {
+  return path.join(resolveBaselineDir(config), `${name}.json`);
+}
+
+export async function captureBaseline(options?: {
+  name?: string;
+  config?: OpenClawConfig;
+  skipGateway?: boolean;
+  skipPlugins?: boolean;
+}): Promise<BaselineCapture> {
+  const config = options?.config;
+  const version = "1.0.0";
+
+  const gateway: ComponentStatus = await checkGatewayStatus(options?.skipGateway);
+  const channels: ComponentStatus = await checkChannelsStatus(config);
+  const agents: ComponentStatus = await checkAgentsStatus();
+  const tasks: ComponentStatus = await checkTasksStatus();
+  const locks: ComponentStatus = await checkLocksStatus();
+  const plugins: ComponentStatus = await checkPluginsStatus(options?.skipPlugins);
+
+  const agentCount = (await listAgentEntries({})).length;
+  const channelCount = listConfiguredChannelIdsForReadOnlyScope(config ?? {}).length;
+  const loadedPlugins = await getLoadedPlugins();
+  const pluginCount = Array.isArray(loadedPlugins) ? loadedPlugins.length : 0;
+
+  let sessionCount = 0;
+  try {
+    const result = await callGateway<{ sessions?: unknown[] }>({
+      method: "sessions.list",
+      params: { limit: 1 },
+      timeoutMs: 5000,
+    });
+    sessionCount = Array.isArray(result?.sessions) ? result.sessions.length : 0;
+  } catch {
+    // session count unknown
+  }
+
+  let taskCount = 0;
+  try {
+    const result = await callGateway<{ flows?: unknown[] }>({
+      method: "tasks.flows",
+      params: { active: true },
+      timeoutMs: 5000,
+    });
+    taskCount = Array.isArray(result?.flows) ? result.flows.length : 0;
+  } catch {
+    // task count unknown
+  }
+
+  const baseline: BaselineCapture = {
+    version,
+    timestamp: new Date().toISOString(),
+    openClawVersion: process.env.npm_package_version ?? "unknown",
+    components: {
+      gateway,
+      channels,
+      agents,
+      tasks,
+      locks,
+      plugins,
+    },
+    metrics: {
+      sessionCount,
+      agentCount,
+      channelCount,
+      activeTaskCount: taskCount,
+      gatewayPid: gateway.details?.pid as number | undefined,
+      gatewayUptimeMs: gateway.details?.uptimeMs as number | undefined,
+    },
+  };
+
+  const configBindings = (config as { agents?: { default?: { bindings?: unknown } } })?.agents
+    ?.default?.bindings;
+  baseline.config = {
+    agentBindings: Array.isArray(configBindings) ? configBindings.length : 0,
+    configuredChannels: channelCount,
+    enabledPlugins: pluginCount,
+  };
+
+  return baseline;
+}
+
+export async function saveBaseline(
+  baseline: BaselineCapture,
+  name: string,
+  config?: OpenClawConfig,
+): Promise<string> {
+  const baselinePath = resolveBaselinePath(name, config);
+  fs.writeFileSync(baselinePath, JSON.stringify(baseline, null, 2), "utf-8");
+  return baselinePath;
+}
+
+export function loadBaseline(name: string, config?: OpenClawConfig): BaselineCapture | null {
+  const baselinePath = resolveBaselinePath(name, config);
+  if (!fs.existsSync(baselinePath)) {
+    return null;
+  }
+  const content = fs.readFileSync(baselinePath, "utf-8");
+  try {
+    return JSON.parse(content) as BaselineCapture;
+  } catch {
+    return null;
+  }
+}
+
+export function listBaselines(config?: OpenClawConfig): string[] {
+  const baselineDir = resolveBaselineDir(config);
+  const files = fs.readdirSync(baselineDir).filter((f) => f.endsWith(".json"));
+  return files.map((f) => path.basename(f, ".json"));
+}
+
+export async function compareBaseline(
+  baselineName: string,
+  options?: {
+    config?: OpenClawConfig;
+    skipGateway?: boolean;
+    skipPlugins?: boolean;
+  },
+): Promise<BaselineComparison> {
+  const baseline = loadBaseline(baselineName, options?.config);
+  if (!baseline) {
+    throw new Error(`Baseline not found: ${baselineName}`);
+  }
+
+  const current = await captureBaseline(options);
+
+  const regressions: string[] = [];
+  const improvements: string[] = [];
+
+  const componentDiff: BaselineComparison["diff"]["components"] = {};
+
+  for (const key of Object.keys(baseline.components) as Array<keyof typeof baseline.components>) {
+    const baselineStatus = baseline.components[key].status;
+    const currentStatus = current.components[key].status;
+
+    if (baselineStatus !== currentStatus) {
+      componentDiff[key] = { baseline: baselineStatus, current: currentStatus };
+
+      if (statusToScore(currentStatus) < statusToScore(baselineStatus)) {
+        regressions.push(`${key}: ${baselineStatus} -> ${currentStatus}`);
+      } else {
+        improvements.push(`${key}: ${baselineStatus} -> ${currentStatus}`);
+      }
+    }
+  }
+
+  const metricsDiff: BaselineComparison["diff"]["metrics"] = {};
+
+  if (baseline.metrics.sessionCount !== current.metrics.sessionCount) {
+    metricsDiff.sessionCount = {
+      baseline: baseline.metrics.sessionCount,
+      current: current.metrics.sessionCount,
+      delta: current.metrics.sessionCount - baseline.metrics.sessionCount,
+    };
+  }
+
+  if (baseline.metrics.agentCount !== current.metrics.agentCount) {
+    metricsDiff.agentCount = {
+      baseline: baseline.metrics.agentCount,
+      current: current.metrics.agentCount,
+      delta: current.metrics.agentCount - baseline.metrics.agentCount,
+    };
+  }
+
+  if (baseline.metrics.channelCount !== current.metrics.channelCount) {
+    metricsDiff.channelCount = {
+      baseline: baseline.metrics.channelCount,
+      current: current.metrics.channelCount,
+      delta: current.metrics.channelCount - baseline.metrics.channelCount,
+    };
+  }
+
+  if (baseline.metrics.activeTaskCount !== current.metrics.activeTaskCount) {
+    metricsDiff.activeTaskCount = {
+      baseline: baseline.metrics.activeTaskCount,
+      current: current.metrics.activeTaskCount,
+      delta: current.metrics.activeTaskCount - baseline.metrics.activeTaskCount,
+    };
+  }
+
+  let overallStatus: BaselineSeverity = "pass";
+  if (regressions.length > 0) {
+    overallStatus = "fail";
+  } else if (improvements.length > 0) {
+    overallStatus = "pass";
+  }
+
+  return {
+    baseline,
+    current,
+    diff: {
+      components: componentDiff,
+      metrics: metricsDiff,
+    },
+    overallStatus,
+    regressions,
+    improvements,
+  };
+}
+
+function statusToScore(status: BaselineSeverity): number {
+  switch (status) {
+    case "pass":
+      return 2;
+    case "warn":
+      return 1;
+    case "fail":
+      return 0;
+  }
+}
+
+async function checkGatewayStatus(skip?: boolean): Promise<ComponentStatus> {
+  if (skip) {
+    return { status: "pass", message: "Skipped" };
+  }
+
+  try {
+    const result = await callGateway<{ running?: boolean; pid?: number; uptimeMs?: number }>({
+      method: "gateway.status",
+      params: {},
+      timeoutMs: 5000,
+    });
+
+    if (result?.running) {
+      return {
+        status: "pass",
+        message: "Gateway running",
+        details: { pid: result.pid, uptimeMs: result.uptimeMs },
+      };
+    }
+
+    return { status: "fail", message: "Gateway not running" };
+  } catch (err) {
+    return { status: "fail", message: err instanceof Error ? err.message : "Unknown error" };
+  }
+}
+
+async function checkChannelsStatus(config?: OpenClawConfig): Promise<ComponentStatus> {
+  try {
+    const channelIds = listConfiguredChannelIdsForReadOnlyScope(config ?? {});
+    if (channelIds.length === 0) {
+      return { status: "pass", message: "No channels configured" };
+    }
+
+    const result = await callGateway<{ channels?: Array<{ id: string; connected?: boolean }> }>({
+      method: "channels.status",
+      params: {},
+      timeoutMs: 5000,
+    });
+
+    const channels = result?.channels ?? [];
+    const connected = channels.filter((c) => c.connected).length;
+    const total = channelIds.length;
+
+    if (connected === total) {
+      return {
+        status: "pass",
+        message: `All ${total} channels connected`,
+        details: { connected, total },
+      };
+    } else if (connected > 0) {
+      return {
+        status: "warn",
+        message: `${connected}/${total} channels connected`,
+        details: { connected, total },
+      };
+    }
+
+    return {
+      status: "fail",
+      message: `0/${total} channels connected`,
+      details: { connected, total },
+    };
+  } catch (err) {
+    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+  }
+}
+
+async function checkAgentsStatus(): Promise<ComponentStatus> {
+  try {
+    const entries = await listAgentEntries({});
+    return {
+      status: "pass",
+      message: `${entries.length} agents`,
+      details: { count: entries.length },
+    };
+  } catch (err) {
+    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+  }
+}
+
+async function checkTasksStatus(): Promise<ComponentStatus> {
+  try {
+    const result = await callGateway<{ flows?: unknown[] }>({
+      method: "tasks.flows",
+      params: { active: true },
+      timeoutMs: 5000,
+    });
+    const count = Array.isArray(result?.flows) ? result.flows.length : 0;
+    return { status: "pass", message: `${count} active flows`, details: { count } };
+  } catch (err) {
+    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+  }
+}
+
+async function checkLocksStatus(): Promise<ComponentStatus> {
+  try {
+    const stateDir = resolveStateDir();
+    const locksDir = path.join(stateDir, "locks");
+    if (!fs.existsSync(locksDir)) {
+      return { status: "pass", message: "No locks directory" };
+    }
+    const lockFiles = fs.readdirSync(locksDir).filter((f) => f.endsWith(".lock"));
+    if (lockFiles.length === 0) {
+      return { status: "pass", message: "No locks" };
+    }
+    return {
+      status: "warn",
+      message: `${lockFiles.length} stale locks`,
+      details: { files: lockFiles },
+    };
+  } catch (err) {
+    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+  }
+}
+
+async function checkPluginsStatus(skip?: boolean): Promise<ComponentStatus> {
+  if (skip) {
+    return { status: "pass", message: "Skipped" };
+  }
+
+  try {
+    const loadedPlugins = await getLoadedPlugins();
+    const count = Array.isArray(loadedPlugins) ? loadedPlugins.length : 0;
+    return { status: "pass", message: `${count} plugins loaded`, details: { count } };
+  } catch (err) {
+    return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };
+  }
+}
+
+export { resolveBaselineDir, resolveBaselinePath };
