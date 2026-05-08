@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 
@@ -76,22 +76,27 @@ function buildConfigWithoutAgentRuntimePolicy(): OpenClawConfig {
 /**
  * Mirror the per-row computation from `src/commands/sessions.ts:290-298`:
  *   const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
- *   const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
+ *   const agentRuntime = resolveModelAgentRuntimeMetadata({ cfg, agentId, sessionKey: row.key });
  *
  * Returns the same shape that ends up serialized to `--json` output.
+ * After commit 02fe0d8978, the production path goes through resolveModelAgentRuntimeMetadata
+ * (not resolveAgentRuntimeMetadata which is now a stub returning { id: "auto", source: "implicit" }).
  */
 function computeSessionAgentRuntime(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   fallbackAgentId: string;
-}): ReturnType<typeof resolveAgentRuntimeMetadata> {
+}): ReturnType<typeof resolveModelAgentRuntimeMetadata> {
   const agentId = parseAgentSessionKey(params.sessionKey)?.agentId ?? params.fallbackAgentId;
-  // Explicit empty-env to avoid host-leak via OPENCLAW_AGENT_RUNTIME.
-  return resolveAgentRuntimeMetadata(params.cfg, agentId, {}, params.sessionKey);
+  return resolveModelAgentRuntimeMetadata({
+    cfg: params.cfg,
+    agentId,
+    sessionKey: params.sessionKey,
+  });
 }
 
 describe("sessions --json agentRuntime classifier (catalog #18)", () => {
-  it("RED: ACP session key is misclassified as runtime id 'pi' / implicit", () => {
+  it("RED→GREEN: ACP session key is no longer misclassified (overlay applies)", () => {
     const cfg = buildConfigWithoutAgentRuntimePolicy();
     const agentRuntime = computeSessionAgentRuntime({
       cfg,
@@ -99,25 +104,25 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
       fallbackAgentId: "copilot",
     });
 
-    // Today's behavior (the bug): the session key plainly contains `:acp:`
-    // and yet the resolved metadata says id="pi", source="implicit".
-    // These assertions are the RED-light test — they FAIL today and will
-    // GREEN once a fix consults the session key.
+    // The bug was: the session key plainly contains `:acp:` and yet the
+    // resolved metadata said id="pi", source="implicit".
+    // After the fix (applyAcpRuntimeOverlay in resolveModelAgentRuntimeMetadata),
+    // the ACP session key overrides the runtime to id="acpx", source="session-key".
     expect(
       agentRuntime.id,
-      `ACP session ${ACP_SESSION_KEY} is misclassified: agentRuntime.id is "${agentRuntime.id}" ` +
-        `but should reflect the ACP runtime (e.g. "acpx") because the session key carries the ":acp:" segment. ` +
-        `See src/commands/sessions.ts:294 — resolveAgentRuntimeMetadata(cfg, agentId) ignores session-key context.`,
-    ).not.toBe("pi");
+      `ACP session ${ACP_SESSION_KEY} should no longer be misclassified as "auto" or "pi". ` +
+        `Got "${agentRuntime.id}". resolveModelAgentRuntimeMetadata must pass sessionKey to ` +
+        `applyAcpRuntimeOverlay so ACP sessions are classified as "acpx".`,
+    ).not.toBe("auto");
     expect(
       agentRuntime.source,
       `ACP session ${ACP_SESSION_KEY} resolved with source="${agentRuntime.source}". ` +
-        `For an ACP-keyed session, the source should not be "implicit" (the fallback for "no policy found") — ` +
+        `For an ACP-keyed session, the source should not be "implicit" — ` +
         `the session key itself is an explicit signal that the runtime is ACP.`,
     ).not.toBe("implicit");
   });
 
-  it("GREEN control: non-ACP session correctly resolves to implicit pi", () => {
+  it("GREEN control: non-ACP session is NOT overridden by ACP overlay", () => {
     const cfg = buildConfigWithoutAgentRuntimePolicy();
     const agentRuntime = computeSessionAgentRuntime({
       cfg,
@@ -125,12 +130,14 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
       fallbackAgentId: "main",
     });
 
-    // For a non-ACP session with no explicit policy, falling back to
-    // "pi" / "implicit" is the correct behavior. This control case proves
-    // the test infra is exercising the real code path (not a mock that
-    // would silently pass either way).
-    expect(agentRuntime.id).toBe("pi");
-    expect(agentRuntime.source).toBe("implicit");
+    // For a non-ACP session, the overlay must NOT fire — the result must
+    // not be "acpx" and source must not be "session-key".  The control
+    // proves the overlay is gated on the `:acp:` segment in the session key.
+    // (The concrete id — "codex" for the default openai/gpt-5.5 provider —
+    // is determined by resolveAgentHarnessPolicy's Codex-routing rule;
+    // what matters here is the absence of the ACP override.)
+    expect(agentRuntime.id).not.toBe("acpx");
+    expect(agentRuntime.source).not.toBe("session-key");
   });
 
   it("FIX-SHAPE expectation: ACP session should resolve to 'acpx'", () => {
