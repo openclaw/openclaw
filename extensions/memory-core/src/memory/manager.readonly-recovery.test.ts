@@ -4,7 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openMemoryDatabaseAtPath } from "./manager-db.js";
+import { MEMORY_SQLITE_BUSY_TIMEOUT_MS, openMemoryDatabaseAtPath } from "./manager-db.js";
 import {
   _createMemorySyncControlConfigForTests,
   enqueueMemoryTargetedSessionSync,
@@ -219,7 +219,7 @@ describe("memory manager readonly recovery", () => {
       | { busy_timeout?: number; timeout?: number }
       | undefined;
     const busyTimeout = row?.busy_timeout ?? row?.timeout;
-    expect(busyTimeout).toBe(5000);
+    expect(busyTimeout).toBe(MEMORY_SQLITE_BUSY_TIMEOUT_MS);
     db.close();
   });
 
