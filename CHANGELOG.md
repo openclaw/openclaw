@@ -12,7 +12,7 @@ Docs: https://docs.openclaw.ai
 - Control UI: read the Quick Settings exec policy badge from `tools.exec.security` instead of the non-schema `agents.defaults.exec.security` path, so configured `full`/`deny` values render accurately. Fixes #78311. Thanks @FriedBack.
 - Control UI/usage: add transcript-backed historical lineage rollups for rotated logical sessions, with current-instance vs historical-lineage scope controls and long-range presets so usage history stays visible after restarts and updates. Fixes #50701. Thanks @dev-gideon-llc and @BunsDev.
 - Agents/failover: harden state-aware lane suspension by persisting quota resume transitions, restoring configured lane concurrency, preserving non-quota failure reasons, and exporting model failover events through diagnostics OTLP. Thanks @BunsDev.
-- Channels/streaming: render structured tool rows as compact emoji/title/details, show web-search queries from provider-native argument shapes, and skip empty Discord apply-patch starts until a patch summary exists. (#79146)
+- Channels/streaming: make progress draft labels scroll away with other progress lines, render structured tool rows as compact emoji/title/details, show web-search queries from provider-native argument shapes, and skip empty Discord apply-patch starts until a patch summary exists. (#79146)
 - Workspace/oc-path: add the `oc://` addressing substrate (`src/oc-path/`) — a universal, kind-dispatched path scheme for addressing leaves and nodes inside markdown, jsonc, jsonl, and yaml workspace files, with `parseOcPath`/`formatOcPath`, per-kind `parseXxx`/`emitXxx`, universal `resolveOcPath`/`setOcPath`/`findOcPaths` verbs, the `__OPENCLAW_REDACTED__` sentinel emit guard, and the new `openclaw path resolve|find|set|validate|emit` CLI for shell-level inspection and surgical edits. Implements #78051. (#78678) Thanks @giodl73-repo.
 - Runtime/performance: avoid full-array sorting while auto-selecting providers, resolving supported thinking levels, picking node last-seen timestamps, and extracting Codex usage-limit messages. Thanks @shakkernerd.
 - Plugins/doctor: avoid full-array sorting while selecting ClawHub search/archive results and bounded dreaming doctor entries. Thanks @shakkernerd.
@@ -185,7 +185,6 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/compaction: keep the recent tail after manual `/compact` when Pi returns an empty or no-op compaction summary, preventing blank checkpoints from replacing the live context.
-- Channels/streaming: keep progress draft labels visible above the last `streaming.progress.maxLines` progress rows instead of counting the label against the rolling line limit. Thanks @shakkernerd.
 - fix(discord): gate user allowlist name resolution [AI]. (#79002) Thanks @pgondhi987.
 - fix(msteams): gate startup user allowlist resolution [AI]. (#79003) Thanks @pgondhi987.
 - Harden macOS shell wrapper allowlist parsing [AI]. (#78518) Thanks @pgondhi987.
