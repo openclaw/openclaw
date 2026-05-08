@@ -1,9 +1,9 @@
+import crypto from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
@@ -11,6 +11,11 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { readStringValue } from "../shared/string-coerce.js";
+import {
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
@@ -28,6 +33,7 @@ export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
 const WORKSPACE_STATE_DIRNAME = ".openclaw";
 const WORKSPACE_STATE_FILENAME = "workspace-state.json";
+const WORKSPACE_SETUP_STATE_SCOPE = "workspace.setup-state";
 const WORKSPACE_STATE_VERSION = 1;
 const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_SOUL_FILENAME,
@@ -308,22 +314,30 @@ function resolveWorkspaceStatePath(dir: string): string {
   return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
 
+function resolveWorkspaceStateKey(dir: string): string {
+  return crypto.createHash("sha256").update(resolveUserPath(dir)).digest("hex");
+}
+
+function parseWorkspaceSetupStateValue(value: unknown): WorkspaceSetupState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const parsed = value as {
+    bootstrapSeededAt?: unknown;
+    setupCompletedAt?: unknown;
+    onboardingCompletedAt?: unknown;
+  };
+  const legacyCompletedAt = readStringValue(parsed.onboardingCompletedAt);
+  return {
+    version: WORKSPACE_STATE_VERSION,
+    bootstrapSeededAt: readStringValue(parsed.bootstrapSeededAt),
+    setupCompletedAt: readStringValue(parsed.setupCompletedAt) ?? legacyCompletedAt,
+  };
+}
+
 function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
   try {
-    const parsed = JSON.parse(raw) as {
-      bootstrapSeededAt?: unknown;
-      setupCompletedAt?: unknown;
-      onboardingCompletedAt?: unknown;
-    };
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    const legacyCompletedAt = readStringValue(parsed.onboardingCompletedAt);
-    return {
-      version: WORKSPACE_STATE_VERSION,
-      bootstrapSeededAt: readStringValue(parsed.bootstrapSeededAt),
-      setupCompletedAt: readStringValue(parsed.setupCompletedAt) ?? legacyCompletedAt,
-    };
+    return parseWorkspaceSetupStateValue(JSON.parse(raw) as unknown);
   } catch {
     return null;
   }
@@ -333,17 +347,20 @@ async function readWorkspaceSetupState(
   statePath: string,
   opts?: { persistLegacyMigration?: boolean },
 ): Promise<WorkspaceSetupState> {
+  const dir = path.dirname(path.dirname(statePath));
+  const key = resolveWorkspaceStateKey(dir);
+  const sqliteState = parseWorkspaceSetupStateValue(
+    readOpenClawStateKvJson(WORKSPACE_SETUP_STATE_SCOPE, key),
+  );
+  if (sqliteState) {
+    return sqliteState;
+  }
   try {
     const raw = await fs.readFile(statePath, "utf-8");
     const parsed = parseWorkspaceSetupState(raw);
-    if (
-      opts?.persistLegacyMigration &&
-      parsed &&
-      raw.includes('"onboardingCompletedAt"') &&
-      !raw.includes('"setupCompletedAt"') &&
-      parsed.setupCompletedAt
-    ) {
+    if (opts?.persistLegacyMigration && parsed) {
       await writeWorkspaceSetupState(statePath, parsed);
+      await fs.rm(statePath, { force: true }).catch(() => {});
     }
     return parsed ?? { version: WORKSPACE_STATE_VERSION };
   } catch (err) {
@@ -409,11 +426,16 @@ async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,
 ): Promise<void> {
-  await replaceFileAtomic({
-    filePath: statePath,
-    content: `${JSON.stringify(state, null, 2)}\n`,
-    tempPrefix: ".workspace-state",
-  });
+  const dir = path.dirname(path.dirname(statePath));
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    WORKSPACE_SETUP_STATE_SCOPE,
+    resolveWorkspaceStateKey(dir),
+    state as unknown as OpenClawStateJsonValue,
+  );
+}
+
+export async function readWorkspaceSetupStateForTests(dir: string): Promise<WorkspaceSetupState> {
+  return await readWorkspaceSetupState(resolveWorkspaceStatePath(resolveUserPath(dir)));
 }
 
 async function hasGitRepo(dir: string): Promise<boolean> {
