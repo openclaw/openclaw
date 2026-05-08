@@ -1062,7 +1062,7 @@ describe("sessions tools", () => {
     });
     await vi.waitFor(
       () => {
-        expect(calls.filter((call) => call.method === "agent")).toHaveLength(3);
+        expect(countMatching(calls, (call) => call.method === "agent")).toBe(3);
       },
       { timeout: 2_000, interval: 5 },
     );

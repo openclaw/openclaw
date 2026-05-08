@@ -1233,7 +1233,7 @@ describe("task-registry", () => {
       await maybeDeliverTaskTerminalUpdate(spawnedTask.taskId);
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(listTaskRecords().filter((task) => task.runId === "run-shared-delivery")).toHaveLength(
+      expect(countMatching(listTaskRecords(), (task) => task.runId === "run-shared-delivery")).toBe(
         1,
       );
       expect(findTaskByRunId("run-shared-delivery")).toMatchObject({

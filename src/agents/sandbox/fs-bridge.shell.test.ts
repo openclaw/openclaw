@@ -20,6 +20,16 @@ function expectSomeScriptContaining(scripts: string[], needle: string) {
   expect(scripts.some((script) => script.includes(needle))).toBe(true);
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("sandbox fs bridge shell compatibility", () => {
   installFsBridgeTestHarness();
 
@@ -157,7 +167,9 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "nested/b.txt" });
 
       const scripts = getScriptsFromCalls();
-      expect(scripts.filter((script) => script.includes("operation = sys.argv[1]")).length).toBe(3);
+      expect(countMatching(scripts, (script) => script.includes("operation = sys.argv[1]"))).toBe(
+        3,
+      );
       expectNoScriptsContaining(scripts, 'mkdir -p -- "$2"');
       expectNoScriptsContaining(scripts, 'rm -f -- "$2"');
       expectNoScriptsContaining(scripts, 'mv -- "$3" "$2/$4"');
