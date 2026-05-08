@@ -38,7 +38,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function parseCommandSpans(value: unknown):
+function parseCommandSpans(
+  value: unknown,
+  commandLength: number,
+):
   | {
       startIndex: number;
       endIndex: number;
@@ -63,7 +66,9 @@ function parseCommandSpans(value: unknown):
         Number.isSafeInteger(endIndex) &&
         typeof startIndex === "number" &&
         typeof endIndex === "number" &&
-        endIndex > startIndex
+        startIndex >= 0 &&
+        endIndex > startIndex &&
+        endIndex <= commandLength
       );
     },
   );
@@ -100,7 +105,7 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
-      commandSpans: parseCommandSpans(request.commandSpans),
+      commandSpans: parseCommandSpans(request.commandSpans, command.length),
     },
     createdAtMs,
     expiresAtMs,

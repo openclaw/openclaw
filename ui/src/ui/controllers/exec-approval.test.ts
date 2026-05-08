@@ -130,6 +130,7 @@ describe("parseExecApprovalRequested command spans", () => {
           { startIndex: 5, endIndex: 9 },
           { startIndex: 10, endIndex: 15 },
           { startIndex: 16, endIndex: 20 },
+          { startIndex: -1, endIndex: 2 },
           { startIndex: 8, endIndex: 8 },
         ],
       },
@@ -141,7 +142,6 @@ describe("parseExecApprovalRequested command spans", () => {
       { startIndex: 0, endIndex: 2 },
       { startIndex: 5, endIndex: 9 },
       { startIndex: 10, endIndex: 15 },
-      { startIndex: 16, endIndex: 20 },
     ]);
   });
 });
