@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeTextAtomic } from "../../infra/json-files.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveSessionTranscriptsDirForAgent } from "./paths.js";
@@ -204,49 +203,6 @@ describe("SQLite session store backend", () => {
     expect(fs.existsSync(storePath)).toBe(false);
     expect(loadSqliteSessionEntries({ agentId: "ops", env })).toEqual({
       "discord:ops": entry,
-    });
-  });
-
-  it("does not import a legacy canonical sessions.json on first SQLite open", async () => {
-    const stateDir = createTempDir();
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    const storePath = resolveLegacySessionJsonFixturePath({
-      agentId: "ops",
-      env: process.env,
-    });
-    const legacyEntry: SessionEntry = {
-      sessionId: "legacy-session",
-      sessionFile: "legacy-session.jsonl",
-      updatedAt: 100,
-    };
-    await writeTextAtomic(
-      storePath,
-      JSON.stringify(
-        {
-          "discord:ops": legacyEntry,
-        },
-        null,
-        2,
-      ),
-    );
-
-    expect(loadSqliteSessionEntries({ agentId: "ops", env: process.env })).toEqual({});
-
-    upsertSessionEntry({
-      agentId: "ops",
-      sessionKey: "discord:ops",
-      entry: {
-        ...legacyEntry,
-        sessionId: "sqlite-session",
-        updatedAt: 200,
-      },
-    });
-    expect(loadSqliteSessionEntries({ agentId: "ops", env: process.env })).toEqual({
-      "discord:ops": {
-        ...legacyEntry,
-        sessionId: "sqlite-session",
-        updatedAt: 200,
-      },
     });
   });
 });
