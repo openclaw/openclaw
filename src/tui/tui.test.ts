@@ -395,7 +395,11 @@ describe("resolveCodexCliBin", () => {
 
   it("returns null or a valid path (never throws)", () => {
     const result = resolveCodexCliBin();
-    expect(result === null || typeof result === "string").toBe(true);
+    if (result === null) {
+      expect(result).toBeNull();
+    } else {
+      expect(typeof result).toBe("string");
+    }
   });
 });
 

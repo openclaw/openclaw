@@ -53,7 +53,9 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  expect(value && typeof value === "object" && !Array.isArray(value)).toBe(true);
+  expect(value).not.toBeNull();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
 }
 
