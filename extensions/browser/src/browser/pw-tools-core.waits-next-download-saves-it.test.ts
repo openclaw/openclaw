@@ -208,6 +208,55 @@ describe("pw-tools-core", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "does not write outside the output root when a download parent is swapped after save",
+    async () => {
+      await withTempDir(async (tempDir) => {
+        const rootDir = path.join(tempDir, "downloads");
+        const targetParent = path.join(rootDir, "race");
+        const outsideDir = path.join(tempDir, "outside");
+        const targetPath = path.join(targetParent, "file.bin");
+        await fs.mkdir(targetParent, { recursive: true });
+        await fs.mkdir(outsideDir);
+
+        const harness = createDownloadEventHarness();
+        let parentSwappedBeforeFinalize = false;
+        const saveAs = vi.fn(async (outPath: string) => {
+          await fs.writeFile(outPath, "race-content", "utf8");
+          const beforeSwap = await fs.lstat(targetParent);
+          expect(beforeSwap.isDirectory()).toBe(true);
+          expect(beforeSwap.isSymbolicLink()).toBe(false);
+          await fs.rm(targetParent, { recursive: true, force: true });
+          await fs.symlink(outsideDir, targetParent);
+          const afterSwap = await fs.lstat(targetParent);
+          expect(afterSwap.isSymbolicLink()).toBe(true);
+          parentSwappedBeforeFinalize = true;
+        });
+
+        const p = mod.waitForDownloadViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "T1",
+          path: targetPath,
+          rootDir,
+          timeoutMs: 1000,
+        });
+
+        await Promise.resolve();
+        harness.expectArmed();
+        harness.trigger({
+          url: () => "https://example.com/file.bin",
+          suggestedFilename: () => "file.bin",
+          saveAs,
+        });
+
+        await expect(p).rejects.toThrow(/path alias|outside workspace|directory changed/i);
+        expect(parentSwappedBeforeFinalize).toBe(true);
+        expect(saveAs).toHaveBeenCalledOnce();
+        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+      });
+    },
+  );
+
   it("marks explicit download waiters as owning the next download until cleanup", async () => {
     const harness = createDownloadEventHarness();
     const state = sessionMocks.ensurePageState();
