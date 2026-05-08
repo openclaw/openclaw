@@ -106,7 +106,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   }
 
   it("does not accumulate :heartbeat suffix when wake passes an already-suffixed key", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
       const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const baseSessionKey = resolveMainSessionKey(cfg);
 
@@ -140,7 +140,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   });
 
   it("appends :heartbeat exactly once from a clean base key", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, agentId }) => {
       const cfg = makeIsolatedHeartbeatConfig(tmpDir);
       const baseSessionKey = resolveMainSessionKey(cfg);
 
