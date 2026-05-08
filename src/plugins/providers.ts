@@ -19,6 +19,10 @@ import {
   type PluginRegistrySnapshot,
 } from "./plugin-registry.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
+import {
+  createProviderResolutionCacheKey,
+  type ProviderResolutionScope,
+} from "./provider-resolution-scope.js";
 
 type ProviderManifestLoadParams = {
   config?: PluginLoadOptions["config"];
@@ -484,6 +488,7 @@ export function resolveOwningPluginIdsForProvider(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   manifestRegistry?: PluginManifestRegistry;
+  resolutionScope?: ProviderResolutionScope;
 }): string[] | undefined {
   const normalizedProvider = normalizeProviderId(params.provider);
   if (!normalizedProvider) {
@@ -507,6 +512,24 @@ export function resolveOwningPluginIdsForProvider(params: {
   }
 
   const env = params.env ?? process.env;
+  const cacheKey = params.resolutionScope
+    ? createProviderResolutionCacheKey({
+        provider: normalizedProvider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env,
+        extra: "owning-provider-plugin-ids",
+      })
+    : undefined;
+  const cached = cacheKey
+    ? params.resolutionScope?.owningPluginIdsForProvider.get(cacheKey)
+    : undefined;
+  if (
+    cached !== undefined ||
+    (cacheKey && params.resolutionScope?.owningPluginIdsForProvider.has(cacheKey))
+  ) {
+    return cached;
+  }
   const pluginIds = [
     ...resolveProviderOwners({
       config: params.config,
@@ -526,7 +549,11 @@ export function resolveOwningPluginIdsForProvider(params: {
   ];
 
   const deduped = dedupeSortedPluginIds(pluginIds);
-  return deduped.length > 0 ? deduped : undefined;
+  const resolved = deduped.length > 0 ? deduped : undefined;
+  if (cacheKey) {
+    params.resolutionScope?.owningPluginIdsForProvider.set(cacheKey, resolved);
+  }
+  return resolved;
 }
 
 export function resolveOwningPluginIdsForModelRef(params: {
@@ -536,6 +563,7 @@ export function resolveOwningPluginIdsForModelRef(params: {
   env?: PluginLoadOptions["env"];
   manifestRegistry?: PluginManifestRegistry;
   registry?: PluginRegistrySnapshot;
+  resolutionScope?: ProviderResolutionScope;
 }): string[] | undefined {
   const parsed = splitExplicitModelRef(params.model);
   if (!parsed) {
@@ -549,6 +577,7 @@ export function resolveOwningPluginIdsForModelRef(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
       manifestRegistry: params.manifestRegistry,
+      resolutionScope: params.resolutionScope,
     });
   }
 
@@ -579,6 +608,7 @@ export function resolveOwningPluginIdsForModelRefs(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   manifestRegistry?: PluginManifestRegistry;
+  resolutionScope?: ProviderResolutionScope;
 }): string[] {
   const registry = params.manifestRegistry ? undefined : loadProviderRegistrySnapshot(params);
   const manifestRegistry = params.manifestRegistry;
@@ -590,6 +620,7 @@ export function resolveOwningPluginIdsForModelRefs(params: {
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          resolutionScope: params.resolutionScope,
           ...(manifestRegistry ? { manifestRegistry } : {}),
           ...(registry ? { registry } : {}),
         }) ?? [],
@@ -622,6 +653,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  resolutionScope?: ProviderResolutionScope;
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
