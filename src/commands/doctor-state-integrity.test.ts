@@ -202,6 +202,18 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("CRITICAL: OAuth dir missing");
   });
 
+  it("does not require the legacy sessions directory for SQLite-backed sessions", async () => {
+    const cfg: OpenClawConfig = {};
+    const confirmRuntimeRepair = await runStateIntegrity(cfg);
+
+    expect(stateIntegrityText()).not.toContain("CRITICAL: Sessions dir missing");
+    expect(confirmRuntimeRepair).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("Create Sessions dir"),
+      }),
+    );
+  });
+
   it("does not prompt for oauth dir when whatsapp is configured without persisted auth state", async () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -474,7 +486,7 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "does not archive referenced transcripts when the state dir path resolves through a symlink",
+    "treats symlinked legacy transcript files as orphan cleanup candidates",
     async () => {
       const cfg: OpenClawConfig = {};
       const originalHome = tempHome;
@@ -508,11 +520,10 @@ describe("doctor state integrity oauth dir checks", () => {
         );
         await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-        expect(fs.existsSync(transcriptPath)).toBe(true);
-        expect(fs.readdirSync(sessionsDir).filter((name) => name.includes(".deleted."))).toEqual(
-          [],
+        expect(fs.existsSync(transcriptPath)).toBe(false);
+        expect(stateIntegrityText()).toContain(
+          "These legacy .jsonl files are no longer referenced by SQLite session rows",
         );
-        expect(stateIntegrityText()).not.toContain("These .jsonl files are no longer referenced");
       } finally {
         fs.rmSync(symlinkHome, { force: true, recursive: true });
       }
