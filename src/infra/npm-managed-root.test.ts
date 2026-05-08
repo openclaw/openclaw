@@ -398,8 +398,6 @@ describe("managed npm root", () => {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        ".",
         "openclaw",
       ],
       expect.objectContaining({

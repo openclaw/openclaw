@@ -992,8 +992,6 @@ describe("uninstallPlugin", () => {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        ".",
         "@openclaw/kitchen-sink",
       ],
       expect.objectContaining({
@@ -1128,8 +1126,6 @@ describe("uninstallPlugin", () => {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        ".",
         "missing-plugin",
       ],
       expect.objectContaining({

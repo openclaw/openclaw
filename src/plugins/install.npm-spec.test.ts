@@ -69,8 +69,6 @@ function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string 
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
-    "--prefix",
-    ".",
   ]);
 }
 
@@ -290,9 +288,7 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
         );
       }
       if (argv[0] === "npm" && argv[1] === "install") {
-        const prefixIndex = argv.indexOf("--prefix");
-        const prefixValue = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
-        const npmRoot = prefixValue === "." ? options?.cwd : prefixValue;
+        const npmRoot = options?.cwd;
         if (!npmRoot) {
           throw new Error(`unexpected npm install command: ${argv.join(" ")}`);
         }
@@ -345,9 +341,7 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
       if (argv[0] === "npm" && argv[1] === "uninstall") {
         const packageName = argv.at(-1);
         if (packageName === "openclaw") {
-          const prefixIndex = argv.indexOf("--prefix");
-          const prefixValue = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
-          const npmRoot = prefixValue === "." ? options?.cwd : prefixValue;
+          const npmRoot = options?.cwd;
           if (!npmRoot) {
             throw new Error(`unexpected npm uninstall command: ${argv.join(" ")}`);
           }
