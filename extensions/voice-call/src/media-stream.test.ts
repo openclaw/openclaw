@@ -624,11 +624,14 @@ describe("MediaStreamHandler security hardening", () => {
   });
 
   it("clears pending state after valid start", async () => {
+    const shouldAcceptStream = vi.fn(() => true);
     const handler = new MediaStreamHandler({
       transcriptionProvider: createStubSttProvider(),
       providerConfig: {},
-      preStartTimeoutMs: 40,
-      shouldAcceptStream: () => true,
+      maxPendingConnections: 1,
+      maxPendingConnectionsPerIp: 10,
+      preStartTimeoutMs: 5_000,
+      shouldAcceptStream,
     });
     const server = await startWsServer(handler);
 
@@ -642,9 +645,22 @@ describe("MediaStreamHandler security hardening", () => {
         }),
       );
 
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      await vi.waitFor(() => {
+        expect(shouldAcceptStream).toHaveBeenCalledWith(
+          expect.objectContaining({
+            callId: "CA123",
+            streamSid: "MZ123",
+            token: "token-123",
+          }),
+        );
+      });
       expect(ws.readyState).toBe(WebSocket.OPEN);
 
+      const second = await connectWs(server.url);
+      expect(second.readyState).toBe(WebSocket.OPEN);
+
+      second.close();
+      await waitForClose(second);
       ws.close();
       await waitForClose(ws);
     } finally {
