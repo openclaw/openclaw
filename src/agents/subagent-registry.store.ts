@@ -25,7 +25,6 @@ type PersistedSubagentRegistryV2 = {
 
 type PersistedSubagentRegistry = PersistedSubagentRegistryV1 | PersistedSubagentRegistryV2;
 
-const REGISTRY_VERSION = 2 as const;
 const MAX_SUBAGENT_REGISTRY_READ_CACHE_ENTRIES = 32;
 const SUBAGENT_REGISTRY_KV_SCOPE = "subagent_runs";
 
@@ -217,10 +216,6 @@ export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>)
   for (const [runId, entry] of runs.entries()) {
     serialized[runId] = entry;
   }
-  const out: PersistedSubagentRegistry = {
-    version: REGISTRY_VERSION,
-    runs: serialized,
-  };
   const existing = listOpenClawStateKvJson<PersistedSubagentRunRecord>(
     SUBAGENT_REGISTRY_KV_SCOPE,
     subagentRegistryDbOptions(),
