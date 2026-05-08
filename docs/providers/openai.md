@@ -11,18 +11,22 @@ OpenAI provides developer APIs for GPT models, and Codex is also available as a
 ChatGPT-plan coding agent through OpenAI's Codex clients. OpenClaw keeps those
 surfaces separate so config stays predictable.
 
-OpenClaw uses `openai/*` as the canonical OpenAI model route. Embedded agent
-turns on OpenAI models run through the native Codex app-server runtime by
-default; direct OpenAI API-key auth remains available for non-agent OpenAI
-surfaces such as images, embeddings, speech, and realtime.
+OpenClaw supports both `openai/*` and explicit `openai-codex/*` agent model
+routes. Embedded agent turns on OpenAI-family models run through the native
+Codex app-server runtime by default; direct OpenAI API-key auth remains
+available for non-agent OpenAI surfaces such as images, embeddings, speech, and
+realtime.
 
 - **Agent models** - `openai/*` models through the Codex runtime; sign in with
   `openai-codex` auth for ChatGPT/Codex subscription use, or configure an
   `openai-codex` API-key profile when you intentionally want API-key auth.
+- **Explicit Codex provider route** - `openai-codex/*` model refs preserve the
+  ChatGPT/Codex OAuth provider route and are no longer rewritten by doctor.
 - **Non-agent OpenAI APIs** - direct OpenAI Platform access with usage-based
   billing through `OPENAI_API_KEY` or OpenAI API-key onboarding.
-- **Legacy config** - `openai-codex/*` model refs are repaired by
-  `openclaw doctor --fix` to `openai/*` plus the Codex runtime.
+- **Doctor guardrails** - `openclaw doctor --fix` preserves explicit provider
+  routes and repairs only generic `openai/*` refs that are explicitly pinned to
+  the Codex runtime when they should stay on the Codex provider route.
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
 
@@ -35,6 +39,7 @@ changing config.
 | Goal                                                 | Use                                                     | Notes                                                                 |
 | ---------------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------- |
 | ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-5.5`                                        | Default OpenAI agent setup. Sign in with `openai-codex` auth.         |
+| Explicit Codex provider route                        | `openai-codex/gpt-5.5`                                  | Preserved by doctor when selected deliberately.                       |
 | Direct API-key billing for agent models              | `openai/gpt-5.5` plus an `openai-codex` API-key profile | Use `auth.order.openai-codex` to prefer that profile.                 |
 | Direct API-key billing through explicit PI           | `openai/gpt-5.5` plus provider/model runtime `pi`       | Select a normal `openai` API-key profile.                             |
 | Latest ChatGPT Instant API alias                     | `openai/chat-latest`                                    | Direct API-key only. Moving alias for experiments, not the default.   |
@@ -46,34 +51,38 @@ changing config.
 
 The names are similar but not interchangeable:
 
-| Name you see                            | Layer               | Meaning                                                                                           |
-| --------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------- |
-| `openai`                                | Provider prefix     | Canonical OpenAI model route; agent turns use the Codex runtime.                                  |
-| `openai-codex`                          | Auth/profile prefix | OpenAI Codex OAuth/subscription auth profile provider.                                            |
-| `codex` plugin                          | Plugin              | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls. |
-| provider/model `agentRuntime.id: codex` | Agent runtime       | Force the native Codex app-server harness for matching embedded turns.                            |
-| `/codex ...`                            | Chat command set    | Bind/control Codex app-server threads from a conversation.                                        |
-| `runtime: "acp", agentId: "codex"`      | ACP session route   | Explicit fallback path that runs Codex through ACP/acpx.                                          |
+| Name you see                            | Layer                | Meaning                                                                                           |
+| --------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------- |
+| `openai`                                | Provider prefix      | OpenAI model route; agent turns use the Codex runtime by default.                                 |
+| `openai-codex`                          | Provider/auth prefix | Explicit OpenAI Codex OAuth/subscription model and auth profile route.                            |
+| `codex` plugin                          | Plugin               | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls. |
+| provider/model `agentRuntime.id: codex` | Agent runtime        | Force the native Codex app-server harness for matching embedded turns.                            |
+| `/codex ...`                            | Chat command set     | Bind/control Codex app-server threads from a conversation.                                        |
+| `runtime: "acp", agentId: "codex"`      | ACP session route    | Explicit fallback path that runs Codex through ACP/acpx.                                          |
 
 This means a config can intentionally contain both `openai/*` model refs and
-`openai-codex` auth profiles. `openclaw doctor --fix` rewrites legacy
-`openai-codex/*` model refs to the canonical OpenAI model route.
+`openai-codex` auth profiles. It can also intentionally contain
+`openai-codex/*` model refs when the operator wants the provider id to carry the
+Codex OAuth/subscription route. `openclaw doctor --fix` preserves those explicit
+provider choices.
 
 <Note>
 GPT-5.5 is available through both direct OpenAI Platform API-key access and
 subscription/OAuth routes. For ChatGPT/Codex subscription plus native Codex
-execution, use `openai/gpt-5.5`; unset runtime config now selects the Codex
-harness for OpenAI agent turns. Use OpenAI API-key profiles only when you want
-direct API-key auth for an OpenAI agent model.
+execution, use `openai/gpt-5.5` for the default route or
+`openai-codex/gpt-5.5` when you want the provider id to remain explicit; unset
+runtime config now selects the Codex harness for OpenAI-family agent turns. Use
+OpenAI API-key profiles only when you want direct API-key auth for an OpenAI
+agent model.
 </Note>
 
 <Note>
 OpenAI agent model turns require the bundled Codex app-server plugin. Explicit
 PI runtime config remains available as an opt-in compatibility route. When PI is
 explicitly selected with an `openai-codex` auth profile, OpenClaw keeps the
-public model ref as `openai/*` and routes PI internally through the legacy
-Codex-auth transport. Run `openclaw doctor --fix` to repair stale
-`openai-codex/*` model refs or old PI session pins that do not come from
+selected provider route rather than silently crossing billing/auth domains. Run
+`openclaw doctor --fix` to repair stale generic OpenAI refs that are explicitly
+paired with the Codex runtime and old PI session pins that do not come from
 explicit runtime config.
 </Note>
 
@@ -83,7 +92,7 @@ explicit runtime config.
 | ------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Chat / Responses          | `openai/<model>` model provider                                                  | Yes                                                    |
 | Codex subscription models | `openai/<model>` with `openai-codex` OAuth                                       | Yes                                                    |
-| Legacy Codex model refs   | `openai-codex/<model>`                                                           | Repaired by doctor to `openai/<model>`                 |
+| Explicit Codex model refs | `openai-codex/<model>`                                                           | Preserved by doctor                                    |
 | Codex app-server harness  | `openai/<model>` with omitted runtime or provider/model `agentRuntime.id: codex` | Yes                                                    |
 | Server-side web search    | Native OpenAI Responses tool                                                     | Yes, when web search is enabled and no provider pinned |
 | Images                    | `image_generate`                                                                 | Yes                                                    |
@@ -216,7 +225,7 @@ Choose your preferred auth method and follow the setup steps.
         openclaw models auth login --provider openai-codex --device-code
         ```
       </Step>
-      <Step title="Use the canonical OpenAI model route">
+      <Step title="Use an OpenAI-family agent model route">
         ```bash
         openclaw config set agents.defaults.model.primary openai/gpt-5.5
         ```
@@ -224,6 +233,8 @@ Choose your preferred auth method and follow the setup steps.
         No runtime config is required for the default path. OpenAI agent turns
         select the native Codex app-server runtime automatically, and OpenClaw
         installs or repairs the bundled Codex plugin when this route is chosen.
+        Use `openai-codex/gpt-5.5` instead when you want the config to carry the
+        Codex provider route explicitly.
       </Step>
       <Step title="Verify Codex auth is available">
         ```bash
@@ -240,21 +251,22 @@ Choose your preferred auth method and follow the setup steps.
     | Model ref | Runtime config | Route | Auth |
     |-----------|----------------|-------|------|
     | `openai/gpt-5.5` | omitted / provider/model `agentRuntime.id: "codex"` | Native Codex app-server harness | Codex sign-in or selected `openai-codex` profile |
+    | `openai-codex/gpt-5.5` | omitted / provider/model `agentRuntime.id: "codex"` | Native Codex app-server harness | Codex sign-in or selected `openai-codex` profile |
     | `openai/gpt-5.5` | provider/model `agentRuntime.id: "pi"` | PI embedded runtime with internal Codex-auth transport | Selected `openai-codex` profile |
-    | `openai-codex/gpt-5.5` | repaired by doctor | Legacy route rewritten to `openai/gpt-5.5` | Existing `openai-codex` profile |
 
     <Warning>
     Do not configure older `openai-codex/gpt-5.1*`, `openai-codex/gpt-5.2*`, or
     `openai-codex/gpt-5.3*` model refs. ChatGPT/Codex OAuth accounts now reject
-    those models. Use `openai/gpt-5.5`; OpenAI agent turns now select the Codex
-    runtime by default.
+    those models. Use `openai/gpt-5.5` or `openai-codex/gpt-5.5`; OpenAI-family
+    agent turns now select the Codex runtime by default.
     </Warning>
 
     <Note>
-    Keep using the `openai-codex` provider id for auth/profile commands. The
-    `openai-codex/*` model prefix is legacy config repaired by doctor. For the
-    common subscription plus native runtime setup, sign in with `openai-codex`
-    but keep the model ref as `openai/gpt-5.5`.
+    Keep using the `openai-codex` provider id for auth/profile commands.
+    `openai-codex/*` model refs are also supported when you want the model ref
+    itself to stay on the Codex provider route. For the common subscription plus
+    native runtime setup, sign in with `openai-codex` and use either
+    `openai/gpt-5.5` or `openai-codex/gpt-5.5` intentionally.
     </Note>
 
     ### Config example

@@ -103,7 +103,7 @@ describe("collectCodexRouteWarnings", () => {
     });
     expect(result.cfg.agents?.list?.[1]?.model).toEqual({
       primary: "openai-codex/gpt-5.5",
-      fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      fallbacks: ["openai-codex/gpt-5.4", "anthropic/claude-sonnet-4-6"],
     });
   });
 

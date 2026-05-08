@@ -149,6 +149,7 @@ function collectModelConfigSlot(params: {
         hits: params.hits,
         path: `${params.path}.fallbacks.${index}`,
         value: entry,
+        runtime: params.runtime,
       });
     }
   }
@@ -341,6 +342,7 @@ function rewriteModelConfigSlot(params: {
         hits: params.hits,
         path: `${params.path}.fallbacks.${index}`,
         model,
+        runtime: params.runtime,
       });
       return canonicalModel ?? entry;
     });
