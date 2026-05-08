@@ -15,7 +15,11 @@ import {
   type SourceDeliveryPlan,
   type SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
-import { logMessageProcessed, logMessageQueued } from "../../logging/diagnostic.js";
+import {
+  logMessageProcessed,
+  logMessageQueued,
+  logSessionStateChange,
+} from "../../logging/diagnostic.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -1187,16 +1191,16 @@ export async function runCronIsolatedAgentTurn(params: {
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
 
   const turnStartedAtMs = Date.now();
-  const taskLabel =
-    params.job.payload.kind === "agentTurn"
-      ? params.job.name?.trim() || params.job.id
-      : params.job.id;
   logMessageQueued({
     sessionId: prepared.context.runSessionId,
     sessionKey: prepared.context.runSessionKey,
     channel: "cron",
     source: "cron-isolated",
-    taskLabel,
+  });
+  logSessionStateChange({
+    sessionId: prepared.context.runSessionId,
+    sessionKey: prepared.context.runSessionKey,
+    state: "processing",
   });
 
   let outcome: "completed" | "error" = "completed";
@@ -1272,6 +1276,11 @@ export async function runCronIsolatedAgentTurn(params: {
       ),
     });
   } finally {
+    logSessionStateChange({
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+      state: "idle",
+    });
     logMessageProcessed({
       channel: "cron",
       sessionId: prepared.context.runSessionId,
