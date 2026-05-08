@@ -190,7 +190,7 @@ describe("delivery-queue storage", () => {
   });
 
   describe("moveToFailed", () => {
-    it("moves entry to failed/ subdirectory", async () => {
+    it("moves entry to failed status", async () => {
       const id = await enqueueTextDelivery(
         {
           channel: "workspace",
@@ -208,7 +208,7 @@ describe("delivery-queue storage", () => {
   });
 
   describe("loadPendingDeliveries", () => {
-    it("returns empty array when queue directory does not exist", async () => {
+    it("returns empty array when the SQLite queue is empty", async () => {
       expect(await loadPendingDeliveries(path.join(tmpDir(), "no-such-dir"))).toStrictEqual([]);
     });
 

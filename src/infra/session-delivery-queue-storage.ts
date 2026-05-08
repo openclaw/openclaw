@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import type { ChatType } from "../channels/chat-type.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -15,7 +13,6 @@ import {
 } from "./kysely-sync.js";
 import { generateSecureUuid } from "./secure-random.js";
 
-const QUEUE_DIRNAME = "session-delivery-queue";
 const QUEUE_NAME = "session-delivery";
 
 type SessionDeliveryContext = {
@@ -93,21 +90,15 @@ function parseQueueEntry(row: DeliveryQueueEntryRow | undefined): QueuedSessionD
   return typeof entry.id === "string" ? entry : null;
 }
 
-export function resolveSessionDeliveryQueueDir(stateDir?: string): string {
-  const base = stateDir ?? resolveStateDir();
-  return path.join(base, QUEUE_DIRNAME);
-}
-
-async function ensureSessionDeliveryQueueDir(stateDir?: string): Promise<string> {
+function ensureSessionDeliveryQueueStorage(stateDir?: string): void {
   openOpenClawStateDatabase(databaseOptions(stateDir));
-  return resolveSessionDeliveryQueueDir(stateDir);
 }
 
 export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
 ): Promise<string> {
-  await ensureSessionDeliveryQueueDir(stateDir);
+  ensureSessionDeliveryQueueStorage(stateDir);
   const id = buildEntryId(params.idempotencyKey);
 
   if (params.idempotencyKey) {
