@@ -344,6 +344,12 @@ export interface TranscriptFiles {
   session_id: string;
 }
 
+export interface TuiLastSessions {
+  scope_key: string;
+  session_key: string;
+  updated_at: number;
+}
+
 export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
@@ -371,4 +377,5 @@ export interface DB {
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
   transcript_files: TranscriptFiles;
+  tui_last_sessions: TuiLastSessions;
 }

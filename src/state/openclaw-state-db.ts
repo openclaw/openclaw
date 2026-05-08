@@ -17,7 +17,7 @@ import {
 } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
-const OPENCLAW_STATE_SCHEMA_VERSION = 21;
+const OPENCLAW_STATE_SCHEMA_VERSION = 22;
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
@@ -457,6 +457,49 @@ function migrateCurrentConversationBindingsFromKv(db: DatabaseSync): void {
   db.prepare("DELETE FROM kv WHERE scope = 'current-conversation-bindings'").run();
 }
 
+function migrateTuiLastSessionsFromKv(db: DatabaseSync): void {
+  const legacyRows = db
+    .prepare("SELECT key, value_json FROM kv WHERE scope = 'tui:last-session'")
+    .all() as Array<{ key?: unknown; value_json?: unknown }>;
+  if (legacyRows.length === 0) {
+    return;
+  }
+
+  const insert = db.prepare(`
+    INSERT OR REPLACE INTO tui_last_sessions (
+      scope_key,
+      session_key,
+      updated_at
+    )
+    VALUES (?, ?, ?)
+  `);
+
+  for (const row of legacyRows) {
+    if (typeof row.key !== "string" || typeof row.value_json !== "string") {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.value_json);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      continue;
+    }
+    const record = parsed as Record<string, unknown>;
+    const scopeKey = row.key.trim();
+    const sessionKey = readString(record.sessionKey);
+    const updatedAt = readFiniteNumber(record.updatedAt);
+    if (!scopeKey || !sessionKey || updatedAt === null) {
+      continue;
+    }
+    insert.run(scopeKey, sessionKey, updatedAt);
+  }
+
+  db.prepare("DELETE FROM kv WHERE scope = 'tui:last-session'").run();
+}
+
 function rebuildTaskDeliveryStateWithForeignKey(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_delivery_state_next (
@@ -538,6 +581,9 @@ function migrateStateSchema(db: DatabaseSync, fromVersion: number): void {
   }
   if (fromVersion < 21) {
     migrateCurrentConversationBindingsFromKv(db);
+  }
+  if (fromVersion < 22) {
+    migrateTuiLastSessionsFromKv(db);
   }
 }
 
