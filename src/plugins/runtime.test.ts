@@ -233,14 +233,19 @@ describe("setActivePluginRegistry", () => {
     },
   ] as const)("continues cleanup when the $name", async ({ refresh }) => {
     let releaseFirstCleanup: (() => void) | undefined;
-    let markFirstCleanupStarted!: () => void;
-    let markSecondCleanupCalled!: () => void;
+    let markFirstCleanupStarted: (() => void) | undefined;
+    let markSecondCleanupCalled: (() => void) | undefined;
     const firstCleanupStarted = new Promise<void>((resolve) => {
       markFirstCleanupStarted = resolve;
     });
     const secondCleanupCalled = new Promise<void>((resolve) => {
       markSecondCleanupCalled = resolve;
     });
+    if (!markFirstCleanupStarted || !markSecondCleanupCalled) {
+      throw new Error("Expected cleanup signal callbacks to be initialized");
+    }
+    const notifyFirstCleanupStarted = markFirstCleanupStarted;
+    const notifySecondCleanupCalled = markSecondCleanupCalled;
     const previous = createEmptyPluginRegistry();
     previous.plugins.push(
       createPluginRecord({
@@ -256,7 +261,7 @@ describe("setActivePluginRegistry", () => {
         lifecycle: {
           id: "first-cleanup",
           async cleanup() {
-            markFirstCleanupStarted();
+            notifyFirstCleanupStarted();
             await new Promise<void>((resolve) => {
               releaseFirstCleanup = resolve;
             });
@@ -271,7 +276,7 @@ describe("setActivePluginRegistry", () => {
         lifecycle: {
           id: "second-cleanup",
           cleanup() {
-            markSecondCleanupCalled();
+            notifySecondCleanupCalled();
           },
         },
         source: "/virtual/cleanup-refresh-race/index.ts",
@@ -285,7 +290,10 @@ describe("setActivePluginRegistry", () => {
     await waitForCleanupSignal(firstCleanupStarted, "first cleanup start");
 
     refresh(next);
-    releaseFirstCleanup?.();
+    if (!releaseFirstCleanup) {
+      throw new Error("Expected first cleanup release callback to be initialized");
+    }
+    releaseFirstCleanup();
 
     await waitForCleanupSignal(secondCleanupCalled, "second cleanup");
   });
