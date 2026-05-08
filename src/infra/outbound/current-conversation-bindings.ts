@@ -1,12 +1,16 @@
+import type { DatabaseSync } from "node:sqlite";
+import type { Insertable, Selectable } from "kysely";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  deleteOpenClawStateKvJson,
-  listOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-} from "../../state/openclaw-state-kv.js";
+  type OpenClawStateDatabaseOptions,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
   ConversationRef,
@@ -16,13 +20,14 @@ import type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
-type PersistedCurrentConversationBindingEntry = {
-  version: 1;
-  binding: SessionBindingRecord;
-};
+type CurrentConversationBindingsTable =
+  OpenClawStateKyselyDatabase["current_conversation_bindings"];
+type CurrentConversationBindingRow = Selectable<CurrentConversationBindingsTable>;
+type CurrentConversationBindingsDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "current_conversation_bindings"
+>;
 
-const CURRENT_BINDINGS_FILE_VERSION = 1;
-const CURRENT_BINDINGS_KV_SCOPE = "current-conversation-bindings";
 const CURRENT_BINDINGS_ID_PREFIX = "generic:";
 
 let bindingsLoaded = false;
@@ -48,19 +53,134 @@ function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boole
     : false;
 }
 
-function toPersistedEntry(record: SessionBindingRecord): PersistedCurrentConversationBindingEntry {
+function sqliteOptionsForEnv(env: NodeJS.ProcessEnv = process.env): OpenClawStateDatabaseOptions {
   return {
-    version: CURRENT_BINDINGS_FILE_VERSION,
-    binding: record,
+    env,
   };
 }
 
-function parsePersistedBindingEntry(value: unknown): SessionBindingRecord | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function getCurrentConversationBindingsKysely(db: DatabaseSync) {
+  return getNodeSqliteKysely<CurrentConversationBindingsDatabase>(db);
+}
+
+function serializeJson(value: unknown): string | null {
+  return value == null ? null : JSON.stringify(value);
+}
+
+function parseJsonRecord(raw: string | null): Record<string, unknown> | undefined {
+  if (!raw?.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeNumber(value: number | bigint | null): number | undefined {
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return typeof value === "number" ? value : undefined;
+}
+
+function recordToRow(record: SessionBindingRecord): Insertable<CurrentConversationBindingsTable> {
+  const conversation = normalizeConversationRef(record.conversation);
+  const bindingKey = buildConversationKey(conversation);
+  const bindingId = buildBindingId(conversation);
+  const normalized: SessionBindingRecord = {
+    ...record,
+    bindingId,
+    conversation,
+    targetSessionKey: record.targetSessionKey.trim(),
+  };
+  return {
+    binding_key: bindingKey,
+    binding_id: bindingId,
+    channel: conversation.channel,
+    account_id: conversation.accountId,
+    parent_conversation_id: conversation.parentConversationId ?? null,
+    conversation_id: conversation.conversationId,
+    target_session_key: normalized.targetSessionKey,
+    target_kind: normalized.targetKind,
+    status: normalized.status,
+    bound_at: normalized.boundAt,
+    expires_at: normalized.expiresAt ?? null,
+    metadata_json: serializeJson(normalized.metadata),
+    record_json: JSON.stringify(normalized),
+    updated_at: Date.now(),
+  };
+}
+
+function rowToRecord(row: CurrentConversationBindingRow): SessionBindingRecord | null {
+  const parsed = parseJsonRecord(row.record_json) ?? {};
+  const conversation = normalizeConversationRef({
+    channel: row.channel,
+    accountId: row.account_id,
+    conversationId: row.conversation_id,
+    ...(row.parent_conversation_id ? { parentConversationId: row.parent_conversation_id } : {}),
+  });
+  const targetSessionKey = row.target_session_key.trim();
+  if (!conversation.channel || !conversation.conversationId || !targetSessionKey) {
     return null;
   }
-  const record = value as PersistedCurrentConversationBindingEntry;
-  return record.version === CURRENT_BINDINGS_FILE_VERSION ? record.binding : null;
+  return {
+    ...(parsed as Partial<SessionBindingRecord>),
+    bindingId: buildBindingId(conversation),
+    targetSessionKey,
+    targetKind: row.target_kind === "subagent" ? "subagent" : "session",
+    conversation,
+    status:
+      row.status === "ending" || row.status === "ended" || row.status === "active"
+        ? row.status
+        : "active",
+    boundAt: normalizeNumber(row.bound_at) ?? 0,
+    ...(row.expires_at != null ? { expiresAt: normalizeNumber(row.expires_at) } : {}),
+    metadata: parseJsonRecord(row.metadata_json),
+  };
+}
+
+function upsertBindingRow(record: SessionBindingRecord, env?: NodeJS.ProcessEnv): void {
+  runOpenClawStateWriteTransaction((stateDatabase) => {
+    const db = getCurrentConversationBindingsKysely(stateDatabase.db);
+    executeSqliteQuerySync(
+      stateDatabase.db,
+      db
+        .insertInto("current_conversation_bindings")
+        .values(recordToRow(record))
+        .onConflict((conflict) =>
+          conflict.column("binding_key").doUpdateSet({
+            binding_id: (eb) => eb.ref("excluded.binding_id"),
+            channel: (eb) => eb.ref("excluded.channel"),
+            account_id: (eb) => eb.ref("excluded.account_id"),
+            parent_conversation_id: (eb) => eb.ref("excluded.parent_conversation_id"),
+            conversation_id: (eb) => eb.ref("excluded.conversation_id"),
+            target_session_key: (eb) => eb.ref("excluded.target_session_key"),
+            target_kind: (eb) => eb.ref("excluded.target_kind"),
+            status: (eb) => eb.ref("excluded.status"),
+            bound_at: (eb) => eb.ref("excluded.bound_at"),
+            expires_at: (eb) => eb.ref("excluded.expires_at"),
+            metadata_json: (eb) => eb.ref("excluded.metadata_json"),
+            record_json: (eb) => eb.ref("excluded.record_json"),
+            updated_at: (eb) => eb.ref("excluded.updated_at"),
+          }),
+        ),
+    );
+  }, sqliteOptionsForEnv(env));
+}
+
+function deleteBindingRow(key: string, env?: NodeJS.ProcessEnv): void {
+  runOpenClawStateWriteTransaction((stateDatabase) => {
+    const db = getCurrentConversationBindingsKysely(stateDatabase.db);
+    executeSqliteQuerySync(
+      stateDatabase.db,
+      db.deleteFrom("current_conversation_bindings").where("binding_key", "=", key),
+    );
+  }, sqliteOptionsForEnv(env));
 }
 
 function loadBindingsIntoMemory(): void {
@@ -69,12 +189,16 @@ function loadBindingsIntoMemory(): void {
   }
   bindingsLoaded = true;
   bindingsByConversationKey.clear();
-  const entries =
-    listOpenClawStateKvJson<PersistedCurrentConversationBindingEntry>(CURRENT_BINDINGS_KV_SCOPE);
-  for (const entry of entries) {
-    const record = parsePersistedBindingEntry(entry.value);
+  const stateDatabase = openOpenClawStateDatabase();
+  const db = getCurrentConversationBindingsKysely(stateDatabase.db);
+  const rows = executeSqliteQuerySync<CurrentConversationBindingRow>(
+    stateDatabase.db,
+    db.selectFrom("current_conversation_bindings").selectAll().orderBy("updated_at", "asc"),
+  ).rows;
+  for (const row of rows) {
+    const record = rowToRecord(row);
     if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
-      deleteOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, entry.key);
+      deleteBindingRow(row.binding_key);
       continue;
     }
     const conversation = normalizeConversationRef(record.conversation);
@@ -92,12 +216,11 @@ function loadBindingsIntoMemory(): void {
 }
 
 function persistBinding(record: SessionBindingRecord): void {
-  const key = buildConversationKey(record.conversation);
-  writeOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, key, toPersistedEntry(record));
+  upsertBindingRow(record);
 }
 
 function deletePersistedBinding(key: string): void {
-  deleteOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, key);
+  deleteBindingRow(key);
 }
 
 function pruneExpiredBinding(key: string): SessionBindingRecord | null {
@@ -273,11 +396,10 @@ export const __testing = {
     bindingsLoaded = false;
     bindingsByConversationKey.clear();
     if (params?.deletePersistedFile) {
-      for (const entry of listOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, {
-        env: params.env,
-      })) {
-        deleteOpenClawStateKvJson(CURRENT_BINDINGS_KV_SCOPE, entry.key, { env: params.env });
-      }
+      runOpenClawStateWriteTransaction((stateDatabase) => {
+        const db = getCurrentConversationBindingsKysely(stateDatabase.db);
+        executeSqliteQuerySync(stateDatabase.db, db.deleteFrom("current_conversation_bindings"));
+      }, sqliteOptionsForEnv(params.env));
     }
   },
   persistBindingForTests(record: SessionBindingRecord, env?: NodeJS.ProcessEnv) {
@@ -287,15 +409,6 @@ export const __testing = {
       bindingId: buildBindingId(conversation),
       conversation,
     };
-    writeOpenClawStateKvJson(
-      CURRENT_BINDINGS_KV_SCOPE,
-      buildConversationKey(conversation),
-      {
-        version: CURRENT_BINDINGS_FILE_VERSION,
-        binding: normalized,
-      },
-      { env },
-    );
+    upsertBindingRow(normalized, env);
   },
-  currentBindingsKvScope: CURRENT_BINDINGS_KV_SCOPE,
 };

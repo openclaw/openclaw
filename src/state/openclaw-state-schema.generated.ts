@@ -353,6 +353,28 @@ CREATE INDEX IF NOT EXISTS idx_subagent_runs_archive_at
 CREATE INDEX IF NOT EXISTS idx_subagent_runs_ended_cleanup
   ON subagent_runs(ended_at, cleanup_handled, run_id);
 
+CREATE TABLE IF NOT EXISTS current_conversation_bindings (
+  binding_key TEXT NOT NULL PRIMARY KEY,
+  binding_id TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  parent_conversation_id TEXT,
+  conversation_id TEXT NOT NULL,
+  target_session_key TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  bound_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  metadata_json TEXT,
+  record_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
+  ON current_conversation_bindings(target_session_key, updated_at DESC, binding_key);
+CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_expires
+  ON current_conversation_bindings(expires_at, binding_key);
+
 CREATE TABLE IF NOT EXISTS task_delivery_state (
   task_id TEXT NOT NULL PRIMARY KEY,
   requester_origin_json TEXT,

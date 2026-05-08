@@ -157,7 +157,7 @@ describe("openclaw state database", () => {
 
     expect(columns.some((column) => column.name === "sort_order")).toBe(true);
     expect(index?.sql).toContain("sort_order ASC");
-    expect(version.user_version).toBe(20);
+    expect(version.user_version).toBe(21);
   });
 
   it("migrates legacy cron runtime state from kv into cron job columns", () => {
@@ -215,7 +215,7 @@ describe("openclaw state database", () => {
         .prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?")
         .get("cron.jobs.state"),
     ).toEqual({ count: 0 });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
   });
 
   it("migrates persisted subagent runs from kv into subagent run rows", () => {
@@ -264,7 +264,57 @@ describe("openclaw state database", () => {
     expect(
       database.db.prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?").get("subagent_runs"),
     ).toEqual({ count: 0 });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
+  });
+
+  it("migrates current conversation bindings from kv into binding rows", () => {
+    const stateDir = createTempStateDir();
+    const dbPath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const sqlite = requireNodeSqlite();
+    const oldDb = new sqlite.DatabaseSync(dbPath);
+    oldDb.exec(`
+      CREATE TABLE kv (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      );
+      INSERT INTO kv (scope, key, value_json, updated_at)
+      VALUES (
+        'current-conversation-bindings',
+        'forum\u241fdefault\u241f6098642967\u241f6098642967',
+        '{"version":1,"binding":{"bindingId":"generic:forum\u241fdefault\u241f6098642967\u241f6098642967","targetSessionKey":" agent:worker-1:acp:forum-dm ","targetKind":"session","conversation":{"channel":"forum","accountId":"default","conversationId":"6098642967","parentConversationId":"6098642967"},"status":"active","boundAt":1234,"metadata":{"label":"forum-dm"}}}',
+        5678
+      );
+      PRAGMA user_version = 20;
+    `);
+    oldDb.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      database.db
+        .prepare(
+          "SELECT binding_key, binding_id, parent_conversation_id, target_session_key, metadata_json FROM current_conversation_bindings WHERE conversation_id = ?",
+        )
+        .get("6098642967"),
+    ).toEqual({
+      binding_key: "forum\u241fdefault\u241f\u241f6098642967",
+      binding_id: "generic:forum\u241fdefault\u241f\u241f6098642967",
+      parent_conversation_id: null,
+      target_session_key: "agent:worker-1:acp:forum-dm",
+      metadata_json: '{"label":"forum-dm"}',
+    });
+    expect(
+      database.db
+        .prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = ?")
+        .get("current-conversation-bindings"),
+    ).toEqual({ count: 0 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 21 });
   });
 
   it("upgrades task delivery state with task-run cascade integrity", () => {
