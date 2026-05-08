@@ -463,11 +463,8 @@ describe("config io write", () => {
       });
       await fs.writeFile(path.join(unwritableStatePath, "plugins"), "not a directory", "utf-8");
 
-      let loadedConfig: ReturnType<typeof io.loadConfig> | undefined;
-      expect(() => {
-        loadedConfig = io.loadConfig();
-      }).not.toThrow();
-      expect(loadedConfig?.plugins?.installs?.demo).toMatchObject({
+      const loadedConfig = io.loadConfig();
+      expect(loadedConfig.plugins?.installs?.demo).toMatchObject({
         source: "npm",
         spec: "demo@1.0.0",
         installPath: pluginDir,
@@ -1386,7 +1383,7 @@ describe("config io write", () => {
           plugins: { entries: { "strict-plugin": { enabled: true } } },
         };
 
-        await expect(writeConfigFile(cfg, { skipPluginValidation: true })).resolves.not.toThrow();
+        await writeConfigFile(cfg, { skipPluginValidation: true });
         await expect(fs.readFile(configPath, "utf-8")).resolves.toContain('"strict-plugin"');
 
         await expect(writeConfigFile(cfg, { skipPluginValidation: false })).rejects.toThrow(
