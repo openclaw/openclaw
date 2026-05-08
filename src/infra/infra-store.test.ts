@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { importLegacyVoiceWakeRoutingConfigFileToSqlite } from "../commands/doctor/legacy/voicewake-routing.js";
+import { importLegacyVoiceWakeConfigFileToSqlite } from "../commands/doctor/legacy/voicewake.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   getChannelActivity,
