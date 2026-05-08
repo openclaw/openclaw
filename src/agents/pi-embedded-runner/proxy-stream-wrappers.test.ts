@@ -205,11 +205,26 @@ describe("proxy stream wrappers", () => {
     expect(payload.model).toBe("stepfun/step-3.5-flash");
   });
 
+  it("sends bare OpenRouter model ids when resolved ids already include the OpenRouter prefix", () => {
+    const payload = runOpenRouterWrapperPayload(
+      { id: "openrouter/stepfun/step-3.5-flash" },
+      "openrouter/stepfun/step-3.5-flash",
+    );
+
+    expect(payload.model).toBe("stepfun/step-3.5-flash");
+  });
+
   it("preserves native OpenRouter model namespaces after removing one synthetic prefix", () => {
     const payload = runOpenRouterWrapperPayload(
       { id: "openrouter/auto" },
       "openrouter/openrouter/auto",
     );
+
+    expect(payload.model).toBe("openrouter/auto");
+  });
+
+  it("preserves native OpenRouter model namespaces when the resolved id is already native", () => {
+    const payload = runOpenRouterWrapperPayload({ id: "openrouter/auto" }, "openrouter/auto");
 
     expect(payload.model).toBe("openrouter/auto");
   });

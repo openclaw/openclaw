@@ -144,6 +144,19 @@ function normalizeOpenRouterRequestPayloadModel(
   const syntheticModelId = `${provider}/${modelId}`;
   if (payloadModel === syntheticModelId) {
     payload.model = modelId;
+    return;
+  }
+
+  if (normalizeOptionalLowercaseString(provider) !== "openrouter" || payloadModel !== modelId) {
+    return;
+  }
+  const routedOpenRouterPrefix = "openrouter/";
+  if (!modelId.startsWith(routedOpenRouterPrefix)) {
+    return;
+  }
+  const upstreamModelId = modelId.slice(routedOpenRouterPrefix.length);
+  if (upstreamModelId.includes("/")) {
+    payload.model = upstreamModelId;
   }
 }
 
