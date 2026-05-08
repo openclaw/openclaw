@@ -7,7 +7,7 @@ import { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   // Models-config tests do not exercise session persistence; skip draining
-  // unrelated session lock state during temp-home teardown.
+  // unrelated session database state during temp-home teardown.
   return withTempHomeBase(fn, {
     prefix: "openclaw-models-",
     skipSessionCleanup: true,
