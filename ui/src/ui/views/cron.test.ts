@@ -77,10 +77,39 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
   };
 }
 
-function getButtonByText(container: Element, text: string) {
-  return Array.from(container.querySelectorAll("button")).find(
+function getButtonByText(container: Element, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find(
     (btn) => btn.textContent?.trim() === text,
   );
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button with text "${text}"`);
+  }
+  return button;
+}
+
+function getButtonByAnyText(container: Element, texts: string[]): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find((btn) =>
+    texts.includes(btn.textContent?.trim() ?? ""),
+  );
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button with text ${texts.join(" or ")}`);
+  }
+  return button;
+}
+
+function getElement<T extends Element>(
+  container: Element,
+  selector: string,
+  constructor: new () => T,
+): T {
+  const element = container.querySelector<T>(selector);
+  expect(element).toBeInstanceOf(constructor);
+  if (!(element instanceof constructor)) {
+    throw new Error(`Expected ${selector} to match ${constructor.name}`);
+  }
+  return element;
 }
 
 describe("cron view", () => {
@@ -165,9 +194,12 @@ describe("cron view", () => {
       container,
     );
 
-    const reset = container.querySelector('button[data-test-id="cron-jobs-filters-reset"]');
-    expect(reset).not.toBeNull();
-    reset?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const reset = getElement(
+      container,
+      'button[data-test-id="cron-jobs-filters-reset"]',
+      HTMLButtonElement,
+    );
+    reset.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onJobsFiltersReset).toHaveBeenCalledTimes(1);
   });
@@ -202,16 +234,18 @@ describe("cron view", () => {
     const selected = container.querySelector(".list-item-selected");
     expect(selected).not.toBeNull();
 
-    const row = container.querySelector(".list-item-clickable");
-    expect(row).not.toBeNull();
-    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const row = getElement(container, ".list-item-clickable", HTMLElement);
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onLoadRuns).toHaveBeenCalledWith("job-1");
 
     const historyButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "History",
     );
-    expect(historyButton).not.toBeUndefined();
-    historyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(historyButton).toBeInstanceOf(HTMLButtonElement);
+    if (!(historyButton instanceof HTMLButtonElement)) {
+      throw new Error("Expected History button");
+    }
+    historyButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onLoadRuns).toHaveBeenCalledTimes(2);
     expect(onLoadRuns).toHaveBeenNthCalledWith(1, "job-1");
@@ -228,11 +262,14 @@ describe("cron view", () => {
     const runHistoryCard = cards.find(
       (card) => card.querySelector(".card-title")?.textContent?.trim() === "Run history",
     );
-    expect(runHistoryCard).not.toBeUndefined();
+    expect(runHistoryCard).toBeInstanceOf(Element);
+    if (!(runHistoryCard instanceof Element)) {
+      throw new Error("Expected run history card");
+    }
 
-    const summaries = Array.from(
-      runHistoryCard?.querySelectorAll(".cron-run-entry__body") ?? [],
-    ).map((el) => (el.textContent ?? "").trim());
+    const summaries = Array.from(runHistoryCard.querySelectorAll(".cron-run-entry__body")).map(
+      (el) => (el.textContent ?? "").trim(),
+    );
     expect(summaries[0]).toBe("newer run");
     expect(summaries[1]).toBe("older run");
   });
@@ -288,9 +325,13 @@ describe("cron view", () => {
 
     render(renderCron(expandedProps), container);
 
-    const collapseButton = container.querySelector('[data-test-id="cron-form-collapse-toggle"]');
-    expect(collapseButton?.getAttribute("aria-expanded")).toBe("true");
-    collapseButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const collapseButton = getElement(
+      container,
+      '[data-test-id="cron-form-collapse-toggle"]',
+      HTMLButtonElement,
+    );
+    expect(collapseButton.getAttribute("aria-expanded")).toBe("true");
+    collapseButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onToggleFormCollapsed).toHaveBeenCalledWith(true);
     expect(container.querySelector(".cron-form")).not.toBeNull();
 
@@ -303,14 +344,18 @@ describe("cron view", () => {
 
     render(renderCron(collapsedProps), container);
 
-    const collapsedButton = container.querySelector('[data-test-id="cron-form-collapse-toggle"]');
+    const collapsedButton = getElement(
+      container,
+      '[data-test-id="cron-form-collapse-toggle"]',
+      HTMLButtonElement,
+    );
     expect(container.querySelectorAll(".cron-workspace--form-collapsed")).toHaveLength(1);
     expect(container.querySelectorAll(".cron-workspace-form--collapsed")).toHaveLength(1);
-    expect(collapsedButton?.getAttribute("aria-expanded")).toBe("false");
+    expect(collapsedButton.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".cron-form")?.hasAttribute("hidden")).toBe(true);
     expect(container.querySelector(".cron-form-actions")?.hasAttribute("hidden")).toBe(true);
 
-    collapsedButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    collapsedButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onToggleFormCollapsed).toHaveBeenLastCalledWith(false);
   });
 
@@ -386,17 +431,17 @@ describe("cron view", () => {
       container,
     );
 
-    const prompt = container.querySelector(".cron-job-detail-value.chat-text");
-    expect(prompt?.querySelector("strong")?.textContent).toBe("Ship");
-    expect(prompt?.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
-    expect(prompt?.querySelector("script")).toBeNull();
+    const prompt = getElement(container, ".cron-job-detail-value.chat-text", HTMLElement);
+    expect(prompt.querySelector("strong")?.textContent).toBe("Ship");
+    expect(prompt.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+    expect(prompt.querySelector("script")).toBeNull();
 
-    const promptLink = prompt?.querySelector("a");
-    promptLink?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const promptLink = getElement(prompt, "a", HTMLAnchorElement);
+    promptLink.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onLoadRuns).not.toHaveBeenCalled();
 
-    const row = container.querySelector(".cron-job");
-    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const row = getElement(container, ".cron-job", HTMLElement);
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onLoadRuns).toHaveBeenCalledWith("job-md");
 
     const runBody = container.querySelector(".cron-run-entry__body.chat-text");
@@ -474,8 +519,7 @@ describe("cron view", () => {
     );
 
     const editButton = getButtonByText(container, "Edit");
-    expect(editButton).not.toBeUndefined();
-    editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    editButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onEdit).toHaveBeenCalledWith(job);
     expect(onLoadRuns).toHaveBeenCalledWith("job-3");
 
@@ -483,8 +527,7 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Save changes");
 
     const cancelButton = getButtonByText(container, "Cancel");
-    expect(cancelButton).not.toBeUndefined();
-    cancelButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    cancelButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onCancelEdit).toHaveBeenCalledTimes(1);
   });
 
@@ -597,11 +640,8 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Can't add job yet");
     expect(container.textContent).toContain("Fix 3 fields to continue.");
 
-    const saveButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      ["Add job", "Save changes"].includes(btn.textContent?.trim() ?? ""),
-    );
-    expect(saveButton).not.toBeUndefined();
-    expect(saveButton?.disabled).toBe(true);
+    const saveButton = getButtonByAnyText(container, ["Add job", "Save changes"]);
+    expect(saveButton.disabled).toBe(true);
 
     render(
       renderCron(
@@ -662,24 +702,19 @@ describe("cron view", () => {
     );
 
     const cloneButton = getButtonByText(container, "Clone");
-    expect(cloneButton).not.toBeUndefined();
-    cloneButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    cloneButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const enableButton = getButtonByText(container, "Disable");
-    expect(enableButton).not.toBeUndefined();
-    enableButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    enableButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const runButton = getButtonByText(container, "Run");
-    expect(runButton).not.toBeUndefined();
-    runButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    runButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const runDueButton = getButtonByText(container, "Run if due");
-    expect(runDueButton).not.toBeUndefined();
-    runDueButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    runDueButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const removeButton = getButtonByText(container, "Remove");
-    expect(removeButton).not.toBeUndefined();
-    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    removeButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClone).toHaveBeenCalledWith(actionJob);
     expect(onToggle).toHaveBeenCalledWith(actionJob, false);
