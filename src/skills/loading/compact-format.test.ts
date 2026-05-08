@@ -1,7 +1,10 @@
 import os from "node:os";
 import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createEmptyInstallChecks } from "../../cli/requirements-test-fixtures.js";
+import { formatSkillInfo } from "../../cli/skills-cli.format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SkillStatusEntry, SkillStatusReport } from "../discovery/status.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
@@ -26,10 +29,11 @@ function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/S
   });
 }
 
-function makeEntry(skill: Skill): SkillEntry {
+function makeEntry(skill: Skill, options: { skillKey?: string } = {}): SkillEntry {
   return {
     skill,
     frontmatter: {},
+    ...(options.skillKey ? { metadata: { skillKey: options.skillKey } } : {}),
     exposure: {
       includeInRuntimeRegistry: true,
       includeInAvailableSkillsPrompt: true,
@@ -38,12 +42,48 @@ function makeEntry(skill: Skill): SkillEntry {
   };
 }
 
+function makeSkillStatusEntry(entry: SkillEntry): SkillStatusEntry {
+  const skillKey = entry.metadata?.skillKey ?? entry.skill.name;
+  return {
+    name: entry.skill.name,
+    description: entry.skill.description,
+    source: "workspace",
+    bundled: false,
+    filePath: entry.skill.filePath,
+    baseDir: entry.skill.baseDir,
+    skillKey,
+    always: false,
+    disabled: false,
+    blockedByAllowlist: false,
+    blockedByAgentFilter: false,
+    eligible: true,
+    modelVisible: true,
+    userInvocable: true,
+    commandVisible: true,
+    ...createEmptyInstallChecks(),
+  };
+}
+
+function makeSkillStatusReport(entries: SkillEntry[]): SkillStatusReport {
+  return {
+    workspaceDir: "/fake",
+    managedSkillsDir: "/managed",
+    skills: entries.map(makeSkillStatusEntry),
+  };
+}
+
+function parseAdvertisedOmittedSkillKeys(prompt: string): string[] {
+  const match = prompt.match(/<omitted_skill_keys>(.*?)<\/omitted_skill_keys>/s);
+  expect(match).toBeTruthy();
+  return JSON.parse(match![1]) as string[];
+}
+
 function buildPrompt(
   skills: Skill[],
   limits: { maxChars?: number; maxCount?: number } = {},
 ): string {
   return buildWorkspaceSkillsPrompt("/fake", {
-    entries: skills.map(makeEntry),
+    entries: skills.map((skill) => makeEntry(skill)),
     config: {
       skills: {
         limits: {
@@ -181,6 +221,42 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt.match(/<skill>/g)?.length ?? 0).toBe(included);
   });
 
+  it("budgets omitted skill lookup keys and advertises identifiers that skills info resolves", () => {
+    const maxSkillsPromptChars = 520;
+    const entries = Array.from({ length: 24 }, (_, i) => {
+      const name = `skill-${String(i).padStart(2, "0")}`;
+      const skillKey = i === 0 ? "skill<zero`raw" : name;
+      return makeEntry(makeSkill(name, "A".repeat(500)), { skillKey });
+    });
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries,
+      config: {
+        skills: {
+          limits: {
+            maxSkillsInPrompt: 100,
+            maxSkillsPromptChars,
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
+    expect(prompt.length).toBeLessThanOrEqual(maxSkillsPromptChars);
+    expect(prompt).toContain("⚠️ Skills truncated");
+    const advertisedKeys = parseAdvertisedOmittedSkillKeys(prompt);
+    expect(advertisedKeys.length).toBeGreaterThan(0);
+    expect(advertisedKeys).toContain("skill<zero`raw");
+
+    const report = makeSkillStatusReport(entries);
+    for (const skillKey of advertisedKeys) {
+      const info = JSON.parse(formatSkillInfo(report, skillKey, { json: true })) as {
+        error?: string;
+        skillKey?: string;
+      };
+      expect(info.error).toBeUndefined();
+      expect(info.skillKey).toBe(skillKey);
+    }
+  });
+
   it("compact preserves all skills where full format would drop some", () => {
     const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(200)));
     const compactLen = formatSkillsCompact(skills).length;
@@ -214,10 +290,10 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   it("extreme budget: even a single compact skill overflows", () => {
     const skills = [makeSkill("only-one", "desc")];
     // Budget so small that even one compact skill can't fit
-    const prompt = buildPrompt(skills, { maxChars: 10 });
+    const maxChars = 10;
+    const prompt = buildPrompt(skills, { maxChars });
+    expect(prompt.length).toBeLessThanOrEqual(maxChars);
     expect(prompt).not.toContain("only-one");
-    const [included] = requireIncludedCounts(prompt);
-    expect(included).toBe(0);
   });
 
   it("count truncation only: shows included X of Y without compact note", () => {
@@ -298,7 +374,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
       makeSkill(`skill-${i}`, "A skill", `${home}/.openclaw/workspace/skills/skill-${i}/SKILL.md`),
     );
     const snapshot = buildWorkspaceSkillSnapshot("/fake", {
-      entries: skills.map(makeEntry),
+      entries: skills.map((skill) => makeEntry(skill)),
     });
     // Prompt should use compacted paths
     expect(snapshot.prompt).toContain("~/");
