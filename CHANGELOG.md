@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Breaking
 
-- Active Memory: the memory-core default blocking recall tool allowlist is now `memory_search` and `memory_get` only. Existing configs that select `memory-lancedb` via `plugins.slots.memory` keep using `memory_recall` automatically; custom memory plugins that need other tools must set `plugins.entries.active-memory.config.toolsAllow`.
+- Active Memory: the memory-core default blocking recall tool allowlist is now `memory_search` and `memory_get` only, while `plugins.slots.memory: "memory-lancedb"` keeps using `memory_recall` automatically and custom memory plugins can set concrete `plugins.entries.active-memory.config.toolsAllow` tool names.
 
 ### Changes
 
@@ -83,7 +83,6 @@ Docs: https://docs.openclaw.ai
 - Google Meet: preserve `realtime.introMessage: ""` so realtime Chrome joins can stay silent instead of restoring the default spoken intro. Thanks @vincentkoc.
 - CLI/migrate: add bulk on/off and skip controls to interactive Codex skill migration, leaving conflicting skill copies unchecked by default. (#77597) Thanks @kevinslin.
 - OpenAI/Codex media: advertise Codex audio transcription in runtime and manifest metadata and route active Codex chat models to the OpenAI transcription default instead of sending chat model ids to audio transcription. Thanks @vincentkoc.
-- Plugins/active-memory: add `config.toolsAllow` so the blocking recall subagent can use custom memory-provider tools, keep a narrow `memory-lancedb` compatibility default when `plugins.slots.memory` selects it, ignore wildcard/group/core tool entries before the hidden memory run starts, make the default prompt list the resolved tools instead of hardcoding memory-core/LanceDB fallback rules, and degrade missing or failed recall tools to empty memory so the main reply continues.
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
 - Cron CLI: add `openclaw cron list --agent <id>`, normalize the requested agent id, and include jobs without a stored agent id under the configured default agent while keeping `cron list` unfiltered when no agent is supplied. Fixes #77118. Thanks @zhanggttry.
 - Status: show compact Gateway process uptime and host system uptime in `/status`, making restart and host-lifetime checks visible from chat. Thanks @vincentkoc.
@@ -129,7 +128,6 @@ Docs: https://docs.openclaw.ai
 - Secrets/external channel contracts: also look in `<rootDir>/dist/` when resolving the `secret-contract-api` sidecar, so npm-published externalized channel plugins (e.g. `@openclaw/discord` since 2026.5.2) whose compiled artifacts live under `dist/` actually contribute their channel SecretRef contracts to the runtime snapshot. Without this, env-backed `channels.discord.token` SecretRefs silently failed to resolve at gateway start on 2026.5.3, leaving the channel `not configured` even though #76449 had landed the generic external-contract loader. Thanks @mogglemoss.
 - Secrets/apply: preserve auth-profile `keyRef` and `tokenRef` fields when scrubbing provider-target secrets, so the canonical SecretRef metadata survives `secrets apply` without keeping plaintext values. Thanks @Beandon13.
 - Config/plugin auto-enable: prefer the claiming plugin manifest id over a built-in channel alias when auto-allowlisting a configured channel, so WeCom/Yuanbao-style aliases resolve to the installed plugin id. Thanks @Beandon13.
-- Docs/active-memory: document `toolsAllow` examples for built-in memory-core, bundled LanceDB memory, and Lossless Claw recall tools so custom memory providers can be wired into Active Memory without relying on the default memory-core tool contract.
 - Plugins/update: treat official externalized bundled npm migrations and ClawHub-to-npm fallbacks as trusted source-linked installs, so prerelease-only official plugin packages can migrate from bundled builds without being rejected as unsafe prerelease resolutions. Thanks @vincentkoc.
 - Plugins/update: move ClawHub-preferred externalized plugin installs back to ClawHub after an earlier npm fallback once the ClawHub package becomes available. Thanks @vincentkoc.
 - Plugins/update: clean stale bundled load paths for already-externalized pinned npm and ClawHub plugin installs, so release-channel sync does not leave removed bundled paths ahead of the installed external package. Thanks @vincentkoc.
