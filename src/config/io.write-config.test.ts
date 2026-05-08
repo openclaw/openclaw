@@ -1,10 +1,11 @@
-import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { readConfigHealthStateFromSqlite } from "./health-state.js";
 import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import {
   createConfigIO,
@@ -86,6 +87,7 @@ describe("config io write", () => {
 
   afterEach(() => {
     resetConfigRuntimeState();
+    closeOpenClawStateDatabaseForTest();
     mockMaintainConfigBackups.mockReset();
     mockMaintainConfigBackups.mockResolvedValue(undefined);
   });
@@ -153,30 +155,7 @@ describe("config io write", () => {
       logger: silentLogger,
     });
 
-  function withHealthStateWriteFailure(healthPath: string): typeof fsNode {
-    const writeFile = fsNode.promises.writeFile.bind(fsNode.promises);
-    const writeFileSync = fsNode.writeFileSync.bind(fsNode);
-    return {
-      ...fsNode,
-      promises: {
-        ...fsNode.promises,
-        writeFile: async (target, data, options) => {
-          if (target === healthPath) {
-            throw new Error("health write failed");
-          }
-          return await writeFile(target, data, options);
-        },
-      },
-      writeFileSync: (target, data, options) => {
-        if (target === healthPath) {
-          throw new Error("health write failed");
-        }
-        return writeFileSync(target, data, options);
-      },
-    };
-  }
-
-  it("logs health-state write failures through public config reads", async () => {
+  it("stores config health state in SQLite instead of config-health.json", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
@@ -186,21 +165,25 @@ describe("config io write", () => {
         `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`,
         "utf-8",
       );
-      const warn = vi.fn();
       const io = createConfigIO({
         configPath,
         env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        fs: withHealthStateWriteFailure(healthPath),
         homedir: () => home,
-        logger: { warn, error: vi.fn() },
+        logger: { warn: vi.fn(), error: vi.fn() },
       });
 
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.exists).toBe(true);
-      expect(io.loadConfig().gateway).toEqual({ mode: "local" });
-
-      const expectedHealthWarning = `Config health-state write failed: ${healthPath}: health write failed`;
-      expect(warn.mock.calls).toEqual([[expectedHealthWarning], [expectedHealthWarning]]);
+      await expect(io.readConfigFileSnapshot()).resolves.toMatchObject({ exists: true });
+      expect(io.loadConfig()).toMatchObject({ gateway: { mode: "local" } });
+      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        readConfigHealthStateFromSqlite(
+          { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          () => home,
+        ).entries?.[configPath]?.lastKnownGood,
+      ).toMatchObject({
+        hash: expect.any(String),
+        gatewayMode: "local",
+      });
     });
   });
 

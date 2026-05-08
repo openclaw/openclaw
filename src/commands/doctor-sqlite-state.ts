@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   discoverLegacyAuthProfileStateAgentDirs,
   importLegacyAuthProfileStateFileToSqlite,
@@ -15,6 +17,7 @@ import {
   legacyCommitmentStoreFileExists,
 } from "../commitments/store.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { writeConfigHealthStateToSqlite, type ConfigHealthState } from "../config/health-state.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   importLegacyManagedOutgoingImageRecordFilesToSqlite,
@@ -106,6 +109,7 @@ type LegacyStateProbe = {
   webPush: boolean;
   apns: boolean;
   updateCheck: boolean;
+  configHealth: boolean;
   managedImages: boolean;
   mediaFiles: boolean;
   pluginState: boolean;
@@ -121,6 +125,50 @@ type LegacyStateProbe = {
   openRouterModelCache: boolean;
   memoryCoreDreamingState: boolean;
 };
+
+function resolveLegacyConfigHealthPath(baseDir: string): string {
+  return path.join(baseDir, "logs", "config-health.json");
+}
+
+async function legacyConfigHealthFileExists(baseDir: string): Promise<boolean> {
+  try {
+    return (await fs.stat(resolveLegacyConfigHealthPath(baseDir))).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function importLegacyConfigHealthFileToSqlite(params: {
+  env: NodeJS.ProcessEnv;
+  baseDir: string;
+}): Promise<{ imported: boolean; entries: number }> {
+  const filePath = resolveLegacyConfigHealthPath(params.baseDir);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { imported: false, entries: 0 };
+    }
+    throw error;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { imported: false, entries: 0 };
+  }
+  const state = parsed as ConfigHealthState;
+  writeConfigHealthStateToSqlite(params.env, () => params.baseDir, state);
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
+  return {
+    imported: true,
+    entries:
+      state.entries && typeof state.entries === "object" && !Array.isArray(state.entries)
+        ? Object.keys(state.entries).length
+        : 0,
+  };
+}
 
 async function probeLegacyRuntimeStateFiles(params: {
   env: NodeJS.ProcessEnv;
@@ -141,6 +189,7 @@ async function probeLegacyRuntimeStateFiles(params: {
     webPush: await legacyWebPushFilesExist(baseDir),
     apns: await legacyApnsRegistrationFileExists(baseDir),
     updateCheck: await legacyUpdateCheckFileExists(env),
+    configHealth: await legacyConfigHealthFileExists(baseDir),
     managedImages: await legacyManagedOutgoingImageRecordFilesExist(baseDir),
     mediaFiles: await legacyMediaFilesExist(env),
     pluginState: legacyPluginStateSidecarExists(env),
@@ -294,6 +343,16 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
       const result = await importLegacyUpdateCheckFileToSqlite(env);
       if (result.imported) {
         changes.push("- Imported update-check state into SQLite.");
+      }
+    });
+  }
+  if (probe.configHealth) {
+    await runImport("Config health", async () => {
+      const result = await importLegacyConfigHealthFileToSqlite({ env, baseDir });
+      if (result.imported) {
+        changes.push(
+          `- Imported ${result.entries} config health entr${result.entries === 1 ? "y" : "ies"} into SQLite.`,
+        );
       }
     });
   }

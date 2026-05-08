@@ -223,6 +223,32 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           })}\n`,
           "utf8",
         );
+        await fs.mkdir(path.join(stateDir, "logs"), { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, "logs", "config-health.json"),
+          `${JSON.stringify({
+            entries: {
+              "/tmp/openclaw.json": {
+                lastKnownGood: {
+                  hash: "legacy-health",
+                  bytes: 42,
+                  mtimeMs: 1,
+                  ctimeMs: 1,
+                  dev: null,
+                  ino: null,
+                  mode: 384,
+                  nlink: 1,
+                  uid: null,
+                  gid: null,
+                  hasMeta: true,
+                  gatewayMode: "local",
+                  observedAt: "2026-01-17T10:00:00.000Z",
+                },
+              },
+            },
+          })}\n`,
+          "utf8",
+        );
         const mediaRecordsDir = path.join(stateDir, "media", "outgoing", "records");
         await fs.mkdir(mediaRecordsDir, { recursive: true });
         await fs.writeFile(
@@ -430,6 +456,19 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(fs.stat(path.join(stateDir, "update-check.json"))).rejects.toMatchObject({
           code: "ENOENT",
         });
+        expect(readOpenClawStateKvJson("config.health", "current", { env })).toMatchObject({
+          entries: {
+            "/tmp/openclaw.json": {
+              lastKnownGood: {
+                hash: "legacy-health",
+                gatewayMode: "local",
+              },
+            },
+          },
+        });
+        await expect(
+          fs.stat(path.join(stateDir, "logs", "config-health.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
         expect(
           readOpenClawStateKvJson(
             "managed_outgoing_image_records",
