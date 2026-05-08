@@ -1130,6 +1130,107 @@ describe("runMemoryFlushIfNeeded", () => {
     );
   });
 
+  it("uses the prepared run agent when measuring active transcript bytes", async () => {
+    appendSqliteSessionTranscriptEvent({
+      agentId: "worker",
+      sessionId: "session",
+      event: {
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "x".repeat(256) },
+      },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const sessionKey = "agent:main:main";
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        agentId: "worker",
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const workerCompactCall = requireCompactEmbeddedPiSessionCall();
+    expect(workerCompactCall.agentId).toBe("worker");
+    expect(workerCompactCall.sessionId).toBe("session");
+  });
+
+  it("uses the prepared run agent when measuring active transcript bytes", async () => {
+    appendSqliteSessionTranscriptEvent({
+      agentId: "worker",
+      sessionId: "session",
+      event: {
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "x".repeat(256) },
+      },
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const sessionKey = "agent:main:main";
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        agentId: "worker",
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "worker",
+        sessionId: "session",
+      }),
+    );
+  });
+
   it("keeps the active transcript byte threshold inactive unless transcript rotation is enabled", async () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
