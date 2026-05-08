@@ -165,11 +165,11 @@ describe("qa-bus state", () => {
     const byFilename = state.searchMessages({
       query: "screenshot",
     });
-    expect(byFilename.some((message) => message.id === outbound.id)).toBe(true);
+    expect(byFilename.map((message) => message.id)).toContain(outbound.id);
 
     const byAltText = state.searchMessages({
       query: "dashboard",
     });
-    expect(byAltText.some((message) => message.id === outbound.id)).toBe(true);
+    expect(byAltText.map((message) => message.id)).toContain(outbound.id);
   });
 });
