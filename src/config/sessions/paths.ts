@@ -32,26 +32,22 @@ export function resolveSessionTranscriptsDirForAgent(
   return resolveAgentSessionsDir(agentId, env, homedir);
 }
 
-export function resolveDefaultSessionStorePath(agentId?: string): string {
-  return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
-}
-
 export type SessionFilePathOptions = {
   agentId?: string;
   sessionsDir?: string;
 };
 
-const MULTI_STORE_PATH_SENTINEL = "(multiple)";
-
 export function resolveSessionFilePathOptions(params: {
   agentId?: string;
-  storePath?: string;
+  sessionsDir?: string;
 }): SessionFilePathOptions | undefined {
   const agentId = params.agentId?.trim();
-  const storePath = params.storePath?.trim();
-  if (storePath && storePath !== MULTI_STORE_PATH_SENTINEL) {
-    const sessionsDir = path.dirname(path.resolve(storePath));
-    return agentId ? { sessionsDir, agentId } : { sessionsDir };
+  const sessionsDir = params.sessionsDir?.trim();
+  if (sessionsDir) {
+    const resolvedSessionsDir = path.resolve(sessionsDir);
+    return agentId
+      ? { sessionsDir: resolvedSessionsDir, agentId }
+      : { sessionsDir: resolvedSessionsDir };
   }
   if (agentId) {
     return { agentId };
@@ -173,6 +169,11 @@ function safeRealpathSync(filePath: string): string | undefined {
   }
 }
 
+function resolveExistingParentPath(candidateAbsPath: string): string | undefined {
+  const parent = safeRealpathSync(path.dirname(candidateAbsPath));
+  return parent ? path.join(parent, path.basename(candidateAbsPath)) : undefined;
+}
+
 function resolvePathWithinSessionsDir(
   sessionsDir: string,
   candidate: string,
@@ -187,7 +188,9 @@ function resolvePathWithinSessionsDir(
   // Normalize absolute paths that are within the sessions directory.
   // Older versions stored absolute sessionFile paths in sessions.json;
   // convert them to relative so the containment check passes.
-  const realTrimmed = path.isAbsolute(trimmed) ? (safeRealpathSync(trimmed) ?? trimmed) : trimmed;
+  const realTrimmed = path.isAbsolute(trimmed)
+    ? (safeRealpathSync(trimmed) ?? resolveExistingParentPath(trimmed) ?? trimmed)
+    : trimmed;
   const normalized = path.isAbsolute(realTrimmed)
     ? path.relative(realBase, realTrimmed)
     : realTrimmed;
@@ -281,7 +284,7 @@ export function resolveSessionFilePath(
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
 }
 
-export function resolveStorePath(
+export function resolveLegacySessionStorePath(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
@@ -314,38 +317,4 @@ export function resolveStorePath(
     );
   }
   return path.resolve(store);
-}
-
-export function resolveAgentsDirFromSessionStorePath(storePath: string): string | undefined {
-  const candidateAbsPath = path.resolve(storePath);
-  if (path.basename(candidateAbsPath) !== "sessions.json") {
-    return undefined;
-  }
-  const sessionsDir = path.dirname(candidateAbsPath);
-  if (path.basename(sessionsDir) !== "sessions") {
-    return undefined;
-  }
-  const agentDir = path.dirname(sessionsDir);
-  const agentsDir = path.dirname(agentDir);
-  if (path.basename(agentsDir) !== "agents") {
-    return undefined;
-  }
-  return agentsDir;
-}
-
-export function resolveAgentIdFromSessionStorePath(storePath: string): string | undefined {
-  const candidateAbsPath = path.resolve(storePath);
-  if (path.basename(candidateAbsPath) !== "sessions.json") {
-    return undefined;
-  }
-  const sessionsDir = path.dirname(candidateAbsPath);
-  if (path.basename(sessionsDir) !== "sessions") {
-    return undefined;
-  }
-  const agentDir = path.dirname(sessionsDir);
-  const agentsDir = path.dirname(agentDir);
-  if (path.basename(agentsDir) !== "agents") {
-    return undefined;
-  }
-  return normalizeAgentId(path.basename(agentDir));
 }

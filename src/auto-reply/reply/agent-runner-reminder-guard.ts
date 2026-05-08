@@ -31,8 +31,8 @@ export async function hasSessionRelatedCronJobs(params: {
   sessionKey?: string;
 }): Promise<boolean> {
   try {
-    const storePath = resolveCronStorePath(params.cronStorePath);
-    const store = await loadCronStore(storePath);
+    const cronStorePath = resolveCronStorePath(params.cronStorePath);
+    const store = await loadCronStore(cronStorePath);
     if (store.jobs.length === 0) {
       return false;
     }

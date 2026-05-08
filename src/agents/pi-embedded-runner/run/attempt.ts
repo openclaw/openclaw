@@ -142,17 +142,11 @@ import {
 } from "../../runtime-plan/tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
-import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   sanitizeToolUseResultPairing,
   stripToolResultDetails,
 } from "../../session-transcript-repair.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionLockMaxHoldFromTimeout,
-  resolveSessionWriteLockAcquireTimeoutMs,
-} from "../../session-write-lock.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import {
   applySkillEnvOverrides,
@@ -191,6 +185,7 @@ import {
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
+import { repairTranscriptStateIfNeeded } from "../../transcript-state-repair.js";
 import { removeSessionManagerTailEntries } from "../../transcript/session-manager-tail.js";
 import { openTranscriptSessionManager } from "../../transcript/session-manager.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
@@ -341,7 +336,6 @@ import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   resolveRunTimeoutDuringCompaction,
-  resolveRunTimeoutWithCompactionGraceMs,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
@@ -646,10 +640,6 @@ function sessionMessagesContainIdempotencyKey(
   );
 }
 
-function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
-  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
-}
-
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
   return params.promptErrorSource !== "hook:before_agent_run";
 }
@@ -678,7 +668,7 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
   );
   if (removal.rewriteUnavailable) {
     log.warn(
-      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager rewrite hook is unavailable",
+      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager tail removal is unavailable",
     );
     return;
   }
@@ -1204,7 +1194,7 @@ export async function runEmbeddedAttempt(
     }
     if (isEmbeddedMode()) {
       workspaceNotes.push(
-        "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific files such as sessions.json, gateway.log, or gateway.pid.",
+        "Running in local embedded mode (no gateway). Most tools work locally. Gateway-dependent tools (canvas, nodes, cron, message, sessions_send, sessions_spawn, gateway) are unavailable. Subagent kill/steer require a gateway. Do not attempt to read gateway-specific runtime files.",
       );
     }
 
@@ -1605,20 +1595,6 @@ export async function runEmbeddedAttempt(
     let systemPromptText = systemPromptOverride();
     prepStages.mark("system-prompt");
 
-    // Keep the session lock scoped to transcript/session mutations. Cold plugin
-    // and tool setup can be slow, and holding the lock there blocks CLI fallback
-    // from taking over the same session when a gateway run stalls before model I/O.
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
-          runTimeoutMs: params.timeoutMs,
-          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
-        }),
-      }),
-    });
-
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
@@ -1626,8 +1602,8 @@ export async function runEmbeddedAttempt(
     let trajectoryEndRecorded = false;
     let buildAbortSettlePromise: () => Promise<void> | null = () => null;
     try {
-      await repairSessionFileIfNeeded({
-        sessionFile: params.sessionFile,
+      await repairTranscriptStateIfNeeded({
+        transcriptPath: params.sessionFile,
         debug: (message) => log.debug(message),
         warn: (message) => log.warn(message),
       });
@@ -3185,7 +3161,6 @@ export async function runEmbeddedAttempt(
               activeSessionManager.appendMessage(
                 redactedUserMessage as Parameters<typeof activeSessionManager.appendMessage>[0],
               );
-              flushSessionManagerFile(activeSessionManager);
               activeSession.agent.state.messages =
                 activeSessionManager.buildSessionContext().messages;
               return true;
@@ -3841,6 +3816,7 @@ export async function runEmbeddedAttempt(
           try {
             const rotation = await rotateTranscriptAfterCompaction({
               sessionManager,
+              agentId: params.agentId,
               sessionFile: params.sessionFile,
             });
             if (rotation.rotated) {
@@ -4153,7 +4129,7 @@ export async function runEmbeddedAttempt(
           await trajectoryRecorder?.flush();
         },
       });
-      // Always tear down the session (and release the lock) before we leave this attempt.
+      // Always tear down the session before we leave this attempt.
       //
       // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.
       // pi-agent-core's auto-retry resolves waitForRetry() on assistant message receipt,
