@@ -266,8 +266,12 @@ describe("inworldTTS", () => {
     expect(request.url).toBe("https://api.inworld.ai/tts/v1/voice:stream");
     expect(request.auditContext).toBe("inworld-tts");
     expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
-    expect(request.init?.method).toBe("POST");
-    const headers = new Headers(request.init?.headers);
+    expect(request.init).toBeDefined();
+    if (!request.init) {
+      throw new Error("expected Inworld TTS request init");
+    }
+    expect(request.init.method).toBe("POST");
+    const headers = new Headers(request.init.headers);
     expect(headers.get("authorization")).toBe("Basic test-key");
     expect(headers.get("content-type")).toBe("application/json");
     expect(JSON.parse(readRequestBody(request))).toEqual({
