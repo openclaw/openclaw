@@ -34,7 +34,7 @@ const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
-const DISK_CACHE_FILENAME = "openrouter-models.json";
+const LEGACY_JSON_CACHE_FILENAME = "openrouter-models.json";
 const SQLITE_CACHE_SCOPE = "openrouter_model_capabilities";
 const SQLITE_CACHE_KEY = "models";
 
@@ -78,23 +78,25 @@ export interface OpenRouterModelCapabilities {
   };
 }
 
-interface DiskCachePayload {
+interface OpenRouterModelCachePayload {
   models: Record<string, OpenRouterModelCapabilities>;
 }
 
 // ---------------------------------------------------------------------------
-// Disk cache
+// Persistent cache
 // ---------------------------------------------------------------------------
 
-function resolveDiskCacheDir(env: NodeJS.ProcessEnv = process.env): string {
+function resolveLegacyJsonCacheDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(resolveStateDir(env), "cache");
 }
 
-function resolveDiskCachePath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveDiskCacheDir(env), DISK_CACHE_FILENAME);
+function resolveLegacyJsonCachePath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(resolveLegacyJsonCacheDir(env), LEGACY_JSON_CACHE_FILENAME);
 }
 
-function mapToDiskCachePayload(map: Map<string, OpenRouterModelCapabilities>): DiskCachePayload {
+function mapToCachePayload(
+  map: Map<string, OpenRouterModelCapabilities>,
+): OpenRouterModelCachePayload {
   return {
     models: Object.fromEntries(map),
   };
@@ -112,7 +114,7 @@ function writeSqliteCache(
     writeOpenClawStateKvJson(
       SQLITE_CACHE_SCOPE,
       SQLITE_CACHE_KEY,
-      mapToDiskCachePayload(map),
+      mapToCachePayload(map),
       sqliteOptionsForEnv(env),
     );
   } catch (err: unknown) {
@@ -143,7 +145,7 @@ function parseCachePayload(payload: unknown): Map<string, OpenRouterModelCapabil
   if (!payload || typeof payload !== "object") {
     return undefined;
   }
-  const models = (payload as DiskCachePayload).models;
+  const models = (payload as OpenRouterModelCachePayload).models;
   if (!models || typeof models !== "object") {
     return undefined;
   }
@@ -168,11 +170,11 @@ function readSqliteCache(
   }
 }
 
-function readDiskCache(
+function readLegacyJsonCache(
   env: NodeJS.ProcessEnv = process.env,
 ): Map<string, OpenRouterModelCapabilities> | undefined {
   try {
-    const cachePath = resolveDiskCachePath(env);
+    const cachePath = resolveLegacyJsonCachePath(env);
     if (!existsSync(cachePath)) {
       return undefined;
     }
@@ -189,7 +191,7 @@ function readPersistentCache(): Map<string, OpenRouterModelCapabilities> | undef
 export function legacyOpenRouterModelCapabilitiesCacheExists(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return existsSync(resolveDiskCachePath(env));
+  return existsSync(resolveLegacyJsonCachePath(env));
 }
 
 export function importLegacyOpenRouterModelCapabilitiesCacheToSqlite(
@@ -198,16 +200,16 @@ export function importLegacyOpenRouterModelCapabilitiesCacheToSqlite(
   if (!legacyOpenRouterModelCapabilitiesCacheExists(env)) {
     return { imported: false, models: 0 };
   }
-  const diskCache = readDiskCache(env);
-  if (diskCache) {
-    writeSqliteCache(diskCache, env);
+  const legacyJsonCache = readLegacyJsonCache(env);
+  if (legacyJsonCache) {
+    writeSqliteCache(legacyJsonCache, env);
   }
   try {
-    unlinkSync(resolveDiskCachePath(env));
+    unlinkSync(resolveLegacyJsonCachePath(env));
   } catch {
     // Import succeeded; a later doctor pass can remove the stale file.
   }
-  return { imported: true, models: diskCache?.size ?? 0 };
+  return { imported: true, models: legacyJsonCache?.size ?? 0 };
 }
 
 // ---------------------------------------------------------------------------
