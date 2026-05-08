@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSqliteSessionTranscriptLocator } from "../config/sessions/paths.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import {
@@ -80,6 +82,20 @@ const OVERLOADED_ERROR_PAYLOAD =
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
 const NO_ENDPOINTS_FOUND_ERROR_MESSAGE = "404 No endpoints found for deepseek/deepseek-r1:free.";
 
+function createTestSessionTranscriptLocator(params: {
+  sessionKey: string;
+  sessionId: string;
+}): string {
+  return createSqliteSessionTranscriptLocator({
+    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    sessionId: params.sessionId,
+  });
+}
+
+function createTestSessionId(raw: string): string {
+  return raw.replace(/[^a-z0-9._-]/gi, "-").slice(0, 128);
+}
+
 type EmbeddedAttemptParams = {
   provider: string;
   modelId?: string;
@@ -141,12 +157,22 @@ async function withAgentWorkspace<T>(
 ): Promise<T> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-fallback-"));
   const agentDir = path.join(root, "agent");
+  const stateDir = path.join(root, "state");
   const workspaceDir = path.join(root, "workspace");
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   await fs.mkdir(agentDir, { recursive: true });
+  await fs.mkdir(stateDir, { recursive: true });
   await fs.mkdir(workspaceDir, { recursive: true });
+  process.env.OPENCLAW_STATE_DIR = stateDir;
   try {
     return await fn({ agentDir, workspaceDir });
   } finally {
+    closeOpenClawStateDatabaseForTest();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
     await fs.rm(root, { recursive: true, force: true });
   }
 }
@@ -239,6 +265,7 @@ async function runEmbeddedFallback(params: {
   config?: OpenClawConfig;
 }) {
   const cfg = params.config ?? makeConfig();
+  const sessionId = createTestSessionId(`session-${params.runId}`);
   return await runWithModelFallback({
     cfg,
     provider: "openai",
@@ -247,9 +274,12 @@ async function runEmbeddedFallback(params: {
     agentDir: params.agentDir,
     run: (provider, model, options) =>
       runEmbeddedPiAgent({
-        sessionId: `session:${params.runId}`,
+        sessionId,
         sessionKey: params.sessionKey,
-        sessionFile: path.join(params.workspaceDir, `${params.runId}.jsonl`),
+        sessionFile: createTestSessionTranscriptLocator({
+          sessionKey: params.sessionKey,
+          sessionId,
+        }),
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         config: cfg,
@@ -397,9 +427,12 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       );
 
       const result = await runEmbeddedPiAgent({
-        sessionId: "session:tool-side-effect-terminal",
+        sessionId: "tool-side-effect-terminal",
         sessionKey: "agent:test:tool-side-effect-terminal",
-        sessionFile: path.join(workspaceDir, "tool-side-effect-terminal.jsonl"),
+        sessionFile: createTestSessionTranscriptLocator({
+          sessionKey: "agent:test:tool-side-effect-terminal",
+          sessionId: "tool-side-effect-terminal",
+        }),
         workspaceDir,
         agentDir,
         config: makeConfig(),
