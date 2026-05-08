@@ -40,7 +40,17 @@ const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 
 function normalizeProfileAllowlist(raw?: string[]): string[] {
-  return Array.isArray(raw) ? raw.map((entry) => entry.trim()).filter(Boolean) : [];
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const profiles: string[] = [];
+  for (const entry of raw) {
+    const trimmed = entry.trim();
+    if (trimmed) {
+      profiles.push(trimmed);
+    }
+  }
+  return profiles;
 }
 
 function resolveBrowserProxyConfig() {

@@ -681,6 +681,8 @@ Docs: https://docs.openclaw.ai
 
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
 - Agents/commands: add `/steer <message>` for queue-independent steering of the active current-session run without starting a new turn when the session is idle. (#76934)
+- Core/performance: trim additional channel snapshot, turn-context, allowlist, bundled catalog, media probing, and model-catalog normalization hot paths by removing duplicate reads and intermediate array chains. Thanks @vincentkoc.
+- Core/performance: trim plugin registry, manifest/package entry, provider-owner, browser traversal, QA coverage/provider, schema, and command-preview helper normalization paths with direct loops. Thanks @vincentkoc.
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.
 - Doctor/config: `doctor --fix` now commits safe legacy migrations even when unrelated validation issues (e.g. a missing plugin) prevent full validation from passing, so `agents.defaults.llm` and other known-legacy keys are always cleaned up by `doctor --fix` regardless of other config problems. Fixes #76798. (#76800) Thanks @hclsys.
 - Agents/tools: skip optional media and PDF tool factories when the effective tool denylist already blocks them, avoiding unnecessary hot-path setup for tools that will be filtered out before model use. (#76773) Thanks @dorukardahan.

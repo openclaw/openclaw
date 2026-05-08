@@ -87,18 +87,24 @@ function resolveBundledSetupCliBackends(
   ) {
     return cachedBundledSetupCliBackends.entries;
   }
-  const entries = snapshot.plugins.flatMap((plugin) => {
+  const entries: SetupCliBackendRuntimeEntry[] = [];
+  for (const plugin of snapshot.plugins) {
     if (plugin.origin !== "bundled" || !isInstalledPluginEnabled(snapshot.index, plugin.id)) {
-      return [];
+      continue;
     }
-    return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
-      (backendId) =>
-        ({
-          pluginId: plugin.id,
-          backend: { id: backendId },
-        }) satisfies SetupCliBackendRuntimeEntry,
-    );
-  });
+    for (const backendId of plugin.cliBackends) {
+      entries.push({
+        pluginId: plugin.id,
+        backend: { id: backendId },
+      });
+    }
+    for (const backendId of plugin.setup?.cliBackends ?? []) {
+      entries.push({
+        pluginId: plugin.id,
+        backend: { id: backendId },
+      });
+    }
+  }
   if (cacheable && configFingerprint) {
     cachedBundledSetupCliBackends = { configFingerprint, entries };
   }

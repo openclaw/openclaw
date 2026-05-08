@@ -118,8 +118,16 @@ function normalizeModelCatalogTieredCost(value: unknown): ModelCatalogTieredCost
     ) {
       continue;
     }
-    const rangeValues = entry.range.map((rangeValue) => normalizeNonNegativeNumber(rangeValue));
-    if (rangeValues.some((rangeValue) => rangeValue === undefined)) {
+    const rangeValues: number[] = [];
+    for (const rangeValue of entry.range) {
+      const normalizedRangeValue = normalizeNonNegativeNumber(rangeValue);
+      if (normalizedRangeValue === undefined) {
+        rangeValues.length = 0;
+        break;
+      }
+      rangeValues.push(normalizedRangeValue);
+    }
+    if (rangeValues.length === 0) {
       continue;
     }
     normalized.push({
@@ -203,11 +211,14 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
   }
 
   if (isRecord(value.reasoningEffortMap)) {
-    const reasoningEffortMap = Object.fromEntries(
-      Object.entries(value.reasoningEffortMap)
-        .map(([key, mapped]) => [key.trim(), typeof mapped === "string" ? mapped.trim() : ""])
-        .filter(([key, mapped]) => key.length > 0 && mapped.length > 0),
-    );
+    const reasoningEffortMap: Record<string, string> = {};
+    for (const [rawKey, mapped] of Object.entries(value.reasoningEffortMap)) {
+      const key = rawKey.trim();
+      const mappedValue = typeof mapped === "string" ? mapped.trim() : "";
+      if (key && mappedValue) {
+        reasoningEffortMap[key] = mappedValue;
+      }
+    }
     if (Object.keys(reasoningEffortMap).length > 0) {
       compat.reasoningEffortMap = reasoningEffortMap;
     }
@@ -285,11 +296,15 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   if (!isRecord(value)) {
     return undefined;
   }
-  const models = Array.isArray(value.models)
-    ? value.models
-        .map((entry) => normalizeModelCatalogModel(entry))
-        .filter((entry): entry is ModelCatalogModel => Boolean(entry))
-    : [];
+  const models: ModelCatalogModel[] = [];
+  if (Array.isArray(value.models)) {
+    for (const entry of value.models) {
+      const model = normalizeModelCatalogModel(entry);
+      if (model) {
+        models.push(model);
+      }
+    }
+  }
   if (models.length === 0) {
     return undefined;
   }
@@ -371,12 +386,14 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
     }
     const reason = normalizeOptionalString(entry.reason) ?? "";
     const rawWhen = isRecord(entry.when) ? entry.when : undefined;
-    const baseUrlHosts = normalizeTrimmedStringList(rawWhen?.baseUrlHosts).map((host) =>
-      host.toLowerCase(),
-    );
-    const providerConfigApiIn = normalizeTrimmedStringList(rawWhen?.providerConfigApiIn).map(
-      (api) => api.toLowerCase(),
-    );
+    const baseUrlHosts = normalizeTrimmedStringList(rawWhen?.baseUrlHosts);
+    for (let index = 0; index < baseUrlHosts.length; index += 1) {
+      baseUrlHosts[index] = baseUrlHosts[index]?.toLowerCase() ?? "";
+    }
+    const providerConfigApiIn = normalizeTrimmedStringList(rawWhen?.providerConfigApiIn);
+    for (let index = 0; index < providerConfigApiIn.length; index += 1) {
+      providerConfigApiIn[index] = providerConfigApiIn[index]?.toLowerCase() ?? "";
+    }
     const when =
       baseUrlHosts.length > 0 || providerConfigApiIn.length > 0
         ? {

@@ -417,13 +417,21 @@ function flattenUnionFallback(
   obj: Record<string, unknown>,
   variants: unknown[],
 ): Record<string, unknown> | undefined {
-  const objects = variants.filter(
-    (v): v is Record<string, unknown> => !!v && typeof v === "object",
-  );
+  const objects: Record<string, unknown>[] = [];
+  const types = new Set<unknown>();
+  for (const variant of variants) {
+    if (!variant || typeof variant !== "object") {
+      continue;
+    }
+    objects.push(variant as Record<string, unknown>);
+    const type = (variant as Record<string, unknown>).type;
+    if (type) {
+      types.add(type);
+    }
+  }
   if (objects.length === 0) {
     return undefined;
   }
-  const types = new Set(objects.map((v) => v.type).filter(Boolean));
   if (objects.length === 1) {
     const merged: Record<string, unknown> = { ...objects[0] };
     copySchemaMeta(obj, merged);

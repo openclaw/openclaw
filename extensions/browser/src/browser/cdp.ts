@@ -549,8 +549,14 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
     }
   }
 
-  const roots = tree.map((_node, index) => index).filter((index) => !childIndexes.has(index));
-  const stack = roots.map((index) => ({ index, depth: 0 }));
+  const roots: number[] = [];
+  const stack: Array<{ index: number; depth: number }> = [];
+  for (let index = 0; index < tree.length; index++) {
+    if (!childIndexes.has(index)) {
+      roots.push(index);
+      stack.push({ index, depth: 0 });
+    }
+  }
   while (stack.length) {
     const current = stack.pop();
     if (!current) {

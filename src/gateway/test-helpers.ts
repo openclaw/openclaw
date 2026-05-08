@@ -10,7 +10,11 @@ export {
   testTailnetIPv4,
   testTailscaleWhois,
 } from "./test-helpers.runtime-state.js";
-export { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+export {
+  installGatewayTestCanvasNodeInvokePolicy,
+  resetTestPluginRegistry,
+  setTestPluginRegistry,
+} from "./test-helpers.plugin-registry.js";
 export {
   connectOk,
   connectReq,

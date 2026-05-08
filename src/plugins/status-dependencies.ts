@@ -119,10 +119,18 @@ export function buildPluginDependencyStatus(params: {
     dependencies: params.optionalDependencies ?? {},
     optional: true,
   });
-  const missing = dependencies.filter((entry) => !entry.installed).map((entry) => entry.name);
-  const missingOptional = optionalDependencies
-    .filter((entry) => !entry.installed)
-    .map((entry) => entry.name);
+  const missing: string[] = [];
+  for (const entry of dependencies) {
+    if (!entry.installed) {
+      missing.push(entry.name);
+    }
+  }
+  const missingOptional: string[] = [];
+  for (const entry of optionalDependencies) {
+    if (!entry.installed) {
+      missingOptional.push(entry.name);
+    }
+  }
   const requiredInstalled = missing.length === 0;
   const optionalInstalled = missingOptional.length === 0;
   return {

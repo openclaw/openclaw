@@ -44,21 +44,23 @@ function mapDiscordSetupAllowlistEntries(resolved: unknown): DiscordGuildChannel
   if (!Array.isArray(resolved)) {
     return [];
   }
-  return resolved.flatMap((entry): DiscordGuildChannelAllowlistEntry[] => {
+  const entries: DiscordGuildChannelAllowlistEntry[] = [];
+  for (const entry of resolved) {
     if (!entry || typeof entry !== "object") {
-      return [];
+      continue;
     }
     const row = entry as DiscordSetupAllowlistResolution;
     if (row.resolved === false) {
-      return [];
+      continue;
     }
     const guildKey = normalizeOptionalString(row.guildId ?? row.guildKey);
     if (!guildKey) {
-      return [];
+      continue;
     }
     const channelKey = normalizeOptionalString(row.channelId ?? row.channelKey);
-    return channelKey ? [{ guildKey, channelKey }] : [{ guildKey }];
-  });
+    entries.push(channelKey ? { guildKey, channelKey } : { guildKey });
+  }
+  return entries;
 }
 
 function setDiscordGuildChannelAllowlist(
@@ -160,17 +162,24 @@ export function createDiscordSetupWizardBase(handlers: {
       currentPolicy: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         resolveDiscordSetupAccountConfig({ cfg, accountId }).config.groupPolicy ?? "allowlist",
       currentEntries: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
-        Object.entries(
-          resolveDiscordSetupAccountConfig({ cfg, accountId }).config.guilds ?? {},
-        ).flatMap(([guildKey, value]) => {
-          const channels = value?.channels ?? {};
-          const channelKeys = Object.keys(channels);
-          if (channelKeys.length === 0) {
-            const input = /^\d+$/.test(guildKey) ? `guild:${guildKey}` : guildKey;
-            return [input];
+        (() => {
+          const entries: string[] = [];
+          for (const [guildKey, value] of Object.entries(
+            resolveDiscordSetupAccountConfig({ cfg, accountId }).config.guilds ?? {},
+          )) {
+            const channels = value?.channels ?? {};
+            const channelKeys = Object.keys(channels);
+            if (channelKeys.length === 0) {
+              const input = /^\d+$/.test(guildKey) ? `guild:${guildKey}` : guildKey;
+              entries.push(input);
+              continue;
+            }
+            for (const channelKey of channelKeys) {
+              entries.push(`${guildKey}/${channelKey}`);
+            }
           }
-          return channelKeys.map((channelKey) => `${guildKey}/${channelKey}`);
-        }),
+          return entries;
+        })(),
       updatePrompt: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         Boolean(resolveDiscordSetupAccountConfig({ cfg, accountId }).config.guilds),
       resolveAllowlist: handlers.resolveGroupAllowlist,

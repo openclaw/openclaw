@@ -420,9 +420,16 @@ export function resolvePluginSetupRegistry(params?: {
   manifestRegistry?: PluginManifestRegistry;
 }): PluginSetupRegistry {
   const env = params?.env ?? process.env;
-  const scopedPluginIds = params?.pluginIds
-    ? new Set(params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean))
-    : null;
+  let scopedPluginIds: Set<string> | null = null;
+  if (params?.pluginIds) {
+    scopedPluginIds = new Set<string>();
+    for (const pluginId of params.pluginIds) {
+      const trimmed = pluginId.trim();
+      if (trimmed) {
+        scopedPluginIds.add(trimmed);
+      }
+    }
+  }
   if (scopedPluginIds && scopedPluginIds.size === 0) {
     const empty = {
       providers: [],

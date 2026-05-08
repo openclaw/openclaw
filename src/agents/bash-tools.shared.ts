@@ -279,7 +279,14 @@ export function deriveSessionName(command: string): string | undefined {
 
 function tokenizeCommand(command: string): string[] {
   const matches = command.match(/(?:[^\s"']+|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')+/g) ?? [];
-  return matches.map((token) => stripQuotes(token)).filter(Boolean);
+  const tokens: string[] = [];
+  for (const token of matches) {
+    const stripped = stripQuotes(token);
+    if (stripped) {
+      tokens.push(stripped);
+    }
+  }
+  return tokens;
 }
 
 function stripQuotes(value: string): string {

@@ -26,7 +26,14 @@ export function normalizeToolList(list?: string[]) {
   if (!list) {
     return [];
   }
-  return list.map(normalizeToolName).filter(Boolean);
+  const normalized: string[] = [];
+  for (const entry of list) {
+    const toolName = normalizeToolName(entry);
+    if (toolName) {
+      normalized.push(toolName);
+    }
+  }
+  return normalized;
 }
 
 export function expandToolGroups(list?: string[]) {

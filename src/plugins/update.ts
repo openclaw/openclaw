@@ -245,7 +245,13 @@ function resolveRecordedExtensionsDir(params: {
 
 function buildLoadPathHelpers(existing: string[], env: NodeJS.ProcessEnv = process.env) {
   let paths = [...existing];
-  const resolveSet = () => new Set(paths.map((entry) => resolveUserPath(entry, env)));
+  const resolveSet = () => {
+    const resolvedPaths = new Set<string>();
+    for (const entry of paths) {
+      resolvedPaths.add(resolveUserPath(entry, env));
+    }
+    return resolvedPaths;
+  };
   let resolved = resolveSet();
   let changed = false;
 

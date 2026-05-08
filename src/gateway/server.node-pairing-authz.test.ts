@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import {
   approveNodePairing,
@@ -16,12 +16,16 @@ import {
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
   connectOk,
+  installGatewayTestCanvasNodeInvokePolicy,
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+beforeEach(() => {
+  installGatewayTestCanvasNodeInvokePolicy();
+});
 
 async function connectNodeClient(params: {
   port: number;

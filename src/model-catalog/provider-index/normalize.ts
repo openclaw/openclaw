@@ -94,11 +94,13 @@ function normalizePreviewCatalog(params: {
 function normalizeOnboardingScopes(
   value: unknown,
 ): OpenClawProviderIndexProviderAuthChoice["onboardingScopes"] | undefined {
-  const scopes = normalizeTrimmedStringList(value).filter(
-    (scope): scope is "text-inference" | "image-generation" =>
-      scope === "text-inference" || scope === "image-generation",
-  );
-  return scopes.length > 0 ? [...new Set(scopes)] : undefined;
+  const scopes = new Set<"text-inference" | "image-generation">();
+  for (const scope of normalizeTrimmedStringList(value)) {
+    if (scope === "text-inference" || scope === "image-generation") {
+      scopes.add(scope);
+    }
+  }
+  return scopes.size > 0 ? Array.from(scopes) : undefined;
 }
 
 function normalizeAssistantVisibility(
@@ -162,9 +164,13 @@ function normalizeAuthChoices(params: {
   if (!Array.isArray(params.value)) {
     return undefined;
   }
-  const choices = params.value
-    .map((value) => normalizeAuthChoice({ ...params, value }))
-    .filter((choice): choice is OpenClawProviderIndexProviderAuthChoice => Boolean(choice));
+  const choices: OpenClawProviderIndexProviderAuthChoice[] = [];
+  for (const value of params.value) {
+    const choice = normalizeAuthChoice({ ...params, value });
+    if (choice) {
+      choices.push(choice);
+    }
+  }
   return choices.length > 0 ? choices : undefined;
 }
 

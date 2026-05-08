@@ -71,10 +71,14 @@ export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
 }
 
 export function listRegisteredChannelPluginIds(): ChannelId[] {
-  return listRegisteredChannelPluginEntries().flatMap((entry) => {
+  const ids: ChannelId[] = [];
+  for (const entry of listRegisteredChannelPluginEntries()) {
     const id = normalizeOptionalString(entry.plugin.id);
-    return id ? [id as ChannelId] : [];
-  });
+    if (id) {
+      ids.push(id as ChannelId);
+    }
+  }
+  return ids;
 }
 
 export function getRegisteredChannelPluginMeta(

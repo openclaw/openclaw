@@ -44,14 +44,18 @@ export function formatQaProviderModeHelp() {
 }
 
 export function listQaStandaloneProviderCommands() {
-  return PROVIDERS.flatMap((provider) =>
-    provider.standaloneCommand
-      ? [
-          {
-            providerMode: provider.mode,
-            ...provider.standaloneCommand,
-          },
-        ]
-      : [],
-  );
+  const commands: Array<
+    {
+      providerMode: QaProviderMode;
+    } & NonNullable<QaProviderDefinition["standaloneCommand"]>
+  > = [];
+  for (const provider of PROVIDERS) {
+    if (provider.standaloneCommand) {
+      commands.push({
+        providerMode: provider.mode,
+        ...provider.standaloneCommand,
+      });
+    }
+  }
+  return commands;
 }

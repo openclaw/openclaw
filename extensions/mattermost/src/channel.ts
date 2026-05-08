@@ -229,6 +229,29 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
 
     const mediaUrl =
       typeof params.media === "string" ? params.media.trim() || undefined : undefined;
+    let buttons: Array<unknown> | undefined;
+    if (presentation) {
+      const interactive = presentationToInteractiveReply(presentation);
+      if (interactive) {
+        buttons = [];
+        for (const block of interactive.blocks) {
+          if (block.type !== "buttons") {
+            continue;
+          }
+          const row = [];
+          for (const button of block.buttons) {
+            if (button.value) {
+              row.push({
+                text: button.label,
+                callback_data: button.value,
+                style: button.style,
+              });
+            }
+          }
+          buttons.push(row);
+        }
+      }
+    }
 
     const result = await (
       await loadMattermostChannelRuntime()
@@ -236,23 +259,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId: resolvedAccountId,
       replyToId,
-      buttons: presentation
-        ? presentationToInteractiveReply(presentation)
-            ?.blocks.filter((block) => block.type === "buttons")
-            .map((block) =>
-              block.buttons.flatMap((button) =>
-                button.value
-                  ? [
-                      {
-                        text: button.label,
-                        callback_data: button.value,
-                        style: button.style,
-                      },
-                    ]
-                  : [],
-              ),
-            )
-        : undefined,
+      buttons,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
     });

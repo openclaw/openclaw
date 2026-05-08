@@ -53,9 +53,13 @@ export function resolveThreadBindingIntroText(params: {
   const idleTimeoutMs = normalizeThreadBindingDurationMs(params.idleTimeoutMs);
   const maxAgeMs = normalizeThreadBindingDurationMs(params.maxAgeMs);
   const cwd = normalizeOptionalString(params.sessionCwd);
-  const details = (params.sessionDetails ?? [])
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+  const details: string[] = [];
+  for (const entry of params.sessionDetails ?? []) {
+    const trimmed = entry.trim();
+    if (trimmed) {
+      details.push(trimmed);
+    }
+  }
   if (cwd) {
     details.unshift(`cwd: ${cwd}`);
   }

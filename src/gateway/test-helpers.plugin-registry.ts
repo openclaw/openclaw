@@ -46,6 +46,17 @@ function createStubPluginRegistry(): PluginRegistry {
   };
 }
 
+const GATEWAY_TEST_CANVAS_NODE_COMMANDS = [
+  "canvas.present",
+  "canvas.hide",
+  "canvas.navigate",
+  "canvas.eval",
+  "canvas.snapshot",
+  "canvas.a2ui.push",
+  "canvas.a2ui.pushJSONL",
+  "canvas.a2ui.reset",
+];
+
 const GATEWAY_TEST_PLUGIN_REGISTRY_STATE_KEY = Symbol.for(
   "openclaw.gatewayTestHelpers.pluginRegistryState",
 );
@@ -68,4 +79,25 @@ export function resetTestPluginRegistry(): void {
 
 export function getTestPluginRegistry(): PluginRegistry {
   return pluginRegistryState.registry;
+}
+
+export function installGatewayTestCanvasNodeInvokePolicy(): void {
+  const registry = getTestPluginRegistry();
+  registry.nodeInvokePolicies ??= [];
+  if (registry.nodeInvokePolicies.some((entry) => entry.pluginId === "canvas")) {
+    return;
+  }
+  registry.nodeInvokePolicies.push({
+    pluginId: "canvas",
+    pluginName: "Canvas",
+    source: "extensions/canvas/index.ts",
+    rootDir: "extensions/canvas",
+    pluginConfig: {},
+    policy: {
+      commands: GATEWAY_TEST_CANVAS_NODE_COMMANDS,
+      defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
+      foregroundRestrictedOnIos: true,
+      handle: (ctx) => ctx.invokeNode(),
+    },
+  });
 }

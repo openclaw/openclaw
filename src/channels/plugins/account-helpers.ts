@@ -47,7 +47,14 @@ export function createAccountListHelpers(
     if (!normalizeConfiguredAccountId) {
       return ids;
     }
-    return [...new Set(ids.map((id) => normalizeConfiguredAccountId(id)).filter(Boolean))];
+    const normalized = new Set<string>();
+    for (const id of ids) {
+      const accountId = normalizeConfiguredAccountId(id);
+      if (accountId) {
+        normalized.add(accountId);
+      }
+    }
+    return [...normalized];
   }
 
   function listAccountIds(cfg: OpenClawConfig): string[] {

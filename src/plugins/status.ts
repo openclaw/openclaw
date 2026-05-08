@@ -583,7 +583,11 @@ export function buildPluginCompatibilityNotices(params?: {
   logger?: PluginLogger;
   report?: PluginStatusReport;
 }): PluginCompatibilityNotice[] {
-  return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+  const notices: PluginCompatibilityNotice[] = [];
+  for (const inspect of buildAllPluginInspectReports(params)) {
+    notices.push(...inspect.compatibility);
+  }
+  return notices;
 }
 
 export function buildPluginCompatibilitySnapshotNotices(params?: {
@@ -605,8 +609,12 @@ export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotic
 export function summarizePluginCompatibility(
   notices: PluginCompatibilityNotice[],
 ): PluginCompatibilitySummary {
+  const pluginIds = new Set<string>();
+  for (const notice of notices) {
+    pluginIds.add(notice.pluginId);
+  }
   return {
     noticeCount: notices.length,
-    pluginCount: new Set(notices.map((notice) => notice.pluginId)).size,
+    pluginCount: pluginIds.size,
   };
 }

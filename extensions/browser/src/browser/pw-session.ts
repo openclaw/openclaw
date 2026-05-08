@@ -595,7 +595,10 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
 
 async function getAllPages(browser: Browser): Promise<Page[]> {
   const contexts = browser.contexts();
-  const pages = contexts.flatMap((c) => c.pages());
+  const pages: Page[] = [];
+  for (const context of contexts) {
+    pages.push(...context.pages());
+  }
   return pages;
 }
 

@@ -9,19 +9,25 @@ type ExplicitToolAllowlistSource = {
 export function collectExplicitToolAllowlistSources(
   sources: Array<{ label: string; allow?: string[]; enforceWhenToolsDisabled?: boolean }>,
 ): ExplicitToolAllowlistSource[] {
-  return sources.flatMap((source) => {
-    const entries = (source.allow ?? []).map((entry) => entry.trim()).filter(Boolean);
-    if (entries.length === 0) {
-      return [];
+  const normalizedSources: ExplicitToolAllowlistSource[] = [];
+  for (const source of sources) {
+    const entries: string[] = [];
+    for (const entry of source.allow ?? []) {
+      const trimmed = entry.trim();
+      if (trimmed) {
+        entries.push(trimmed);
+      }
     }
-    return [
-      {
-        label: source.label,
-        entries,
-        ...(source.enforceWhenToolsDisabled === true ? { enforceWhenToolsDisabled: true } : {}),
-      },
-    ];
-  });
+    if (entries.length === 0) {
+      continue;
+    }
+    normalizedSources.push({
+      label: source.label,
+      entries,
+      ...(source.enforceWhenToolsDisabled === true ? { enforceWhenToolsDisabled: true } : {}),
+    });
+  }
+  return normalizedSources;
 }
 
 export function buildEmptyExplicitToolAllowlistError(params: {
@@ -34,7 +40,13 @@ export function buildEmptyExplicitToolAllowlistError(params: {
     params.disableTools === true
       ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
       : params.sources;
-  const callableToolNames = params.callableToolNames.map(normalizeToolName).filter(Boolean);
+  const callableToolNames: string[] = [];
+  for (const toolName of params.callableToolNames) {
+    const normalized = normalizeToolName(toolName);
+    if (normalized) {
+      callableToolNames.push(normalized);
+    }
+  }
   if (sources.length === 0 || callableToolNames.length > 0) {
     return null;
   }

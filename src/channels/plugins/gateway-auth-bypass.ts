@@ -28,5 +28,15 @@ export function resolveBundledChannelGatewayAuthBypassPaths(params: {
 }): string[] {
   const api = loadBundledChannelGatewayAuthApi(params.channelId);
   const paths = api?.resolveGatewayAuthBypassPaths?.({ cfg: params.cfg }) ?? [];
-  return paths.flatMap((path) => (typeof path === "string" && path.trim() ? [path.trim()] : []));
+  const normalized: string[] = [];
+  for (const path of paths) {
+    if (typeof path !== "string") {
+      continue;
+    }
+    const trimmed = path.trim();
+    if (trimmed) {
+      normalized.push(trimmed);
+    }
+  }
+  return normalized;
 }

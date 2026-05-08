@@ -207,7 +207,10 @@ function hasPolicyRefreshTargets(
   if (!policyPluginIds || policyPluginIds.length === 0) {
     return true;
   }
-  const pluginIds = new Set(persisted.plugins.map((plugin) => plugin.pluginId));
+  const pluginIds = new Set<string>();
+  for (const plugin of persisted.plugins) {
+    pluginIds.add(plugin.pluginId);
+  }
   return policyPluginIds.every((pluginId) => pluginIds.has(pluginId));
 }
 

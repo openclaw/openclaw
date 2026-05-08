@@ -41,10 +41,16 @@ function readStringArray(record: Record<string, unknown>, key: string): string[]
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const normalized = value
-    .map((entry) => (typeof entry === "string" || typeof entry === "number" ? String(entry) : ""))
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" && typeof entry !== "number") {
+      continue;
+    }
+    const trimmed = String(entry).trim();
+    if (trimmed) {
+      normalized.push(trimmed);
+    }
+  }
   return normalized.length > 0 ? normalized : undefined;
 }
 
@@ -140,27 +146,22 @@ export function projectCredentialSnapshotFields(
   const botTokenSource = normalizeOptionalString(record.botTokenSource);
   const appTokenSource = normalizeOptionalString(record.appTokenSource);
   const signingSecretSource = normalizeOptionalString(record.signingSecretSource);
+  const tokenStatus = readCredentialStatus(record, "tokenStatus");
+  const botTokenStatus = readCredentialStatus(record, "botTokenStatus");
+  const appTokenStatus = readCredentialStatus(record, "appTokenStatus");
+  const signingSecretStatus = readCredentialStatus(record, "signingSecretStatus");
+  const userTokenStatus = readCredentialStatus(record, "userTokenStatus");
 
   return {
     ...(tokenSource ? { tokenSource } : {}),
     ...(botTokenSource ? { botTokenSource } : {}),
     ...(appTokenSource ? { appTokenSource } : {}),
     ...(signingSecretSource ? { signingSecretSource } : {}),
-    ...(readCredentialStatus(record, "tokenStatus")
-      ? { tokenStatus: readCredentialStatus(record, "tokenStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "botTokenStatus")
-      ? { botTokenStatus: readCredentialStatus(record, "botTokenStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "appTokenStatus")
-      ? { appTokenStatus: readCredentialStatus(record, "appTokenStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "signingSecretStatus")
-      ? { signingSecretStatus: readCredentialStatus(record, "signingSecretStatus") }
-      : {}),
-    ...(readCredentialStatus(record, "userTokenStatus")
-      ? { userTokenStatus: readCredentialStatus(record, "userTokenStatus") }
-      : {}),
+    ...(tokenStatus ? { tokenStatus } : {}),
+    ...(botTokenStatus ? { botTokenStatus } : {}),
+    ...(appTokenStatus ? { appTokenStatus } : {}),
+    ...(signingSecretStatus ? { signingSecretStatus } : {}),
+    ...(userTokenStatus ? { userTokenStatus } : {}),
   };
 }
 
@@ -179,63 +180,50 @@ export function projectSafeChannelAccountSnapshotFields(
   const baseUrl = normalizeOptionalString(record.baseUrl);
   const cliPath = normalizeOptionalString(record.cliPath);
   const dbPath = normalizeOptionalString(record.dbPath);
+  const linked = readBoolean(record, "linked");
+  const running = readBoolean(record, "running");
+  const connected = readBoolean(record, "connected");
+  const restartPending = readBoolean(record, "restartPending");
+  const reconnectAttempts = readNumber(record, "reconnectAttempts");
+  const lastConnectedAt = readNullableNumber(record, "lastConnectedAt");
+  const lastInboundAt = readNumber(record, "lastInboundAt");
+  const lastOutboundAt = readNullableNumber(record, "lastOutboundAt");
+  const lastMessageAt = readNullableNumber(record, "lastMessageAt");
+  const lastEventAt = readNullableNumber(record, "lastEventAt");
+  const lastTransportActivityAt = readNumber(record, "lastTransportActivityAt");
+  const busy = readBoolean(record, "busy");
+  const activeRuns = readNumber(record, "activeRuns");
+  const lastRunActivityAt = readNullableNumber(record, "lastRunActivityAt");
+  const allowFrom = readStringArray(record, "allowFrom");
+  const allowUnmentionedGroups = readBoolean(record, "allowUnmentionedGroups");
+  const port = readNumber(record, "port");
 
   return {
     ...(name ? { name } : {}),
-    ...(readBoolean(record, "linked") !== undefined
-      ? { linked: readBoolean(record, "linked") }
-      : {}),
-    ...(readBoolean(record, "running") !== undefined
-      ? { running: readBoolean(record, "running") }
-      : {}),
-    ...(readBoolean(record, "connected") !== undefined
-      ? { connected: readBoolean(record, "connected") }
-      : {}),
-    ...(readBoolean(record, "restartPending") !== undefined
-      ? { restartPending: readBoolean(record, "restartPending") }
-      : {}),
-    ...(readNumber(record, "reconnectAttempts") !== undefined
-      ? { reconnectAttempts: readNumber(record, "reconnectAttempts") }
-      : {}),
-    ...(readNullableNumber(record, "lastConnectedAt") !== undefined
-      ? { lastConnectedAt: readNullableNumber(record, "lastConnectedAt") }
-      : {}),
-    ...(readNumber(record, "lastInboundAt") !== undefined
-      ? { lastInboundAt: readNumber(record, "lastInboundAt") }
-      : {}),
-    ...(readNullableNumber(record, "lastOutboundAt") !== undefined
-      ? { lastOutboundAt: readNullableNumber(record, "lastOutboundAt") }
-      : {}),
-    ...(readNullableNumber(record, "lastMessageAt") !== undefined
-      ? { lastMessageAt: readNullableNumber(record, "lastMessageAt") }
-      : {}),
-    ...(readNullableNumber(record, "lastEventAt") !== undefined
-      ? { lastEventAt: readNullableNumber(record, "lastEventAt") }
-      : {}),
-    ...(readNumber(record, "lastTransportActivityAt") !== undefined
-      ? { lastTransportActivityAt: readNumber(record, "lastTransportActivityAt") }
-      : {}),
+    ...(linked !== undefined ? { linked } : {}),
+    ...(running !== undefined ? { running } : {}),
+    ...(connected !== undefined ? { connected } : {}),
+    ...(restartPending !== undefined ? { restartPending } : {}),
+    ...(reconnectAttempts !== undefined ? { reconnectAttempts } : {}),
+    ...(lastConnectedAt !== undefined ? { lastConnectedAt } : {}),
+    ...(lastInboundAt !== undefined ? { lastInboundAt } : {}),
+    ...(lastOutboundAt !== undefined ? { lastOutboundAt } : {}),
+    ...(lastMessageAt !== undefined ? { lastMessageAt } : {}),
+    ...(lastEventAt !== undefined ? { lastEventAt } : {}),
+    ...(lastTransportActivityAt !== undefined ? { lastTransportActivityAt } : {}),
     ...(statusState ? { statusState } : {}),
     ...(healthState ? { healthState } : {}),
-    ...(readBoolean(record, "busy") !== undefined ? { busy: readBoolean(record, "busy") } : {}),
-    ...(readNumber(record, "activeRuns") !== undefined
-      ? { activeRuns: readNumber(record, "activeRuns") }
-      : {}),
-    ...(readNullableNumber(record, "lastRunActivityAt") !== undefined
-      ? { lastRunActivityAt: readNullableNumber(record, "lastRunActivityAt") }
-      : {}),
+    ...(busy !== undefined ? { busy } : {}),
+    ...(activeRuns !== undefined ? { activeRuns } : {}),
+    ...(lastRunActivityAt !== undefined ? { lastRunActivityAt } : {}),
     ...(mode ? { mode } : {}),
     ...(dmPolicy ? { dmPolicy } : {}),
-    ...(readStringArray(record, "allowFrom")
-      ? { allowFrom: readStringArray(record, "allowFrom") }
-      : {}),
+    ...(allowFrom ? { allowFrom } : {}),
     ...projectCredentialSnapshotFields(account),
     ...(baseUrl ? { baseUrl: stripUrlUserInfo(baseUrl) } : {}),
-    ...(readBoolean(record, "allowUnmentionedGroups") !== undefined
-      ? { allowUnmentionedGroups: readBoolean(record, "allowUnmentionedGroups") }
-      : {}),
+    ...(allowUnmentionedGroups !== undefined ? { allowUnmentionedGroups } : {}),
     ...(cliPath ? { cliPath } : {}),
     ...(dbPath ? { dbPath } : {}),
-    ...(readNumber(record, "port") !== undefined ? { port: readNumber(record, "port") } : {}),
+    ...(port !== undefined ? { port } : {}),
   };
 }

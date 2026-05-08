@@ -31,10 +31,18 @@ vi.mock("../infra/update-runner.js", () => ({
 
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
-import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
+import {
+  installGatewayTestCanvasNodeInvokePolicy,
+  installGatewayTestHooks,
+  onceMessage,
+  rpcReq,
+} from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
+beforeEach(() => {
+  installGatewayTestCanvasNodeInvokePolicy();
+});
 const FAST_WAIT_OPTS = { timeout: 1_000, interval: 2 } as const;
 
 let ws: WebSocket;

@@ -109,21 +109,25 @@ function resolveCapabilityPluginIds(params: {
       value: params.providerId,
     }),
   );
+  const runtimePluginIds: string[] = [];
+  const bundledCompatPluginIds: string[] = [];
+  for (const plugin of contractPlugins) {
+    if (
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: params.cfg,
+      })
+    ) {
+      runtimePluginIds.push(plugin.id);
+    }
+    if (plugin.origin === "bundled") {
+      bundledCompatPluginIds.push(plugin.id);
+    }
+  }
   return {
-    runtimePluginIds: uniqueSorted(
-      contractPlugins
-        .filter((plugin) =>
-          isManifestPluginAvailableForControlPlane({
-            snapshot,
-            plugin,
-            config: params.cfg,
-          }),
-        )
-        .map((plugin) => plugin.id),
-    ),
-    bundledCompatPluginIds: uniqueSorted(
-      contractPlugins.filter((plugin) => plugin.origin === "bundled").map((plugin) => plugin.id),
-    ),
+    runtimePluginIds: uniqueSorted(runtimePluginIds),
+    bundledCompatPluginIds: uniqueSorted(bundledCompatPluginIds),
   };
 }
 
@@ -156,11 +160,13 @@ export function resolveBundledCapabilityProviderIds(params: {
 }): string[] {
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
   const snapshot = loadCapabilityManifestSnapshot(params);
-  return uniqueSorted(
-    snapshot.plugins.flatMap((plugin) =>
-      plugin.origin === "bundled" ? (plugin.contracts?.[contractKey] ?? []) : [],
-    ),
-  );
+  const providerIds: string[] = [];
+  for (const plugin of snapshot.plugins) {
+    if (plugin.origin === "bundled") {
+      providerIds.push(...(plugin.contracts?.[contractKey] ?? []));
+    }
+  }
+  return uniqueSorted(providerIds);
 }
 
 function resolveCapabilityProviderConfig(params: {

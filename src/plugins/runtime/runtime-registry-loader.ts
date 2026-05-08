@@ -50,9 +50,12 @@ function activeRegistrySatisfiesScope(
     if (requestedPluginIds.length === 0) {
       return false;
     }
-    const activePluginIds = new Set(
-      active.plugins.filter((plugin) => plugin.status === "loaded").map((plugin) => plugin.id),
-    );
+    const activePluginIds = new Set<string>();
+    for (const plugin of active.plugins) {
+      if (plugin.status === "loaded") {
+        activePluginIds.add(plugin.id);
+      }
+    }
     return requestedPluginIds.every((pluginId) => activePluginIds.has(pluginId));
   }
   const activeChannelPluginIds = new Set(active.channels.map((entry) => entry.plugin.id));

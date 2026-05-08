@@ -45,10 +45,17 @@ export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): 
   if (!channels) {
     return [];
   }
-  return Object.entries(channels)
-    .filter(([, value]) => isRecord(value) && value.enabled === false)
-    .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
-    .filter((channelId): channelId is string => Boolean(channelId));
+  const disabled: string[] = [];
+  for (const [channelId, value] of Object.entries(channels)) {
+    if (!isRecord(value) || value.enabled !== false) {
+      continue;
+    }
+    const normalized = normalizeOptionalLowercaseString(channelId);
+    if (normalized) {
+      disabled.push(normalized);
+    }
+  }
+  return disabled;
 }
 
 function listChannelEnvPrefixes(
