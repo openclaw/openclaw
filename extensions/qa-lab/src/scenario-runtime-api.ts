@@ -60,6 +60,7 @@ export type QaScenarioRuntimeDeps = {
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
   readRawQaSessionEntries: QaScenarioRuntimeFunction;
+  setQaActiveMemorySessionDisabled: QaScenarioRuntimeFunction;
   seedQaSessionTranscript: QaScenarioRuntimeFunction;
   runQaCli: QaScenarioRuntimeFunction;
   extractMediaPathFromText: QaScenarioRuntimeFunction;
@@ -145,6 +146,7 @@ type QaScenarioRuntimeApi<
   readEffectiveTools: TDeps["readEffectiveTools"];
   readSkillStatus: TDeps["readSkillStatus"];
   readRawQaSessionEntries: TDeps["readRawQaSessionEntries"];
+  setQaActiveMemorySessionDisabled: TDeps["setQaActiveMemorySessionDisabled"];
   seedQaSessionTranscript: TDeps["seedQaSessionTranscript"];
   runQaCli: TDeps["runQaCli"];
   extractMediaPathFromText: TDeps["extractMediaPathFromText"];
@@ -245,6 +247,7 @@ export function createQaScenarioRuntimeApi<
     readEffectiveTools: params.deps.readEffectiveTools,
     readSkillStatus: params.deps.readSkillStatus,
     readRawQaSessionEntries: params.deps.readRawQaSessionEntries,
+    setQaActiveMemorySessionDisabled: params.deps.setQaActiveMemorySessionDisabled,
     seedQaSessionTranscript: params.deps.seedQaSessionTranscript,
     runQaCli: params.deps.runQaCli,
     extractMediaPathFromText: params.deps.extractMediaPathFromText,

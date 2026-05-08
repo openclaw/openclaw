@@ -29,6 +29,7 @@ export type OpenKeyedStoreOptions = {
   namespace: string;
   maxEntries: number;
   defaultTtlMs?: number;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type PluginStateStoreErrorCode =

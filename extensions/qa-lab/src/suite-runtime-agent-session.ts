@@ -4,12 +4,27 @@ import {
   replaceSqliteSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/config-runtime";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionEntry,
   QaSkillStatusEntry,
   QaSuiteRuntimeEnv,
 } from "./suite-runtime-types.js";
+
+type ActiveMemorySessionToggleEntry = {
+  version: 1;
+  disabled: true;
+  updatedAt: number;
+};
+
+function createActiveMemorySessionToggleStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
+  return createPluginStateKeyedStore<ActiveMemorySessionToggleEntry>("active-memory", {
+    namespace: "session-toggles",
+    maxEntries: 50_000,
+    env: env.gateway.runtimeEnv,
+  });
+}
 
 async function createSession(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
@@ -120,6 +135,27 @@ async function seedQaSessionTranscript(
   return { agentId, sessionId, sessionKey, sessionFile };
 }
 
+async function setQaActiveMemorySessionDisabled(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: { sessionKey: string; disabled: boolean; now?: number },
+) {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    throw new Error("setQaActiveMemorySessionDisabled requires sessionKey");
+  }
+  const toggleStore = createActiveMemorySessionToggleStore(env);
+  if (params.disabled) {
+    await toggleStore.register(sessionKey, {
+      version: 1,
+      disabled: true,
+      updatedAt: params.now ?? Date.now(),
+    });
+    return { sessionKey, disabled: true };
+  }
+  await toggleStore.delete(sessionKey);
+  return { sessionKey, disabled: false };
+}
+
 async function readEffectiveTools(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
   sessionKey: string,
@@ -213,5 +249,6 @@ export {
   readEffectiveTools,
   readRawQaSessionEntries,
   readSkillStatus,
+  setQaActiveMemorySessionDisabled,
   seedQaSessionTranscript,
 };
