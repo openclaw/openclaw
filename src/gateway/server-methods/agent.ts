@@ -724,6 +724,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    const shouldPreserveDirectDeliveryInput =
+      request.directDelivery === true &&
+      request.deliver === true &&
+      !isRawModelRun &&
+      !request.internalEvents?.length &&
+      images.length === 0;
 
     // Accept internal non-delivery sources (heartbeat, cron, webhook) as valid
     // channel hints so subagent spawns from those parent runs are not rejected.
@@ -876,7 +882,9 @@ export const agentHandlers: GatewayRequestHandlers = {
     let skipTimestampInjection = false;
     let shouldPrependStartupContext = false;
 
-    const resetCommandMatch = message.match(RESET_COMMAND_RE);
+    const resetCommandMatch = shouldPreserveDirectDeliveryInput
+      ? null
+      : message.match(RESET_COMMAND_RE);
     if (resetCommandMatch && requestedSessionKey) {
       if (!canResetSession) {
         respond(
@@ -1313,13 +1321,7 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
     const directDeliveryText =
-      request.directDelivery === true &&
-      deliver &&
-      !isRawModelRun &&
-      !request.internalEvents?.length &&
-      images.length === 0
-        ? originalDirectDeliveryMessage
-        : undefined;
+      shouldPreserveDirectDeliveryInput && deliver ? originalDirectDeliveryMessage : undefined;
 
     // Register before the accepted ack so an immediate chat.abort/sessions.abort
     // cannot race the active-run entry. Agent RPC runs use the agent timeout;

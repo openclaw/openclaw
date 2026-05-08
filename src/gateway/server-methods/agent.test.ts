@@ -1314,6 +1314,33 @@ describe("gateway agent handler", () => {
     expect(callArgs.directDeliveryText).toBe("strict delivery");
   });
 
+  it("treats slash-prefixed direct delivery text as literal notification content", async () => {
+    mocks.agentCommand.mockClear();
+    mocks.performGatewaySessionReset.mockClear();
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "/reset deploy done",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        directDelivery: true,
+        replyChannel: "telegram",
+        to: "123",
+        bestEffortDeliver: false,
+        idempotencyKey: "test-direct-delivery-reset-literal",
+      },
+      { reqId: "direct-delivery-reset-literal" },
+    );
+
+    const callArgs = await waitForAgentCommandCall();
+    expect(mocks.performGatewaySessionReset).not.toHaveBeenCalled();
+    expect(callArgs.deliver).toBe(true);
+    expect(callArgs.directDelivery).toBe(true);
+    expect(callArgs.directDeliveryText).toBe("/reset deploy done");
+  });
+
   it("keeps composed delivery on the agent path without directDelivery", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
