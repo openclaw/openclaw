@@ -1,6 +1,5 @@
 import path from "node:path";
 import {
-  listSqliteSessionTranscriptFiles,
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
   resolveSqliteSessionTranscriptScopeForPath,
@@ -28,11 +27,17 @@ function extractTextMessageContent(content: unknown): string | undefined {
 }
 
 export async function getRecentTranscriptContent(
-  transcriptPath: string,
+  target:
+    | string
+    | {
+        agentId?: string;
+        sessionId?: string;
+        transcriptPath?: string;
+      },
   messageCount: number = 15,
 ): Promise<string | null> {
   try {
-    const scope = resolveScopeForTranscriptPath(transcriptPath);
+    const scope = resolveScopeForTranscriptTarget(target);
     if (!scope) {
       return null;
     }
@@ -59,7 +64,7 @@ export async function getRecentTranscriptContent(
           }
         }
       } catch {
-        // Skip invalid JSON lines.
+        // Skip invalid transcript rows.
       }
     }
 
@@ -83,70 +88,40 @@ function extractSessionIdFromTranscriptPath(transcriptPath: string): string | un
   return topicIndex > 0 ? stem.slice(0, topicIndex) : stem || undefined;
 }
 
-function resolveScopeForTranscriptPath(
-  transcriptPath: string,
+function resolveScopeForTranscriptTarget(
+  target:
+    | string
+    | {
+        agentId?: string;
+        sessionId?: string;
+        transcriptPath?: string;
+      },
 ): SqliteSessionTranscriptScope | undefined {
-  const byPath = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
+  if (typeof target !== "string") {
+    const sessionId = target.sessionId?.trim();
+    if (sessionId) {
+      return resolveSqliteSessionTranscriptScope({
+        agentId: target.agentId,
+        sessionId,
+        transcriptPath: target.transcriptPath,
+      });
+    }
+    if (!target.transcriptPath?.trim()) {
+      return undefined;
+    }
+    target = target.transcriptPath;
+  }
+
+  const byPath = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath: target });
   if (byPath) {
     return byPath;
   }
-  const sessionId = extractSessionIdFromTranscriptPath(transcriptPath);
+  const sessionId = extractSessionIdFromTranscriptPath(target);
   if (!sessionId) {
     return undefined;
   }
   return resolveSqliteSessionTranscriptScope({
     sessionId,
-    transcriptPath,
+    transcriptPath: target,
   });
-}
-
-function resolveRememberedPathInSessionsDir(params: {
-  sessionsDir: string;
-  sessionId: string;
-}): string | undefined {
-  const sessionsDir = path.resolve(params.sessionsDir);
-  const candidates = listSqliteSessionTranscriptFiles()
-    .filter((file) => path.dirname(path.resolve(file.path)) === sessionsDir)
-    .filter((file) => file.sessionId === params.sessionId)
-    .toSorted((a, b) => {
-      const updatedDelta = b.updatedAt - a.updatedAt;
-      return updatedDelta || b.path.localeCompare(a.path);
-    });
-
-  if (candidates.length === 0) {
-    return undefined;
-  }
-
-  const canonicalPath = path.join(sessionsDir, `${params.sessionId}.jsonl`);
-  const canonical = candidates.find((file) => path.resolve(file.path) === canonicalPath);
-  return canonical?.path ?? candidates[0]?.path;
-}
-
-export async function findPreviousTranscriptPath(params: {
-  sessionsDir: string;
-  sessionId?: string;
-}): Promise<string | undefined> {
-  try {
-    const trimmedSessionId = params.sessionId?.trim();
-    if (trimmedSessionId) {
-      const rememberedPath = resolveRememberedPathInSessionsDir({
-        sessionsDir: params.sessionsDir,
-        sessionId: trimmedSessionId,
-      });
-      if (rememberedPath) {
-        return rememberedPath;
-      }
-
-      const scope = resolveSqliteSessionTranscriptScope({
-        sessionId: trimmedSessionId,
-        transcriptPath: path.join(params.sessionsDir, `${trimmedSessionId}.jsonl`),
-      });
-      if (scope) {
-        return path.join(params.sessionsDir, `${trimmedSessionId}.jsonl`);
-      }
-    }
-  } catch {
-    // Ignore directory read errors.
-  }
-  return undefined;
 }

@@ -396,6 +396,10 @@ The remaining cleanup is mostly consolidation and deletion:
 - Docker MCP channel seeding now writes the main session row and transcript
   events into the per-agent SQLite database instead of creating
   `sessions.json` and a JSONL transcript.
+- The bundled session-memory hook now resolves previous-session context from
+  SQLite by `{agentId, sessionId}` and only treats retained transcript paths as
+  legacy metadata. It no longer scans or synthesizes `workspace/sessions`
+  directories.
 - `migration_runs` records legacy-state migration executions with status,
   timestamps, target schema version, and JSON reports.
 - `migration_sources` records each imported legacy file source with hash, size,
