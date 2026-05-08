@@ -115,6 +115,39 @@ function requireNativeCommand(name: string, provider?: string): ChatCommandDefin
   return command;
 }
 
+function requireCommandArg(
+  command: ChatCommandDefinition,
+  name: string,
+): NonNullable<ChatCommandDefinition["args"]>[number] {
+  const arg = command.args?.find((candidate) => candidate.name === name);
+  if (!arg) {
+    throw new Error(`Expected ${command.key} command arg "${name}"`);
+  }
+  return arg;
+}
+
+function requireCommandArgAt(
+  command: ChatCommandDefinition,
+  index: number,
+): NonNullable<ChatCommandDefinition["args"]>[number] {
+  const arg = command.args?.[index];
+  if (!arg) {
+    throw new Error(`Expected ${command.key} command arg ${index}`);
+  }
+  return arg;
+}
+
+function requireCommandArgMenu(
+  params: Parameters<typeof resolveCommandArgMenu>[0],
+): NonNullable<ReturnType<typeof resolveCommandArgMenu>> {
+  const menu = resolveCommandArgMenu(params);
+  expect(menu).not.toBeNull();
+  if (!menu) {
+    throw new Error(`Expected arg menu for ${params.command.key}`);
+  }
+  return menu;
+}
+
 describe("commands registry", () => {
   it("builds command text with args", () => {
     expect(buildCommandText("status")).toBe("/status");
@@ -301,8 +334,8 @@ describe("commands registry", () => {
 
   it("keeps ACP native action choices aligned with implemented handlers", () => {
     const acp = requireChatCommand("acp");
-    const actionArg = acp.args?.find((arg) => arg.name === "action");
-    expect(actionArg?.choices).toEqual([
+    const actionArg = requireCommandArg(acp, "action");
+    expect(actionArg.choices).toEqual([
       "spawn",
       "cancel",
       "steer",
@@ -323,14 +356,14 @@ describe("commands registry", () => {
   });
 
   it("registers fast mode as a first-class options command", () => {
-    const fast = listChatCommands().find((command) => command.key === "fast");
+    const fast = requireChatCommand("fast");
     expect(fast).toMatchObject({
       nativeName: "fast",
       textAliases: ["/fast"],
       category: "options",
     });
-    const modeArg = fast?.args?.find((arg) => arg.name === "mode");
-    expect(modeArg?.choices).toEqual(["status", "on", "off"]);
+    const modeArg = requireCommandArg(fast, "mode");
+    expect(modeArg.choices).toEqual(["status", "on", "off"]);
   });
 
   it("detects known text commands", () => {
@@ -458,7 +491,7 @@ describe("commands registry args", () => {
     };
 
     const args = parseCommandArgs(command, "set foo bar baz");
-    expect(args?.values).toEqual({ action: "set", path: "foo", value: "bar baz" });
+    expect(args).toMatchObject({ values: { action: "set", path: "foo", value: "bar baz" } });
   });
 
   it("serializes args via raw first, then values", () => {
@@ -481,9 +514,9 @@ describe("commands registry args", () => {
   it("resolves auto arg menus when missing a choice arg", () => {
     const command = createUsageModeCommand();
 
-    const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
-    expect(menu?.arg.name).toBe("mode");
-    expect(menu?.choices).toEqual([
+    const menu = requireCommandArgMenu({ command, args: undefined, cfg: {} as never });
+    expect(menu.arg.name).toBe("mode");
+    expect(menu.choices).toEqual([
       { label: "off", value: "off" },
       { label: "tokens", value: "tokens" },
       { label: "full", value: "full" },
@@ -492,11 +525,12 @@ describe("commands registry args", () => {
   });
 
   it("keeps verbose full available while preserving no-arg status dispatch", () => {
-    const verbose = listChatCommands().find((command) => command.key === "verbose");
+    const verbose = requireChatCommand("verbose");
 
-    expect(verbose?.args?.[0]?.choices).toEqual(["on", "off", "full"]);
+    const modeArg = requireCommandArgAt(verbose, 0);
+    expect(modeArg.choices).toEqual(["on", "off", "full"]);
     expect(
-      resolveCommandArgMenu({ command: verbose!, args: undefined, cfg: {} as never }),
+      resolveCommandArgMenu({ command: verbose, args: undefined, cfg: {} as never }),
     ).toBeNull();
   });
 
