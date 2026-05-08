@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createSqliteSessionTranscriptLocator } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { maybeCompactCodexAppServerSession, __testing } from "./compact.js";
@@ -14,8 +15,12 @@ import {
 
 let tempDir: string;
 
+function testSessionFile(suffix = "session-1"): string {
+  return createSqliteSessionTranscriptLocator({ agentId: "main", sessionId: suffix });
+}
+
 async function writeTestBinding(options: { authProfileId?: string } = {}): Promise<string> {
-  const sessionFile = path.join(tempDir, "session.jsonl");
+  const sessionFile = testSessionFile();
   await writeCodexAppServerBinding(
     { sessionKey: "agent:main:session-1", sessionFile },
     {
@@ -164,7 +169,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     const fake = createFakeCodexClient();
     const factory = vi.fn(async () => fake.client);
     __testing.setCodexAppServerClientFactoryForTests(factory);
-    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionFile = testSessionFile("auth-profile-mismatch");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
       cwd: tempDir,
