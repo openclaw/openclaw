@@ -104,11 +104,6 @@ export type LegacyStateDetection = {
   preview: string[];
 };
 
-type MigrationLogger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-};
-
 let autoMigrateStateDirChecked = false;
 
 type LegacySessionSurface = {
@@ -2078,7 +2073,6 @@ function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean
 export async function autoMigrateLegacyStateDir(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
-  log?: MigrationLogger;
 }): Promise<StateDirMigrationResult> {
   if (autoMigrateStateDirChecked) {
     return { migrated: false, skipped: true, changes: [], warnings: [] };
