@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 const command = process.argv[2];
+const TEST_DISCORD_GUILD_ID = `${"2".repeat(17)}2`;
+const TEST_DISCORD_CHANNEL_ID = `${"3".repeat(17)}3`;
 const SCENARIOS = new Set([
   "base",
   "feishu-channel",
@@ -171,8 +173,8 @@ function seedState() {
 
   writeJson(path.join(stateDir, "survivor-baseline.json"), {
     agents: ["main", "ops"],
-    discordGuild: "222222222222222222",
-    discordChannel: "333333333333333333",
+    discordGuild: TEST_DISCORD_GUILD_ID,
+    discordChannel: TEST_DISCORD_CHANNEL_ID,
     telegramGroup: "-1001234567890",
     whatsappGroup: "120363000000000000@g.us",
     workspaceIdentity: path.join(workspace, "IDENTITY.md"),
@@ -262,8 +264,8 @@ function assertConfigSurvived() {
       "discord allowFrom changed",
     );
     assert(
-      discord.guilds?.["222222222222222222"]?.channels?.["333333333333333333"]?.requireMention ===
-        true,
+      discord.guilds?.[TEST_DISCORD_GUILD_ID]?.channels?.[TEST_DISCORD_CHANNEL_ID]
+        ?.requireMention === true,
       "discord guild channel mention policy changed",
     );
     assert(discord.threadBindings?.idleHours === 72, "discord thread binding ttl changed");

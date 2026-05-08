@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: openclaw
+  namespace: openclaw
   labels:
     app: openclaw
 spec:
@@ -18,7 +19,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext:
-        fsGroup: 1000
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       initContainers:
@@ -33,8 +34,14 @@ spec:
               mkdir -p /home/node/.openclaw/workspace
               cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
           securityContext:
-            runAsUser: 1000
-            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           resources:
             requests:
               memory: 32Mi
@@ -128,8 +135,8 @@ spec:
               mountPath: /tmp
           securityContext:
             runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
+            runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:

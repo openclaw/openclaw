@@ -1,0 +1,48 @@
+title = "OpenClaw Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated build output is scanned by local no-git certification runs but is not source of truth."
+paths = ['''(^|/)dist/.*''']
+
+[[allowlists]]
+description = "Translation memory JSONL files contain repeated localization source strings that trip generic key entropy rules."
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)ui/src/i18n/\.i18n/.*\.tm\.jsonl$''']
+
+[[allowlists]]
+description = "Unit and fixture tests intentionally contain fake tokens and redaction examples."
+targetRules = [
+  "alibaba-access-key-id",
+  "curl-auth-header",
+  "discord-client-id",
+  "discord-client-secret",
+  "gcp-api-key",
+  "generic-api-key",
+  "github-pat",
+  "mattermost-access-token",
+  "private-key",
+]
+paths = [
+  '''(^|/).*\.test\.(cjs|cts|js|mjs|mts|ts|tsx)$''',
+  '''(^|/)src/plugins/interactive-contract\.test-helpers\.ts$''',
+  '''(^|/)extensions/nostr/src/test-fixtures\.ts$''',
+  '''(^|/)extensions/qa-matrix/src/runners/contract/scenario-catalog\.ts$''',
+]
+
+[[allowlists]]
+description = "Documentation examples use placeholder bearer headers and fake Discord snowflake-shaped IDs."
+targetRules = ["curl-auth-header", "discord-client-id"]
+paths = ['''(^|/)docs/.*\.md$''']
+
+[[allowlists]]
+description = "Runtime constants whose names look like provider secrets but do not contain secret values."
+targetRules = ["discord-client-secret", "generic-api-key", "mattermost-access-token"]
+paths = [
+  '''(^|/)extensions/qa-lab/src/live-transports/discord/discord-live\.runtime\.ts$''',
+  '''(^|/)extensions/whatsapp/src/inbound/access-control\.ts$''',
+  '''(^|/)extensions/mattermost/src/mattermost/monitor-websocket\.ts$''',
+  '''(^|/)extensions/msteams/src/monitor-handler/message-handler\.ts$''',
+]

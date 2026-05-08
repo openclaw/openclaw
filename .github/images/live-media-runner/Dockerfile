@@ -14,3 +14,10 @@ RUN apt-get update \
     xz-utils \
     zstd \
   && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin openclaw
+
+USER openclaw
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ffmpeg -version >/dev/null || exit 1

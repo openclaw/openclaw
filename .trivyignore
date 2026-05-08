@@ -1,0 +1,4 @@
+# KSV-0125 is accepted for scripts/k8s/manifests/deployment.yaml because
+# ghcr.io/openclaw/openclaw is the project-owned release registry for this repo.
+# Review by: OpenClaw maintainers. Expiry: 2026-08-08.
+KSV-0125

@@ -17,4 +17,7 @@ COPY --chmod=755 install-sh-e2e/run.sh /usr/local/bin/openclaw-install-e2e
 RUN useradd --create-home --shell /bin/bash appuser
 USER appuser
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node --version >/dev/null || exit 1
+
 ENTRYPOINT ["/usr/local/bin/openclaw-install-e2e"]

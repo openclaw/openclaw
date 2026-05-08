@@ -61,6 +61,7 @@ describe("agent tool result middleware", () => {
     });
 
     const options = {
+      onlyPluginIds: ["tool-result-middleware"],
       config: {
         plugins: {
           entries: {
@@ -70,7 +71,6 @@ describe("agent tool result middleware", () => {
           },
         },
       },
-      onlyPluginIds: ["tool-result-middleware"],
     };
 
     loadOpenClawPlugins(options);
@@ -285,6 +285,7 @@ describe("Codex app-server extension factories", () => {
     });
 
     const options = {
+      onlyPluginIds: ["codex-ext"],
       config: {
         plugins: {
           entries: {
@@ -294,7 +295,6 @@ describe("Codex app-server extension factories", () => {
           },
         },
       },
-      onlyPluginIds: ["codex-ext"],
     };
 
     loadOpenClawPlugins(options);

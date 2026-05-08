@@ -1664,13 +1664,14 @@ describe("memory cli", () => {
     await withTempWorkspace(async (workspaceDir) => {
       const dayMs = 24 * 60 * 60 * 1000;
       const nowMs = Date.now();
+      const memoryDay = new Date(nowMs - 2 * dayMs).toISOString().slice(0, 10);
       await recordShortTermRecalls({
         workspaceDir,
         query: "router vlan",
         nowMs: nowMs - 2 * dayMs,
         results: [
           {
-            path: "memory/2026-04-01.md",
+            path: `memory/${memoryDay}.md`,
             startLine: 4,
             endLine: 8,
             score: 0.9,
@@ -1685,7 +1686,7 @@ describe("memory cli", () => {
         nowMs: nowMs - dayMs,
         results: [
           {
-            path: "memory/2026-04-01.md",
+            path: `memory/${memoryDay}.md`,
             startLine: 4,
             endLine: 8,
             score: 0.88,

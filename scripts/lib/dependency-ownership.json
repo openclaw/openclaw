@@ -6,10 +6,73 @@
       "class": "core-runtime",
       "risk": ["protocol-client"]
     },
+    "@anthropic-ai/sdk": {
+      "owner": "provider:anthropic",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network"]
+    },
+    "@anthropic-ai/vertex-sdk": {
+      "owner": "provider:anthropic-vertex",
+      "class": "optional-provider-runtime",
+      "activation": ["providers.anthropic.vertex", "providers.vertex.anthropic"],
+      "risk": ["provider-sdk", "network", "cloud-iam"]
+    },
+    "@aws-sdk/client-bedrock": {
+      "owner": "provider:aws-bedrock",
+      "class": "optional-provider-runtime",
+      "activation": ["providers.aws-bedrock", "providers.bedrock"],
+      "risk": ["provider-sdk", "network", "cloud-iam"]
+    },
+    "@aws-sdk/client-bedrock-runtime": {
+      "owner": "provider:aws-bedrock",
+      "class": "optional-provider-runtime",
+      "activation": ["providers.aws-bedrock", "providers.bedrock"],
+      "risk": ["provider-sdk", "network", "cloud-iam"]
+    },
+    "@aws-sdk/credential-provider-node": {
+      "owner": "provider:aws-bedrock",
+      "class": "optional-provider-runtime",
+      "activation": ["providers.aws-bedrock", "providers.bedrock"],
+      "risk": ["credential-provider", "cloud-iam"]
+    },
+    "@aws/bedrock-token-generator": {
+      "owner": "provider:aws-bedrock",
+      "class": "optional-provider-runtime",
+      "activation": ["providers.aws-bedrock", "providers.bedrock"],
+      "risk": ["credential-helper", "cloud-iam"]
+    },
+    "@clack/core": {
+      "owner": "core:cli",
+      "class": "core-runtime",
+      "risk": ["interactive-cli"]
+    },
     "@clack/prompts": {
       "owner": "core:cli",
       "class": "core-runtime",
       "risk": ["interactive-cli"]
+    },
+    "@google/genai": {
+      "owner": "provider:google-genai",
+      "class": "default-runtime-initially",
+      "risk": ["provider-sdk", "network"]
+    },
+    "@grammyjs/runner": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "activation": ["channels.telegram.enabled", "plugins.entries.telegram.enabled"],
+      "risk": ["bot-runtime", "network"]
+    },
+    "@grammyjs/transformer-throttler": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "activation": ["channels.telegram.enabled", "plugins.entries.telegram.enabled"],
+      "risk": ["rate-limit", "bot-runtime", "network"]
+    },
+    "@homebridge/ciao": {
+      "owner": "plugin:bonjour",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.bonjour.enabled", "discovery.bonjour.enabled"],
+      "risk": ["lan-discovery", "mdns", "network"]
     },
     "@lydell/node-pty": {
       "owner": "core:tui-terminal",
@@ -46,6 +109,29 @@
       "class": "plugin-runtime",
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
+    },
+    "@openclaw/fs-safe": {
+      "owner": "core:filesystem-policy",
+      "class": "core-runtime",
+      "risk": ["filesystem-policy", "path-safety"]
+    },
+    "@slack/bolt": {
+      "owner": "plugin:slack",
+      "class": "plugin-runtime",
+      "activation": ["channels.slack.enabled", "plugins.entries.slack.enabled"],
+      "risk": ["bot-runtime", "network", "workspace-access"]
+    },
+    "@slack/types": {
+      "owner": "plugin:slack",
+      "class": "plugin-runtime",
+      "activation": ["channels.slack.enabled", "plugins.entries.slack.enabled"],
+      "risk": ["api-types", "workspace-access"]
+    },
+    "@slack/web-api": {
+      "owner": "plugin:slack",
+      "class": "plugin-runtime",
+      "activation": ["channels.slack.enabled", "plugins.entries.slack.enabled"],
+      "risk": ["provider-sdk", "network", "workspace-access"]
     },
     "@napi-rs/canvas": {
       "owner": "plugin:document-extract",
@@ -101,6 +187,12 @@
       "class": "core-runtime",
       "risk": ["network", "proxy"]
     },
+    "grammy": {
+      "owner": "plugin:telegram",
+      "class": "plugin-runtime",
+      "activation": ["channels.telegram.enabled", "plugins.entries.telegram.enabled"],
+      "risk": ["bot-runtime", "network"]
+    },
     "https-proxy-agent": {
       "owner": "core:proxy",
       "class": "core-runtime",
@@ -142,10 +234,26 @@
       "class": "core-runtime",
       "risk": ["parser", "markdown"]
     },
+    "minimatch": {
+      "owner": "core:glob-matching",
+      "class": "core-runtime",
+      "risk": ["glob-matching", "path-filtering"]
+    },
+    "node-edge-tts": {
+      "owner": "plugin:tts-edge",
+      "class": "plugin-runtime",
+      "activation": ["tts.provider.edge", "plugins.entries.edge-tts.enabled"],
+      "risk": ["network", "speech-synthesis"]
+    },
     "openai": {
       "owner": "provider:openai",
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
+    },
+    "openshell": {
+      "owner": "core:shell-integration",
+      "class": "core-runtime",
+      "risk": ["shell-execution", "terminal"]
     },
     "playwright-core": {
       "owner": "core:browser",
@@ -184,6 +292,16 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
+    "tokenjuice": {
+      "owner": "core:token-accounting",
+      "class": "core-runtime",
+      "risk": ["token-counting", "cost-estimation"]
+    },
+    "tree-sitter-bash": {
+      "owner": "core:shell-parsing",
+      "class": "core-runtime",
+      "risk": ["native-parser", "shell-parsing"]
+    },
     "tslog": {
       "owner": "core:logging",
       "class": "core-runtime",
@@ -203,6 +321,11 @@
       "owner": "core:web-push",
       "class": "core-runtime",
       "risk": ["network", "push-notifications", "crypto"]
+    },
+    "web-tree-sitter": {
+      "owner": "core:syntax-parsing",
+      "class": "core-runtime",
+      "risk": ["wasm-parser", "untrusted-text"]
     },
     "ws": {
       "owner": "core:gateway-websocket",

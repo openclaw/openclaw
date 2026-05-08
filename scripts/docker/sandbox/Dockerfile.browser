@@ -32,4 +32,7 @@ WORKDIR /home/sandbox
 
 EXPOSE 9222 5900 6080
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD command -v chromium >/dev/null || exit 1
+
 CMD ["openclaw-sandbox-browser"]
