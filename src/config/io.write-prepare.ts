@@ -156,7 +156,7 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   };
 }
 
-function deletePathValue(value: unknown, path: string[]): unknown {
+export function deletePathValue(value: unknown, path: string[]): unknown {
   if (path.length === 0 || !isRecord(value)) {
     return value;
   }
@@ -284,6 +284,13 @@ export function resolvePersistCandidateForWrite(params: {
   sourceConfig: unknown;
   nextConfig: unknown;
   rootAuthoredConfig?: unknown;
+  /**
+   * Paths to explicitly delete from the persisted candidate. Required for any
+   * field the caller intends to remove — absent-in-target keys are preserved
+   * by default (catalog #5/#17 fix). Without this, a write that omits a key
+   * silently keeps the on-disk value; callers that want deletion (e.g. doctor
+   * migrations like normalizeLegacyDmAliases) must enumerate the paths here.
+   */
   unsetPaths?: readonly string[][];
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);

@@ -61,6 +61,7 @@ import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js"
 import {
   collectChangedPaths,
   createMergePatch,
+  deletePathValue,
   formatConfigValidationFailure,
   applyUnsetPathsForWrite,
   projectSourceOntoRuntimeShape,
@@ -2415,7 +2416,19 @@ export async function writeConfigFile(
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
   if (hadBothSnapshots) {
     const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
-    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
+    let mergedCfg: unknown = applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch);
+    // Apply explicit unsetPaths deletions immediately after the merge so that
+    // doctor-style callers (e.g. normalizeLegacyDmAliases) can remove fields
+    // they intentionally deleted from cfg. Without this, absent-in-target keys
+    // are preserved by createMergePatch (catalog #5/#17 fix) and the caller's
+    // deletion intent is silently discarded. Mirror the inline deletion pattern
+    // used in resolvePersistCandidateForWrite.
+    for (const unsetPath of options.unsetPaths ?? []) {
+      if (Array.isArray(unsetPath) && unsetPath.length > 0) {
+        mergedCfg = deletePathValue(mergedCfg, unsetPath);
+      }
+    }
+    nextCfg = coerceConfig(mergedCfg);
   }
   const writeResult = await io.writeConfigFile(nextCfg, {
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({

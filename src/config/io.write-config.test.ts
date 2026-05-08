@@ -1461,4 +1461,73 @@ describe("config io write", () => {
       expect(persisted.logging?.level).toBe("debug");
     });
   });
+
+  // Regression: catalog #5/#17 fix (absent-key preservation) must not prevent
+  // doctor-style full-replace writes from deleting fields via unsetPaths when
+  // the hadBothSnapshots branch is active. Before this fix, the absent-in-target
+  // key (dm.policy) was preserved by createMergePatch and the unsetPaths deletion
+  // was applied too late — after nextCfg had already been baked with the preserved
+  // value. The test must FAIL on commit 4ea857aae4 and PASS on this fix.
+  it("applies unsetPaths deletions in hadBothSnapshots branch (doctor full-replace regression)", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+
+      // Seed: runtime snapshot has the legacy channels.discord.dm.policy field.
+      const sourceConfig: OpenClawConfig = {
+        gateway: { mode: "local" },
+        channels: {
+          discord: {
+            dm: { policy: "pairing" } as Record<string, unknown>,
+          } as unknown as OpenClawConfig["channels"]["discord"],
+        },
+      };
+      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf-8");
+
+      // Runtime snapshot (what the gateway loaded) also has dm.policy.
+      const runtimeConfig: OpenClawConfig = {
+        gateway: { mode: "local" },
+        channels: {
+          discord: {
+            dm: { policy: "pairing" } as Record<string, unknown>,
+          } as unknown as OpenClawConfig["channels"]["discord"],
+        },
+      };
+
+      try {
+        // Simulate gateway startup: pin both runtime and source snapshots so the
+        // hadBothSnapshots branch activates on the subsequent write.
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+        // Doctor-style full-replace write: caller omits channels.discord.dm entirely
+        // and explicitly declares the path for deletion via unsetPaths. Without the
+        // fix, absent-key preservation wins and dm.policy survives on disk.
+        await writeConfigFile(
+          { gateway: { mode: "local" } },
+          { unsetPaths: [["channels", "discord", "dm", "policy"]] },
+        );
+
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+          string,
+          unknown
+        >;
+        const dmSection = (
+          (persisted.channels as Record<string, unknown> | undefined)?.discord as
+            | Record<string, unknown>
+            | undefined
+        )?.dm as Record<string, unknown> | undefined;
+
+        // dm.policy must be absent: the caller declared it as an explicit deletion.
+        expect(dmSection?.policy).toBeUndefined();
+      } finally {
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
+  });
 });
