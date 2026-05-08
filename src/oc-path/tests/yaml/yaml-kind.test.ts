@@ -106,6 +106,68 @@ describe('setYamlOcPath — direct', () => {
   });
 });
 
+describe('setYamlOcPath — positional tokens (round-11 resolve↔edit symmetry)', () => {
+  // ClawSweeper round-11 P2 — yaml edit forwarded segments straight
+  // to `setIn`, which would treat `$first` / `$last` / `-N` as
+  // literal map keys and silently miss the target. Pin the new
+  // behavior: positional tokens resolve against the live document
+  // BEFORE the yaml lib walks the path.
+  it('edits the first seq element via $first', () => {
+    const { ast } = parseYaml(LOBSTER);
+    const r = setYamlOcPath(
+      ast,
+      parseOcPath('oc://workflow.lobster/steps/$first/id'),
+      'fetch-renamed',
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {expect(r.ast.raw).toContain('id: fetch-renamed');}
+  });
+
+  it('edits the last seq element via $last', () => {
+    const { ast } = parseYaml(LOBSTER);
+    const r = setYamlOcPath(
+      ast,
+      parseOcPath('oc://workflow.lobster/steps/$last/id'),
+      'classify-renamed',
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {expect(r.ast.raw).toContain('id: classify-renamed');}
+  });
+
+  it('edits the second-to-last seq element via -2', () => {
+    const { ast } = parseYaml('items:\n  - a\n  - b\n  - c\n');
+    const r = setYamlOcPath(
+      ast,
+      parseOcPath('oc://x.yaml/items/-2'),
+      'B',
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {expect(r.ast.raw).toContain('- B');}
+  });
+
+  it('edits the first map entry via $first', () => {
+    const { ast } = parseYaml('config:\n  a: 1\n  b: 2\n  c: 3\n');
+    const r = setYamlOcPath(
+      ast,
+      parseOcPath('oc://x.yaml/config/$first'),
+      99,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {expect(r.ast.raw).toContain('a: 99');}
+  });
+
+  it('returns unresolved for $first against an empty seq', () => {
+    const { ast } = parseYaml('items: []\n');
+    const r = setYamlOcPath(
+      ast,
+      parseOcPath('oc://x.yaml/items/$first'),
+      'x',
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {expect(r.reason).toBe('unresolved');}
+  });
+});
+
 describe('inferKind — yaml extensions', () => {
   it('maps .yaml / .yml / .lobster to yaml', () => {
     expect(inferKind('workflow.yaml')).toBe('yaml');

@@ -11,9 +11,24 @@
  * @module @openclaw/oc-path/yaml/edit
  */
 
-import { Document, LineCounter, parseDocument } from 'yaml';
+import {
+  Document,
+  isMap,
+  isScalar,
+  isSeq,
+  LineCounter,
+  parseDocument,
+  type Node,
+  type Pair,
+} from 'yaml';
 import type { OcPath } from '../oc-path.js';
-import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from '../oc-path.js';
+import {
+  isPositionalSeg,
+  isQuotedSeg,
+  resolvePositionalSeg,
+  splitRespectingBrackets,
+  unquoteSeg,
+} from '../oc-path.js';
 import type { YamlAst } from './ast.js';
 
 export type YamlEditResult =
@@ -30,10 +45,18 @@ export function setYamlOcPath(
 ): YamlEditResult {
   if (ast.doc.contents === null) {return { ok: false, reason: 'no-root' };}
 
-  const segments = pathSegments(path);
-  if (segments.length === 0) {
+  const rawSegments = pathSegments(path);
+  if (rawSegments.length === 0) {
     return { ok: false, reason: 'unresolved' };
   }
+
+  // Resolve positional tokens ($first / $last / -N) against the actual
+  // map keys / seq sizes BEFORE handing the segments to the yaml lib —
+  // otherwise `hasIn(['$last'])` treats the token as a literal map key
+  // and silently unresolves, producing a write↔read asymmetry with
+  // resolveYamlOcPath (which honors positional tokens at lookup).
+  const segments = resolvePositionalSegments(ast.doc.contents as Node, rawSegments);
+  if (segments === null) {return { ok: false, reason: 'unresolved' };}
 
   // Verify the path resolves before mutating — `setIn` would create
   // missing intermediate nodes which is insertion semantics, not set.
@@ -60,7 +83,15 @@ export function insertYamlOcPath(
 ): YamlEditResult {
   if (ast.doc.contents === null) {return { ok: false, reason: 'no-root' };}
 
-  const segments = pathSegments(parentPath);
+  const rawParentSegments = pathSegments(parentPath);
+  // Resolve positional tokens against the live document before walking
+  // — same rationale as setYamlOcPath; `getIn(['$last'])` would treat
+  // the token as a literal key and miss the actual last child.
+  const segments =
+    rawParentSegments.length === 0
+      ? rawParentSegments
+      : resolvePositionalSegments(ast.doc.contents as Node, rawParentSegments);
+  if (segments === null) {return { ok: false, reason: 'unresolved' };}
   const { doc: cloned, lineCounter } = cloneDoc(ast.doc);
 
   // Find the parent node.
@@ -105,6 +136,66 @@ export function insertYamlOcPath(
   }
 
   return { ok: false, reason: 'unresolved' };
+}
+
+/**
+ * Walk `segments` against the live document, replacing each positional
+ * token (`$first` / `$last` / `-N`) with the concrete key (for maps) or
+ * index (for seqs) at that depth. Returns `null` if a positional token
+ * targets a missing or non-container node — caller treats that as
+ * `unresolved` and refuses to write.
+ *
+ * Mirrors `positionalForYaml` in resolve.ts so read and write agree on
+ * which child each token names.
+ */
+function resolvePositionalSegments(
+  root: Node,
+  segments: readonly string[],
+): string[] | null {
+  const out: string[] = [];
+  let node: Node | null = root;
+  for (const seg of segments) {
+    if (node === null) {return null;}
+    let segNorm = seg;
+    if (isPositionalSeg(seg)) {
+      const concrete = positionalForYamlNode(node, seg);
+      if (concrete === null) {return null;}
+      segNorm = concrete;
+    }
+    out.push(segNorm);
+    if (isMap(node)) {
+      const pair = (node as { items: Pair[] }).items.find((p) => {
+        const k = isScalar(p.key) ? p.key.value : p.key;
+        return String(k) === segNorm;
+      });
+      node = (pair?.value as Node | undefined) ?? null;
+      continue;
+    }
+    if (isSeq(node)) {
+      const idx = Number(segNorm);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {return null;}
+      node = (node.items[idx] as Node | null) ?? null;
+      continue;
+    }
+    // Scalar — we still emit the literal segment so the next-step
+    // hasIn check sees the same shape and fails cleanly with
+    // `unresolved`. Don't try to descend further.
+    node = null;
+  }
+  return out;
+}
+
+function positionalForYamlNode(node: Node, seg: string): string | null {
+  if (isMap(node)) {
+    const pairs = (node as { items: Pair[] }).items;
+    const keys = pairs.map((p) => String(isScalar(p.key) ? p.key.value : p.key));
+    return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
+  }
+  if (isSeq(node)) {
+    const items = (node as { items: Node[] }).items;
+    return resolvePositionalSeg(seg, { indexable: true, size: items.length });
+  }
+  return null;
 }
 
 function pathSegments(path: OcPath): string[] {

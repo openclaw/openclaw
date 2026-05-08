@@ -29,7 +29,13 @@
  */
 
 import type { OcPath } from '../oc-path.js';
-import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from '../oc-path.js';
+import {
+  isPositionalSeg,
+  isQuotedSeg,
+  resolvePositionalSeg,
+  splitRespectingBrackets,
+  unquoteSeg,
+} from '../oc-path.js';
 import type { JsoncAst, JsoncEntry, JsoncValue } from './ast.js';
 import { emitJsonc } from './emit.js';
 
@@ -82,11 +88,27 @@ function replaceAt(
   if (seg.length === 0) {return null;}
 
   if (current.kind === 'object') {
+    // Resolve positional tokens ($first / $last) against the entries
+    // ordered key list before any literal-key comparison. Without
+    // this, `oc://x.jsonc/agents/$first/alias` would look for a key
+    // literally named `$first` and miss the actual first agent.
+    // Negative indices (-N) don't apply to keyed containers and
+    // resolvePositionalSeg returns null in that case → unresolved.
+    let segNorm: string = seg;
+    if (isPositionalSeg(seg)) {
+      const resolved = resolvePositionalSeg(seg, {
+        indexable: false,
+        size: current.entries.length,
+        keys: current.entries.map((e) => e.key),
+      });
+      if (resolved === null) {return null;}
+      segNorm = resolved;
+    }
     // Quoted segments (e.g. `"anthropic/claude-opus-4-7"`) carry the
     // raw bytes verbatim; the entry key in the AST is unquoted, so
     // strip the surrounding quotes before comparing. Bare segments
     // pass through unchanged.
-    const lookupKey = isQuotedSeg(seg) ? unquoteSeg(seg) : seg;
+    const lookupKey = isQuotedSeg(segNorm) ? unquoteSeg(segNorm) : segNorm;
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
     if (idx === -1) {return null;}
     const child = current.entries[idx];
@@ -104,7 +126,19 @@ function replaceAt(
   }
 
   if (current.kind === 'array') {
-    const idx = Number(seg);
+    // Resolve positional tokens ($first / $last / -N) against the
+    // array's size before the numeric coercion below; without this
+    // `Number('$last')` is NaN and the path silently unresolves.
+    let segNorm: string = seg;
+    if (isPositionalSeg(seg)) {
+      const resolved = resolvePositionalSeg(seg, {
+        indexable: true,
+        size: current.items.length,
+      });
+      if (resolved === null) {return null;}
+      segNorm = resolved;
+    }
+    const idx = Number(segNorm);
     if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
     const child = current.items[idx];
     if (child === undefined) {return null;}

@@ -92,6 +92,66 @@ describe('appendJsonlOcPath — session checkpointing primitive', () => {
   });
 });
 
+describe('setJsonlOcPath — positional field tokens (round-11 resolve↔edit symmetry)', () => {
+  // ClawSweeper round-11 P2 — JSONL line-address `$last` already
+  // resolved (pickLineIndex), but positional tokens INSIDE a line's
+  // structural body (item / field) were not. Pin the in-line edit
+  // path: a `$first` / `$last` / `-N` field-segment must reach the
+  // same child as resolveJsonlOcPath.
+  const log = '{"items":[10,20,30],"events":{"a":1,"b":2}}\n';
+
+  it('edits the first array item on a line via $first', () => {
+    const { ast } = parseJsonl(log);
+    const r = setJsonlOcPath(
+      ast,
+      parseOcPath('oc://session-events/L1/items/$first'),
+      { kind: 'number', value: 99 },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const firstLine = emitJsonl(r.ast).split('\n').find((l) => l.length > 0) ?? '';
+      expect(JSON.parse(firstLine)).toEqual({
+        items: [99, 20, 30],
+        events: { a: 1, b: 2 },
+      });
+    }
+  });
+
+  it('edits the last array item on a line via $last', () => {
+    const { ast } = parseJsonl(log);
+    const r = setJsonlOcPath(
+      ast,
+      parseOcPath('oc://session-events/L1/items/$last'),
+      { kind: 'number', value: 99 },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const firstLine = emitJsonl(r.ast).split('\n').find((l) => l.length > 0) ?? '';
+      expect(JSON.parse(firstLine)).toEqual({
+        items: [10, 20, 99],
+        events: { a: 1, b: 2 },
+      });
+    }
+  });
+
+  it('edits the first object entry on a line via $first', () => {
+    const { ast } = parseJsonl(log);
+    const r = setJsonlOcPath(
+      ast,
+      parseOcPath('oc://session-events/L1/events/$first'),
+      { kind: 'number', value: 99 },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const firstLine = emitJsonl(r.ast).split('\n').find((l) => l.length > 0) ?? '';
+      expect(JSON.parse(firstLine)).toEqual({
+        items: [10, 20, 30],
+        events: { a: 99, b: 2 },
+      });
+    }
+  });
+});
+
 describe('setJsonlOcPath — quoted field segments (regression: resolve↔edit symmetry)', () => {
   it('edits a field key containing a slash via quoted segment', () => {
     // Closes ClawSweeper P2 on PR #78678: JSONL resolve unquotes
