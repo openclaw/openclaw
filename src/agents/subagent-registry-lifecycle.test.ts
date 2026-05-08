@@ -74,7 +74,10 @@ vi.mock("./subagent-announce.js", () => ({
 
 vi.mock("./subagent-registry-cleanup.js", () => ({
   resolveCleanupCompletionReason: () => SUBAGENT_ENDED_REASON_COMPLETE,
-  resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "retry-limit" }),
+  resolveDeferredCleanupDecision: () => ({
+    kind: "give-up",
+    reason: "retry-limit",
+  }),
 }));
 
 vi.mock("./subagent-registry-helpers.js", () => ({
@@ -156,7 +159,12 @@ describe("subagent registry lifecycle hardening", () => {
       throw new Error("task store boom");
     });
 
-    const controller = createLifecycleController({ entry, runs, persist, warn });
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      persist,
+      warn,
+    });
 
     await expect(
       controller.completeSubagentRun({
@@ -233,7 +241,11 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const runSubagentAnnounceFlow = vi.fn(async () => true);
 
-    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+    });
 
     await expect(
       controller.completeSubagentRun({
@@ -266,7 +278,11 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const runSubagentAnnounceFlow = vi.fn(async () => true);
 
-    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+    });
 
     await expect(
       controller.completeSubagentRun({
@@ -400,7 +416,11 @@ describe("subagent registry lifecycle hardening", () => {
       expectsCompletionMessage: true,
     });
 
-    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+    });
 
     await expect(
       controller.completeSubagentRun({
@@ -744,6 +764,138 @@ describe("subagent registry lifecycle hardening", () => {
     );
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
     expect(persist).toHaveBeenCalled();
+  });
+
+  it("attempts terminal completion fallback exactly once on give-up", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      taskId: "task-1",
+      requesterOrigin: { channel: "telegram", to: "8505203295" },
+      frozenResultText: "final completion reply",
+      announceRetryCount: 0,
+    });
+    const runSubagentAnnounceFlow = vi
+      .fn()
+      .mockImplementationOnce(async (args) => {
+        args.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          error: "UNAVAILABLE: requester wake failed",
+        });
+        return false;
+      })
+      .mockImplementationOnce(async (args) => {
+        args.onDeliveryResult?.({
+          delivered: true,
+          path: "direct-fallback",
+        });
+        return true;
+      });
+
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+    expect(runSubagentAnnounceFlow).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        allowCompletionFallback: false,
+      }),
+    );
+    expect(runSubagentAnnounceFlow).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        allowCompletionFallback: true,
+        waitForCompletion: false,
+        taskId: "task-1",
+      }),
+    );
+    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        deliveryStatus: "fallback_sent",
+      }),
+    );
+    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: entry.runId,
+        deliveryStatus: "failed",
+      }),
+    );
+  });
+
+  it("records task_id_missing when give-up fallback cannot resolve task context", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      requesterOrigin: { channel: "telegram", to: "8505203295" },
+      frozenResultText: "final completion reply",
+    });
+    const runSubagentAnnounceFlow = vi
+      .fn()
+      .mockImplementationOnce(async (args) => {
+        args.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          error: "UNAVAILABLE: requester wake failed",
+        });
+        return false;
+      })
+      .mockImplementationOnce(async (args) => {
+        args.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          error: "task_id_missing",
+        });
+        return false;
+      });
+
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+    expect(runSubagentAnnounceFlow).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        allowCompletionFallback: true,
+        taskId: undefined,
+      }),
+    );
+    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        deliveryStatus: "task_id_missing",
+      }),
+    );
   });
 
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {

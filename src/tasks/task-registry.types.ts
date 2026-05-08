@@ -16,6 +16,11 @@ export type TaskDeliveryStatus =
   | "delivered"
   | "session_queued"
   | "failed"
+  | "fallback_sent"
+  | "fallback_failed"
+  | "wake_failed"
+  | "context_missing"
+  | "task_id_missing"
   | "parent_missing"
   | "not_applicable";
 
