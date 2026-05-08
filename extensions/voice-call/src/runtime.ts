@@ -339,6 +339,9 @@ export async function createVoiceCallRuntime(params: {
       realtimeHandler.registerToolHandler(
         REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
         async (args, callId, handlerContext) => {
+          log.info(
+            `[voice-call] Tool handler invoked: tool=${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME}, call=${callId}, args=${JSON.stringify(args)}, partialTranscript=${JSON.stringify(handlerContext?.partialUserTranscript ?? null)}`,
+          );
           const call = manager.getCall(callId);
           if (!call) {
             return { error: `Call "${callId}" not found` };
